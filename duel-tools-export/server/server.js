@@ -7,36 +7,9 @@ const fs     = require('fs');
 const path   = require('path');
 const crypto = require('crypto');
 
-const PORT         = process.env.PORT || 8000;
-const DB_FILE      = path.join(__dirname, 'duel-tools.db.json');
-const PUB_DIR      = path.join(__dirname, '..', 'public');
-const APP_PASSWORD = process.env.APP_PASSWORD || 'Ilovesui';
-
-// ── Session store ─────────────────────────────────────────────────────────────
-const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const sessions = new Map(); // token → expiry timestamp
-
-function createSession() {
-  const token = crypto.randomBytes(32).toString('hex');
-  sessions.set(token, Date.now() + SESSION_TTL_MS);
-  return token;
-}
-
-function isValidSession(token) {
-  if (!token) return false;
-  const expiry = sessions.get(token);
-  if (!expiry) return false;
-  if (Date.now() > expiry) { sessions.delete(token); return false; }
-  return true;
-}
-
-// Periodically clean up expired sessions
-setInterval(() => {
-  const now = Date.now();
-  for (const [token, expiry] of sessions) {
-    if (now > expiry) sessions.delete(token);
-  }
-}, 60 * 60 * 1000); // every hour
+const PORT    = process.env.PORT || 8000;
+const DB_FILE = path.join(__dirname, 'duel-tools.db.json');
+const PUB_DIR = path.join(__dirname, '..', 'public');
 
 // ── Database abstraction ──────────────────────────────────────────────────────
 // Supports both PostgreSQL (Railway) and local JSON file (local dev)
@@ -168,28 +141,9 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname.startsWith('/api/')) {
 
-    // POST /api/auth — password check, returns session token
-    if (parts[0] === 'auth' && method === 'POST') {
-      return readBody(req, data => {
-        if (data.password === APP_PASSWORD) {
-          const token = createSession();
-          return json(res, 200, { token });
-        }
-        return json(res, 401, { error: 'Invalid password' });
-      });
-    }
-
-    // ── Auth middleware — all other /api/* routes require a valid session ──
-    const authHeader = req.headers['authorization'] || '';
-    const cookieHeader = req.headers['cookie'] || '';
-    let token = null;
-    if (authHeader.startsWith('Bearer ')) token = authHeader.slice(7).trim();
-    if (!token) {
-      const match = cookieHeader.match(/(?:^|;\s*)dt_session=([^;]+)/);
-      if (match) token = match[1];
-    }
-    if (!isValidSession(token)) {
-      return json(res, 401, { error: 'Unauthorized' });
+    // GET /api/health — first so Railway healthcheck always gets a 200
+    if (parts[0]==='health' && method==='GET') {
+      return json(res, 200, { ok:true, db: pgClient ? 'postgres' : 'file', batches: Object.keys(db.batches).length, players: Object.keys(db.players).length });
     }
 
     // GET /api/players
@@ -369,11 +323,6 @@ const server = http.createServer((req, res) => {
       });
     }
 
-    // GET /api/health
-    if (parts[0]==='health' && method==='GET') {
-      return json(res, 200, { ok:true, db: pgClient ? 'postgres' : 'file', batches: Object.keys(db.batches).length, players: Object.keys(db.players).length });
-    }
-
     return json(res, 404, { error:'Unknown endpoint' });
   }
 
@@ -399,18 +348,17 @@ const server = http.createServer((req, res) => {
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-initDB().then(() => {
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log(`\n  🃏 Duel Tools  →  http://0.0.0.0:${PORT}\n`);
-    // Only auto-open browser in local dev
-    if (!process.env.RAILWAY_ENVIRONMENT && !process.env.DATABASE_URL) {
-      const { exec } = require('child_process');
-      const url = `http://localhost:${PORT}`;
-      const open = process.platform==='win32' ? `start "" "${url}"` :
-                   process.platform==='darwin' ? `open "${url}"` : `xdg-open "${url}"`;
-      exec(open);
-    }
-  });
+// Listen immediately so Railway healthcheck passes, then connect DB in background
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`\n  🃏 Duel Tools  →  http://0.0.0.0:${PORT}\n`);
+  if (!process.env.RAILWAY_ENVIRONMENT && !process.env.DATABASE_URL) {
+    const { exec } = require('child_process');
+    const url = `http://localhost:${PORT}`;
+    const open = process.platform==='win32' ? `start "" "${url}"` :
+                 process.platform==='darwin' ? `open "${url}"` : `xdg-open "${url}"`;
+    exec(open);
+  }
+  initDB().catch(e => console.error('DB init error:', e.message));
 });
 
 process.on('SIGINT',  () => { saveDB().then(() => process.exit(0)); });

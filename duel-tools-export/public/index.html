@@ -617,23 +617,6 @@ select{cursor:pointer}
   </main>
 </div>
 
-<!-- ── Login overlay ──────────────────────────────────────────────────────── -->
-<div id="login-overlay" style="display:none;position:fixed;inset:0;background:rgba(6,6,12,0.97);z-index:9999;align-items:center;justify-content:center">
-  <div style="background:var(--panel);border:1px solid var(--border2);border-radius:14px;padding:40px 36px;width:340px;max-width:90vw;display:flex;flex-direction:column;align-items:center;gap:18px;box-shadow:0 24px 64px rgba(0,0,0,.8)">
-    <div style="font-size:32px">🃏</div>
-    <div style="font-size:18px;font-weight:bold;color:var(--text);letter-spacing:.1em">DUEL TOOLS</div>
-    <div style="font-size:12px;color:var(--muted);text-align:center">Enter the password to continue</div>
-    <input id="login-pw" type="password" placeholder="Password"
-      style="width:100%;background:var(--card);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:monospace;font-size:14px;padding:10px 14px;outline:none;text-align:center;letter-spacing:.08em"
-      onkeydown="if(event.key==='Enter')doLogin()"/>
-    <div id="login-err" style="display:none;font-size:12px;color:var(--red);text-align:center"></div>
-    <button onclick="doLogin()"
-      style="width:100%;background:var(--green);color:#050508;border:none;border-radius:8px;font-family:monospace;font-weight:bold;font-size:14px;padding:11px;cursor:pointer;letter-spacing:.06em">
-      ENTER
-    </button>
-  </div>
-</div>
-
 <div id="ibox" style="position:fixed;top:-9999px;left:-9999px;width:1280px;height:960px;overflow:hidden;pointer-events:none;opacity:0.01;z-index:-1"></div>
 
 <script>
@@ -967,91 +950,7 @@ const CARD_ID_MAP = {
 };
 
 
-const API = '/api';
-
-// ══════════════════════════════════════════════════════════════════════
-// AUTH
-// ══════════════════════════════════════════════════════════════════════
-
-function getAuthToken() {
-  return localStorage.getItem('dt_session_token') || '';
-}
-
-function setAuthToken(token) {
-  localStorage.setItem('dt_session_token', token);
-}
-
-function clearAuthToken() {
-  localStorage.removeItem('dt_session_token');
-}
-
-function authHeaders() {
-  const token = getAuthToken();
-  return token ? { 'Authorization': 'Bearer ' + token } : {};
-}
-
-function showLoginOverlay() {
-  const overlay = document.getElementById('login-overlay');
-  if (overlay) {
-    overlay.style.display = 'flex';
-    setTimeout(() => {
-      const pw = document.getElementById('login-pw');
-      if (pw) pw.focus();
-    }, 50);
-  }
-}
-
-function hideLoginOverlay() {
-  const overlay = document.getElementById('login-overlay');
-  if (overlay) overlay.style.display = 'none';
-}
-
-async function doLogin() {
-  const pw = document.getElementById('login-pw');
-  const err = document.getElementById('login-err');
-  if (!pw) return;
-  err.style.display = 'none';
-  try {
-    const res = await fetch(API + '/auth', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: pw.value })
-    });
-    if (res.ok) {
-      const data = await res.json();
-      setAuthToken(data.token);
-      pw.value = '';
-      hideLoginOverlay();
-      initApp();
-    } else {
-      err.textContent = 'Incorrect password. Try again.';
-      err.style.display = 'block';
-      pw.value = '';
-      pw.focus();
-    }
-  } catch(e) {
-    err.textContent = 'Connection error. Please try again.';
-    err.style.display = 'block';
-  }
-}
-
-// Wrap fetch to automatically add auth header and handle 401
-const _origFetch = window.fetch;
-window.fetch = async function(url, opts = {}) {
-  // Only inject auth header for our own API calls (not external CDN/card API)
-  const urlStr = typeof url === 'string' ? url : (url.url || '');
-  const isOwnApi = urlStr.startsWith('/api') || urlStr.startsWith(window.location.origin + '/api');
-  if (isOwnApi) {
-    opts = { ...opts };
-    opts.headers = { ...authHeaders(), ...(opts.headers || {}) };
-  }
-  const res = await _origFetch(url, opts);
-  if (res.status === 401 && isOwnApi) {
-    clearAuthToken();
-    showLoginOverlay();
-  }
-  return res;
-};
+const API = 'http://localhost:8000/api';
 
 // ══════════════════════════════════════════════════════════════════════
 // GOAT FORMAT BANLIST
@@ -4796,20 +4695,10 @@ function importBatch() {
 window._playerRegistry = {}; // cache: lowercase name → {name, aliases}
 
 async function initApp() {
-  // Check if we have a valid session token before loading the app
-  if (!getAuthToken()) {
-    showLoginOverlay();
-    return;
-  }
-  // Verify the token is still valid by probing a protected endpoint
+  // Load player registry into memory cache
   try {
-    const probe = await _origFetch(API + '/players', { headers: authHeaders() });
-    if (probe.status === 401) {
-      clearAuthToken();
-      showLoginOverlay();
-      return;
-    }
-    const players = await probe.json();
+    const res = await fetch(API+'/players');
+    const players = await res.json();
     window._playerRegistry = {};
     for (const p of players) {
       window._playerRegistry[p.name.toLowerCase()] = p;
