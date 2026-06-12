@@ -7,9 +7,36 @@ const fs     = require('fs');
 const path   = require('path');
 const crypto = require('crypto');
 
-const PORT    = process.env.PORT || 8000;
-const DB_FILE = path.join(__dirname, 'duel-tools.db.json');
-const PUB_DIR = path.join(__dirname, '..', 'public');
+const PORT         = process.env.PORT || 8000;
+const DB_FILE      = path.join(__dirname, 'duel-tools.db.json');
+const PUB_DIR      = path.join(__dirname, '..', 'public');
+const APP_PASSWORD = process.env.APP_PASSWORD || 'Ilovesui';
+
+// ── Session store ─────────────────────────────────────────────────────────────
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const sessions = new Map(); // token → expiry timestamp
+
+function createSession() {
+  const token = crypto.randomBytes(32).toString('hex');
+  sessions.set(token, Date.now() + SESSION_TTL_MS);
+  return token;
+}
+
+function isValidSession(token) {
+  if (!token) return false;
+  const expiry = sessions.get(token);
+  if (!expiry) return false;
+  if (Date.now() > expiry) { sessions.delete(token); return false; }
+  return true;
+}
+
+// Periodically clean up expired sessions
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, expiry] of sessions) {
+    if (now > expiry) sessions.delete(token);
+  }
+}, 60 * 60 * 1000); // every hour
 
 // ── Database abstraction ──────────────────────────────────────────────────────
 // Supports both PostgreSQL (Railway) and local JSON file (local dev)
@@ -140,6 +167,30 @@ const server = http.createServer((req, res) => {
   const parts  = url.pathname.replace(/^\/api\/?/, '').split('/').filter(Boolean);
 
   if (url.pathname.startsWith('/api/')) {
+
+    // POST /api/auth — password check, returns session token
+    if (parts[0] === 'auth' && method === 'POST') {
+      return readBody(req, data => {
+        if (data.password === APP_PASSWORD) {
+          const token = createSession();
+          return json(res, 200, { token });
+        }
+        return json(res, 401, { error: 'Invalid password' });
+      });
+    }
+
+    // ── Auth middleware — all other /api/* routes require a valid session ──
+    const authHeader = req.headers['authorization'] || '';
+    const cookieHeader = req.headers['cookie'] || '';
+    let token = null;
+    if (authHeader.startsWith('Bearer ')) token = authHeader.slice(7).trim();
+    if (!token) {
+      const match = cookieHeader.match(/(?:^|;\s*)dt_session=([^;]+)/);
+      if (match) token = match[1];
+    }
+    if (!isValidSession(token)) {
+      return json(res, 401, { error: 'Unauthorized' });
+    }
 
     // GET /api/players
     if (parts[0]==='players' && !parts[1] && method==='GET') {
