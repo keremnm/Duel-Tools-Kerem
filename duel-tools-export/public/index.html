@@ -620,43 +620,36 @@ select{cursor:pointer}
 <div id="ibox" style="position:fixed;top:-9999px;left:-9999px;width:1280px;height:960px;overflow:hidden;pointer-events:none;opacity:0.01;z-index:-1"></div>
 
 <script>
-// ── Password gate ─────────────────────────────────────────────────────────────
-(function() {
-  const PASS = 'ilovesui';
-  const SESSION_KEY = 'dt_auth';
-  if (sessionStorage.getItem(SESSION_KEY) === '1') return;
-  // Show gate
-  document.addEventListener('DOMContentLoaded', () => {
-    const gate = document.createElement('div');
-    gate.id = 'auth-gate';
-    gate.style.cssText = 'position:fixed;inset:0;background:#06060c;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;font-family:monospace';
-    gate.innerHTML = `
-      <div style="font-size:22px;font-weight:bold;color:#00e596;letter-spacing:.12em">🃏 DUEL TOOLS</div>
-      <div style="font-size:13px;color:#ccccdd;margin-bottom:8px">Enter password to continue</div>
-      <input id="gate-inp" type="password" placeholder="Password" autofocus
-        style="background:#131320;border:1px solid #252538;border-radius:6px;color:#fff;font-family:monospace;font-size:15px;padding:10px 16px;outline:none;width:260px;text-align:center"/>
-      <button id="gate-btn" style="background:#00e596;color:#050508;border:none;border-radius:6px;font-family:monospace;font-weight:bold;font-size:14px;padding:10px 32px;cursor:pointer">Enter</button>
-      <div id="gate-err" style="color:#ff5555;font-size:12px;display:none">Incorrect password</div>
-    `;
-    document.body.prepend(gate);
-    const inp = document.getElementById('gate-inp');
-    const btn = document.getElementById('gate-btn');
-    const err = document.getElementById('gate-err');
-    const tryPass = () => {
-      if (inp.value === PASS) {
-        sessionStorage.setItem(SESSION_KEY, '1');
-        gate.remove();
-      } else {
-        err.style.display='block';
-        inp.value=''; inp.focus();
-        inp.style.borderColor='#ff5555';
-        setTimeout(()=>inp.style.borderColor='#252538', 1000);
-      }
-    };
-    btn.onclick = tryPass;
-    inp.addEventListener('keydown', e => { if(e.key==='Enter') tryPass(); });
-  });
-})();
+// ── Password gate — runs immediately, no DOMContentLoaded needed ──────────────
+const _DT_PASS = 'ilovesui';
+const _DT_KEY  = 'dt_auth';
+function _dtShowGate() {
+  if (sessionStorage.getItem(_DT_KEY) === '1') return;
+  const gate = document.createElement('div');
+  gate.id = 'auth-gate';
+  gate.style.cssText = 'position:fixed;inset:0;background:#06060c;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;font-family:monospace;pointer-events:all';
+  gate.innerHTML = '<div style="font-size:22px;font-weight:bold;color:#00e596;letter-spacing:.12em">🃏 DUEL TOOLS</div><div style="font-size:13px;color:#ccccdd;margin-bottom:8px">Enter password to continue</div><input id="gate-inp" type="password" placeholder="Password" style="background:#131320;border:1px solid #252538;border-radius:6px;color:#fff;font-family:monospace;font-size:15px;padding:10px 16px;outline:none;width:260px;text-align:center"/><button id="gate-btn" style="background:#00e596;color:#050508;border:none;border-radius:6px;font-family:monospace;font-weight:bold;font-size:14px;padding:10px 32px;cursor:pointer">Enter</button><div id="gate-err" style="color:#ff5555;font-size:12px;display:none">Incorrect password</div>';
+  document.body.prepend(gate);
+  const inp = gate.querySelector('#gate-inp');
+  const btn = gate.querySelector('#gate-btn');
+  const err = gate.querySelector('#gate-err');
+  inp.focus();
+  const tryPass = () => {
+    if (inp.value === _DT_PASS) {
+      sessionStorage.setItem(_DT_KEY, '1');
+      gate.remove();
+    } else {
+      err.style.display='block'; inp.value=''; inp.focus();
+      inp.style.borderColor='#ff5555';
+      setTimeout(()=>inp.style.borderColor='#252538',1000);
+    }
+  };
+  btn.onclick = tryPass;
+  inp.onkeydown = e => { if(e.key==='Enter') tryPass(); };
+}
+// Call immediately if body exists, otherwise wait
+if (document.body) _dtShowGate();
+else document.addEventListener('DOMContentLoaded', _dtShowGate);
 
 // Duel Tools v1781244128 — built fresh
 
