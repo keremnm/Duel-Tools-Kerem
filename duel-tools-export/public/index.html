@@ -250,14 +250,14 @@ select{cursor:pointer}
 (function(){
   var gate = document.getElementById('auth-gate');
   // Already authenticated this session — hide gate immediately
-  if (sessionStorage.getItem('dt_auth') === '1') { gate.style.display='none'; return; }
+  if (sessionStorage.getItem('dt_auth') === '1') { gate.parentNode.removeChild(gate); return; }
   var inp = document.getElementById('gate-inp');
   var btn = document.getElementById('gate-btn');
   var err = document.getElementById('gate-err');
   function tryPass() {
     if (inp.value === 'ilovesui') {
       sessionStorage.setItem('dt_auth','1');
-      gate.style.display = 'none';
+      gate.parentNode.removeChild(gate);
     } else {
       err.style.display='block'; inp.value=''; inp.focus();
       inp.style.borderColor='#ff5555';
