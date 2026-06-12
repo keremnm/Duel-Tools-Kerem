@@ -1,0 +1,4 @@
+node_modules/
+duel-tools.db.json
+*.log
+.env
