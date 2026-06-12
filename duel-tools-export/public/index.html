@@ -10,12 +10,12 @@
 <style>
 :root{
   --bg:#06060c;--panel:#0e0e1a;--card:#131320;--card2:#1a1a28;
-  --border:#252538;--border2:#32324e;--text:#eeeeff;--muted:#8888bb;--dim:#3a3a5a;
+  --border:#252538;--border2:#32324e;--text:#ffffff;--muted:#ccccdd;--dim:#6a6a8a;
   --green:#00e596;--blue:#6699ff;--purple:#a87fff;--red:#ff5555;--amber:#ffbb44;
-  --rock:#aaaaaa;--paper:#6699ff;--scissors:#c080ff;
+  --rock:#cccccc;--paper:#6699ff;--scissors:#c080ff;
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Courier New',monospace;font-size:14px;overflow:hidden}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Courier New',monospace;font-size:15px;overflow:hidden}
 
 /* ── App shell ── */
 .app{display:grid;grid-template-columns:260px 1fr;grid-template-rows:52px 1fr;height:100vh;width:100vw}
@@ -258,6 +258,7 @@ select{cursor:pointer}
   <div id="batch-panel" style="display:none;position:fixed;top:0;right:0;width:380px;height:100vh;background:var(--panel);border-left:1px solid var(--border);z-index:200;flex-direction:column;box-shadow:-4px 0 24px rgba(0,0,0,.5)">
     <div style="padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0">
       <div id="batch-panel-title" style="font-size:13px;font-weight:bold;color:var(--text);letter-spacing:.08em;flex:1">NEW BATCH</div>
+      <span id="batch-panel-temp-badge" style="display:none;background:rgba(255,187,68,.15);color:var(--amber);border:1px solid var(--amber);font-size:10px;padding:2px 8px;border-radius:4px;font-family:monospace">TEMP · not saved</span>
       <button onclick="closeBatchPanel()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;font-family:monospace;padding:0 4px">✕</button>
     </div>
     <!-- Player / aliases (only for New Batch mode) -->
@@ -297,27 +298,36 @@ select{cursor:pointer}
   <aside class="sidebar">
     <!-- Top action buttons -->
     <div style="padding:10px 12px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:6px;flex-shrink:0">
+      <button onclick="openBatchPanel('temp')" style="width:100%;background:var(--card);color:var(--amber);border:1px solid var(--amber);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">⚡ Temporary Batch</button>
       <button onclick="openBatchPanel('new')" style="width:100%;background:var(--green);color:#050508;border:none;border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:9px;cursor:pointer;text-align:left">＋ New Batch</button>
-      <button id="add-to-batch-btn" onclick="openBatchPanel('add')" style="display:none;width:100%;background:var(--card);color:var(--amber);border:1px solid var(--amber);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">➕ Add to Current Batch</button>
-    </div>
-
-    <!-- Recent Batches -->
-    <div style="padding:8px 12px 4px;border-bottom:1px solid var(--border);flex-shrink:0">
-      <div class="sb-label" style="margin-bottom:6px">Recent Batches</div>
+      <button id="add-to-batch-btn" onclick="openBatchPanel('add')" style="display:none;width:100%;background:var(--card);color:var(--blue);border:1px solid var(--blue);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">➕ Add to Current Batch</button>
       <div style="display:flex;gap:5px">
         <button class="btn-sec" onclick="exportBatch()" style="flex:1;font-size:11px;padding:5px">⬇ Export</button>
         <button class="btn-sec" onclick="importBatch()" style="flex:1;font-size:11px;padding:5px">⬆ Import</button>
       </div>
     </div>
-    <div class="batch-list" id="batch-list" style="max-height:45vh">
+
+    <!-- Player Search -->
+    <div style="padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0;position:relative">
+      <input id="player-search" type="text" placeholder="🔍 Search players..." 
+        style="font-size:12px;padding:6px 10px;width:100%"
+        oninput="onPlayerSearch(this.value)" onfocus="showPlayerDropdown()" autocomplete="off"/>
+      <div id="player-search-dropdown" style="display:none;position:absolute;left:12px;right:12px;top:100%;background:var(--card);border:1px solid var(--border2);border-radius:6px;z-index:100;max-height:200px;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,.5)"></div>
+    </div>
+
+    <!-- Recent Batches -->
+    <div style="padding:6px 12px 4px;flex-shrink:0">
+      <div class="sb-label" style="margin-bottom:2px">Recent Batches</div>
+    </div>
+    <div class="batch-list" id="batch-list" style="flex:1;min-height:0">
       <div class="no-batches">No batches yet.</div>
     </div>
 
     <!-- Top Players -->
-    <div style="padding:8px 12px 4px;border-top:1px solid var(--border);flex-shrink:0">
-      <div class="sb-label" style="margin-bottom:6px">Top Players</div>
+    <div style="padding:6px 12px 2px;border-top:1px solid var(--border);flex-shrink:0">
+      <div class="sb-label" style="margin-bottom:2px">Top Players</div>
     </div>
-    <div id="top-players-list" style="flex:1;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) var(--bg)">
+    <div id="top-players-list" style="max-height:160px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) var(--bg)">
       <div class="no-batches">No top players flagged yet.</div>
     </div>
   </aside>
@@ -491,9 +501,14 @@ select{cursor:pointer}
         <!-- Profile header -->
         <div style="padding:14px 20px;border-bottom:1px solid var(--border);background:var(--panel);flex-shrink:0;display:flex;align-items:center;gap:12px">
           <button onclick="closeProfile()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:5px 12px;border-radius:6px;cursor:pointer">← Back</button>
-          <div id="profile-view-name" style="font-size:16px;font-weight:bold;color:var(--green);letter-spacing:.08em"></div>
-          <div id="profile-view-aliases" style="font-size:11px;color:var(--muted);cursor:pointer" onclick="editAliases()" title="Click to edit aliases"></div>
-          <div id="profile-view-meta" style="font-size:12px;color:var(--muted)"></div>
+          <div style="display:flex;flex-direction:column;gap:2px">
+            <div id="profile-view-name" style="font-size:16px;font-weight:bold;color:var(--green);letter-spacing:.08em"></div>
+            <div id="profile-view-aliases" style="font-size:11px;color:var(--muted);cursor:pointer" onclick="editAliases()" title="Click to edit aliases"></div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:2px;margin-left:8px">
+            <div id="profile-view-meta" style="font-size:12px;color:var(--muted)"></div>
+            <div id="profile-view-updated" style="font-size:11px;color:var(--dim)"></div>
+          </div>
           <button onclick="loadProfileBatch()" id="profile-load-btn"
             style="margin-left:auto;background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:12px;padding:7px 18px;border-radius:6px;cursor:pointer">
             ▶ Load into Analyzer
@@ -605,6 +620,44 @@ select{cursor:pointer}
 <div id="ibox" style="position:fixed;top:-9999px;left:-9999px;width:1280px;height:960px;overflow:hidden;pointer-events:none;opacity:0.01;z-index:-1"></div>
 
 <script>
+// ── Password gate ─────────────────────────────────────────────────────────────
+(function() {
+  const PASS = 'ilovesui';
+  const SESSION_KEY = 'dt_auth';
+  if (sessionStorage.getItem(SESSION_KEY) === '1') return;
+  // Show gate
+  document.addEventListener('DOMContentLoaded', () => {
+    const gate = document.createElement('div');
+    gate.id = 'auth-gate';
+    gate.style.cssText = 'position:fixed;inset:0;background:#06060c;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;font-family:monospace';
+    gate.innerHTML = `
+      <div style="font-size:22px;font-weight:bold;color:#00e596;letter-spacing:.12em">🃏 DUEL TOOLS</div>
+      <div style="font-size:13px;color:#ccccdd;margin-bottom:8px">Enter password to continue</div>
+      <input id="gate-inp" type="password" placeholder="Password" autofocus
+        style="background:#131320;border:1px solid #252538;border-radius:6px;color:#fff;font-family:monospace;font-size:15px;padding:10px 16px;outline:none;width:260px;text-align:center"/>
+      <button id="gate-btn" style="background:#00e596;color:#050508;border:none;border-radius:6px;font-family:monospace;font-weight:bold;font-size:14px;padding:10px 32px;cursor:pointer">Enter</button>
+      <div id="gate-err" style="color:#ff5555;font-size:12px;display:none">Incorrect password</div>
+    `;
+    document.body.prepend(gate);
+    const inp = document.getElementById('gate-inp');
+    const btn = document.getElementById('gate-btn');
+    const err = document.getElementById('gate-err');
+    const tryPass = () => {
+      if (inp.value === PASS) {
+        sessionStorage.setItem(SESSION_KEY, '1');
+        gate.remove();
+      } else {
+        err.style.display='block';
+        inp.value=''; inp.focus();
+        inp.style.borderColor='#ff5555';
+        setTimeout(()=>inp.style.borderColor='#252538', 1000);
+      }
+    };
+    btn.onclick = tryPass;
+    inp.addEventListener('keydown', e => { if(e.key==='Enter') tryPass(); });
+  });
+})();
+
 // Duel Tools v1781244128 — built fresh
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1010,24 +1063,90 @@ async function loadBatches() {
 
 function renderBatchList(list) {
   const el = document.getElementById('batch-list');
-  if (!list.length) { el.innerHTML = '<div class="no-batches">No batches yet.</div>'; return; }
+  // Build combined list: temp batch first (if exists), then server batches
+  const displayList = [];
+  if (_tempBatch) displayList.push(_tempBatch);
+  displayList.push(...list.filter(b => !_tempBatch || b.id !== _tempBatch.id));
+
+  if (!displayList.length) { el.innerHTML = '<div class="no-batches">No batches yet.</div>'; return; }
   el.innerHTML = '';
-  list.forEach(b => {
+  displayList.forEach(b => {
+    const isTemp = !!b.isTemp;
     const reg = window._playerRegistry && window._playerRegistry[(b.player||'').toLowerCase()];
     const aliasNames = reg ? new Set([b.player.toLowerCase(), ...(reg.aliases||[]).map(a=>a.toLowerCase())]) : new Set([b.player.toLowerCase()]);
-    const totalCount = list.filter(x => aliasNames.has((x.player||'').toLowerCase())).reduce((sum,x)=>sum+(x.replayCount||0),0);
-    const ownCount = b.replayCount||0;
+    const totalCount = isTemp ? (b.replays||[]).length : list.filter(x => aliasNames.has((x.player||'').toLowerCase())).reduce((sum,x)=>sum+(x.replayCount||0),0);
+    const ownCount = b.replayCount || (b.replays||[]).length || 0;
     const displayCount = Math.max(totalCount, ownCount);
-    const hasAliasReplays = totalCount > ownCount;
+    const hasAliasReplays = !isTemp && totalCount > ownCount;
 
     const item = document.createElement('div');
     item.className = 'batch-item' + ((_activeBatch&&_activeBatch.id===b.id)?' on':'');
-    const safePlayer = b.player.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-    item.innerHTML = '<div style="display:flex;align-items:center;gap:4px"><div class="bi-name" style="flex:1">'+b.name+'</div><button class="bi-rename" onclick="renameBatch(event,\''+b.id+'\',\''+safePlayer+'\')">✎</button><span class="bi-del" onclick="deleteBatch(event,\''+b.id+'\')">✕</span></div><div class="bi-meta">'+displayCount+' replays'+(hasAliasReplays?' <span style="color:var(--dim);font-size:10px">(incl. aliases)</span>':'')+'</div>';
+    if (isTemp) item.style.borderLeft = '2px solid var(--amber)';
+
+    const safePlayer = (b.player||'').replace(/\/g,'\\').replace(/'/g,"\'");
+    const tempTag = isTemp ? '<span style="color:var(--amber);font-size:10px;margin-left:4px">⚡TEMP</span>' : '';
+    const aliasTag = hasAliasReplays ? '<span style="color:var(--dim);font-size:10px"> (incl. aliases)</span>' : '';
+    item.innerHTML = '<div style="display:flex;align-items:center;gap:4px"><div class="bi-name" style="flex:1">'+b.name+tempTag+'</div>'+(isTemp?'':'<button class="bi-rename" onclick="renameBatch(event,''+b.id+'',''+safePlayer+'')">✎</button>')+'<span class="bi-del" onclick="'+(isTemp?'clearTempBatch':'deleteBatch')+'(event,''+b.id+'')" style="color:'+(isTemp?'var(--amber)':'')+'">✕</span></div><div class="bi-meta">'+displayCount+' replays'+aliasTag+'</div>';
     item.onclick = () => selectBatch(b.id);
     el.appendChild(item);
   });
 }
+
+function clearTempBatch(e, id) {
+  e.stopPropagation();
+  if (!confirm('Clear temporary batch?')) return;
+  _tempBatch = null;
+  if (_activeBatch && _activeBatch.isTemp) {
+    _activeBatch = null;
+    document.getElementById('rps-empty').style.display='flex';
+    document.getElementById('rps-out').style.display='none';
+    document.getElementById('match-list').innerHTML='<div class="dno">Select a batch first.</div>';
+    document.getElementById('deck-empty').style.display='flex';
+    document.getElementById('deck-display').style.display='none';
+  }
+  loadBatches();
+}
+
+// ── Player search ──────────────────────────────────────────────────────────
+function onPlayerSearch(val) {
+  const dropdown = document.getElementById('player-search-dropdown');
+  if (!val.trim()) { dropdown.style.display='none'; return; }
+  const q = val.toLowerCase();
+  const matches = Object.values(window._playerRegistry||{})
+    .filter(p => p.name.toLowerCase().includes(q) || (p.aliases||[]).some(a=>a.toLowerCase().includes(q)))
+    .slice(0, 12);
+  if (!matches.length) { dropdown.style.display='none'; return; }
+  dropdown.innerHTML = '';
+  dropdown.style.display = 'block';
+  matches.forEach(p => {
+    const item = document.createElement('div');
+    item.style.cssText='padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border)';
+    item.onmouseover=()=>item.style.background='var(--card2)';
+    item.onmouseout=()=>item.style.background='';
+    const aliases = (p.aliases||[]);
+    item.innerHTML = '<span style="color:var(--text);font-weight:bold">'+p.name+'</span>'+(aliases.length?'<span style="color:var(--muted);font-size:11px"> aka '+aliases.join(', ')+'</span>':'');
+    item.onclick = () => {
+      document.getElementById('player-search').value = '';
+      dropdown.style.display = 'none';
+      switchTab('profiles');
+      setTimeout(() => openPlayerByName(p.name), 150);
+    };
+    dropdown.appendChild(item);
+  });
+}
+
+function showPlayerDropdown() {
+  const val = (document.getElementById('player-search').value||'').trim();
+  if (val) onPlayerSearch(val);
+}
+
+// Close dropdown when clicking outside
+document.addEventListener('click', e => {
+  if (!e.target.closest('#player-search') && !e.target.closest('#player-search-dropdown')) {
+    const dd = document.getElementById('player-search-dropdown');
+    if (dd) dd.style.display='none';
+  }
+});
 
 function renderTopPlayers(playerRegistry) {
   const el = document.getElementById('top-players-list');
@@ -1061,14 +1180,22 @@ async function openPlayerByName(name) {
 }
 
 async function selectBatch(id) {
+  // Handle temp batch click — it lives in memory only
+  if (_tempBatch && id === _tempBatch.id) {
+    _activeBatch = _tempBatch;
+    loadBatches();
+    renderRPS();
+    buildDeck();
+    st(`⚡ Temp: ${_activeBatch.name}`, 'var(--amber)');
+    return;
+  }
   try {
     const r = await fetch(`${API}/batches/${id}`);
     _activeBatch = await r.json();
-    loadBatches(); // refresh to show active
+    loadBatches();
     renderRPS();
     buildDeck();
     st(`Batch: ${_activeBatch.name}`, 'var(--green)');
-    // Show 'Add to Current Batch' button when a batch is selected
     const addBtn = document.getElementById('add-to-batch-btn');
     if (addBtn) addBtn.style.display = 'block';
   } catch(e) { st('Failed to load batch', 'var(--red)'); }
@@ -1133,22 +1260,28 @@ async function go() {
     return;
   }
 
-  // Parse aliases from the input field
   const aliasRaw = (document.getElementById('aliases-inp').value||'').trim();
   const aliases = aliasRaw ? aliasRaw.split(',').map(a=>a.trim()).filter(Boolean) : [];
 
-  // Always create a new batch named after the player
-  try {
-    const r = await fetch(API+'/batches', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ name: player, player, aliases })
-    });
-    _activeBatch = await r.json();
-    // Store aliases in memory for this session
-    _activeBatch.aliases = aliases;
-  } catch(e) {
-    console.warn('Server unavailable, using local batch:', e.message);
-    _activeBatch = { id:'local-'+Date.now(), name:player, player, aliases, replays:[], createdAt:Date.now(), status:'pending' };
+  if (_batchPanelMode === 'temp') {
+    // Temporary batch — in-memory only, never saved to server
+    const tempId = 'temp-' + Date.now();
+    _tempBatch = { id: tempId, name: player || 'Temp', player, aliases, replays: [], createdAt: Date.now(), status: 'pending', isTemp: true };
+    _activeBatch = _tempBatch;
+    loadBatches(); // refresh list to show temp batch
+  } else {
+    // Always create a new batch named after the player
+    try {
+      const r = await fetch(API+'/batches', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ name: player, player, aliases })
+      });
+      _activeBatch = await r.json();
+      _activeBatch.aliases = aliases;
+    } catch(e) {
+      console.warn('Server unavailable, using local batch:', e.message);
+      _activeBatch = { id:'local-'+Date.now(), name:player, player, aliases, replays:[], createdAt:Date.now(), status:'pending' };
+    }
   }
   loadBatches();
   closeBatchPanel();
@@ -1179,8 +1312,12 @@ async function go() {
     const _aliases = _activeBatch.aliases || [];
     const _parsed  = parseMatch(result.id, result.allPlays||result.plays||[], _activeBatch.player||'', _aliases);
     const _oppName = _parsed ? _parsed.oppName : '';
+    // Skip server save for temp batches
+    if (_activeBatch.isTemp) {
+      _activeBatch.replays.push({ replayId:result.id, plays:result.plays, allPlays:result.allPlays, timedOut:result.timedOut, eventLabel:'' });
+    }
     // Save to server — server handles duplicate detection + cross-linking
-    try {
+    if (!_activeBatch.isTemp) try {
       const saveRes = await fetch(`${API}/batches/${_activeBatch.id}/replay`, {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ replayId:result.id, plays:result.plays, allPlays:result.allPlays,
@@ -1200,7 +1337,7 @@ async function go() {
           if (cl.linked) qi(`<span style="color:var(--blue)">🔗 Replay cross-linked to <b>${cl.player}</b>'s batch</span>`);
         }
       }
-    } catch(e) { console.warn('Server save failed (server may not be running):', e.message); }
+    } catch(e) { console.warn('Server save failed (server may not be running):', e.message); } } // end !isTemp
     if (result.timedOut) toRetry.push({ id:ids[i] });
     pb(Math.round((i+1)/ids.length*50));
     if (i<ids.length-1) await sleep(1200);
@@ -1264,24 +1401,32 @@ function doStop() {
 }
 
 // ── Batch input panel ────────────────────────────────────────────────────────
-let _batchPanelMode = 'new'; // 'new' or 'add'
+let _batchPanelMode = 'new'; // 'new', 'add', or 'temp'
+let _tempBatch = null; // in-memory only temp batch
 
 function openBatchPanel(mode) {
   _batchPanelMode = mode;
-  const panel    = document.getElementById('batch-panel');
-  const backdrop = document.getElementById('batch-panel-backdrop');
-  const title    = document.getElementById('batch-panel-title');
-  const playerRow= document.getElementById('batch-panel-player-row');
+  const panel     = document.getElementById('batch-panel');
+  const backdrop  = document.getElementById('batch-panel-backdrop');
+  const title     = document.getElementById('batch-panel-title');
+  const playerRow = document.getElementById('batch-panel-player-row');
+  const tempBadge = document.getElementById('batch-panel-temp-badge');
   panel.style.display    = 'flex';
   backdrop.style.display = 'block';
+
   if (mode === 'new') {
-    title.textContent   = 'NEW BATCH';
-    playerRow.style.display = 'block';
+    title.textContent        = 'NEW BATCH';
+    playerRow.style.display  = 'block';
+    tempBadge.style.display  = 'none';
+  } else if (mode === 'temp') {
+    title.textContent        = 'TEMPORARY BATCH';
+    playerRow.style.display  = 'block';
+    tempBadge.style.display  = 'inline-block';
   } else {
-    title.textContent   = 'ADD TO CURRENT BATCH';
-    playerRow.style.display = 'none';
+    title.textContent        = 'ADD TO CURRENT BATCH';
+    playerRow.style.display  = 'none';
+    tempBadge.style.display  = 'none';
   }
-  // Focus the right textarea
   setTimeout(() => document.getElementById('urls-inp').focus(), 50);
 }
 
@@ -1764,7 +1909,7 @@ function renderMatchSidebar(query) {
     item.dataset.idx   = idx;
     item.dataset.event = (m.eventLabel||'').toLowerCase();
     const myDeckTag = classifyFromCards(m.allMine);
-    const myDeckLabel = myDeckTag ? myDeckTag.dc : '';
+    const myDeckLabel = m.myDeckOverride || (myDeckTag ? myDeckTag.dc : '');
     const matchPrefix = m.result==='w'?'W ':m.result==='l'?'L ':'';
     const scoreDisplay = m.draws>0 ? m.score : `${m.myW}-${m.oppW}`;
     const rl = matchPrefix + scoreDisplay;
@@ -1798,6 +1943,82 @@ function selectMatch(idx) {
   if (dempty)   dempty.style.display   = 'none';
   if (ddisplay) { ddisplay.style.display = 'flex'; ddisplay.innerHTML = ''; }
   renderMatchDisplay(m).catch(e => console.error("renderMatchDisplay error:", e));
+}
+
+// ── Deck type override ────────────────────────────────────────────────────────
+const DECK_TYPE_LIST = [
+  'Goat Control','Chaos Control','Chaos Warrior','Warrior','Monarch','Earth Aggro',
+  'Aggro Lockdown','Chaos Turbo','Reasoning Gate Turbo','Reasoning Gate Machine',
+  'Chaos Return','Chaos Recruiter','Gravekeeper','Burn','Panda Burn','Drain Burn',
+  'Last Turn','Pacman','Ben Kai OTK','Relinquished','Chaos Relinquished',
+  'Library FTK','Gumo','Rescue Cat Earth Aggro','SWAG Rescue Cat','Rescue Cat OTK',
+  'Rescue Cat Burn','Gearfried Warriors','Unknown'
+].sort();
+
+async function editDeckType(m, isOpp, badgeEl, refreshFn) {
+  const overrideKey = isOpp ? 'oppDeckOverride' : 'myDeckOverride';
+  const current = m[overrideKey] || '';
+
+  // Build inline dropdown replacing the badge
+  const wrapper = document.createElement('span');
+  wrapper.style.cssText='display:inline-flex;align-items:center;gap:4px;margin-left:8px';
+
+  const sel = document.createElement('select');
+  sel.style.cssText='background:var(--card2);border:1px solid var(--amber);color:var(--text);font-family:monospace;font-size:11px;padding:2px 4px;border-radius:4px;outline:none';
+  // Add blank option at top
+  const blank = document.createElement('option'); blank.value=''; blank.textContent='-- pick deck type --'; sel.appendChild(blank);
+  DECK_TYPE_LIST.forEach(dt => {
+    const opt = document.createElement('option'); opt.value=dt; opt.textContent=dt;
+    if (dt === current) opt.selected=true;
+    sel.appendChild(opt);
+  });
+  // Also allow custom text
+  const customOpt = document.createElement('option'); customOpt.value='__custom__'; customOpt.textContent='✎ Type custom...'; sel.appendChild(customOpt);
+
+  const saveBtn = document.createElement('button');
+  saveBtn.textContent='✓'; saveBtn.style.cssText='background:var(--amber);color:#050508;border:none;font-family:monospace;font-size:12px;padding:1px 7px;border-radius:4px;cursor:pointer';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent='✕'; cancelBtn.style.cssText='background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:1px 6px;border-radius:4px;cursor:pointer';
+
+  badgeEl.replaceWith(wrapper);
+  wrapper.appendChild(sel); wrapper.appendChild(saveBtn); wrapper.appendChild(cancelBtn);
+  sel.focus();
+
+  const doSave = async () => {
+    let val = sel.value;
+    if (val === '__custom__') {
+      val = (prompt('Enter deck type name:') || '').trim();
+      if (!val) { refreshFn(); return; }
+    }
+    if (!val) { refreshFn(); return; }
+
+    // Save override to match in memory
+    m[overrideKey] = val;
+    // Also update myDeck/oppDeck so stats/profiles reflect the fix
+    if (isOpp) m.oppDeck = val; else m.myDeck = val;
+
+    // Persist to server — store override on the replay in the active batch
+    if (_activeBatch && !_activeBatch.isTemp) {
+      try {
+        await fetch(`${API}/batches/${_activeBatch.id}/replay/${m.replayId}/override`, {
+          method:'PATCH', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ myDeckOverride: m.myDeckOverride||null, oppDeckOverride: m.oppDeckOverride||null })
+        });
+      } catch(e) { console.warn('Override save failed:', e.message); }
+      // Also update in _activeBatch.replays
+      const rep = (_activeBatch.replays||[]).find(r=>r.replayId===m.replayId);
+      if (rep) { rep.myDeckOverride=m.myDeckOverride||null; rep.oppDeckOverride=m.oppDeckOverride||null; }
+    }
+    // Re-render match list badge
+    buildDeckMatchList(_matches);
+    refreshFn();
+  };
+
+  sel.onchange = () => { if (sel.value !== '__custom__') {} }; // let save button handle it
+  saveBtn.onclick = doSave;
+  cancelBtn.onclick = refreshFn;
+  sel.onkeydown = e => { if(e.key==='Enter') doSave(); if(e.key==='Escape') refreshFn(); };
 }
 
 async function renderMatchDisplay(m) {
@@ -1878,6 +2099,9 @@ async function renderMatchDisplay(m) {
     content.innerHTML = '';
     const showCards = _showOpp ? m.allOpp : m.allMine;
     const deckClass = classifyFromCards(showCards);
+    // Use override if set, fall back to classifier
+    const overrideKey = _showOpp ? 'oppDeckOverride' : 'myDeckOverride';
+    const currentDeck = m[overrideKey] || (deckClass ? deckClass.dc : null);
 
     // Entire match section
     const entHdr = document.createElement('div');
@@ -1885,10 +2109,20 @@ async function renderMatchDisplay(m) {
     const entTitle = document.createElement('span'); entTitle.className='entire-title';
     entTitle.textContent=`ENTIRE MATCH — ${_showOpp?(m.oppName||'Opponent'):player}`;
     entHdr.appendChild(entTitle);
-    if (deckClass) {
+    if (currentDeck) {
       const badge=document.createElement('span');
-      badge.style.cssText=`font-size:11px;color:var(--green);border:1px solid var(--green);border-radius:4px;padding:1px 8px;margin-left:8px`;
-      badge.textContent=deckClass.dc; entHdr.appendChild(badge);
+      const isOverridden = !!m[overrideKey];
+      badge.style.cssText=`font-size:11px;color:${isOverridden?'var(--amber)':'var(--green)'};border:1px solid ${isOverridden?'var(--amber)':'var(--green)'};border-radius:4px;padding:1px 8px;margin-left:8px;cursor:pointer;user-select:none`;
+      badge.title='Click to edit deck type';
+      badge.textContent=currentDeck+(isOverridden?' ✎':'');
+      badge.onclick=()=>editDeckType(m, _showOpp, badge, refreshCards);
+      entHdr.appendChild(badge);
+    } else {
+      const addBadge=document.createElement('span');
+      addBadge.style.cssText='font-size:11px;color:var(--dim);border:1px dashed var(--border2);border-radius:4px;padding:1px 8px;margin-left:8px;cursor:pointer';
+      addBadge.textContent='+ set deck type';
+      addBadge.onclick=()=>editDeckType(m, _showOpp, addBadge, refreshCards);
+      entHdr.appendChild(addBadge);
     }
     const entYdk=document.createElement('button'); entYdk.className='ddl'; entYdk.textContent='↓ YDK';
     entYdk.style.marginLeft='auto';
@@ -2279,15 +2513,21 @@ function buildMatchRecord(replayResult, player, aliases) {
     oppDeck:   oppClass ? oppClass.dc : 'Unknown',
   }));
 
+  // Apply manual overrides if present
+  const myDeckFinal  = replayResult.myDeckOverride  || (myClass  ? myClass.dc  : 'Unknown');
+  const oppDeckFinal = replayResult.oppDeckOverride || (oppClass ? oppClass.dc : 'Unknown');
+
   return {
     replayId:  replayId,
     player,
     oppName:   parsed.oppName,
     eventLabel: replayResult.eventLabel || '',
-    myDeck:    myClass  ? myClass.dc  : 'Unknown',
-    oppDeck:   oppClass ? oppClass.dc : 'Unknown',
-    myDeckConf:  myClass  ? myClass.conf  : 'Low',
-    oppDeckConf: oppClass ? oppClass.conf : 'Low',
+    myDeckOverride:  replayResult.myDeckOverride  || null,
+    oppDeckOverride: replayResult.oppDeckOverride || null,
+    myDeck:    myDeckFinal,
+    oppDeck:   oppDeckFinal,
+    myDeckConf:  replayResult.myDeckOverride  ? 'Override' : (myClass  ? myClass.conf  : 'Low'),
+    oppDeckConf: replayResult.oppDeckOverride ? 'Override' : (oppClass ? oppClass.conf : 'Low'),
     matchWon:  parsed.result === 'w',
     matchLost: parsed.result === 'l',
     result:    parsed.result,
@@ -3586,20 +3826,29 @@ async function toggleTopPlayer(checked) {
   if (!nameEl) return;
   const player = nameEl.textContent.trim();
   const labelEl = document.getElementById('profile-top-flag-label');
+  const key = player.toLowerCase();
+  // Ensure player exists in registry before patching
+  if (!window._playerRegistry[key]) {
+    try {
+      await fetch(`${API}/players`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ name: player, aliases: [] })
+      });
+      window._playerRegistry[key] = { name: player, aliases: [] };
+    } catch(e) {}
+  }
   try {
-    await fetch(`${API}/players/${encodeURIComponent(player)}/aliases`, {
+    const res = await fetch(`${API}/players/${encodeURIComponent(player)}/aliases`, {
       method:'PATCH', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ topPlayer: checked })
     });
+    const data = await res.json();
     if (labelEl) labelEl.textContent = checked ? '⭐ Top Player' : 'Flag as Top Player';
-    // Update registry cache
-    const key = player.toLowerCase();
-    if (window._playerRegistry && window._playerRegistry[key]) {
-      window._playerRegistry[key].topPlayer = checked;
-    }
+    if (window._playerRegistry[key]) window._playerRegistry[key].topPlayer = checked;
+    else window._playerRegistry[key] = { name: player, aliases: [], topPlayer: checked };
     renderTopPlayers();
-    st(checked ? player+' flagged as Top Player' : player+' removed from Top Players', 'var(--green)');
-  } catch(e) { st('Failed to save', 'var(--red)'); }
+    st(checked ? '⭐ '+player+' flagged as Top Player' : player+' removed from Top Players', 'var(--green)');
+  } catch(e) { st('Failed to save: '+e.message, 'var(--red)'); console.error(e); }
 }
 
 // ── GFWL Teams ────────────────────────────────────────────────────────────────
@@ -3753,6 +4002,11 @@ async function openProfile(player, batches, records) {
   const totalReplays = batches.reduce((a,b)=>a+(b.replays||[]).length,0);
   document.getElementById('profile-view-meta').textContent =
     `${batches.length} batch${batches.length!==1?'es':''} · ${totalReplays} replays`;
+  // Last updated = most recent savedAt across all replays
+  const allSavedAts = batches.flatMap(b=>(b.replays||[]).map(r=>r.savedAt||0)).filter(Boolean);
+  const lastUpdated = allSavedAts.length ? Math.max(...allSavedAts) : null;
+  const updEl = document.getElementById('profile-view-updated');
+  if (updEl) updEl.textContent = lastUpdated ? 'Last updated: '+new Date(lastUpdated).toLocaleDateString() : '';
 
   // Load player registry entry for this profile
   let _profileEntry = null;

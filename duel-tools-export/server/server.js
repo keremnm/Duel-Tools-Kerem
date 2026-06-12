@@ -292,6 +292,21 @@ const server = http.createServer((req, res) => {
       });
     }
 
+    // PATCH /api/batches/:id/replay/:replayId/override — save deck type overrides
+    if (parts[0]==='batches' && parts[1] && parts[2]==='replay' && parts[3] && parts[4]==='override' && method==='PATCH') {
+      const b = db.batches[parts[1]];
+      if (!b) return json(res, 404, { error:'Not found' });
+      return readBody(req, async data => {
+        const r = (b.replays||[]).find(r => r.replayId === parts[3]);
+        if (r) {
+          if (data.myDeckOverride  !== undefined) r.myDeckOverride  = data.myDeckOverride;
+          if (data.oppDeckOverride !== undefined) r.oppDeckOverride = data.oppDeckOverride;
+          await saveDB();
+        }
+        json(res, 200, { ok:true });
+      });
+    }
+
     // PATCH /api/batches/:id/replay/:replayId/label
     if (parts[0]==='batches' && parts[1] && parts[2]==='replay' && parts[3] && parts[4]==='label' && method==='PATCH') {
       const b = db.batches[parts[1]];
