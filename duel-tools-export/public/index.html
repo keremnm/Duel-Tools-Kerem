@@ -922,7 +922,7 @@ const CARD_ID_MAP = {
 };
 
 
-const API = 'http://localhost:8000/api';
+const API = (location.hostname === 'localhost' || location.hostname === '127.0.0.1') ? 'http://localhost:8000/api' : '/api';
 
 // ══════════════════════════════════════════════════════════════════════
 // GOAT FORMAT BANLIST
