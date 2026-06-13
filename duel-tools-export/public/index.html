@@ -377,36 +377,58 @@ select{cursor:pointer}
           <button class="dd-tab" onclick="ddSwitchTab('classifier',this)">Deck Classifier</button>
         </div>
         <div id="dd-matchups">
-          <div class="dd-section-title">Deck Matchup Win Rates</div>
-          <div class="dd-section-sub">Calculated automatically from your current loaded batch.</div>
-          <div style="margin-top:12px;margin-bottom:16px">
-            <button class="dd-btn" onclick="ddMatchupsFromBatch()">▶ Calculate from Batch</button>
+          <div class="dd-section-title">Deck Matchup Win Rates — All Batches</div>
+          <div class="dd-section-sub">Combined data from all saved batches. Filter by player deck type using the buttons below.</div>
+          <!-- Deck filter hotkeys -->
+          <div style="margin:12px 0 8px;display:flex;flex-wrap:wrap;gap:5px" id="dd-deck-hotkeys">
+            <button class="dd-btn on" onclick="ddSetDeckFilter('All',this)">All Decks</button>
+            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Chaos Turbo',this)">Chaos Turbo</button>
+            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Chaos Control',this)">Chaos Control</button>
+            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Warrior',this)">Warrior</button>
+            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Chaos Warrior',this)">Chaos Warrior</button>
+            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Goat Control',this)">Goat Control</button>
+            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Earth Aggro',this)">Earth Aggro</button>
+            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Panda Burn',this)">Panda Burn</button>
+            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Reasoning Gate Turbo',this)">Reasoning Gate Turbo</button>
+            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Reasoning Gate Machine',this)">Reasoning Gate Machine</button>
+            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Chaos Return',this)">Chaos Return</button>
+            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Chaos Relinquished',this)">Chaos Relinquished</button>
+            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Chaos Recruiter',this)">Chaos Recruiter</button>
           </div>
-          <div id="dd-matchup-out"><div class="dd-empty">Load a batch and click Calculate.</div></div>
+          <div id="dd-matchup-out"><div class="dd-empty">Loading all batch data...</div></div>
         </div>
         <div id="dd-cardwr" style="display:none">
-          <div class="dd-section-title">Card Win Rate</div>
-          <div class="dd-section-sub">Win rate impact of a specific card from your current batch replays.</div>
-          <div id="dd-quick-picks" style="display:none;margin-top:12px"></div>
-          <div style="margin-top:10px;margin-bottom:10px">
+          <div class="dd-section-title">Card Win Rate — All Batches</div>
+          <div class="dd-section-sub">Win rate impact of cards across all saved batches combined. Filter by deck type.</div>
+          <!-- Deck filter hotkeys (same set, separate instance) -->
+          <div style="margin:12px 0 8px;display:flex;flex-wrap:wrap;gap:5px" id="dd-cwr-hotkeys">
+            <button class="dd-btn on" onclick="ddSetCWRFilter('All',this)">All Decks</button>
+            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Chaos Turbo',this)">Chaos Turbo</button>
+            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Chaos Control',this)">Chaos Control</button>
+            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Warrior',this)">Warrior</button>
+            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Chaos Warrior',this)">Chaos Warrior</button>
+            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Goat Control',this)">Goat Control</button>
+            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Earth Aggro',this)">Earth Aggro</button>
+            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Panda Burn',this)">Panda Burn</button>
+            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Reasoning Gate Turbo',this)">Reasoning Gate Turbo</button>
+            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Reasoning Gate Machine',this)">Reasoning Gate Machine</button>
+            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Chaos Return',this)">Chaos Return</button>
+            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Chaos Relinquished',this)">Chaos Relinquished</button>
+            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Chaos Recruiter',this)">Chaos Recruiter</button>
+          </div>
+          <div id="dd-quick-picks" style="margin-bottom:10px"></div>
+          <div style="margin-bottom:10px">
             <label class="lbl">CARD NAME (partial match ok)</label>
             <input id="dd-card-name" type="text" placeholder="e.g. Night Assailant, Scapegoat, Thunder Dragon..."/>
           </div>
-          <div style="display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap">
-            <div style="flex:1;min-width:160px">
-              <label class="lbl">MY DECK TYPE</label>
-              <select id="dd-cwr-my-deck" style="width:100%;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:12px;padding:7px 9px;outline:none;cursor:pointer"><option value="All">All My Decks</option></select>
-            </div>
-            <div style="flex:1;min-width:160px">
-              <label class="lbl">OPPONENT DECK TYPE</label>
-              <select id="dd-cwr-opp-deck" style="width:100%;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:12px;padding:7px 9px;outline:none;cursor:pointer"><option value="All">All Opponents</option></select>
-            </div>
-          </div>
+          <!-- Hidden selects kept for JS compatibility -->
+          <select id="dd-cwr-my-deck" style="display:none"><option value="All">All My Decks</option></select>
+          <select id="dd-cwr-opp-deck" style="display:none"><option value="All">All Opponents</option></select>
           <div style="display:flex;gap:8px;margin-bottom:16px">
-            <button class="dd-btn" onclick="ddCardWRFromBatch()">▶ Calculate from Batch</button>
+            <button class="dd-btn" onclick="ddCardWRGlobal()">▶ Calculate</button>
             <button class="dd-btn-sec" onclick="document.getElementById('dd-card-name').value='';document.getElementById('dd-cardwr-out').innerHTML=''">↺ Clear</button>
           </div>
-          <div id="dd-cardwr-out"><div class="dd-empty">Load a batch, enter a card name, and click Calculate.</div></div>
+          <div id="dd-cardwr-out"><div class="dd-empty">Select a deck filter and enter a card name.</div></div>
         </div>
         <div id="dd-classifier" style="display:none">
           <div class="dd-section-title">Deck Type Classifier</div>
@@ -532,16 +554,33 @@ select{cursor:pointer}
             <!-- Stat chips row -->
             <div id="profile-stat-chips" style="display:flex;gap:10px;flex-wrap:wrap"></div>
 
-            <!-- Deck chart + matchup table -->
+            <!-- Deck chart + analysis tabs -->
             <div style="display:grid;grid-template-columns:260px 1fr;gap:16px">
               <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px">
                 <div class="slbl" style="margin-bottom:10px">DECK USAGE</div>
                 <canvas id="profile-deck-chart" style="max-height:200px"></canvas>
                 <div id="profile-deck-legend" style="margin-top:10px;display:flex;flex-direction:column;gap:4px"></div>
               </div>
-              <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px">
-                <div class="slbl" style="margin-bottom:10px">WIN RATE VS OPPONENT DECK TYPE</div>
-                <div id="profile-matchup-table"></div>
+              <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;display:flex;flex-direction:column">
+                <!-- Sub-tabs -->
+                <div style="display:flex;gap:2px;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:8px">
+                  <button class="dd-tab on" id="profile-tab-matchups" onclick="profileSubTab('matchups',this)">Deck Matchups</button>
+                  <button class="dd-tab" id="profile-tab-cardwr" onclick="profileSubTab('cardwr',this)">Card Win Rate</button>
+                </div>
+                <!-- Matchup table -->
+                <div id="profile-matchup-panel">
+                  <div class="slbl" style="margin-bottom:8px;font-size:10px">WIN RATE VS OPPONENT DECK TYPE</div>
+                  <div id="profile-matchup-table"></div>
+                </div>
+                <!-- Card Win Rate panel -->
+                <div id="profile-cardwr-panel" style="display:none">
+                  <div class="slbl" style="margin-bottom:8px;font-size:10px">CARD WIN RATE</div>
+                  <input id="profile-card-name" type="text" placeholder="Card name (partial ok)..."
+                    style="font-size:12px;margin-bottom:8px"
+                    oninput="profileCardWRSearch(this.value)"/>
+                  <div id="profile-cardwr-quickpicks" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px"></div>
+                  <div id="profile-cardwr-out"><div style="color:var(--muted);font-size:12px">Type a card name above.</div></div>
+                </div>
               </div>
             </div>
 
@@ -1923,15 +1962,62 @@ function renderMatchSidebar(query) {
     const matchPrefix = m.result==='w'?'W ':m.result==='l'?'L ':'';
     const scoreDisplay = m.draws>0 ? m.score : `${m.myW}-${m.oppW}`;
     const rl = matchPrefix + scoreDisplay;
-    item.innerHTML = `<div class="mi-title">vs ${m.oppName||'?'}</div>
-      <div class="mi-score ${m.result}">${rl} · ${m.games.length}G</div>
-      ${myDeckLabel?`<div class="mi-deck-label">${myDeckLabel}</div>`:''}
-      ${m.eventLabel?`<div class="mi-event-label">🏆 ${m.eventLabel}</div>`:''}`;
+    const titleRow = document.createElement('div');
+    titleRow.style.cssText = 'display:flex;align-items:center;gap:4px';
+    const titleEl = document.createElement('div');
+    titleEl.className = 'mi-title'; titleEl.style.flex='1';
+    titleEl.textContent = 'vs '+(m.oppName||'?');
+    const delBtn = document.createElement('button');
+    delBtn.textContent = '✕';
+    delBtn.style.cssText = 'background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px;padding:0 2px;font-family:monospace;flex-shrink:0;opacity:0;transition:opacity .15s';
+    delBtn.title = 'Delete match';
+    delBtn.onclick = e => { e.stopPropagation(); deleteMatch(idx, m); };
+    titleRow.appendChild(titleEl); titleRow.appendChild(delBtn);
+    item.appendChild(titleRow);
+    item.onmouseenter = () => delBtn.style.opacity = '1';
+    item.onmouseleave = () => delBtn.style.opacity = '0';
+    const scoreEl = document.createElement('div');
+    scoreEl.className = 'mi-score '+m.result; scoreEl.textContent = rl+' · '+m.games.length+'G';
+    item.appendChild(scoreEl);
+    if (myDeckLabel) { const dl=document.createElement('div'); dl.className='mi-deck-label'; dl.textContent=myDeckLabel; item.appendChild(dl); }
+    if (m.eventLabel) { const el2=document.createElement('div'); el2.className='mi-event-label'; el2.textContent='🏆 '+m.eventLabel; item.appendChild(el2); }
     item.onclick = () => selectMatch(idx);
     list.appendChild(item);
   });
   const q = (query||'').toLowerCase().trim();
   if (q) filterMatches(q);
+}
+
+async function deleteMatch(idx, m) {
+  if (!confirm(`Delete match vs ${m.oppName||'?'} (${m.replayId})?
+
+This cannot be undone.`)) return;
+
+  // Remove from _matches in memory
+  _matches.splice(idx, 1);
+
+  // Remove from _activeBatch.replays
+  if (_activeBatch && _activeBatch.replays) {
+    _activeBatch.replays = _activeBatch.replays.filter(r => r.replayId !== m.replayId);
+  }
+
+  // Remove from server (saved batches only)
+  if (_activeBatch && !_activeBatch.isTemp && _activeBatch.id) {
+    try {
+      await fetch(`${API}/batches/${_activeBatch.id}/replay/${m.replayId}`, { method:'DELETE' });
+    } catch(e) { console.warn('Server delete failed:', e.message); }
+  }
+
+  // Re-render match list and clear viewer if deleted match was selected
+  buildDeckMatchList(_matches);
+  const deck = document.getElementById('deck-display');
+  const empty = document.getElementById('deck-empty');
+  if (deck && deck.style.display !== 'none') {
+    deck.style.display = 'none'; deck.innerHTML = '';
+    if (empty) empty.style.display = 'flex';
+  }
+  loadBatches();
+  st(`Match vs ${m.oppName||'?'} deleted`, 'var(--amber)');
 }
 
 function selectMatch(idx) {
@@ -2553,6 +2639,114 @@ function buildMatchRecord(replayResult, player, aliases) {
 }
 
 // ── Matchups from batch ────────────────────────────────────────────────
+// ── Global state for deck data filters ───────────────────────────────────────
+let _ddDeckFilter = 'All';
+let _ddCWRFilter  = 'All';
+let _globalRecords = []; // all records from all batches
+
+async function loadGlobalRecords() {
+  // Build records from all saved batches
+  const records = [];
+  try {
+    const res  = await fetch(API+'/batches');
+    const list = await res.json();
+    await Promise.all(list.map(async b => {
+      if (!b.replayCount) return;
+      try {
+        const r    = await fetch(API+'/batches/'+b.id);
+        const full = await r.json();
+        const player = full.player||'';
+        const aliases = (window._playerRegistry && window._playerRegistry[player.toLowerCase()])
+          ? (window._playerRegistry[player.toLowerCase()].aliases||[]) : (full.aliases||[]);
+        for (const rep of (full.replays||[])) {
+          const rec = buildMatchRecord(rep, player, aliases);
+          if (rec) records.push(rec);
+        }
+      } catch(e) {}
+    }));
+  } catch(e) {}
+  _globalRecords = records;
+  return records;
+}
+
+function ddSetDeckFilter(deck, btn) {
+  _ddDeckFilter = deck;
+  document.querySelectorAll('#dd-deck-hotkeys button').forEach(b => {
+    b.className = b === btn ? 'dd-btn on' : 'dd-btn-sec';
+  });
+  renderGlobalMatchups(_ddDeckFilter);
+}
+
+function ddSetCWRFilter(deck, btn) {
+  _ddCWRFilter = deck;
+  document.querySelectorAll('#dd-cwr-hotkeys button').forEach(b => {
+    b.className = b === btn ? 'dd-btn on' : 'dd-btn-sec';
+  });
+  // Update quick picks for new filter
+  const filtered = _ddCWRFilter === 'All' ? _globalRecords : _globalRecords.filter(r => r.myDeck === _ddCWRFilter);
+  renderQuickPicks(buildQuickPicks(filtered, _ddCWRFilter));
+}
+
+async function renderGlobalMatchups(deckFilter) {
+  const out = document.getElementById('dd-matchup-out');
+  if (!out) return;
+  if (!_globalRecords.length) {
+    out.innerHTML = '<div class="dd-empty">Loading...</div>';
+    await loadGlobalRecords();
+  }
+  const records = deckFilter === 'All' ? _globalRecords : _globalRecords.filter(r => r.myDeck === deckFilter);
+  if (!records.length) {
+    out.innerHTML = `<div class="dd-empty">No replays found${deckFilter!=='All'?' for '+deckFilter:''}.</div>`;
+    return;
+  }
+  renderMatchupResults(records, deckFilter === 'All' ? 'All Players' : deckFilter);
+}
+
+function ddCardWRGlobal() {
+  const cardName = (document.getElementById('dd-card-name').value||'').trim().toLowerCase();
+  if (!cardName) { st('Enter a card name', 'var(--red)'); return; }
+  const filtered = _ddCWRFilter === 'All' ? _globalRecords : _globalRecords.filter(r => r.myDeck === _ddCWRFilter);
+  if (!filtered.length) { document.getElementById('dd-cardwr-out').innerHTML = '<div class="dd-empty">No records. Check deck filter.</div>'; return; }
+  renderCardWinRate(filtered, cardName, document.getElementById('dd-cardwr-out'));
+}
+
+// ── Profile sub-tabs ─────────────────────────────────────────────────────────
+let _profileRecords = []; // records for currently open profile
+
+function profileSubTab(tab, btn) {
+  document.querySelectorAll('#profile-tab-matchups, #profile-tab-cardwr').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  document.getElementById('profile-matchup-panel').style.display = tab === 'matchups' ? 'block' : 'none';
+  document.getElementById('profile-cardwr-panel').style.display  = tab === 'cardwr'   ? 'block' : 'none';
+  if (tab === 'cardwr') profileCardWRQuickPicks();
+}
+
+function profileCardWRQuickPicks() {
+  if (!_profileRecords.length) return;
+  const picks = buildQuickPicks(_profileRecords, 'All');
+  const el = document.getElementById('profile-cardwr-quickpicks');
+  if (!el) return;
+  el.innerHTML = '';
+  picks.slice(0, 12).forEach(card => {
+    const btn = document.createElement('button');
+    btn.className = 'dd-btn-sec';
+    btn.style.cssText = 'font-size:10px;padding:3px 9px';
+    btn.textContent = card.name;
+    btn.onclick = () => {
+      document.getElementById('profile-card-name').value = card.name;
+      profileCardWRSearch(card.name);
+    };
+    el.appendChild(btn);
+  });
+}
+
+function profileCardWRSearch(cardName) {
+  if (!cardName.trim()) return;
+  const out = document.getElementById('profile-cardwr-out');
+  if (!_profileRecords.length) { out.innerHTML = '<div style="color:var(--muted);font-size:12px">No match data loaded.</div>'; return; }
+  renderCardWinRate(_profileRecords, cardName.toLowerCase(), out);
+}
+
 function ddMatchupsFromBatch() {
   if (!_activeBatch || !_activeBatch.replays || !_activeBatch.replays.length) {
     alert('No batch loaded. Run an analysis first.');
@@ -2879,11 +3073,11 @@ function ddCardWRFromBatch() {
   if (myFilter  !== 'All') records = records.filter(r => r.myDeck  === myFilter);
   if (oppFilter !== 'All') records = records.filter(r => r.oppDeck === oppFilter);
 
-  renderCardWinRate(records, cardInput);
+  renderCardWinRate(records, cardInput, document.getElementById('dd-cardwr-out'));
 }
 
-function renderCardWinRate(records, cardName) {
-  const out = document.getElementById('dd-cardwr-out');
+function renderCardWinRate(records, cardName, outEl) {
+  const out = outEl || document.getElementById('dd-cardwr-out');
   out.innerHTML = '';
 
   // Split matches into: card seen vs not seen
@@ -4073,6 +4267,7 @@ async function openProfile(player, batches, records) {
   buildDonutChart('profile-deck-chart','profile-deck-legend', sortedMy, player+' Deck Usage');
 
   // Matchup table
+  _profileRecords = records;
   buildProfileMatchupTable(records);
 
   // Event decklists
@@ -4425,6 +4620,18 @@ async function loadEventReplay(replayId) {
 
 // ── Deck Data tab switcher ────────────────────────────────────────────────────
 function ddSwitchTab(name, btn) {
+  // Auto-load global data when switching to matchups or card win rate
+  if ((name === 'matchups' || name === 'cardwr') && !_globalRecords.length) {
+    loadGlobalRecords().then(() => {
+      if (name === 'matchups') renderGlobalMatchups(_ddDeckFilter);
+      else {
+        const filtered = _ddCWRFilter === 'All' ? _globalRecords : _globalRecords.filter(r => r.myDeck === _ddCWRFilter);
+        renderQuickPicks(buildQuickPicks(filtered, _ddCWRFilter));
+      }
+    });
+  } else if (name === 'matchups') {
+    renderGlobalMatchups(_ddDeckFilter);
+  }
   document.querySelectorAll('.dd-tab').forEach(b => b.classList.remove('on'));
   if (btn) btn.classList.add('on');
   document.getElementById('dd-matchups').style.display  = name==='matchups'  ? 'block' : 'none';
@@ -4718,6 +4925,8 @@ async function initApp() {
   wireUrlsInput();
   renderTopPlayers();
   loadBatches();
+  // Pre-load global records for Deck Data tab
+  loadGlobalRecords().then(() => renderGlobalMatchups('All'));
 }
 
 initApp();
