@@ -4979,6 +4979,66 @@ function importBatch() {
   input.click();
 }
 
+// ── Show relay userscript in a copy-paste modal ──────────────────────────────
+function dlRelay() {
+  fetch('/relay.user.js')
+    .then(r => r.text())
+    .then(text => {
+      // Build modal overlay
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center';
+      const box = document.createElement('div');
+      box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:20px;width:680px;max-width:95vw;max-height:85vh;display:flex;flex-direction:column;gap:12px';
+
+      const hdr = document.createElement('div');
+      hdr.style.cssText = 'display:flex;align-items:center;gap:10px';
+      const title = document.createElement('div');
+      title.style.cssText = 'font-size:14px;font-weight:bold;color:var(--text);letter-spacing:.08em;flex:1';
+      title.textContent = 'RELAY USERSCRIPT';
+      const sub = document.createElement('div');
+      sub.style.cssText = 'font-size:11px;color:var(--muted)';
+      sub.textContent = 'Copy this into a new Tampermonkey script';
+
+      const copyBtn = document.createElement('button');
+      copyBtn.style.cssText = 'background:var(--green);color:#050508;border:none;border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:6px 16px;cursor:pointer';
+      copyBtn.textContent = '⧉ Copy All';
+      copyBtn.onclick = () => {
+        navigator.clipboard.writeText(text).then(() => {
+          copyBtn.textContent = '✓ Copied!';
+          setTimeout(() => copyBtn.textContent = '⧉ Copy All', 2000);
+        });
+      };
+
+      const closeBtn = document.createElement('button');
+      closeBtn.style.cssText = 'background:none;border:none;color:var(--muted);font-family:monospace;font-size:16px;cursor:pointer;padding:0 4px';
+      closeBtn.textContent = '✕';
+      closeBtn.onclick = () => overlay.remove();
+
+      hdr.appendChild(title);
+      hdr.appendChild(copyBtn);
+      hdr.appendChild(closeBtn);
+
+      const instructions = document.createElement('div');
+      instructions.style.cssText = 'font-size:12px;color:var(--muted);background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 14px;line-height:1.7';
+      instructions.innerHTML = '1. Install <a href="https://www.tampermonkey.net/" target="_blank" style="color:var(--green)">Tampermonkey</a> in your browser<br>2. Click the Tampermonkey icon → <b>Create new script</b><br>3. Select all the existing code and replace it with the script below<br>4. Press <b>Ctrl+S</b> to save';
+
+      const pre = document.createElement('textarea');
+      pre.style.cssText = 'flex:1;min-height:300px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:12px;padding:12px;resize:none;outline:none;line-height:1.5';
+      pre.value = text;
+      pre.readOnly = true;
+      pre.onclick = () => pre.select();
+
+      box.appendChild(hdr);
+      box.appendChild(sub);
+      box.appendChild(instructions);
+      box.appendChild(pre);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+    })
+    .catch(() => st('Could not load relay script', 'var(--red)'));
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // INIT
 // ══════════════════════════════════════════════════════════════════════
