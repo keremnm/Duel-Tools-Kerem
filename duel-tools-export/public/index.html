@@ -395,6 +395,14 @@ select{cursor:pointer}
             <button class="dd-btn-sec" onclick="ddSetDeckFilter('Chaos Relinquished',this)">Chaos Relinquished</button>
             <button class="dd-btn-sec" onclick="ddSetDeckFilter('Chaos Recruiter',this)">Chaos Recruiter</button>
           </div>
+          <!-- Custom deck filter dropdown -->
+          <div style="margin-bottom:12px;display:flex;align-items:center;gap:8px">
+            <label class="lbl" style="margin:0;white-space:nowrap">OR FILTER BY DECK:</label>
+            <select id="dd-matchup-deck-select" onchange="ddSetDeckFilterFromSelect(this.value)"
+              style="background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;outline:none;cursor:pointer;flex:1;max-width:300px">
+              <option value="All">All Decks</option>
+            </select>
+          </div>
           <div id="dd-matchup-out"><div class="dd-empty">Loading all batch data...</div></div>
         </div>
         <div id="dd-cardwr" style="display:none">
@@ -417,6 +425,14 @@ select{cursor:pointer}
             <button class="dd-btn-sec" onclick="ddSetCWRFilter('Chaos Recruiter',this)">Chaos Recruiter</button>
           </div>
           <div id="dd-quick-picks" style="margin-bottom:10px"></div>
+          <!-- Custom deck filter dropdown for decks not in hotkeys -->
+          <div style="margin-bottom:12px;display:flex;align-items:center;gap:8px">
+            <label class="lbl" style="margin:0;white-space:nowrap">OR FILTER BY DECK:</label>
+            <select id="dd-cwr-deck-select" onchange="ddSetCWRFilterFromSelect(this.value)"
+              style="background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;outline:none;cursor:pointer;flex:1;max-width:300px">
+              <option value="All">All Decks</option>
+            </select>
+          </div>
           <div style="margin-bottom:10px">
             <label class="lbl">CARD NAME (partial match ok)</label>
             <input id="dd-card-name" type="text" placeholder="e.g. Night Assailant, Scapegoat, Thunder Dragon..."/>
@@ -991,16 +1007,16 @@ function switchTab(name, btn) {
   document.getElementById('pg-'+name).classList.add('on');
   if (name === 'stats')    loadStats();
   if (name === 'profiles') loadProfiles();
-  if (name === 'deckdata' && _activeBatch && _activeBatch.replays && _activeBatch.replays.length) {
-    // Auto-run matchups
-    const out = document.getElementById('dd-matchup-out');
-    if (out && out.innerHTML.includes('Load a batch')) setTimeout(ddMatchupsFromBatch, 100);
-  }
-  // Auto-run matchup calculation when switching to Deck Data with a loaded batch
-  if (name === 'deckdata' && _activeBatch && _activeBatch.replays && _activeBatch.replays.length) {
-    const out = document.getElementById('dd-matchup-out');
-    if (out && (out.innerHTML.includes('Load a batch') || out.innerHTML === '')) {
-      ddMatchupsFromBatch();
+  // Deck Data tab always shows ALL saved batches — never filtered by active batch
+  if (name === 'deckdata') {
+    if (!_globalRecords.length) {
+      loadGlobalRecords().then(() => {
+        renderGlobalMatchups(_ddDeckFilter);
+        populateCWRDeckDropdown();
+        populateMatchupDeckDropdown();
+      });
+    } else {
+      renderGlobalMatchups(_ddDeckFilter);
     }
   }
 }
@@ -2671,6 +2687,8 @@ async function loadGlobalRecords() {
     }));
   } catch(e) {}
   _globalRecords = records;
+  populateCWRDeckDropdown();
+  populateMatchupDeckDropdown();
   return records;
 }
 
@@ -2679,17 +2697,53 @@ function ddSetDeckFilter(deck, btn) {
   document.querySelectorAll('#dd-deck-hotkeys button').forEach(b => {
     b.className = b === btn ? 'dd-btn on' : 'dd-btn-sec';
   });
+  const sel = document.getElementById('dd-matchup-deck-select');
+  if (sel) sel.value = deck;
   renderGlobalMatchups(_ddDeckFilter);
+}
+
+function ddSetDeckFilterFromSelect(deck) {
+  _ddDeckFilter = deck;
+  document.querySelectorAll('#dd-deck-hotkeys button').forEach(b => b.className = 'dd-btn-sec');
+  renderGlobalMatchups(_ddDeckFilter);
+}
+
+function populateMatchupDeckDropdown() {
+  const sel = document.getElementById('dd-matchup-deck-select');
+  if (!sel || !_globalRecords.length) return;
+  const decks = ['All', ...[...new Set(_globalRecords.map(r => r.myDeck).filter(Boolean))].sort()];
+  sel.innerHTML = decks.map(d => `<option value="${d}">${d === 'All' ? 'All Decks' : d}</option>`).join('');
+  sel.value = _ddDeckFilter;
 }
 
 function ddSetCWRFilter(deck, btn) {
   _ddCWRFilter = deck;
+  // Update hotkey buttons
   document.querySelectorAll('#dd-cwr-hotkeys button').forEach(b => {
     b.className = b === btn ? 'dd-btn on' : 'dd-btn-sec';
   });
-  // Update quick picks for new filter
+  // Sync dropdown
+  const sel = document.getElementById('dd-cwr-deck-select');
+  if (sel) sel.value = deck;
+  // Update quick picks
   const filtered = _ddCWRFilter === 'All' ? _globalRecords : _globalRecords.filter(r => r.myDeck === _ddCWRFilter);
   renderQuickPicks(buildQuickPicks(filtered, _ddCWRFilter));
+}
+
+function ddSetCWRFilterFromSelect(deck) {
+  _ddCWRFilter = deck;
+  // Deactivate all hotkey buttons (dropdown picked something custom)
+  document.querySelectorAll('#dd-cwr-hotkeys button').forEach(b => b.className = 'dd-btn-sec');
+  const filtered = _ddCWRFilter === 'All' ? _globalRecords : _globalRecords.filter(r => r.myDeck === _ddCWRFilter);
+  renderQuickPicks(buildQuickPicks(filtered, _ddCWRFilter));
+}
+
+function populateCWRDeckDropdown() {
+  const sel = document.getElementById('dd-cwr-deck-select');
+  if (!sel || !_globalRecords.length) return;
+  const decks = ['All', ...[...new Set(_globalRecords.map(r => r.myDeck).filter(Boolean))].sort()];
+  sel.innerHTML = decks.map(d => `<option value="${d}">${d === 'All' ? 'All Decks' : d}</option>`).join('');
+  sel.value = _ddCWRFilter;
 }
 
 async function renderGlobalMatchups(deckFilter) {
@@ -4704,6 +4758,9 @@ function ddSwitchTab(name, btn) {
     });
   } else if (name === 'matchups') {
     renderGlobalMatchups(_ddDeckFilter);
+  } else if (name === 'cardwr' && _globalRecords.length) {
+    const filtered = _ddCWRFilter === 'All' ? _globalRecords : _globalRecords.filter(r => r.myDeck === _ddCWRFilter);
+    renderQuickPicks(buildQuickPicks(filtered, _ddCWRFilter));
   }
   document.querySelectorAll('.dd-tab').forEach(b => b.classList.remove('on'));
   if (btn) btn.classList.add('on');
