@@ -2009,7 +2009,7 @@ This cannot be undone.`)) return;
   }
 
   // Re-render match list and clear viewer if deleted match was selected
-  buildDeckMatchList(_matches);
+  renderMatchSidebar();
   const deck = document.getElementById('deck-display');
   const empty = document.getElementById('deck-empty');
   if (deck && deck.style.display !== 'none') {
