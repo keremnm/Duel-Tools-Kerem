@@ -1986,9 +1986,7 @@ function renderMatchSidebar(query) {
 }
 
 async function deleteMatch(idx, m) {
-  if (!confirm(`Delete match vs ${m.oppName||'?'} (${m.replayId})?
-
-This cannot be undone.`)) return;
+  if (!confirm(`Delete match vs ${m.oppName||'?'} (${m.replayId})?\n\nThis cannot be undone.`)) return;
 
   // Remove from _matches in memory
   _matches.splice(idx, 1);
@@ -2001,8 +1999,19 @@ This cannot be undone.`)) return;
   // Remove from server (saved batches only)
   if (_activeBatch && !_activeBatch.isTemp && _activeBatch.id) {
     try {
-      await fetch(`${API}/batches/${_activeBatch.id}/replay/${m.replayId}`, { method:'DELETE' });
-    } catch(e) { console.warn('Server delete failed:', e.message); }
+      const res = await fetch(`${API}/batches/${_activeBatch.id}/replay/${m.replayId}`, { method:'DELETE' });
+      const data = await res.json().catch(()=>({}));
+      if (data.ok) {
+        st(`Match vs ${m.oppName||'?'} deleted and saved`, 'var(--green)');
+      } else {
+        st(`Match removed locally — server save failed`, 'var(--amber)');
+      }
+    } catch(e) {
+      st(`Match removed locally — could not reach server`, 'var(--amber)');
+      console.warn('Server delete failed:', e.message);
+    }
+  } else {
+    st(`Match vs ${m.oppName||'?'} removed`, 'var(--amber)');
   }
 
   // Re-render match list and clear viewer if deleted match was selected
@@ -2014,7 +2023,6 @@ This cannot be undone.`)) return;
     if (empty) empty.style.display = 'flex';
   }
   loadBatches();
-  st(`Match vs ${m.oppName||'?'} deleted`, 'var(--amber)');
 }
 
 function selectMatch(idx) {
@@ -3625,20 +3633,20 @@ function getDeckColor(deck, idx) {
 
 // ── Load stats tab ─────────────────────────────────────────────────────────
 function showAddEventDecklist() {
-  const form = document.getElementById('add-event-deck-form');
+  const form = document.getElementById('event-decklist-form');
   if (form) { form.style.display = form.style.display === 'none' ? 'block' : 'none'; }
 }
 
 async function saveEventDecklist() {
-  const code = (document.getElementById('evt-code-inp').value||'').trim().toUpperCase();
-  const url  = (document.getElementById('evt-deck-url').value||'').trim();
-  if (!code) { alert('Enter an event code.'); return; }
-  if (!url)  { alert('Enter a deck URL.'); return; }
+  const code = (document.getElementById('edl-event-code').value||'').trim().toUpperCase();
+  const url  = (document.getElementById('edl-deck-url').value||'').trim();
+  if (!code) { st('Enter an event code.', 'var(--red)'); return; }
+  if (!url)  { st('Enter a deck URL.', 'var(--red)'); return; }
   const deckIdMatch = url.match(/deck\?id=(\d+)/);
   const deckId = deckIdMatch ? deckIdMatch[1] : url.replace(/\D/g,'');
-  if (!deckId) { alert('Could not parse deck ID from URL.'); return; }
+  if (!deckId) { st('Could not parse deck ID from URL.', 'var(--red)'); return; }
   const player = _activeProfile && _activeProfile.player;
-  if (!player) { alert('No player profile open.'); return; }
+  if (!player) { st('No player profile open.', 'var(--red)'); return; }
   const decks = getEventDecks(player);
   if (decks.find(d => d.code === code)) {
     if (!confirm('Event "'+code+'" already has a decklist. Replace it?')) return;
@@ -3646,9 +3654,9 @@ async function saveEventDecklist() {
   }
   decks.push({ code, deckId, deckUrl: 'https://www.duelingbook.com/deck?id='+deckId, addedAt: Date.now() });
   saveEventDecks(player, decks);
-  document.getElementById('add-event-deck-form').style.display = 'none';
-  document.getElementById('evt-code-inp').value = '';
-  document.getElementById('evt-deck-url').value = '';
+  document.getElementById('event-decklist-form').style.display = 'none';
+  document.getElementById('edl-event-code').value = '';
+  document.getElementById('edl-deck-url').value = '';
   renderEventDecks(player, _activeProfile.batches||[], _activeProfile.records||[]);
   st('Saved: '+code, 'var(--green)');
 }
