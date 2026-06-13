@@ -1035,11 +1035,9 @@ async function loadBatches() {
 
 function renderBatchList(list) {
   const el = document.getElementById('batch-list');
-  // Build combined list: temp batch first (if exists), then server batches
   const displayList = [];
   if (_tempBatch) displayList.push(_tempBatch);
   displayList.push(...list.filter(b => !_tempBatch || b.id !== _tempBatch.id));
-
   if (!displayList.length) { el.innerHTML = '<div class="no-batches">No batches yet.</div>'; return; }
   el.innerHTML = '';
   displayList.forEach(b => {
@@ -1055,10 +1053,50 @@ function renderBatchList(list) {
     item.className = 'batch-item' + ((_activeBatch&&_activeBatch.id===b.id)?' on':'');
     if (isTemp) item.style.borderLeft = '2px solid var(--amber)';
 
-    const safePlayer = (b.player||'').replace(/'/g,"\\'");
-    const tempTag = isTemp ? '<span style="color:var(--amber);font-size:10px;margin-left:4px">⚡TEMP</span>' : '';
-    const aliasTag = hasAliasReplays ? '<span style="color:var(--dim);font-size:10px"> (incl. aliases)</span>' : '';
-    item.innerHTML = '<div style="display:flex;align-items:center;gap:4px"><div class="bi-name" style="flex:1">'+b.name+tempTag+'</div>'+(isTemp?'':'<button class="bi-rename" onclick="renameBatch(event,''+b.id+'',''+safePlayer+'')">✎</button>')+'<span class="bi-del" onclick="'+(isTemp?'clearTempBatch':'deleteBatch')+'(event,''+b.id+'')" style="color:'+(isTemp?'var(--amber)':'')+'">✕</span></div><div class="bi-meta">'+displayCount+' replays'+aliasTag+'</div>';
+    // Name row
+    const nameRow = document.createElement('div');
+    nameRow.style.cssText = 'display:flex;align-items:center;gap:4px';
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'bi-name';
+    nameEl.style.flex = '1';
+    nameEl.textContent = b.name;
+    if (isTemp) {
+      const tag = document.createElement('span');
+      tag.style.cssText = 'color:var(--amber);font-size:10px;margin-left:4px';
+      tag.textContent = '⚡TEMP';
+      nameEl.appendChild(tag);
+    }
+    nameRow.appendChild(nameEl);
+
+    if (!isTemp) {
+      const renBtn = document.createElement('button');
+      renBtn.className = 'bi-rename';
+      renBtn.textContent = '✎';
+      renBtn.onclick = e => renameBatch(e, b.id, b.player);
+      nameRow.appendChild(renBtn);
+    }
+
+    const delBtn = document.createElement('span');
+    delBtn.className = 'bi-del';
+    delBtn.textContent = '✕';
+    if (isTemp) delBtn.style.color = 'var(--amber)';
+    delBtn.onclick = e => isTemp ? clearTempBatch(e, b.id) : deleteBatch(e, b.id);
+    nameRow.appendChild(delBtn);
+
+    // Meta row
+    const metaEl = document.createElement('div');
+    metaEl.className = 'bi-meta';
+    metaEl.textContent = displayCount + ' replays';
+    if (hasAliasReplays) {
+      const tag = document.createElement('span');
+      tag.style.cssText = 'color:var(--dim);font-size:10px';
+      tag.textContent = ' (incl. aliases)';
+      metaEl.appendChild(tag);
+    }
+
+    item.appendChild(nameRow);
+    item.appendChild(metaEl);
     item.onclick = () => selectBatch(b.id);
     el.appendChild(item);
   });
@@ -1309,7 +1347,7 @@ async function go() {
           if (cl.linked) qi(`<span style="color:var(--blue)">🔗 Replay cross-linked to <b>${cl.player}</b>'s batch</span>`);
         }
       }
-    } catch(e) { console.warn('Server save failed (server may not be running):', e.message); } } // end !isTemp
+    } catch(e) { console.warn('Server save failed (server may not be running):', e.message); } // end !isTemp
     if (result.timedOut) toRetry.push({ id:ids[i] });
     pb(Math.round((i+1)/ids.length*50));
     if (i<ids.length-1) await sleep(1200);
