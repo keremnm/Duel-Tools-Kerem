@@ -1055,7 +1055,7 @@ function renderBatchList(list) {
     item.className = 'batch-item' + ((_activeBatch&&_activeBatch.id===b.id)?' on':'');
     if (isTemp) item.style.borderLeft = '2px solid var(--amber)';
 
-    const safePlayer = (b.player||'').replace(/\/g,'\\').replace(/'/g,"\'");
+    const safePlayer = (b.player||'').replace(/'/g,"\\'");
     const tempTag = isTemp ? '<span style="color:var(--amber);font-size:10px;margin-left:4px">⚡TEMP</span>' : '';
     const aliasTag = hasAliasReplays ? '<span style="color:var(--dim);font-size:10px"> (incl. aliases)</span>' : '';
     item.innerHTML = '<div style="display:flex;align-items:center;gap:4px"><div class="bi-name" style="flex:1">'+b.name+tempTag+'</div>'+(isTemp?'':'<button class="bi-rename" onclick="renameBatch(event,''+b.id+'',''+safePlayer+'')">✎</button>')+'<span class="bi-del" onclick="'+(isTemp?'clearTempBatch':'deleteBatch')+'(event,''+b.id+'')" style="color:'+(isTemp?'var(--amber)':'')+'">✕</span></div><div class="bi-meta">'+displayCount+' replays'+aliasTag+'</div>';
