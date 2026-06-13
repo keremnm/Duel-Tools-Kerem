@@ -2721,20 +2721,54 @@ function profileSubTab(tab, btn) {
   if (tab === 'cardwr') profileCardWRQuickPicks();
 }
 
+// Cards to exclude from quick-picks (too universal to be meaningful)
+const _CWR_EXCLUDE = new Set([
+  'pot of greed','graceful charity','delinquent duo','the forceful sentry',
+  'confiscation','sinister serpent','witch of the black forest','sangan',
+  'mystical space typhoon','heavy storm','premature burial','call of the haunted',
+  'mirror force','torrential tribute','bottomless trap hole','waboku',
+  'book of moon','nobleman of crossout','reinforcement of the army',
+  'monster reborn','dark hole','raigeki','harpies feather duster',
+  'snatch steal','change of heart','imperial order','ring of destruction',
+  'magic cylinder','ceasefire'
+]);
+
 function profileCardWRQuickPicks() {
   if (!_profileRecords.length) return;
-  const picks = buildQuickPicks(_profileRecords, 'All');
   const el = document.getElementById('profile-cardwr-quickpicks');
   if (!el) return;
   el.innerHTML = '';
-  picks.slice(0, 12).forEach(card => {
+
+  // Count card appearances across all player matches — use allMine
+  const cardCounts = {};
+  for (const r of _profileRecords) {
+    const seen = new Set();
+    for (const c of (r.allMine||[])) {
+      const name = c.name ? c.name.toLowerCase() : String(c).toLowerCase();
+      if (!seen.has(name) && !_CWR_EXCLUDE.has(name)) {
+        cardCounts[name] = (cardCounts[name]||0) + 1;
+        seen.add(name);
+      }
+    }
+  }
+
+  // Top cards by appearance, show display name (capitalize first letter of each word)
+  const topCards = Object.entries(cardCounts)
+    .sort((a,b) => b[1]-a[1])
+    .slice(0, 16)
+    .map(([name]) => name.replace(/\w/g, c => c.toUpperCase()));
+
+  topCards.forEach(cardDisplay => {
     const btn = document.createElement('button');
     btn.className = 'dd-btn-sec';
-    btn.style.cssText = 'font-size:10px;padding:3px 9px';
-    btn.textContent = card.name;
+    btn.style.cssText = 'font-size:10px;padding:3px 9px;white-space:nowrap';
+    btn.textContent = cardDisplay;
     btn.onclick = () => {
-      document.getElementById('profile-card-name').value = card.name;
-      profileCardWRSearch(card.name);
+      document.getElementById('profile-card-name').value = cardDisplay;
+      // Mark active
+      el.querySelectorAll('button').forEach(b => b.classList.remove('on'));
+      btn.classList.add('on');
+      profileCardWRSearch(cardDisplay.toLowerCase());
     };
     el.appendChild(btn);
   });
@@ -2744,7 +2778,79 @@ function profileCardWRSearch(cardName) {
   if (!cardName.trim()) return;
   const out = document.getElementById('profile-cardwr-out');
   if (!_profileRecords.length) { out.innerHTML = '<div style="color:var(--muted);font-size:12px">No match data loaded.</div>'; return; }
-  renderCardWinRate(_profileRecords, cardName.toLowerCase(), out);
+  // Render with opponent deck breakdown
+  renderProfileCardWR(_profileRecords, cardName.toLowerCase(), out);
+}
+
+function renderProfileCardWR(records, cardName, out) {
+  out.innerHTML = '';
+  const withCard    = records.filter(r => (r.allMine||[]).some(c => (c.name||c).toLowerCase().includes(cardName)));
+  const withoutCard = records.filter(r => !(r.allMine||[]).some(c => (c.name||c).toLowerCase().includes(cardName)));
+
+  if (!withCard.length && !withoutCard.length) {
+    out.innerHTML = '<div style="color:var(--muted);font-size:12px">Card not found in any replays.</div>'; return;
+  }
+
+  // Overall summary
+  const wWith    = pct(withCard.filter(r=>r.matchWon).length, withCard.length);
+  const wWithout = pct(withoutCard.filter(r=>r.matchWon).length, withoutCard.length);
+  const delta    = withCard.length && withoutCard.length ? wWith - wWithout : null;
+
+  const sumDiv = document.createElement('div');
+  sumDiv.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px';
+  [[`WITH card (${withCard.length})`, withCard, wWith],[`WITHOUT card (${withoutCard.length})`, withoutCard, wWithout]].forEach(([label, recs, wr]) => {
+    const w = recs.filter(r=>r.matchWon).length, l = recs.filter(r=>r.matchLost).length;
+    const d = document.createElement('div');
+    d.style.cssText = 'background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:10px';
+    d.innerHTML = `<div style="font-size:10px;color:var(--muted);letter-spacing:.1em;margin-bottom:6px">${label}</div>
+      <div style="font-size:20px;font-weight:bold;color:${wr>=50?'var(--green)':'var(--red)'}">${wr}%</div>
+      <div style="font-size:12px;color:var(--muted)">${w}W — ${l}L</div>`;
+    sumDiv.appendChild(d);
+  });
+  out.appendChild(sumDiv);
+
+  if (delta !== null) {
+    const dEl = document.createElement('div');
+    const col = delta > 0 ? 'var(--green)' : delta < 0 ? 'var(--red)' : 'var(--muted)';
+    dEl.style.cssText = 'font-size:12px;margin-bottom:14px;padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:6px';
+    dEl.innerHTML = `Win rate impact: <span style="font-weight:bold;color:${col}">${delta>0?'+':''}${delta}%</span> when card is in deck`;
+    out.appendChild(dEl);
+  }
+
+  // Breakdown by opponent deck type
+  if (withCard.length) {
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'font-size:10px;color:var(--muted);letter-spacing:.15em;text-transform:uppercase;margin-bottom:8px';
+    hdr.textContent = 'Win Rate With Card — By Opponent Deck';
+    out.appendChild(hdr);
+
+    const byOpp = {};
+    withCard.forEach(r => {
+      const k = r.oppDeck||'Unknown';
+      if (!byOpp[k]) byOpp[k] = {w:0,l:0};
+      r.matchWon ? byOpp[k].w++ : byOpp[k].l++;
+    });
+
+    const table = document.createElement('table');
+    table.className = 'dd-table';
+    table.innerHTML = '<thead><tr><th>Opponent Deck</th><th>W</th><th>L</th><th>Win %</th><th style="min-width:80px"></th></tr></thead>';
+    const tbody = document.createElement('tbody');
+    Object.entries(byOpp).sort((a,b)=>(b[1].w+b[1].l)-(a[1].w+a[1].l)).forEach(([opp,rec],i) => {
+      const tot=rec.w+rec.l, wp=pct(rec.w,tot);
+      const tr=document.createElement('tr');
+      tr.innerHTML=`<td style="font-weight:bold;color:var(--text)">${opp}</td>
+        <td style="color:var(--green);font-weight:bold">${rec.w}</td>
+        <td style="color:var(--red);font-weight:bold">${rec.l}</td>
+        <td style="font-weight:bold;color:${wp>=50?'var(--green)':'var(--red)'}">${wp}%</td>
+        <td><div style="display:flex;height:7px;border-radius:3px;overflow:hidden;background:var(--bg)">
+          <div style="width:${tot?rec.w/tot*100:0}%;background:var(--green)"></div>
+          <div style="width:${tot?rec.l/tot*100:0}%;background:var(--red)"></div>
+        </div></td>`;
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    out.appendChild(table);
+  }
 }
 
 function ddMatchupsFromBatch() {
@@ -2875,43 +2981,11 @@ function renderMatchupResults(records, player) {
   headerRow.appendChild(deckChip);
   out.appendChild(headerRow);
 
-  // ── Two-column layout ──────────────────────────────────────────────────────
-  const cols = document.createElement('div');
-  cols.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:18px';
-
-  // Left: Entire Batch matchup table
-  const leftCol = document.createElement('div');
-  const leftHdr = document.createElement('div');
-  leftHdr.style.cssText = 'font-size:11px;color:var(--muted);letter-spacing:.15em;text-transform:uppercase;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)';
-  leftHdr.textContent = 'Entire Batch — vs Opponent Deck Type';
-  leftCol.appendChild(leftHdr);
-  const leftTable = document.createElement('div');
-  leftTable.id = 'dd-table-all';
-  leftCol.appendChild(leftTable);
-  buildMatchupTable(records, leftTable, player);
-
-  // Right: Filtered by selected deck
-  const rightCol = document.createElement('div');
-  const rightHdrRow = document.createElement('div');
-  rightHdrRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)';
-  const rightHdr = document.createElement('span');
-  rightHdr.id = 'dd-filtered-hdr';
-  rightHdr.style.cssText = 'font-size:11px;color:var(--muted);letter-spacing:.15em;text-transform:uppercase;flex:1';
-  rightHdr.textContent = 'All Decks — Filtered View';
-  // Filtered stats chips row
-  const filteredStats = document.createElement('div');
-  filteredStats.id = 'dd-filtered-stats';
-  filteredStats.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px';
-  rightHdrRow.appendChild(rightHdr);
-  rightCol.appendChild(rightHdrRow);
-  rightCol.appendChild(filteredStats);
-  const rightTable = document.createElement('div');
-  rightTable.id = 'dd-table-filtered';
-  rightCol.appendChild(rightTable);
-
-  cols.appendChild(leftCol);
-  cols.appendChild(rightCol);
-  out.appendChild(cols);
+  // ── Single matchup table (filtered by hotkey or dropdown) ─────────────────
+  const tableContainer = document.createElement('div');
+  tableContainer.id = 'dd-table-all';
+  out.appendChild(tableContainer);
+  buildMatchupTable(records, tableContainer, player);
 
   // Note
   const note = document.createElement('div');
@@ -2919,31 +2993,11 @@ function renderMatchupResults(records, player) {
   note.textContent = 'Deck types auto-classified by TF-IDF model. Click a row to see individual replays.';
   out.appendChild(note);
 
-  // ── Helper: update right column ────────────────────────────────────────────
-  function updateFiltered(deckVal) {
-    const isAll = deckVal === 'All';
-    const filtered = isAll ? records : records.filter(r => r.myDeck === deckVal);
-    // Update header
-    rightHdr.textContent = (isAll ? 'All Decks' : deckVal) + ' — Filtered View';
-    // Update stats chips
-    filteredStats.innerHTML = '';
-    const fw = filtered.filter(r=>r.matchWon).length;
-    const fl = filtered.filter(r=>r.matchLost).length;
-    const fwr = pct(fw, filtered.length);
-    [[filtered.length,'Matches','var(--blue)'],[fw+'-'+fl,'W — L Record',fwr>=50?'var(--green)':'var(--red)'],[fwr+'%','Win Rate',fwr>=50?'var(--green)':'var(--red)']].forEach(([v,l,col])=>{
-      filteredStats.appendChild(makeChip(v,l,col));
-    });
-    // Update table
-    buildMatchupTable(filtered, rightTable, player);
-  }
-
-  // ── Dropdown change handler ────────────────────────────────────────────────
-  sel.onchange = () => updateFiltered(sel.value);
-
-  // Initial filtered render — default to most common deck
-  const defaultDeck = myDeckTypes[0] || 'All';
-  sel.value = defaultDeck;
-  updateFiltered(defaultDeck);
+  // Dropdown change still works (hidden but used by old code paths)
+  sel.onchange = () => {
+    const filtered = sel.value === 'All' ? records : records.filter(r => r.myDeck === sel.value);
+    buildMatchupTable(filtered, tableContainer, player);
+  };
 }
 
 // Build a matchup table inside a container div
