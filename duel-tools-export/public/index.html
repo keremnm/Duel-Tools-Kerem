@@ -2012,15 +2012,27 @@ async function deleteMatch(idx, m) {
     _activeBatch.replays = _activeBatch.replays.filter(r => r.replayId !== m.replayId);
   }
 
-  // Remove from server (saved batches only)
-  if (_activeBatch && !_activeBatch.isTemp && _activeBatch.id) {
+  // Remove from server — find which batch this replay belongs to
+  if (_activeBatch && !_activeBatch.isTemp) {
     try {
-      const res = await fetch(`${API}/batches/${_activeBatch.id}/replay/${m.replayId}`, { method:'DELETE' });
+      // First try the active batch
+      let batchId = _activeBatch.id;
+      // If replay not in active batch replays, search all loaded batches
+      const inActive = (_activeBatch.replays||[]).find(r => r.replayId === m.replayId);
+      if (!inActive && _allProfileBatches && _allProfileBatches.length) {
+        const ownerBatch = _allProfileBatches.find(b => (b.replays||[]).find(r => r.replayId === m.replayId));
+        if (ownerBatch) batchId = ownerBatch.id;
+      }
+      if (!batchId) {
+        st('Match removed locally — could not find batch', 'var(--amber)'); return;
+      }
+      const res = await fetch(`${API}/batches/${batchId}/replay/${encodeURIComponent(m.replayId)}`, { method:'DELETE' });
       const data = await res.json().catch(()=>({}));
       if (data.ok) {
         st(`Match vs ${m.oppName||'?'} deleted and saved`, 'var(--green)');
       } else {
-        st(`Match removed locally — server save failed`, 'var(--amber)');
+        console.warn('Server delete response:', data);
+        st(`Match removed locally — server error: ${data.error||'unknown'}`, 'var(--amber)');
       }
     } catch(e) {
       st(`Match removed locally — could not reach server`, 'var(--amber)');
