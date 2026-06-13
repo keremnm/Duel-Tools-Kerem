@@ -1361,10 +1361,7 @@ async function go() {
     const _aliases = _activeBatch.aliases || [];
     const _parsed  = parseMatch(result.id, result.allPlays||result.plays||[], _activeBatch.player||'', _aliases);
     const _oppName = _parsed ? _parsed.oppName : '';
-    // Skip server save for temp batches
-    if (_activeBatch.isTemp) {
-      _activeBatch.replays.push({ replayId:result.id, plays:result.plays, allPlays:result.allPlays, timedOut:result.timedOut, eventLabel:'' });
-    }
+    // (temp batches already stored in memory above — no server save needed)
     // Save to server — server handles duplicate detection + cross-linking
     if (!_activeBatch.isTemp) try {
       const saveRes = await fetch(`${API}/batches/${_activeBatch.id}/replay`, {
@@ -4254,6 +4251,20 @@ async function openProfile(player, batches, records) {
   _activeProfile = { player, batches, records };
   document.getElementById('profile-browser').style.display = 'none';
   document.getElementById('profile-view').style.display = 'flex';
+
+  // Load this player's batch into the analyzer (RPS + Deck Viewer)
+  // Use the most recently created batch for this player
+  const profileBatch = batches.filter(b=>b.replays&&b.replays.length).sort((a,b)=>b.createdAt-a.createdAt)[0];
+  if (profileBatch && (!_activeBatch || _activeBatch.id !== profileBatch.id)) {
+    _activeBatch = profileBatch;
+    _matches = records.filter(r=>r.allMine); // use already-parsed records
+    renderRPS();
+    buildDeck();
+    // Show Add to Current button
+    const addBtn = document.getElementById('add-to-batch-btn');
+    if (addBtn) addBtn.style.display = 'block';
+    loadBatches();
+  }
 
   // Header
   document.getElementById('profile-view-name').textContent = player;
