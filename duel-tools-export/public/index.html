@@ -2026,7 +2026,9 @@ async function deleteMatch(idx, m) {
       if (!batchId) {
         st('Match removed locally — could not find batch', 'var(--amber)'); return;
       }
+      console.log('[Delete] batchId:', batchId, 'replayId:', m.replayId, 'activeBatch.id:', _activeBatch?.id);
       const res = await fetch(`${API}/batches/${batchId}/replay/${encodeURIComponent(m.replayId)}`, { method:'DELETE' });
+      console.log('[Delete] response status:', res.status);
       const data = await res.json().catch(()=>({}));
       if (data.ok) {
         st(`Match vs ${m.oppName||'?'} deleted and saved`, 'var(--green)');
