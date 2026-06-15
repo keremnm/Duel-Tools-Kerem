@@ -17,33 +17,40 @@ const PUB_DIR = path.join(__dirname, '..', 'public');
 let pgClient = null;
 let db = { batches: {}, players: {} };
 
+async function connectPostgres() {
+  const { Client } = require('pg');
+  const client = new Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 10000 });
+  await client.connect();
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS duel_tools_data (
+      key TEXT PRIMARY KEY,
+      value JSONB NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('batches','players')");
+  for (const row of res.rows) { db[row.key] = row.value; }
+  if (!db.batches) db.batches = {};
+  if (!db.players) db.players = {};
+  pgClient = client;
+  console.log('Connected to PostgreSQL, batches:', Object.keys(db.batches).length);
+}
+
 async function initDB() {
   if (process.env.DATABASE_URL) {
-    try {
-      const { Client } = require('pg');
-      pgClient = new Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
-      await pgClient.connect();
-      // Create table if it doesn't exist
-      await pgClient.query(`
-        CREATE TABLE IF NOT EXISTS duel_tools_data (
-          key TEXT PRIMARY KEY,
-          value JSONB NOT NULL,
-          updated_at TIMESTAMPTZ DEFAULT NOW()
-        )
-      `);
-      // Load existing data
-      const res = await pgClient.query("SELECT key, value FROM duel_tools_data WHERE key IN ('batches','players')");
-      for (const row of res.rows) {
-        db[row.key] = row.value;
+    // Retry postgres connection up to 5 times with backoff
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        await connectPostgres();
+        return;
+      } catch(e) {
+        console.error(`PostgreSQL attempt ${attempt}/5 failed: ${e.message}`);
+        if (attempt < 5) await new Promise(r => setTimeout(r, attempt * 2000));
       }
-      if (!db.batches) db.batches = {};
-      if (!db.players) db.players = {};
-      console.log('Connected to PostgreSQL');
-    } catch(e) {
-      console.error('PostgreSQL connection failed, falling back to file DB:', e.message);
-      pgClient = null;
-      loadFileDB();
     }
+    console.error('All PostgreSQL attempts failed, falling back to file DB');
+    pgClient = null;
+    loadFileDB();
   } else {
     loadFileDB();
     console.log('Using local file database');
