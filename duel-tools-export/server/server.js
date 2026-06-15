@@ -123,7 +123,7 @@ function crossLinkReplay(replayData, opponentUsername) {
   const exists = (batch.replays||[]).find(r => r.replayId === replayData.replayId);
   if (exists) return { linked: false, duplicate: true, batchId: batch.id, player: opponentEntry.name };
   if (!batch.replays) batch.replays = [];
-  batch.replays.push({ replayId: replayData.replayId, plays: replayData.plays||[], allPlays: replayData.allPlays||[], timedOut: !!replayData.timedOut, eventLabel: replayData.eventLabel||'', crossLinked: true, savedAt: Date.now() });
+  batch.replays.push({ replayId: replayData.replayId, plays: replayData.plays||[], allPlays: replayData.allPlays||[], timedOut: !!replayData.timedOut, eventLabel: replayData.eventLabel||'', oppName: replayData.oppName||'', crossLinked: true, savedAt: Date.now() });
   batch.status = 'ready';
   return { linked: true, duplicate: false, batchId: batch.id, player: opponentEntry.name };
 }
@@ -144,6 +144,31 @@ const server = http.createServer((req, res) => {
     // GET /api/health — first so Railway healthcheck always gets a 200
     if (parts[0]==='health' && method==='GET') {
       return json(res, 200, { ok:true, db: pgClient ? 'postgres' : 'file', batches: Object.keys(db.batches).length, players: Object.keys(db.players).length });
+    }
+
+    // POST /api/admin/cleanup — strip bloated allPlays from all existing replays in DB
+    if (parts[0]==='admin' && parts[1]==='cleanup' && method==='POST') {
+      let totalReplays = 0, totalBatches = 0;
+      const stripPlay = p => ({
+        play: p.play, owner: p.owner, username: p.username,
+        player1: p.player1, player2: p.player2,
+        cards: p.cards ? p.cards.map(c => ({ name:c.name, owner:c.owner })) : undefined,
+        winner: p.winner, loser: p.loser, game: p.game,
+        pick: p.pick, p1pick: p.p1pick, p2pick: p.p2pick,
+        log: p.log ? p.log.map(l => ({ type:l.type, owner:l.owner, username:l.username, card:l.card?{name:l.card.name}:undefined, game:l.game })) : undefined
+      });
+      for (const batch of Object.values(db.batches)) {
+        let changed = false;
+        for (const replay of (batch.replays||[])) {
+          if (replay.allPlays && replay.allPlays.length) {
+            replay.allPlays = replay.allPlays.map(stripPlay);
+            changed = true; totalReplays++;
+          }
+        }
+        if (changed) totalBatches++;
+      }
+      await saveDB();
+      return json(res, 200, { ok:true, cleanedBatches: totalBatches, cleanedReplays: totalReplays });
     }
 
     // GET /api/players
@@ -270,6 +295,17 @@ const server = http.createServer((req, res) => {
       return json(res, 200, { ok:true });
     }
 
+    // DELETE /api/batches/:id/replay/:replayId
+    if (parts[0]==='batches' && parts[1] && parts[2]==='replay' && parts[3] && !parts[4] && method==='DELETE') {
+      const b = db.batches[parts[1]];
+      if (!b) return json(res, 404, { error:'Not found' });
+      const replayId = decodeURIComponent(parts[3]);
+      const before = (b.replays||[]).length;
+      b.replays = (b.replays||[]).filter(r => r.replayId !== replayId);
+      await saveDB();
+      return json(res, 200, { ok:true, removed: before - b.replays.length });
+    }
+
     // POST /api/batches/:id/replay
     if (parts[0]==='batches' && parts[1] && parts[2]==='replay' && method==='POST') {
       const b = db.batches[parts[1]];
@@ -281,7 +317,17 @@ const server = http.createServer((req, res) => {
           duplicateWarnings.push({ player:b.player, batchId:b.id, replayId:data.replayId });
         } else {
           if (!b.replays) b.replays = [];
-          b.replays.push({ replayId:data.replayId, plays:data.plays||[], allPlays:data.allPlays||[], timedOut:!!data.timedOut, eventLabel:data.eventLabel||'', savedAt:Date.now() });
+          // Strip allPlays down to minimal card data only — skips raw log entries to save ~80% space
+          const minPlays = (data.allPlays||[]).map(p => ({
+            play: p.play, owner: p.owner, username: p.username,
+            player1: p.player1, player2: p.player2,
+            cards: p.cards ? p.cards.map(c => ({ name:c.name, owner:c.owner })) : undefined,
+            winner: p.winner, loser: p.loser, game: p.game,
+            pick: p.pick, p1pick: p.p1pick, p2pick: p.p2pick,
+            // Keep log but strip verbose fields
+            log: p.log ? p.log.map(l => ({ type:l.type, owner:l.owner, username:l.username, card:l.card?{name:l.card.name}:undefined, game:l.game })) : undefined
+          }));
+          b.replays.push({ replayId:data.replayId, plays:data.plays||[], allPlays:minPlays, timedOut:!!data.timedOut, eventLabel:data.eventLabel||'', oppName:data.oppName||'', savedAt:Date.now() });
           b.status = 'ready';
         }
         const crossLinks = [];
