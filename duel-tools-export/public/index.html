@@ -236,8 +236,9 @@ select{cursor:pointer}
 .dd-card-img{width:44px;height:64px;object-fit:cover;border-radius:3px;background:var(--border);flex-shrink:0}
 .dd-card-row{display:flex;align-items:center;gap:10px}
 /* ── In-Game Tools panels ─────────────────────────────────────────── */
-#pg-ingame .igt-panel { display:none !important; flex-direction:column; overflow:hidden; flex:1; }
-#pg-ingame .igt-panel[style*="display:flex"] { display:flex !important; }
+#igt-panel-container { position:relative; flex:1; overflow:hidden; min-height:0; }
+.igt-panel { display:none; position:absolute; inset:0; flex-direction:column; overflow:hidden; }
+.igt-panel.igt-active { display:flex; }
 
 /* ── Mobile responsive ────────────────────────────────────────────── */
 @media (max-width: 768px) {
@@ -726,10 +727,10 @@ select{cursor:pointer}
     </div>
 
     <!-- Panel container -->
-    <div style="flex:1;overflow:hidden;display:flex;flex-direction:column">
+    <div id="igt-panel-container">
 
       <!-- DECK BUILDER -->
-      <div id="igt-deck" class="igt-panel" style="display:flex;flex-direction:column;overflow:hidden">
+      <div id="igt-deck" class="igt-panel igt-active">
         <!-- Toolbar -->
         <div style="padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap">
           <input id="igt-card-search" type="text" placeholder="Search card name..." style="flex:1;min-width:180px" oninput="igtSearchCards(this.value)"/>
@@ -759,7 +760,7 @@ select{cursor:pointer}
       </div>
 
       <!-- SIDE PRACTICE -->
-      <div id="igt-side" class="igt-panel" style="display:none;flex-direction:column;overflow:hidden">
+      <div id="igt-side" class="igt-panel">
         <!-- Toolbar -->
         <div style="padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap">
           <span style="font-size:12px;color:var(--muted)">OUT: <span id="igt-sp-out-count" style="color:var(--red);font-weight:bold">0</span> &nbsp; IN: <span id="igt-sp-in-count" style="color:var(--green);font-weight:bold">0</span></span>
@@ -787,7 +788,7 @@ select{cursor:pointer}
       </div>
 
       <!-- MY TRACKER -->
-      <div id="igt-mytrack" class="igt-panel" style="display:none;flex-direction:column;overflow:hidden">
+      <div id="igt-mytrack" class="igt-panel">
         <!-- Toolbar -->
         <div style="padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap">
           <div style="display:flex;gap:4px">
@@ -817,7 +818,7 @@ select{cursor:pointer}
       </div>
 
       <!-- OPP TRACKER -->
-      <div id="igt-opptrack" class="igt-panel" style="display:none;flex-direction:column;overflow:hidden">
+      <div id="igt-opptrack" class="igt-panel">
         <!-- Toolbar -->
         <div style="padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap">
           <input id="igt-ot-archetype" type="text" placeholder="Opponent archetype (e.g. Chaos Turbo)..." style="flex:1;min-width:160px"/>
@@ -840,7 +841,7 @@ select{cursor:pointer}
       </div>
 
       <!-- TOOLS -->
-      <div id="igt-tools" class="igt-panel" style="display:none;overflow-y:auto;padding:14px">
+      <div id="igt-tools" class="igt-panel" style="overflow-y:auto;padding:14px">
         <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start">
 
           <!-- Timer settings -->
@@ -4926,7 +4927,7 @@ function saveEventDecks(player, list) {
 }
 
 function renderEventDecks(player, batches, records) {
-  const el = document.getElementById('profile-event-decks');
+  const el = document.getElementById('profile-event-decklists') || document.getElementById('profile-event-decks');
   if (!el) return;
   const decks = getEventDecks(player);
 
@@ -5320,9 +5321,9 @@ let _igtSearchTimeout = null;
 function igtTab(name, btn) {
   document.querySelectorAll('[id^="igt-tab-"]').forEach(b => b.classList.remove('on'));
   if (btn) btn.classList.add('on');
-  document.querySelectorAll('.igt-panel').forEach(p => { p.style.display = 'none'; });
+  document.querySelectorAll('.igt-panel').forEach(p => p.classList.remove('igt-active'));
   const panel = document.getElementById('igt-'+name);
-  if (panel) panel.style.display = 'flex';
+  if (panel) panel.classList.add('igt-active');
   if (name === 'side') igtSpRender();
   if (name === 'mytrack') igtMtRender();
 }
