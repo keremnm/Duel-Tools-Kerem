@@ -236,6 +236,7 @@ select{cursor:pointer}
 .dd-card-img{width:44px;height:64px;object-fit:cover;border-radius:3px;background:var(--border);flex-shrink:0}
 .dd-card-row{display:flex;align-items:center;gap:10px}
 /* ── In-Game Tools panels ─────────────────────────────────────────── */
+#pg-ingame { flex-direction:column !important; overflow:hidden !important; }
 #igt-panel-container { position:relative; flex:1; overflow:hidden; min-height:0; }
 .igt-panel { display:none; position:absolute; inset:0; flex-direction:column; overflow:hidden; }
 .igt-panel.igt-active { display:flex; }
@@ -709,7 +710,7 @@ select{cursor:pointer}
 
   <!-- ── In-Game Tools ──────────────────────────────────────────────────── -->
   <!-- ── In-Game Tools ──────────────────────────────────────────────────── -->
-  <div class="page" id="pg-ingame" style="display:flex;flex-direction:column;overflow:hidden">
+  <div class="page" id="pg-ingame">
 
     <!-- Top bar: sub-tabs + timer -->
     <div style="padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
@@ -742,20 +743,18 @@ select{cursor:pointer}
         </div>
         <!-- Search results -->
         <div id="igt-search-results" style="padding:6px 14px;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:5px;min-height:32px;flex-shrink:0;max-height:80px;overflow-y:auto"></div>
-        <!-- Deck sections -->
-        <div style="flex:1;overflow-y:auto;padding:10px 14px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+        <!-- Deck sections: Main (4x10) + Side (3x5) -->
+        <div style="flex:1;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:14px">
           <div>
             <div class="slbl" style="margin-bottom:6px">MAIN DECK <span id="igt-main-count" style="color:var(--muted)">(0/40)</span></div>
-            <div id="igt-main-tiles" style="display:flex;flex-wrap:wrap;gap:3px"></div>
+            <div id="igt-main-tiles" style="display:grid;grid-template-columns:repeat(10,72px);gap:3px"></div>
           </div>
           <div>
             <div class="slbl" style="margin-bottom:6px">SIDE DECK <span id="igt-side-count" style="color:var(--muted)">(0/15)</span></div>
-            <div id="igt-side-tiles" style="display:flex;flex-wrap:wrap;gap:3px"></div>
+            <div id="igt-side-tiles" style="display:grid;grid-template-columns:repeat(5,80px);gap:3px"></div>
           </div>
-          <div>
-            <div class="slbl" style="margin-bottom:6px">EXTRA DECK <span id="igt-extra-count" style="color:var(--muted)">(0/15)</span></div>
-            <div id="igt-extra-tiles" style="display:flex;flex-wrap:wrap;gap:3px"></div>
-          </div>
+          <!-- hidden for compat -->
+          <div style="display:none"><div id="igt-extra-tiles"></div><span id="igt-extra-count"></span></div>
         </div>
       </div>
 
@@ -777,12 +776,12 @@ select{cursor:pointer}
         <div style="flex:1;overflow-y:auto;padding:10px 14px;display:grid;grid-template-columns:1fr auto 1fr;gap:12px">
           <div>
             <div class="slbl" style="margin-bottom:6px">MAIN DECK (POST-SIDE) <span id="igt-sp-main-count" style="color:var(--muted)"></span></div>
-            <div id="igt-sp-main-tiles" style="display:flex;flex-wrap:wrap;gap:3px"></div>
+            <div id="igt-sp-main-tiles" style="display:grid;grid-template-columns:repeat(10,72px);gap:3px"></div>
           </div>
           <div style="width:1px;background:var(--border)"></div>
           <div>
             <div class="slbl" style="margin-bottom:6px">SIDE DECK <span id="igt-sp-side-count" style="color:var(--muted)"></span></div>
-            <div id="igt-sp-side-tiles" style="display:flex;flex-wrap:wrap;gap:3px"></div>
+            <div id="igt-sp-side-tiles" style="display:grid;grid-template-columns:repeat(5,80px);gap:3px"></div>
           </div>
         </div>
       </div>
@@ -806,7 +805,7 @@ select{cursor:pointer}
         <div style="flex:1;overflow:hidden;display:grid;grid-template-columns:1fr 260px;gap:0">
           <div style="overflow-y:auto;padding:10px 14px">
             <div class="slbl" style="margin-bottom:6px">DECK <span id="igt-mt-deck-count" style="color:var(--muted)"></span></div>
-            <div id="igt-mt-tiles" style="display:flex;flex-wrap:wrap;gap:3px"></div>
+            <div id="igt-mt-tiles" style="display:grid;grid-template-columns:repeat(10,72px);gap:3px"></div>
           </div>
           <div style="border-left:1px solid var(--border);padding:10px 12px;display:flex;flex-direction:column;gap:8px;overflow-y:auto">
             <div class="slbl">MATCH NOTES</div>
@@ -831,7 +830,7 @@ select{cursor:pointer}
         <div style="flex:1;overflow:hidden;display:grid;grid-template-columns:1fr 260px;gap:0">
           <div style="overflow-y:auto;padding:10px 14px">
             <div class="slbl" style="margin-bottom:6px">OPP DECK <span id="igt-ot-deck-count" style="color:var(--muted)"></span></div>
-            <div id="igt-ot-tiles" style="display:flex;flex-wrap:wrap;gap:3px"></div>
+            <div id="igt-ot-tiles" style="display:grid;grid-template-columns:repeat(10,72px);gap:3px"></div>
           </div>
           <div style="border-left:1px solid var(--border);padding:10px 12px;display:flex;flex-direction:column;gap:8px;overflow-y:auto">
             <div class="slbl">MATCH NOTES</div>
@@ -5422,31 +5421,29 @@ function igtShowYdkeDialog(target) {
 
 // ── Card tile rendering ───────────────────────────────────────────────────────
 function igtCardTile(card, opts) {
-  // opts: { section, index, onClick, label, labelColor, showControls, size }
-  const size = opts.size || 54;
+  const size = opts.size || 72; // default bigger
+  const h = Math.round(size * 1.45);
   const wrap = document.createElement('div');
-  wrap.style.cssText = `position:relative;width:${size}px;height:${Math.round(size*1.45)}px;flex-shrink:0;cursor:pointer;border-radius:3px;overflow:hidden;border:2px solid transparent`;
-  if (opts.borderColor) wrap.style.borderColor = opts.borderColor;
+  wrap.style.cssText = `position:relative;width:${size}px;height:${h}px;flex-shrink:0;cursor:pointer;border-radius:3px;overflow:hidden;border:2px solid ${opts.borderColor||'transparent'};transition:border-color .1s`;
 
   const img = document.createElement('img');
   img.style.cssText = 'width:100%;height:100%;object-fit:cover;object-position:top;display:block';
   img.src = card.id ? `https://images.ygoprodeck.com/images/cards_small/${card.id}.jpg` : '';
   img.alt = card.name;
-  img.title = card.name + (card.qty > 1 ? ' x'+card.qty : '');
-  img.onerror = function() { this.style.display='none'; wrap.style.background='var(--card2)'; };
+  img.title = card.name;
+  img.onerror = function() {
+    this.style.display='none';
+    wrap.style.background='var(--card2)';
+    const nm = document.createElement('div');
+    nm.style.cssText='position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--muted);padding:3px;text-align:center;line-height:1.2';
+    nm.textContent = card.name;
+    wrap.appendChild(nm);
+  };
 
-  // Qty badge
-  if (card.qty > 1) {
-    const qty = document.createElement('div');
-    qty.style.cssText = 'position:absolute;bottom:2px;right:2px;background:rgba(0,0,0,.75);color:#fff;font-size:9px;font-weight:bold;padding:1px 4px;border-radius:3px;font-family:monospace';
-    qty.textContent = 'x'+card.qty;
-    wrap.appendChild(qty);
-  }
-
-  // Status label (SIDED IN, GRAVE, BANISH, etc.)
+  // Status label (SIDED IN, GRAVE, BANISH, OUT, NOT IN DECK)
   if (opts.label) {
     const lbl = document.createElement('div');
-    lbl.style.cssText = `position:absolute;top:0;left:0;right:0;background:${opts.labelColor||'rgba(0,0,0,.75)'};color:#fff;font-size:8px;font-weight:bold;text-align:center;padding:2px;font-family:monospace;letter-spacing:.05em`;
+    lbl.style.cssText = `position:absolute;top:0;left:0;right:0;background:${opts.labelColor||'rgba(0,0,0,.85)'};color:#fff;font-size:8px;font-weight:bold;text-align:center;padding:2px 1px;font-family:monospace;letter-spacing:.04em;line-height:1.3`;
     lbl.textContent = opts.label;
     wrap.appendChild(lbl);
   }
@@ -5490,7 +5487,10 @@ function igtAddCard(card, section) {
 }
 
 function igtRenderAllDeck() {
-  ['main','side','extra'].forEach(sec => {
+  // Main deck: 4 rows of 10 = 40 tiles max, one per copy
+  // Side deck: 3 rows of 5 = 15 tiles max, one per copy
+  // Extra deck: omitted from display
+  ['main','side'].forEach(sec => {
     const el = document.getElementById('igt-'+sec+'-tiles');
     const countEl = document.getElementById('igt-'+sec+'-count');
     if (!el) return;
@@ -5499,12 +5499,20 @@ function igtRenderAllDeck() {
     const max = sec==='main'?40:15;
     if (countEl) countEl.textContent = '('+total+'/'+max+')';
     el.innerHTML = '';
-    deck.forEach((card, i) => {
-      const tile = igtCardTile(card, { size:54,
-        onClick: () => { _igtDeck[sec][i].qty--; if(_igtDeck[sec][i].qty<=0)_igtDeck[sec].splice(i,1); igtRenderAllDeck(); }
-      });
-      tile.title = card.name+' (click to remove)';
-      el.appendChild(tile);
+    // Expand each card by qty — one tile per copy
+    deck.forEach((card, ci) => {
+      for (let q = 0; q < card.qty; q++) {
+        const qi = q; // closure
+        const tile = igtCardTile(card, { size: sec==='main'?72:80,
+          onClick: () => {
+            _igtDeck[sec][ci].qty--;
+            if (_igtDeck[sec][ci].qty <= 0) _igtDeck[sec].splice(ci,1);
+            igtRenderAllDeck();
+          }
+        });
+        tile.title = card.name+' (click to remove)';
+        el.appendChild(tile);
+      }
     });
   });
 }
@@ -5539,12 +5547,11 @@ async function igtImportYDK(target) {
 
 // ── SIDE PRACTICE ─────────────────────────────────────────────────────────────
 function igtSpInit() {
-  if (!_igtSpState) {
-    _igtSpState = {
-      main: _igtDeck.main.flatMap(c => Array(c.qty).fill({id:c.id,name:c.name,type:c.type})),
-      side: _igtDeck.side.flatMap(c => Array(c.qty).fill({id:c.id,name:c.name,type:c.type}))
-    };
-  }
+  // Always sync from deck builder (creates fresh copy each time)
+  _igtSpState = {
+    main: _igtDeck.main.flatMap(c => Array(c.qty).fill(null).map(() => ({id:c.id,name:c.name,type:c.type}))),
+    side: _igtDeck.side.flatMap(c => Array(c.qty).fill(null).map(() => ({id:c.id,name:c.name,type:c.type})))
+  };
   _igtSpSelected = { out:[], in:[] };
   igtSpRender();
 }
@@ -5657,10 +5664,10 @@ function igtMtSetGame(game, btn) {
 }
 
 function igtMtRender() {
-  // Use post-side deck if available, otherwise main deck
+  // Use post-side deck if available, otherwise expand main deck one per copy
   const deckCards = _igtSpState
     ? _igtSpState.main
-    : _igtDeck.main.flatMap(c => Array(c.qty).fill({id:c.id,name:c.name,type:c.type}));
+    : _igtDeck.main.flatMap(c => Array(c.qty).fill(null).map(() => ({id:c.id,name:c.name,type:c.type})));
   const countEl = document.getElementById('igt-mt-deck-count');
   if (countEl) countEl.textContent = '('+deckCards.length+')';
   const el = document.getElementById('igt-mt-tiles');
