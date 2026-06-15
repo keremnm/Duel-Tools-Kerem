@@ -236,8 +236,8 @@ select{cursor:pointer}
 .dd-card-img{width:44px;height:64px;object-fit:cover;border-radius:3px;background:var(--border);flex-shrink:0}
 .dd-card-row{display:flex;align-items:center;gap:10px}
 /* ── In-Game Tools panels ─────────────────────────────────────────── */
-#pg-ingame .igt-panel { display:none;overflow-y:auto;padding:16px 20px;flex:1; }
-#pg-ingame .igt-panel:first-child { display:block; }
+#pg-ingame .igt-panel { display:none !important; flex-direction:column; overflow:hidden; flex:1; }
+#pg-ingame .igt-panel[style*="display:flex"] { display:flex !important; }
 
 /* ── Mobile responsive ────────────────────────────────────────────── */
 @media (max-width: 768px) {
@@ -707,186 +707,223 @@ select{cursor:pointer}
     </div>
 
   <!-- ── In-Game Tools ──────────────────────────────────────────────────── -->
-  <div class="page" id="pg-ingame" style="overflow-y:auto;display:flex;flex-direction:column">
-    <div style="padding:10px 16px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:5px;flex-wrap:wrap">
+  <!-- ── In-Game Tools ──────────────────────────────────────────────────── -->
+  <div class="page" id="pg-ingame" style="display:flex;flex-direction:column;overflow:hidden">
+
+    <!-- Top bar: sub-tabs + timer -->
+    <div style="padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
       <button class="dd-tab on" id="igt-tab-deck"     onclick="igtTab('deck',this)">⚙ Deck Builder</button>
       <button class="dd-tab"    id="igt-tab-side"     onclick="igtTab('side',this)">🔄 Side Practice</button>
       <button class="dd-tab"    id="igt-tab-mytrack"  onclick="igtTab('mytrack',this)">📊 My Tracker</button>
       <button class="dd-tab"    id="igt-tab-opptrack" onclick="igtTab('opptrack',this)">👁 Opp Tracker</button>
       <button class="dd-tab"    id="igt-tab-tools"    onclick="igtTab('tools',this)">🛠 Tools</button>
+      <!-- Timer in top bar -->
+      <div style="margin-left:auto;display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:5px 12px">
+        <div id="igt-timer-display" style="font-size:20px;font-weight:bold;color:var(--green);font-family:monospace;letter-spacing:.05em;min-width:58px">50:00</div>
+        <button id="igt-timer-btn" onclick="igtTimerToggle()" style="background:var(--green);color:#050508;border:none;border-radius:5px;font-family:monospace;font-weight:bold;font-size:11px;padding:4px 10px;cursor:pointer">▶</button>
+        <button onclick="igtTimerReset()" style="background:none;border:1px solid var(--border);color:var(--muted);border-radius:5px;font-family:monospace;font-size:11px;padding:4px 8px;cursor:pointer">↺</button>
+      </div>
     </div>
-    <div style="flex:1;overflow:hidden;position:relative">
+
+    <!-- Panel container -->
+    <div style="flex:1;overflow:hidden;display:flex;flex-direction:column">
 
       <!-- DECK BUILDER -->
-      <div id="igt-deck" class="igt-panel" style="overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:12px">
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-          <input id="igt-card-search" type="text" placeholder="Search card name (YGOPRODeck)..." style="flex:1;min-width:180px" oninput="igtSearchCards(this.value)"/>
-          <button class="dd-btn" onclick="igtImportYDK()">⬆ Import YDK</button>
-          <button class="dd-btn" onclick="igtExportYDK()">⬇ Export YDK</button>
-          <button class="dd-btn-sec" onclick="igtClearDeck()">✕ Clear</button>
+      <div id="igt-deck" class="igt-panel" style="display:flex;flex-direction:column;overflow:hidden">
+        <!-- Toolbar -->
+        <div style="padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap">
+          <input id="igt-card-search" type="text" placeholder="Search card name..." style="flex:1;min-width:180px" oninput="igtSearchCards(this.value)"/>
+          <button class="dd-btn-sec" onclick="igtShowYdkeDialog('main')" style="font-size:11px">⬆ YDKe Code</button>
+          <button class="dd-btn-sec" onclick="igtImportYDK()" style="font-size:11px">⬆ Import YDK</button>
+          <button class="dd-btn-sec" onclick="igtExportYDK()" style="font-size:11px">⬇ Export YDK</button>
+          <button class="dd-btn-sec" onclick="igtExportImage()" style="font-size:11px">🖼 Decklist Image</button>
+          <button class="dd-btn-sec" onclick="igtClearDeck()" style="font-size:11px;color:var(--red)">✕ Clear</button>
         </div>
-        <div id="igt-search-results" style="display:flex;flex-wrap:wrap;gap:6px;min-height:32px"></div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px">
+        <!-- Search results -->
+        <div id="igt-search-results" style="padding:6px 14px;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:5px;min-height:32px;flex-shrink:0;max-height:80px;overflow-y:auto"></div>
+        <!-- Deck sections -->
+        <div style="flex:1;overflow-y:auto;padding:10px 14px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+          <div>
             <div class="slbl" style="margin-bottom:6px">MAIN DECK <span id="igt-main-count" style="color:var(--muted)">(0/40)</span></div>
-            <div id="igt-main-list" style="display:flex;flex-direction:column;gap:2px;min-height:40px"></div>
+            <div id="igt-main-tiles" style="display:flex;flex-wrap:wrap;gap:3px"></div>
           </div>
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px">
+          <div>
             <div class="slbl" style="margin-bottom:6px">SIDE DECK <span id="igt-side-count" style="color:var(--muted)">(0/15)</span></div>
-            <div id="igt-side-list" style="display:flex;flex-direction:column;gap:2px;min-height:40px"></div>
+            <div id="igt-side-tiles" style="display:flex;flex-wrap:wrap;gap:3px"></div>
           </div>
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px">
+          <div>
             <div class="slbl" style="margin-bottom:6px">EXTRA DECK <span id="igt-extra-count" style="color:var(--muted)">(0/15)</span></div>
-            <div id="igt-extra-list" style="display:flex;flex-direction:column;gap:2px;min-height:40px"></div>
+            <div id="igt-extra-tiles" style="display:flex;flex-wrap:wrap;gap:3px"></div>
           </div>
         </div>
       </div>
 
       <!-- SIDE PRACTICE -->
-      <div id="igt-side" class="igt-panel" style="display:none;overflow-y:auto;padding:16px 20px">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:860px">
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px">
-            <div class="slbl" style="margin-bottom:8px">LOADED DECK (PRE-SIDE)</div>
-            <div id="igt-sp-main" style="display:flex;flex-direction:column;gap:2px;min-height:40px;margin-bottom:8px"></div>
-            <div class="slbl" style="margin-bottom:6px">SIDE DECK</div>
-            <div id="igt-sp-side" style="display:flex;flex-direction:column;gap:2px;min-height:40px"></div>
+      <div id="igt-side" class="igt-panel" style="display:none;flex-direction:column;overflow:hidden">
+        <!-- Toolbar -->
+        <div style="padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap">
+          <span style="font-size:12px;color:var(--muted)">OUT: <span id="igt-sp-out-count" style="color:var(--red);font-weight:bold">0</span> &nbsp; IN: <span id="igt-sp-in-count" style="color:var(--green);font-weight:bold">0</span></span>
+          <button class="btn-go" onclick="igtSpSwap()" style="font-size:12px;padding:5px 18px">⇄ SWAP</button>
+          <button class="dd-btn-sec" onclick="igtSpSaveProfile()" style="font-size:11px">💾 Save Profile</button>
+          <select id="igt-sp-profile-sel" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 8px;border-radius:5px;outline:none">
+            <option value="">— Load Profile —</option>
+          </select>
+          <button class="dd-btn-sec" onclick="igtSpLoadProfile()" style="font-size:11px">Load</button>
+          <button class="dd-btn-sec" onclick="igtSpReset()" style="font-size:11px">↺ Reset</button>
+          <button class="dd-btn-sec" onclick="igtExportImage()" style="font-size:11px">🖼 Decklist Image</button>
+        </div>
+        <!-- Two columns: main deck + side deck -->
+        <div style="flex:1;overflow-y:auto;padding:10px 14px;display:grid;grid-template-columns:1fr auto 1fr;gap:12px">
+          <div>
+            <div class="slbl" style="margin-bottom:6px">MAIN DECK (POST-SIDE) <span id="igt-sp-main-count" style="color:var(--muted)"></span></div>
+            <div id="igt-sp-main-tiles" style="display:flex;flex-wrap:wrap;gap:3px"></div>
           </div>
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px">
-            <div class="slbl" style="margin-bottom:8px">CURRENT DECK (POST-SIDE)</div>
-            <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Click cards to swap in/out</div>
-            <div id="igt-sp-current" style="display:flex;flex-direction:column;gap:2px;min-height:60px"></div>
-            <button class="btn-sec" onclick="igtSpReset()" style="margin-top:10px;font-size:11px">↺ Reset</button>
+          <div style="width:1px;background:var(--border)"></div>
+          <div>
+            <div class="slbl" style="margin-bottom:6px">SIDE DECK <span id="igt-sp-side-count" style="color:var(--muted)"></span></div>
+            <div id="igt-sp-side-tiles" style="display:flex;flex-wrap:wrap;gap:3px"></div>
           </div>
         </div>
       </div>
 
       <!-- MY TRACKER -->
-      <div id="igt-mytrack" class="igt-panel" style="display:none;overflow-y:auto;padding:16px 20px">
-        <div style="max-width:660px">
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-            <input id="igt-mt-opp" type="text" placeholder="Opponent..." style="flex:1;min-width:120px"/>
-            <select id="igt-mt-result" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:13px;padding:7px 10px;border-radius:6px;outline:none">
-              <option value="w">Win</option><option value="l">Loss</option><option value="d">Draw</option>
-            </select>
-            <input id="igt-mt-score" type="text" placeholder="Score (2-1)" style="width:90px"/>
-            <button class="btn-go" onclick="igtMtAdd()" style="font-size:12px;padding:7px 14px">+ Add</button>
+      <div id="igt-mytrack" class="igt-panel" style="display:none;flex-direction:column;overflow:hidden">
+        <!-- Toolbar -->
+        <div style="padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap">
+          <div style="display:flex;gap:4px">
+            <button class="dd-btn-sec on" id="igt-mt-g1-btn" onclick="igtMtSetGame(1,this)" style="font-size:11px;padding:4px 10px">G1</button>
+            <button class="dd-btn-sec"    id="igt-mt-g2-btn" onclick="igtMtSetGame(2,this)" style="font-size:11px;padding:4px 10px">G2</button>
+            <button class="dd-btn-sec"    id="igt-mt-g3-btn" onclick="igtMtSetGame(3,this)" style="font-size:11px;padding:4px 10px">G3</button>
           </div>
-          <div id="igt-mt-chips" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px"></div>
-          <div id="igt-mt-list" style="display:flex;flex-direction:column;gap:4px"></div>
-          <button class="btn-sec" onclick="igtMtClear()" style="margin-top:10px;font-size:11px">✕ Clear All</button>
+          <button class="btn-go"   onclick="igtMtRecord('w')" style="background:var(--green);font-size:11px;padding:4px 14px">+ WIN</button>
+          <button class="btn-go"   onclick="igtMtRecord('l')" style="background:var(--red);font-size:11px;padding:4px 14px">+ LOSS</button>
+          <button class="dd-btn-sec" onclick="igtMtRecord('d')" style="font-size:11px">DRAW</button>
+          <div id="igt-mt-record" style="font-size:12px;color:var(--muted);font-family:monospace"></div>
+          <button class="dd-btn-sec" onclick="igtMtNewMatch()" style="font-size:11px;margin-left:auto">NEW MATCH</button>
+        </div>
+        <!-- Main content: cards + notes -->
+        <div style="flex:1;overflow:hidden;display:grid;grid-template-columns:1fr 260px;gap:0">
+          <div style="overflow-y:auto;padding:10px 14px">
+            <div class="slbl" style="margin-bottom:6px">DECK <span id="igt-mt-deck-count" style="color:var(--muted)"></span></div>
+            <div id="igt-mt-tiles" style="display:flex;flex-wrap:wrap;gap:3px"></div>
+          </div>
+          <div style="border-left:1px solid var(--border);padding:10px 12px;display:flex;flex-direction:column;gap:8px;overflow-y:auto">
+            <div class="slbl">MATCH NOTES</div>
+            <textarea id="igt-mt-notes" placeholder="Opponent deck type...&#10;Key plays / reads...&#10;Misplays to avoid...&#10;Side plan for G2/G3..." style="flex:1;min-height:140px;background:var(--card2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:11px;padding:8px;resize:none;outline:none;line-height:1.6"></textarea>
+            <div class="slbl" style="margin-top:4px">WIN / LOSS RECORD</div>
+            <div id="igt-mt-history" style="display:flex;flex-direction:column;gap:3px;font-size:11px"></div>
+          </div>
         </div>
       </div>
 
       <!-- OPP TRACKER -->
-      <div id="igt-opptrack" class="igt-panel" style="display:none;overflow-y:auto;padding:16px 20px">
-        <div style="max-width:700px">
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-            <input id="igt-ot-opp"  type="text" placeholder="Opponent..." style="flex:1;min-width:120px"/>
-            <input id="igt-ot-deck" type="text" placeholder="Their deck..." style="flex:1;min-width:120px"/>
-            <input id="igt-ot-note" type="text" placeholder="Note (e.g. opened Graceful)" style="flex:1;min-width:150px"/>
-            <button class="btn-go" onclick="igtOtAdd()" style="font-size:12px;padding:7px 14px">+ Add</button>
+      <div id="igt-opptrack" class="igt-panel" style="display:none;flex-direction:column;overflow:hidden">
+        <!-- Toolbar -->
+        <div style="padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap">
+          <input id="igt-ot-archetype" type="text" placeholder="Opponent archetype (e.g. Chaos Turbo)..." style="flex:1;min-width:160px"/>
+          <button class="dd-btn-sec" onclick="igtShowYdkeDialog('opp')" style="font-size:11px">⬆ YDKe Code</button>
+          <button class="dd-btn-sec" onclick="igtOtImportYDK()" style="font-size:11px">⬆ Import YDK</button>
+          <button class="dd-btn-sec" onclick="igtExportImage('opp')" style="font-size:11px">🖼 Decklist Image</button>
+          <button class="dd-btn-sec" onclick="igtOtReset()" style="font-size:11px;color:var(--red)">↺ Reset</button>
+        </div>
+        <!-- Main content: cards + notes -->
+        <div style="flex:1;overflow:hidden;display:grid;grid-template-columns:1fr 260px;gap:0">
+          <div style="overflow-y:auto;padding:10px 14px">
+            <div class="slbl" style="margin-bottom:6px">OPP DECK <span id="igt-ot-deck-count" style="color:var(--muted)"></span></div>
+            <div id="igt-ot-tiles" style="display:flex;flex-wrap:wrap;gap:3px"></div>
           </div>
-          <div id="igt-ot-list" style="display:flex;flex-direction:column;gap:4px"></div>
-          <button class="btn-sec" onclick="igtOtClear()" style="margin-top:10px;font-size:11px">✕ Clear All</button>
+          <div style="border-left:1px solid var(--border);padding:10px 12px;display:flex;flex-direction:column;gap:8px;overflow-y:auto">
+            <div class="slbl">MATCH NOTES</div>
+            <textarea id="igt-ot-notes" placeholder="Key plays / reads...&#10;Misplays to avoid...&#10;Side plan for G2/G3..." style="flex:1;min-height:140px;background:var(--card2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:11px;padding:8px;resize:none;outline:none;line-height:1.6"></textarea>
+          </div>
         </div>
       </div>
 
       <!-- TOOLS -->
-      <div id="igt-tools" class="igt-panel" style="display:none;overflow-y:auto;padding:16px 20px">
-        <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start">
+      <div id="igt-tools" class="igt-panel" style="display:none;overflow-y:auto;padding:14px">
+        <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start">
+
+          <!-- Timer settings -->
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;min-width:220px;text-align:center">
+            <div class="slbl" style="margin-bottom:8px">TIMER SETTINGS</div>
+            <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Set timer duration (takes effect on reset)</div>
+            <div style="display:flex;gap:5px;justify-content:center;margin-bottom:8px">
+              <button class="dd-btn-sec" onclick="igtTimerPreset(40)" style="font-size:11px;padding:3px 10px">40m</button>
+              <button class="dd-btn-sec" onclick="igtTimerPreset(50)" style="font-size:11px;padding:3px 10px">50m</button>
+              <button class="dd-btn-sec" onclick="igtTimerPreset(60)" style="font-size:11px;padding:3px 10px">60m</button>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center;justify-content:center">
+              <input id="igt-timer-min" type="number" value="50" min="0" style="width:55px;text-align:center"/>
+              <span style="color:var(--muted);font-size:11px">min</span>
+              <input id="igt-timer-sec" type="number" value="0" min="0" max="59" style="width:55px;text-align:center"/>
+              <span style="color:var(--muted);font-size:11px">sec</span>
+              <button class="dd-btn-sec" onclick="igtTimerSet()" style="font-size:11px;padding:3px 10px">Set</button>
+            </div>
+          </div>
 
           <!-- RPS Advisor -->
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;min-width:220px;text-align:center;flex:1;max-width:280px">
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;min-width:200px;text-align:center">
             <div class="slbl" style="margin-bottom:6px">RPS ADVISOR</div>
-            <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Track opponent picks — get optimal counter</div>
-            <div id="igt-rps-img" style="font-size:64px;margin-bottom:6px;min-height:72px">🤜</div>
-            <div id="igt-rps-ans" style="font-size:20px;font-weight:bold;color:var(--green);margin-bottom:10px;min-height:28px"></div>
-            <div style="display:flex;gap:5px;margin-bottom:8px">
-              <button class="dd-btn" onclick="igtRpsPick('r')" style="flex:1;font-size:11px">✊</button>
-              <button class="dd-btn" onclick="igtRpsPick('p')" style="flex:1;font-size:11px">✋</button>
-              <button class="dd-btn" onclick="igtRpsPick('s')" style="flex:1;font-size:11px">✌</button>
+            <div id="igt-rps-img" style="font-size:56px;margin-bottom:6px;min-height:64px">🤜</div>
+            <div id="igt-rps-ans" style="font-size:18px;font-weight:bold;color:var(--green);margin-bottom:10px;min-height:24px"></div>
+            <div style="display:flex;gap:4px;margin-bottom:8px">
+              <button class="dd-btn" onclick="igtRpsPick('r')" style="flex:1;font-size:11px">✊ Rock</button>
+              <button class="dd-btn" onclick="igtRpsPick('p')" style="flex:1;font-size:11px">✋ Paper</button>
+              <button class="dd-btn" onclick="igtRpsPick('s')" style="flex:1;font-size:11px">✌ Scissors</button>
             </div>
             <div id="igt-rps-counts" style="font-size:11px;color:var(--muted);margin-bottom:6px"></div>
             <button class="btn-sec" onclick="igtRpsReset()" style="font-size:11px">↺ Reset</button>
           </div>
 
           <!-- RNG -->
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;min-width:220px;text-align:center;flex:1;max-width:280px">
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;min-width:200px;text-align:center">
             <div class="slbl" style="margin-bottom:6px">RANDOM NUMBER</div>
-            <div style="display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:10px">
-              <input id="igt-rng-min" type="number" value="1" style="width:65px;text-align:center;font-size:18px"/>
+            <div style="display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:8px">
+              <input id="igt-rng-min" type="number" value="1" style="width:60px;text-align:center;font-size:16px"/>
               <span style="color:var(--muted)">–</span>
-              <input id="igt-rng-max" type="number" value="6" style="width:65px;text-align:center;font-size:18px"/>
+              <input id="igt-rng-max" type="number" value="6" style="width:60px;text-align:center;font-size:16px"/>
             </div>
-            <div id="igt-rng-result" style="font-size:64px;font-weight:bold;color:var(--blue);margin-bottom:8px;min-height:72px;line-height:1">—</div>
-            <button class="btn-go" onclick="igtRngRoll()" style="width:100%;margin-bottom:8px">🎲 Roll</button>
+            <div id="igt-rng-result" style="font-size:56px;font-weight:bold;color:var(--blue);margin-bottom:8px;min-height:64px;line-height:1">—</div>
+            <button class="btn-go" onclick="igtRngRoll()" style="width:100%;margin-bottom:6px">🎲 Roll</button>
             <div id="igt-rng-hist" style="display:flex;flex-wrap:wrap;gap:3px;justify-content:center;font-size:11px"></div>
           </div>
 
-          <!-- Timer -->
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;min-width:220px;text-align:center;flex:1;max-width:280px">
-            <div class="slbl" style="margin-bottom:6px">MATCH TIMER</div>
-            <div id="igt-timer-display" style="font-size:48px;font-weight:bold;color:var(--green);letter-spacing:.05em;margin-bottom:10px;font-family:monospace">50:00</div>
-            <div style="display:flex;gap:6px;margin-bottom:8px">
-              <button class="btn-go" id="igt-timer-btn" onclick="igtTimerToggle()" style="flex:1">▶ Start</button>
-              <button class="btn-sec" onclick="igtTimerReset()">↺</button>
-            </div>
-            <div style="display:flex;gap:4px;justify-content:center;margin-bottom:8px">
-              <button class="dd-btn-sec" onclick="igtTimerPreset(40)" style="font-size:11px;padding:3px 8px">40m</button>
-              <button class="dd-btn-sec" onclick="igtTimerPreset(50)" style="font-size:11px;padding:3px 8px">50m</button>
-              <button class="dd-btn-sec" onclick="igtTimerPreset(60)" style="font-size:11px;padding:3px 8px">60m</button>
-            </div>
-            <div style="display:flex;gap:5px;align-items:center;justify-content:center">
-              <input id="igt-timer-min" type="number" value="50" min="0" style="width:50px;text-align:center"/>
-              <span style="color:var(--muted);font-size:11px">m</span>
-              <input id="igt-timer-sec" type="number" value="0" min="0" max="59" style="width:50px;text-align:center"/>
-              <span style="color:var(--muted);font-size:11px">s</span>
-              <button class="dd-btn-sec" onclick="igtTimerSet()" style="font-size:11px;padding:3px 8px">Set</button>
-            </div>
-          </div>
-
           <!-- Probability Calc -->
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;min-width:240px;flex:1;max-width:320px">
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;min-width:230px">
             <div class="slbl" style="margin-bottom:6px">PROBABILITY CALC</div>
-            <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Chance of drawing N copies in opening hand</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:10px">
+            <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Chance of drawing N copies in opening hand</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">
               <div><label class="lbl">Deck Size</label><input id="igt-prob-deck" type="number" value="40" min="1" style="width:100%"/></div>
               <div><label class="lbl">Hand Size</label><input id="igt-prob-hand" type="number" value="5" min="1" style="width:100%"/></div>
               <div><label class="lbl">Copies in Deck</label><input id="igt-prob-copies" type="number" value="3" min="1" style="width:100%"/></div>
               <div><label class="lbl">Want at Least</label><input id="igt-prob-want" type="number" value="1" min="1" style="width:100%"/></div>
             </div>
-            <button class="btn-go" onclick="igtProbCalc()" style="width:100%;margin-bottom:8px">Calculate</button>
-            <div id="igt-prob-result" style="font-size:20px;font-weight:bold;color:var(--green);text-align:center;min-height:26px"></div>
+            <button class="btn-go" onclick="igtProbCalc()" style="width:100%;margin-bottom:6px">Calculate</button>
+            <div id="igt-prob-result" style="font-size:18px;font-weight:bold;color:var(--green);text-align:center;min-height:24px"></div>
           </div>
 
           <!-- Player Randomizer -->
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;min-width:220px;flex:1;max-width:280px">
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;min-width:200px">
             <div class="slbl" style="margin-bottom:6px">PLAYER ORDER</div>
-            <div style="display:flex;gap:6px;margin-bottom:7px">
+            <div style="display:flex;gap:5px;margin-bottom:6px">
               <input id="igt-pr-inp" type="text" placeholder="Player name..." style="flex:1" onkeydown="if(event.key==='Enter')igtPrAdd()"/>
-              <button class="btn-go" onclick="igtPrAdd()" style="font-size:12px;padding:6px 10px">+</button>
+              <button class="btn-go" onclick="igtPrAdd()" style="font-size:12px;padding:5px 10px">+</button>
             </div>
-            <div id="igt-pr-list" style="display:flex;flex-direction:column;gap:2px;margin-bottom:8px;min-height:32px"></div>
-            <div style="display:flex;gap:5px;margin-bottom:8px">
+            <div id="igt-pr-list" style="display:flex;flex-direction:column;gap:2px;margin-bottom:8px;min-height:28px"></div>
+            <div style="display:flex;gap:5px;margin-bottom:6px">
               <button class="btn-go" onclick="igtPrPick()" style="flex:1;font-size:11px">🎲 Pick</button>
-              <button class="btn-sec" onclick="igtPrClear()" style="font-size:11px;padding:6px 8px">✕</button>
+              <button class="btn-sec" onclick="igtPrClear()" style="font-size:11px;padding:5px 8px">✕</button>
             </div>
-            <div id="igt-pr-result" style="font-size:13px;font-weight:bold;color:var(--green);text-align:center;min-height:20px"></div>
+            <div id="igt-pr-result" style="font-size:13px;font-weight:bold;color:var(--green);text-align:center;min-height:18px"></div>
             <div id="igt-pr-order" style="display:flex;flex-direction:column;gap:2px;margin-top:6px"></div>
-          </div>
-
-          <!-- Decklist Image -->
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;min-width:220px;flex:1;max-width:280px;text-align:center">
-            <div class="slbl" style="margin-bottom:6px">DECKLIST IMAGE</div>
-            <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Export your Deck Builder list as a printable page</div>
-            <button class="btn-go" onclick="igtExportImage()" style="width:100%">🖼 Generate</button>
-            <div id="igt-img-status" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
           </div>
 
         </div>
       </div>
+
     </div>
   </div>
+
 
   </main>
 </div>
@@ -5265,22 +5302,160 @@ function importBatch() {
 
 // ── Show relay userscript in a copy-paste modal ──────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
-// IN-GAME TOOLS
+// IN-GAME TOOLS — FULL REWRITE
 // ══════════════════════════════════════════════════════════════════════
 
-function igtTab(name, btn) {
-  document.querySelectorAll('[id^="igt-tab-"]').forEach(b => b.classList.remove('on'));
-  btn.classList.add('on');
-  document.querySelectorAll('.igt-panel').forEach(p => p.style.display = 'none');
-  const panel = document.getElementById('igt-'+name);
-  if (panel) { panel.style.display = 'block'; }
-  if (name === 'side') igtSpSync();
-}
-
-// Deck Builder
-let _igtDeck = { main: [], side: [], extra: [] };
+// ── State ─────────────────────────────────────────────────────────────────────
+let _igtDeck = { main:[], side:[], extra:[] }; // {id, name, type, qty}
+let _igtOppDeck = { main:[], side:[], extra:[] };
+let _igtSpState = null;        // {main:[...], side:[...]} post-side state
+let _igtSpProfiles = {};       // name -> {main, side} snapshots
+let _igtSpSelected = { out:[], in:[] }; // card indices selected for swap
+let _igtMtGame = 1;
+let _igtMtStates = { 1:{}, 2:{}, 3:{} }; // game -> {cardId -> status}
+let _igtMtResults = [];        // [{game, result}]
 let _igtSearchTimeout = null;
 
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function igtTab(name, btn) {
+  document.querySelectorAll('[id^="igt-tab-"]').forEach(b => b.classList.remove('on'));
+  if (btn) btn.classList.add('on');
+  document.querySelectorAll('.igt-panel').forEach(p => { p.style.display = 'none'; });
+  const panel = document.getElementById('igt-'+name);
+  if (panel) panel.style.display = 'flex';
+  if (name === 'side') igtSpRender();
+  if (name === 'mytrack') igtMtRender();
+}
+
+// ── YDKe decode ───────────────────────────────────────────────────────────────
+function igtDecodeYdke(code) {
+  // Format: ydke:///[main_b64]![extra_b64]![side_b64]!
+  try {
+    const match = code.match(/ydke:\/\/\/([^!]*)!([^!]*)!([^!]*)!/);
+    if (!match) return null;
+    const decode = b64 => {
+      if (!b64) return [];
+      const bin = atob(b64.replace(/-/g,'+').replace(/_/g,'/'));
+      const ids = [];
+      for (let i = 0; i < bin.length; i += 4) {
+        ids.push(bin.charCodeAt(i) | (bin.charCodeAt(i+1)<<8) | (bin.charCodeAt(i+2)<<16) | (bin.charCodeAt(i+3)<<24));
+      }
+      return ids;
+    };
+    return { main: decode(match[1]), extra: decode(match[2]), side: decode(match[3]) };
+  } catch(e) { return null; }
+}
+
+async function igtFetchCardsByIds(ids) {
+  if (!ids.length) return {};
+  const unique = [...new Set(ids)];
+  try {
+    const res = await fetch('https://db.ygoprodeck.com/api/v7/cardinfo.php?id='+unique.join(','));
+    const data = await res.json();
+    const map = {};
+    (data.data||[]).forEach(c => map[c.id] = c);
+    return map;
+  } catch(e) { return {}; }
+}
+
+async function igtImportFromIds(idGroups, target) {
+  // idGroups: {main:[ids], extra:[ids], side:[ids]}
+  const allIds = [...idGroups.main, ...idGroups.extra, ...idGroups.side];
+  if (!allIds.length) return;
+  st('Fetching card data...', 'var(--muted)');
+  const cardMap = await igtFetchCardsByIds(allIds);
+  const buildSection = (ids) => {
+    const result = [];
+    ids.forEach(id => {
+      const card = cardMap[id];
+      if (!card) return;
+      const ex = result.find(c => c.id === card.id);
+      if (ex) ex.qty++;
+      else result.push({ id: card.id, name: card.name, type: card.type, qty: 1 });
+    });
+    return result;
+  };
+  if (target === 'opp') {
+    _igtOppDeck.main  = buildSection(idGroups.main);
+    _igtOppDeck.extra = buildSection(idGroups.extra);
+    _igtOppDeck.side  = buildSection(idGroups.side);
+    igtOtRenderTiles();
+  } else {
+    _igtDeck.main  = buildSection(idGroups.main);
+    _igtDeck.extra = buildSection(idGroups.extra);
+    _igtDeck.side  = buildSection(idGroups.side);
+    _igtSpState = null; // reset side state
+    igtRenderAllDeck();
+  }
+  st('Deck imported', 'var(--green)');
+}
+
+// ── YDKe dialog ───────────────────────────────────────────────────────────────
+function igtShowYdkeDialog(target) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:20px;width:560px;max-width:95vw;display:flex;flex-direction:column;gap:12px';
+  const title = document.createElement('div'); title.style.cssText='font-size:13px;font-weight:bold;color:var(--text);letter-spacing:.08em'; title.textContent='IMPORT YDKE CODE';
+  const inp = document.createElement('textarea');
+  inp.placeholder = 'Paste YDKe code here (ydke:///...!...!...!)';
+  inp.style.cssText = 'min-height:80px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:11px;padding:8px;resize:vertical;outline:none';
+  const row = document.createElement('div'); row.style.cssText='display:flex;gap:8px';
+  const okBtn = document.createElement('button'); okBtn.className='btn-go'; okBtn.style.flex='1'; okBtn.textContent='Import';
+  const cancelBtn = document.createElement('button'); cancelBtn.className='btn-sec'; cancelBtn.textContent='Cancel';
+  okBtn.onclick = async () => {
+    const code = inp.value.trim();
+    const ids = igtDecodeYdke(code);
+    if (!ids) { st('Invalid YDKe code', 'var(--red)'); return; }
+    overlay.remove();
+    await igtImportFromIds(ids, target);
+  };
+  cancelBtn.onclick = () => overlay.remove();
+  row.appendChild(okBtn); row.appendChild(cancelBtn);
+  box.appendChild(title); box.appendChild(inp); box.appendChild(row);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  overlay.onclick = e => { if(e.target===overlay) overlay.remove(); };
+  setTimeout(() => inp.focus(), 50);
+}
+
+// ── Card tile rendering ───────────────────────────────────────────────────────
+function igtCardTile(card, opts) {
+  // opts: { section, index, onClick, label, labelColor, showControls, size }
+  const size = opts.size || 54;
+  const wrap = document.createElement('div');
+  wrap.style.cssText = `position:relative;width:${size}px;height:${Math.round(size*1.45)}px;flex-shrink:0;cursor:pointer;border-radius:3px;overflow:hidden;border:2px solid transparent`;
+  if (opts.borderColor) wrap.style.borderColor = opts.borderColor;
+
+  const img = document.createElement('img');
+  img.style.cssText = 'width:100%;height:100%;object-fit:cover;object-position:top;display:block';
+  img.src = card.id ? `https://images.ygoprodeck.com/images/cards_small/${card.id}.jpg` : '';
+  img.alt = card.name;
+  img.title = card.name + (card.qty > 1 ? ' x'+card.qty : '');
+  img.onerror = function() { this.style.display='none'; wrap.style.background='var(--card2)'; };
+
+  // Qty badge
+  if (card.qty > 1) {
+    const qty = document.createElement('div');
+    qty.style.cssText = 'position:absolute;bottom:2px;right:2px;background:rgba(0,0,0,.75);color:#fff;font-size:9px;font-weight:bold;padding:1px 4px;border-radius:3px;font-family:monospace';
+    qty.textContent = 'x'+card.qty;
+    wrap.appendChild(qty);
+  }
+
+  // Status label (SIDED IN, GRAVE, BANISH, etc.)
+  if (opts.label) {
+    const lbl = document.createElement('div');
+    lbl.style.cssText = `position:absolute;top:0;left:0;right:0;background:${opts.labelColor||'rgba(0,0,0,.75)'};color:#fff;font-size:8px;font-weight:bold;text-align:center;padding:2px;font-family:monospace;letter-spacing:.05em`;
+    lbl.textContent = opts.label;
+    wrap.appendChild(lbl);
+  }
+
+  wrap.appendChild(img);
+  if (opts.onClick) wrap.onclick = opts.onClick;
+  return wrap;
+}
+
+// ── DECK BUILDER ──────────────────────────────────────────────────────────────
 async function igtSearchCards(query) {
   clearTimeout(_igtSearchTimeout);
   const out = document.getElementById('igt-search-results');
@@ -5288,288 +5463,343 @@ async function igtSearchCards(query) {
   _igtSearchTimeout = setTimeout(async () => {
     out.innerHTML = '<span style="font-size:11px;color:var(--muted)">Searching...</span>';
     try {
-      const res = await fetch('https://db.ygoprodeck.com/api/v7/cardinfo.php?fname='+encodeURIComponent(query)+'&num=12&offset=0');
+      const res = await fetch('https://db.ygoprodeck.com/api/v7/cardinfo.php?fname='+encodeURIComponent(query)+'&num=20&offset=0');
       const data = await res.json();
       out.innerHTML = '';
       (data.data||[]).forEach(card => {
-        const wrap = document.createElement('div');
-        wrap.style.cssText = 'display:flex;gap:2px;align-items:center';
-        const btn = document.createElement('button');
-        btn.className = 'dd-btn-sec';
-        btn.style.cssText = 'font-size:11px;padding:3px 10px;white-space:nowrap';
-        btn.textContent = card.name;
-        btn.onclick = () => igtAddCard(card, 'main');
-        const sBtn = document.createElement('button');
-        sBtn.className = 'dd-btn-sec';
-        sBtn.style.cssText = 'font-size:10px;padding:2px 6px;color:var(--muted)';
-        sBtn.textContent = 'S';
-        sBtn.title = 'Add to Side';
-        sBtn.onclick = () => igtAddCard(card, 'side');
-        wrap.appendChild(btn); wrap.appendChild(sBtn);
-        out.appendChild(wrap);
+        const tile = igtCardTile(card, { size:44, onClick:() => igtAddCard(card,'main') });
+        tile.title = card.name + ' (click=main, right-click=side)';
+        tile.oncontextmenu = e => { e.preventDefault(); igtAddCard(card,'side'); };
+        out.appendChild(tile);
       });
-      if (!data.data || !data.data.length) out.innerHTML = '<span style="font-size:11px;color:var(--muted)">No cards found.</span>';
+      if (!data.data || !data.data.length) out.innerHTML = '<span style="font-size:11px;color:var(--muted)">No results.</span>';
     } catch(e) { out.innerHTML = '<span style="font-size:11px;color:var(--red)">Search failed.</span>'; }
-  }, 400);
+  }, 350);
 }
 
 function igtAddCard(card, section) {
   const deck = _igtDeck[section];
   const existing = deck.find(c => c.id === card.id);
   const max = section === 'main' ? 40 : 15;
-  const total = deck.reduce((s,c) => s+c.qty, 0);
-  if (total >= max) { st(section+' deck is full ('+max+')', 'var(--amber)'); return; }
-  if (existing) { if (existing.qty < 3) existing.qty++; }
-  else deck.push({ id: card.id, name: card.name, type: card.type, qty: 1 });
-  igtRenderDeck();
+  const total = deck.reduce((s,c)=>s+c.qty, 0);
+  if (total >= max) { st(section+' deck full', 'var(--amber)'); return; }
+  if (existing && existing.qty < 3) existing.qty++;
+  else if (!existing) deck.push({ id:card.id, name:card.name, type:card.type, qty:1 });
+  igtRenderAllDeck();
 }
 
-function igtRenderDeck() {
+function igtRenderAllDeck() {
   ['main','side','extra'].forEach(sec => {
-    const el = document.getElementById('igt-'+sec+'-list');
+    const el = document.getElementById('igt-'+sec+'-tiles');
     const countEl = document.getElementById('igt-'+sec+'-count');
     if (!el) return;
     const deck = _igtDeck[sec];
-    const total = deck.reduce((s,c) => s+c.qty, 0);
-    const max = sec === 'main' ? 40 : 15;
+    const total = deck.reduce((s,c)=>s+c.qty,0);
+    const max = sec==='main'?40:15;
     if (countEl) countEl.textContent = '('+total+'/'+max+')';
     el.innerHTML = '';
     deck.forEach((card, i) => {
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 6px;background:var(--card2);border:1px solid var(--border);border-radius:4px;font-size:12px';
-      const nameSpan = document.createElement('span'); nameSpan.style.cssText='flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; nameSpan.textContent=card.name;
-      const qtySpan = document.createElement('span'); qtySpan.style.cssText='color:var(--muted);min-width:18px;text-align:right'; qtySpan.textContent=card.qty+'x';
-      const addBtn = document.createElement('button'); addBtn.textContent='+'; addBtn.style.cssText='background:none;border:none;color:var(--green);cursor:pointer;font-size:14px;padding:0 2px;font-family:monospace'; addBtn.onclick=()=>{igtQty(sec,i,1);};
-      const subBtn = document.createElement('button'); subBtn.textContent='−'; subBtn.style.cssText='background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:0 2px;font-family:monospace'; subBtn.onclick=()=>{igtQty(sec,i,-1);};
-      const delBtn = document.createElement('button'); delBtn.textContent='✕'; delBtn.style.cssText='background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px;padding:0 2px;font-family:monospace'; delBtn.onclick=()=>{igtRemCard(sec,i);};
-      row.appendChild(qtySpan); row.appendChild(nameSpan); row.appendChild(addBtn); row.appendChild(subBtn); row.appendChild(delBtn);
-      el.appendChild(row);
+      const tile = igtCardTile(card, { size:54,
+        onClick: () => { _igtDeck[sec][i].qty--; if(_igtDeck[sec][i].qty<=0)_igtDeck[sec].splice(i,1); igtRenderAllDeck(); }
+      });
+      tile.title = card.name+' (click to remove)';
+      el.appendChild(tile);
     });
   });
 }
 
-function igtQty(sec, i, delta) {
-  const card = _igtDeck[sec][i]; if (!card) return;
-  const max = sec === 'main' ? 40 : 15;
-  const total = _igtDeck[sec].reduce((s,c) => s+c.qty, 0);
-  if (delta > 0 && (card.qty >= 3 || total >= max)) return;
-  card.qty += delta;
-  if (card.qty <= 0) _igtDeck[sec].splice(i, 1);
-  igtRenderDeck();
-}
-function igtRemCard(sec, i) { _igtDeck[sec].splice(i, 1); igtRenderDeck(); }
-function igtClearDeck() { if (!confirm('Clear all deck sections?')) return; _igtDeck = { main:[], side:[], extra:[] }; igtRenderDeck(); }
-
-function igtExportYDK() {
-  let ydk = '#main\n';
-  _igtDeck.main.forEach(c => { for(let i=0;i<c.qty;i++) ydk += (c.id||0)+'\n'; });
-  ydk += '#extra\n';
-  _igtDeck.extra.forEach(c => { for(let i=0;i<c.qty;i++) ydk += (c.id||0)+'\n'; });
-  ydk += '!side\n';
-  _igtDeck.side.forEach(c => { for(let i=0;i<c.qty;i++) ydk += (c.id||0)+'\n'; });
-  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([ydk],{type:'text/plain'})); a.download='deck.ydk'; a.click();
+function igtClearDeck() {
+  if (!confirm('Clear all deck sections?')) return;
+  _igtDeck = {main:[],side:[],extra:[]}; _igtSpState=null; igtRenderAllDeck();
 }
 
-async function igtImportYDK() {
-  const inp = document.createElement('input'); inp.type='file'; inp.accept='.ydk';
-  inp.onchange = async e => {
-    const text = await e.target.files[0].text();
-    const lines = text.split('\n').map(l=>l.trim()).filter(Boolean);
-    let section = 'main'; _igtDeck = { main:[], side:[], extra:[] };
-    const ids = [];
-    for (const line of lines) {
-      if (line === '#main') { section='main'; continue; }
-      if (line === '#extra') { section='extra'; continue; }
-      if (line === '!side') { section='side'; continue; }
-      if (/^\d+$/.test(line)) ids.push({ id: parseInt(line), section });
+function igtExportYDK(target) {
+  const d = target === 'opp' ? _igtOppDeck : _igtDeck;
+  let ydk='#main\n'; d.main.forEach(c=>{for(let i=0;i<c.qty;i++)ydk+=(c.id||0)+'\n';});
+  ydk+='#extra\n'; d.extra.forEach(c=>{for(let i=0;i<c.qty;i++)ydk+=(c.id||0)+'\n';});
+  ydk+='!side\n'; d.side.forEach(c=>{for(let i=0;i<c.qty;i++)ydk+=(c.id||0)+'\n';});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([ydk],{type:'text/plain'})); a.download='deck.ydk'; a.click();
+}
+
+async function igtImportYDK(target) {
+  const inp=document.createElement('input'); inp.type='file'; inp.accept='.ydk';
+  inp.onchange=async e=>{
+    const text=await e.target.files[0].text();
+    const lines=text.split('\n').map(l=>l.trim()).filter(Boolean);
+    let sec='main'; const ids={main:[],extra:[],side:[]};
+    for(const l of lines){
+      if(l==='#main'){sec='main';continue;} if(l==='#extra'){sec='extra';continue;} if(l==='!side'){sec='side';continue;}
+      if(/^\d+$/.test(l)) ids[sec].push(parseInt(l));
     }
-    try {
-      const uniqueIds = [...new Set(ids.map(x=>x.id))];
-      const res = await fetch('https://db.ygoprodeck.com/api/v7/cardinfo.php?id='+uniqueIds.join(','));
-      const data = await res.json();
-      const cardMap = {}; (data.data||[]).forEach(c => cardMap[c.id] = c);
-      ids.forEach(({id, section}) => {
-        const card = cardMap[id]; if (!card) return;
-        const existing = _igtDeck[section].find(c=>c.id===card.id);
-        if (existing) existing.qty++; else _igtDeck[section].push({ id:card.id, name:card.name, type:card.type, qty:1 });
-      });
-      igtRenderDeck(); st('YDK imported', 'var(--green)');
-    } catch(e) { st('Import failed', 'var(--red)'); }
+    await igtImportFromIds(ids, target||'main');
   };
   inp.click();
 }
 
-// Side Practice
-let _igtSpCurrent = [];
-function igtSpSync() {
-  const mainEl = document.getElementById('igt-sp-main');
-  const sideEl = document.getElementById('igt-sp-side');
-  if (!mainEl || !sideEl) return;
-  _igtSpCurrent = [];
-  _igtDeck.main.forEach(c => { for(let i=0;i<c.qty;i++) _igtSpCurrent.push({...c}); });
-  mainEl.innerHTML = '';
-  _igtDeck.main.forEach(c => {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:6px;padding:3px 6px;background:var(--card2);border:1px solid var(--border);border-radius:4px;font-size:12px';
-    const q = document.createElement('span'); q.style.color='var(--muted)'; q.textContent=c.qty+'x';
-    const n = document.createElement('span'); n.style.flex='1'; n.textContent=c.name;
-    row.appendChild(q); row.appendChild(n); mainEl.appendChild(row);
-  });
-  sideEl.innerHTML = '';
-  _igtDeck.side.forEach(c => {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:6px;padding:3px 6px;background:var(--card2);border:1px solid var(--border);border-radius:4px;font-size:12px;cursor:pointer';
-    const q = document.createElement('span'); q.style.color='var(--muted)'; q.textContent=c.qty+'x';
-    const n = document.createElement('span'); n.style.flex='1'; n.textContent=c.name;
-    const sw = document.createElement('span'); sw.style.cssText='color:var(--blue);font-size:11px'; sw.textContent='↕';
-    row.appendChild(q); row.appendChild(n); row.appendChild(sw); sideEl.appendChild(row);
-  });
-  igtSpRenderCurrent();
+// ── SIDE PRACTICE ─────────────────────────────────────────────────────────────
+function igtSpInit() {
+  if (!_igtSpState) {
+    _igtSpState = {
+      main: _igtDeck.main.flatMap(c => Array(c.qty).fill({id:c.id,name:c.name,type:c.type})),
+      side: _igtDeck.side.flatMap(c => Array(c.qty).fill({id:c.id,name:c.name,type:c.type}))
+    };
+  }
+  _igtSpSelected = { out:[], in:[] };
+  igtSpRender();
 }
-function igtSpRenderCurrent() {
-  const el = document.getElementById('igt-sp-current'); if (!el) return;
-  el.innerHTML = '';
-  const counts = {};
-  _igtSpCurrent.forEach(c => counts[c.name] = (counts[c.name]||0)+1);
-  Object.entries(counts).forEach(([name,qty]) => {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:6px;padding:3px 6px;background:var(--card2);border:1px solid var(--border);border-radius:4px;font-size:12px';
-    const q = document.createElement('span'); q.style.color='var(--muted)'; q.textContent=qty+'x';
-    const n = document.createElement('span'); n.textContent=name;
-    row.appendChild(q); row.appendChild(n); el.appendChild(row);
-  });
-}
-function igtSpReset() { igtSpSync(); }
 
-// My Tracker
-let _igtMtRecords = [];
-function igtMtAdd() {
-  const opp = (document.getElementById('igt-mt-opp').value||'').trim();
-  if (!opp) { st('Enter opponent name','var(--red)'); return; }
-  const result = document.getElementById('igt-mt-result').value;
-  const score  = (document.getElementById('igt-mt-score').value||'').trim();
-  _igtMtRecords.push({ opp, result, score });
-  document.getElementById('igt-mt-opp').value=''; document.getElementById('igt-mt-score').value='';
+function igtSpRender() {
+  if (!_igtSpState) igtSpInit();
+  const mainEl = document.getElementById('igt-sp-main-tiles');
+  const sideEl = document.getElementById('igt-sp-side-tiles');
+  const mcEl   = document.getElementById('igt-sp-main-count');
+  const scEl   = document.getElementById('igt-sp-side-count');
+  const outC   = document.getElementById('igt-sp-out-count');
+  const inC    = document.getElementById('igt-sp-in-count');
+  if (!mainEl) return;
+  if (mcEl) mcEl.textContent = '('+_igtSpState.main.length+')';
+  if (scEl) scEl.textContent = '('+_igtSpState.side.length+')';
+  if (outC) outC.textContent = _igtSpSelected.out.length;
+  if (inC)  inC.textContent  = _igtSpSelected.in.length;
+  mainEl.innerHTML='';
+  _igtSpState.main.forEach((card, i) => {
+    const isOut = _igtSpSelected.out.includes(i);
+    const wasSidedIn = card._sidedIn;
+    const label   = isOut ? 'OUT' : wasSidedIn ? 'SIDED IN' : null;
+    const lblColor= isOut ? 'rgba(255,85,85,.85)' : wasSidedIn ? 'rgba(0,229,150,.85)' : null;
+    const tile = igtCardTile(card, { size:54, label, labelColor:lblColor, borderColor: isOut?'var(--red)':wasSidedIn?'var(--green)':'transparent' });
+    tile.onclick = () => {
+      const idx = _igtSpSelected.out.indexOf(i);
+      if (idx>=0) _igtSpSelected.out.splice(idx,1);
+      else _igtSpSelected.out.push(i);
+      igtSpRender();
+    };
+    mainEl.appendChild(tile);
+  });
+  sideEl.innerHTML='';
+  _igtSpState.side.forEach((card, i) => {
+    const isIn = _igtSpSelected.in.includes(i);
+    const wasSidedOut = card._sidedOut;
+    const label   = isIn ? 'IN' : wasSidedOut ? 'SIDED OUT' : null;
+    const lblColor= isIn ? 'rgba(0,229,150,.85)' : wasSidedOut ? 'rgba(255,85,85,.85)' : null;
+    const tile = igtCardTile(card, { size:54, label, labelColor:lblColor, borderColor: isIn?'var(--green)':wasSidedOut?'var(--red)':'transparent' });
+    tile.onclick = () => {
+      const idx = _igtSpSelected.in.indexOf(i);
+      if (idx>=0) _igtSpSelected.in.splice(idx,1);
+      else _igtSpSelected.in.push(i);
+      igtSpRender();
+    };
+    sideEl.appendChild(tile);
+  });
+}
+
+function igtSpSwap() {
+  if (!_igtSpState) { igtSpInit(); return; }
+  const outIdxs = [..._igtSpSelected.out].sort((a,b)=>b-a);
+  const inIdxs  = [..._igtSpSelected.in].sort((a,b)=>b-a);
+  if (outIdxs.length !== inIdxs.length) { st('Select equal number of OUT and IN cards', 'var(--amber)'); return; }
+  const outCards = outIdxs.map(i => _igtSpState.main[i]);
+  const inCards  = inIdxs.map(i => _igtSpState.side[i]);
+  // Mark cards
+  inCards.forEach(c => c._sidedIn = true);
+  outCards.forEach(c => c._sidedOut = true);
+  // Remove from main and side
+  outIdxs.forEach(i => _igtSpState.main.splice(i,1));
+  inIdxs.forEach(i  => _igtSpState.side.splice(i,1));
+  // Add to opposite
+  outCards.forEach(c => _igtSpState.side.push(c));
+  inCards.forEach(c  => _igtSpState.main.push(c));
+  _igtSpSelected = { out:[], in:[] };
+  igtSpRender();
+  st('Swapped '+outCards.length+' card(s)', 'var(--green)');
+}
+
+function igtSpReset() {
+  _igtSpState = null; _igtSpSelected = {out:[],in:[]};
+  igtSpInit();
+}
+
+function igtSpSaveProfile() {
+  const name = prompt('Save siding profile as:');
+  if (!name || !name.trim()) return;
+  if (!_igtSpState) igtSpInit();
+  _igtSpProfiles[name.trim()] = JSON.parse(JSON.stringify(_igtSpState));
+  igtSpUpdateProfileSel();
+  st('Profile "'+name+'" saved', 'var(--green)');
+}
+
+function igtSpUpdateProfileSel() {
+  const sel = document.getElementById('igt-sp-profile-sel');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">— Load Profile —</option>';
+  Object.keys(_igtSpProfiles).forEach(n => {
+    const opt = document.createElement('option'); opt.value=n; opt.textContent=n; sel.appendChild(opt);
+  });
+}
+
+function igtSpLoadProfile() {
+  const sel = document.getElementById('igt-sp-profile-sel');
+  const name = sel && sel.value;
+  if (!name || !_igtSpProfiles[name]) { st('Select a profile first', 'var(--amber)'); return; }
+  _igtSpState = JSON.parse(JSON.stringify(_igtSpProfiles[name]));
+  _igtSpSelected = {out:[],in:[]};
+  igtSpRender();
+  st('Loaded profile "'+name+'"', 'var(--green)');
+}
+
+// ── MY TRACKER ────────────────────────────────────────────────────────────────
+function igtMtSetGame(game, btn) {
+  _igtMtGame = game;
+  document.querySelectorAll('[id^="igt-mt-g"]').forEach(b => b.classList.remove('on'));
+  if (btn) btn.classList.add('on');
   igtMtRender();
 }
+
 function igtMtRender() {
-  const chips=document.getElementById('igt-mt-chips'); const list=document.getElementById('igt-mt-list');
-  const w=_igtMtRecords.filter(r=>r.result==='w').length, l=_igtMtRecords.filter(r=>r.result==='l').length, d=_igtMtRecords.filter(r=>r.result==='d').length;
-  const wr=_igtMtRecords.length?Math.round(w/_igtMtRecords.length*100):0;
-  chips.innerHTML='<div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:13px"><span style="color:var(--blue);font-weight:bold">'+_igtMtRecords.length+'</span> <span style="color:var(--muted);font-size:11px">Matches</span></div>'+'<div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:13px"><span style="color:var(--green);font-weight:bold">'+w+'W</span> <span style="color:var(--muted)">—</span> <span style="color:var(--red);font-weight:bold">'+l+'L</span>'+(d?' <span style="color:var(--muted)">—</span> <span style="color:var(--amber);font-weight:bold">'+d+'D</span>':'')+'</div>'+'<div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:13px"><span style="color:'+(wr>=50?'var(--green)':'var(--red)')+';font-weight:bold">'+wr+'%</span> <span style="color:var(--muted);font-size:11px">Win Rate</span></div>';
-  list.innerHTML='';
-  [..._igtMtRecords].reverse().forEach((r,ri)=>{
-    const row=document.createElement('div'); row.style.cssText='display:flex;gap:8px;align-items:center;padding:6px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px;font-size:12px';
-    const col=r.result==='w'?'var(--green)':r.result==='l'?'var(--red)':'var(--amber)'; const lbl=r.result==='w'?'W':r.result==='l'?'L':'D';
-    const res=document.createElement('span'); res.style.cssText='font-weight:bold;color:'+col+';min-width:16px'; res.textContent=lbl;
-    const opp=document.createElement('span'); opp.style.flex='1'; opp.textContent='vs '+r.opp;
-    const score=document.createElement('span'); score.style.color='var(--muted)'; score.textContent=r.score||'';
-    const idx=_igtMtRecords.length-1-ri;
-    const del=document.createElement('button'); del.textContent='✕'; del.style.cssText='background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px;padding:0'; del.onclick=()=>{_igtMtRecords.splice(idx,1);igtMtRender();};
-    row.appendChild(res); row.appendChild(opp); row.appendChild(score); row.appendChild(del); list.appendChild(row);
+  // Use post-side deck if available, otherwise main deck
+  const deckCards = _igtSpState
+    ? _igtSpState.main
+    : _igtDeck.main.flatMap(c => Array(c.qty).fill({id:c.id,name:c.name,type:c.type}));
+  const countEl = document.getElementById('igt-mt-deck-count');
+  if (countEl) countEl.textContent = '('+deckCards.length+')';
+  const el = document.getElementById('igt-mt-tiles');
+  if (!el) return;
+  el.innerHTML = '';
+  const gameState = _igtMtStates[_igtMtGame] || {};
+  deckCards.forEach((card, i) => {
+    const key = (card.id||card.name)+'_'+i;
+    const status = gameState[key];
+    let label = null, labelColor = null, borderColor = 'transparent';
+    if (status === 'out')    { label='OUT';         labelColor='rgba(255,85,85,.85)';    borderColor='var(--red)'; }
+    if (status === 'grave')  { label='GRAVE';       labelColor='rgba(0,0,0,.85)';         borderColor='var(--muted)'; }
+    if (status === 'banish') { label='BANISH';      labelColor='rgba(102,153,255,.85)';   borderColor='var(--blue)'; }
+    if (status === 'not')    { label='NOT IN DECK'; labelColor='rgba(100,100,100,.85)';   borderColor='var(--dim)'; }
+    const tile = igtCardTile(card, { size:54, label, labelColor, borderColor });
+    tile.oncontextmenu = e => { e.preventDefault(); igtMtCycleStatus(key, tile, card, i, deckCards); };
+    tile.onclick = () => igtMtCycleStatus(key, tile, card, i, deckCards);
+    el.appendChild(tile);
+  });
+  // Update record display
+  const recEl = document.getElementById('igt-mt-record');
+  if (recEl) {
+    const w=_igtMtResults.filter(r=>r.result==='w').length;
+    const l=_igtMtResults.filter(r=>r.result==='l').length;
+    const d=_igtMtResults.filter(r=>r.result==='d').length;
+    recEl.innerHTML = _igtMtResults.length ? `<span style="color:var(--green)">${w}W</span> <span style="color:var(--muted)">—</span> <span style="color:var(--red)">${l}L</span>${d?' — <span style="color:var(--amber)">'+d+'D</span>':''}` : '';
+  }
+  igtMtRenderHistory();
+}
+
+function igtMtCycleStatus(key, tile, card, i, deckCards) {
+  const gameState = _igtMtStates[_igtMtGame];
+  const cycle = [undefined, 'out', 'grave', 'banish', 'not'];
+  const cur = gameState[key];
+  const next = cycle[(cycle.indexOf(cur)+1) % cycle.length];
+  if (next === undefined) delete gameState[key]; else gameState[key] = next;
+  igtMtRender();
+}
+
+function igtMtRecord(result) {
+  _igtMtResults.push({ game:_igtMtGame, result });
+  igtMtRenderHistory();
+  st(result==='w'?'Win recorded':result==='l'?'Loss recorded':'Draw recorded', result==='w'?'var(--green)':result==='l'?'var(--red)':'var(--amber)');
+}
+
+function igtMtRenderHistory() {
+  const el = document.getElementById('igt-mt-history'); if (!el) return;
+  el.innerHTML = '';
+  [..._igtMtResults].reverse().forEach((r,ri) => {
+    const row = document.createElement('div');
+    row.style.cssText='display:flex;gap:6px;align-items:center;font-size:11px;padding:2px 0';
+    const col=r.result==='w'?'var(--green)':r.result==='l'?'var(--red)':'var(--amber)';
+    const lbl=r.result==='w'?'WIN':r.result==='l'?'LOSS':'DRAW';
+    row.innerHTML='<span style="color:'+col+';font-weight:bold;min-width:36px">'+lbl+'</span><span style="color:var(--muted)">G'+r.game+'</span>';
+    const del=document.createElement('button'); del.textContent='✕'; del.style.cssText='background:none;border:none;color:var(--dim);cursor:pointer;font-size:11px;padding:0;margin-left:auto';
+    const idx=_igtMtResults.length-1-ri;
+    del.onclick=()=>{_igtMtResults.splice(idx,1);igtMtRenderHistory();};
+    row.appendChild(del); el.appendChild(row);
   });
 }
-function igtMtClear(){if(!confirm('Clear all?'))return;_igtMtRecords=[];igtMtRender();}
 
-// Opp Tracker
-let _igtOtRecords=[];
-function igtOtAdd(){
-  const opp=(document.getElementById('igt-ot-opp').value||'').trim();
-  if(!opp){st('Enter opponent name','var(--red)');return;}
-  const deck=(document.getElementById('igt-ot-deck').value||'').trim();
-  const note=(document.getElementById('igt-ot-note').value||'').trim();
-  _igtOtRecords.push({opp,deck,note});
-  document.getElementById('igt-ot-opp').value=''; document.getElementById('igt-ot-deck').value=''; document.getElementById('igt-ot-note').value='';
-  igtOtRender();
+function igtMtNewMatch() {
+  if (!confirm('Start new match? This clears card states and match notes.')) return;
+  _igtMtStates = {1:{},2:{},3:{}}; _igtMtGame=1; _igtMtResults=[];
+  const notesEl=document.getElementById('igt-mt-notes'); if(notesEl) notesEl.value='';
+  document.querySelectorAll('[id^="igt-mt-g"]').forEach(b=>b.classList.remove('on'));
+  const g1=document.getElementById('igt-mt-g1-btn'); if(g1) g1.classList.add('on');
+  igtMtRender();
 }
-function igtOtRender(){
-  const list=document.getElementById('igt-ot-list'); list.innerHTML='';
-  [..._igtOtRecords].reverse().forEach((r,ri)=>{
-    const row=document.createElement('div'); row.style.cssText='display:flex;gap:8px;align-items:center;padding:6px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px;font-size:12px;flex-wrap:wrap';
-    const n=document.createElement('span'); n.style.cssText='font-weight:bold;min-width:80px'; n.textContent=r.opp;
-    const d=document.createElement('span'); d.style.cssText='color:var(--blue);font-size:11px'; d.textContent=r.deck||'';
-    const nt=document.createElement('span'); nt.style.cssText='color:var(--muted);flex:1;font-style:italic'; nt.textContent=r.note||'';
-    const idx=_igtOtRecords.length-1-ri;
-    const del=document.createElement('button'); del.textContent='✕'; del.style.cssText='background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px;padding:0'; del.onclick=()=>{_igtOtRecords.splice(idx,1);igtOtRender();};
-    row.appendChild(n); row.appendChild(d); row.appendChild(nt); row.appendChild(del); list.appendChild(row);
+
+// ── OPP TRACKER ───────────────────────────────────────────────────────────────
+function igtOtImportYDK() { igtImportYDK('opp'); }
+
+function igtOtReset() {
+  if (!confirm('Reset opponent tracker?')) return;
+  _igtOppDeck = {main:[],side:[],extra:[]};
+  const arcEl=document.getElementById('igt-ot-archetype'); if(arcEl) arcEl.value='';
+  const notesEl=document.getElementById('igt-ot-notes'); if(notesEl) notesEl.value='';
+  igtOtRenderTiles();
+}
+
+function igtOtRenderTiles() {
+  const el = document.getElementById('igt-ot-tiles'); if (!el) return;
+  const countEl = document.getElementById('igt-ot-deck-count');
+  const total = _igtOppDeck.main.reduce((s,c)=>s+c.qty,0);
+  if (countEl) countEl.textContent = '('+total+')';
+  el.innerHTML = '';
+  _igtOppDeck.main.forEach((card, i) => {
+    const tile = igtCardTile(card, { size:54 });
+    el.appendChild(tile);
   });
 }
-function igtOtClear(){if(!confirm('Clear?'))return;_igtOtRecords=[];igtOtRender();}
 
-// RPS Advisor
-let _igtRpsCounts={r:0,p:0,s:0};
-function igtRpsPick(pick){
-  _igtRpsCounts[pick]++;
-  const most=Object.entries(_igtRpsCounts).sort((a,b)=>b[1]-a[1])[0][0];
-  const counter={r:'✋ Paper',p:'✌ Scissors',s:'✊ Rock'};
-  const icons={r:'✊',p:'✋',s:'✌'};
-  document.getElementById('igt-rps-img').textContent=icons[pick];
-  document.getElementById('igt-rps-ans').textContent='Play '+counter[most];
-  const total=_igtRpsCounts.r+_igtRpsCounts.p+_igtRpsCounts.s;
-  document.getElementById('igt-rps-counts').innerHTML='✊ '+_igtRpsCounts.r+' &nbsp; ✋ '+_igtRpsCounts.p+' &nbsp; ✌ '+_igtRpsCounts.s+' <span style="color:var(--muted)">('+total+')</span>';
-}
-function igtRpsReset(){_igtRpsCounts={r:0,p:0,s:0};document.getElementById('igt-rps-img').textContent='🤜';document.getElementById('igt-rps-ans').textContent='';document.getElementById('igt-rps-counts').textContent='';}
-
-// RNG
-let _igtRngHist=[];
-function igtRngRoll(){
-  const min=parseInt(document.getElementById('igt-rng-min').value)||1;
-  const max=parseInt(document.getElementById('igt-rng-max').value)||6;
-  const result=Math.floor(Math.random()*(max-min+1))+min;
-  document.getElementById('igt-rng-result').textContent=result;
-  _igtRngHist.unshift(result); if(_igtRngHist.length>20)_igtRngHist.pop();
-  document.getElementById('igt-rng-hist').innerHTML=_igtRngHist.map((n,i)=>'<span style="padding:2px 6px;background:var(--card2);border:1px solid '+(i===0?'var(--green)':'var(--border)')+';border-radius:3px;color:'+(i===0?'var(--green)':'var(--muted)')+'">'+n+'</span>').join('');
-}
-
-// Timer
-let _igtTimerSecs=50*60,_igtTimerDefault=50*60,_igtTimerInterval=null,_igtTimerRunning=false;
-function igtTimerFmt(s){const neg=s<0?'-':'';const abs=Math.abs(s);return neg+String(Math.floor(abs/60)).padStart(2,'0')+':'+String(abs%60).padStart(2,'0');}
-function igtTimerUpdate(){const el=document.getElementById('igt-timer-display');const btn=document.getElementById('igt-timer-btn');if(el){el.textContent=igtTimerFmt(_igtTimerSecs);el.style.color=_igtTimerSecs>600?'var(--green)':_igtTimerSecs>0?'var(--amber)':'var(--red)';}if(btn)btn.textContent=_igtTimerRunning?'⏸ Pause':'▶ Start';}
-function igtTimerToggle(){if(_igtTimerRunning){clearInterval(_igtTimerInterval);_igtTimerRunning=false;}else{_igtTimerInterval=setInterval(()=>{_igtTimerSecs--;igtTimerUpdate();},1000);_igtTimerRunning=true;}igtTimerUpdate();}
-function igtTimerReset(){clearInterval(_igtTimerInterval);_igtTimerInterval=null;_igtTimerRunning=false;_igtTimerSecs=_igtTimerDefault;igtTimerUpdate();}
-function igtTimerPreset(m){_igtTimerDefault=m*60;document.getElementById('igt-timer-min').value=m;document.getElementById('igt-timer-sec').value=0;igtTimerReset();}
-function igtTimerSet(){const m=parseInt(document.getElementById('igt-timer-min').value)||0;const s=parseInt(document.getElementById('igt-timer-sec').value)||0;_igtTimerDefault=m*60+s;igtTimerReset();}
-
-// Probability Calc
-function igtProbCalc(){
-  const N=parseInt(document.getElementById('igt-prob-deck').value)||40;
-  const n=parseInt(document.getElementById('igt-prob-hand').value)||5;
-  const K=parseInt(document.getElementById('igt-prob-copies').value)||3;
-  const k=parseInt(document.getElementById('igt-prob-want').value)||1;
-  function comb(a,b){if(b>a||b<0)return 0;if(b===0||b===a)return 1;let r=1;for(let i=0;i<Math.min(b,a-b);i++)r=r*(a-i)/(i+1);return r;}
-  let prob=0;for(let i=k;i<=Math.min(K,n);i++)prob+=comb(K,i)*comb(N-K,n-i)/comb(N,n);
-  const pct=Math.round(prob*10000)/100;
-  const out=document.getElementById('igt-prob-result');
-  out.textContent=pct+'% chance';
-  out.style.color=pct>=70?'var(--green)':pct>=40?'var(--amber)':'var(--red)';
-}
-
-// Player Randomizer
-let _igtPrPlayers=[],_igtPrOrder=[];
-function igtPrAdd(){const inp=document.getElementById('igt-pr-inp');const name=(inp.value||'').trim();if(!name)return;_igtPrPlayers.push(name);inp.value='';igtPrRenderList();}
-function igtPrRenderList(){const el=document.getElementById('igt-pr-list');el.innerHTML='';_igtPrPlayers.forEach((p,i)=>{const row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center;padding:3px 8px;background:var(--card2);border:1px solid var(--border);border-radius:4px;font-size:12px';const n=document.createElement('span');n.style.flex='1';n.textContent=p;const del=document.createElement('button');del.textContent='✕';del.style.cssText='background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px;padding:0';del.onclick=()=>{_igtPrPlayers.splice(i,1);igtPrRenderList();};row.appendChild(n);row.appendChild(del);el.appendChild(row);});}
-function igtPrPick(){const avail=_igtPrPlayers.filter(p=>!_igtPrOrder.includes(p));if(!avail.length){st('All players picked — reset first','var(--amber)');return;}const pick=avail[Math.floor(Math.random()*avail.length)];_igtPrOrder.push(pick);document.getElementById('igt-pr-result').textContent='#'+_igtPrOrder.length+': '+pick;const orderEl=document.getElementById('igt-pr-order');const row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center;padding:3px 8px;background:var(--card2);border:1px solid var(--border);border-radius:4px;font-size:11px';const num=document.createElement('span');num.style.cssText='color:var(--muted);min-width:20px';num.textContent='#'+_igtPrOrder.length;const nm=document.createElement('span');nm.textContent=pick;row.appendChild(num);row.appendChild(nm);orderEl.insertBefore(row,orderEl.firstChild);}
-function igtPrClear(){_igtPrPlayers=[];_igtPrOrder=[];igtPrRenderList();document.getElementById('igt-pr-order').innerHTML='';document.getElementById('igt-pr-result').textContent='';}
-
-// Decklist Image
-function igtExportImage(){
-  const{main,side,extra}=_igtDeck;
-  if(!main.length&&!side.length&&!extra.length){st('No cards in deck','var(--amber)');return;}
-  const secs=[];
-  if(main.length)secs.push({label:'MAIN DECK',cards:main,count:main.reduce((s,c)=>s+c.qty,0)});
-  if(side.length)secs.push({label:'SIDE DECK',cards:side,count:side.reduce((s,c)=>s+c.qty,0)});
-  if(extra.length)secs.push({label:'EXTRA DECK',cards:extra,count:extra.reduce((s,c)=>s+c.qty,0)});
-  let html='';
-  for(const sec of secs){
-    const exp=[];sec.cards.forEach(c=>{for(let i=0;i<c.qty;i++)exp.push(c);});
-    const cards=exp.map(c=>c.id?'<div style="width:71px;height:103px;overflow:hidden;background:#111;border:1px solid #222;display:inline-block;vertical-align:top;margin:2px"><img src="https://images.ygoprodeck.com/images/cards/'+c.id+'.jpg" style="width:100%;height:100%;object-fit:cover;object-position:top" crossorigin="anonymous"/></div>':'<div style="width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-block;vertical-align:top;margin:2px;font-size:8px;color:#666;padding:3px;overflow:hidden">'+c.name+'</div>').join('');
+// ── DECKLIST IMAGE ────────────────────────────────────────────────────────────
+function igtExportImage(target) {
+  const d = target === 'opp' ? _igtOppDeck : _igtDeck;
+  const secs = [];
+  if (d.main.length)  secs.push({label:'MAIN DECK',  cards:d.main,  count:d.main.reduce((s,c)=>s+c.qty,0)});
+  if (d.side.length)  secs.push({label:'SIDE DECK',  cards:d.side,  count:d.side.reduce((s,c)=>s+c.qty,0)});
+  if (d.extra.length) secs.push({label:'EXTRA DECK', cards:d.extra, count:d.extra.reduce((s,c)=>s+c.qty,0)});
+  if (!secs.length) { st('No cards to export', 'var(--amber)'); return; }
+  let html = '';
+  for (const sec of secs) {
+    const exp=[]; sec.cards.forEach(c=>{for(let i=0;i<c.qty;i++)exp.push(c);});
+    const cards=exp.map(c=>c.id?'<div style="width:71px;height:103px;overflow:hidden;display:inline-block;vertical-align:top;margin:2px"><img src="https://images.ygoprodeck.com/images/cards/'+c.id+'.jpg" style="width:100%;height:100%;object-fit:cover" crossorigin="anonymous"/></div>':'<div style="width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-block;vertical-align:top;margin:2px;font-size:8px;color:#666;padding:3px">'+c.name+'</div>').join('');
     html+='<div style="margin-bottom:20px"><div style="font-size:14px;font-weight:700;color:#00e596;letter-spacing:2px;margin-bottom:8px">'+sec.label+' ('+sec.count+')</div><div style="line-height:0">'+cards+'</div></div>';
   }
   const win=window.open('','_blank','width=900,height=800');
-  if(!win){st('Allow popups to export','var(--amber)');return;}
+  if(!win){st('Allow popups','var(--amber)');return;}
   win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Decklist</title><style>body{background:#06060c;margin:0;padding:20px;font-family:monospace}.btn{background:#00e596;color:#050508;border:none;padding:10px 24px;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:16px;display:block}@media print{.btn{display:none}body{padding:0}}</style></head><body><button class="btn" onclick="window.print()">Print / Save as PDF</button>'+html+'<\/body><\/html>');
   win.document.close();
 }
+
+// ── TIMER ─────────────────────────────────────────────────────────────────────
+let _igtTimerSecs=50*60,_igtTimerDefault=50*60,_igtTimerInterval=null,_igtTimerRunning=false;
+function igtTimerFmt(s){const neg=s<0?'-':'';const a=Math.abs(s);return neg+String(Math.floor(a/60)).padStart(2,'0')+':'+String(a%60).padStart(2,'0');}
+function igtTimerUpdate(){const el=document.getElementById('igt-timer-display');const btn=document.getElementById('igt-timer-btn');if(el){el.textContent=igtTimerFmt(_igtTimerSecs);el.style.color=_igtTimerSecs>600?'var(--green)':_igtTimerSecs>0?'var(--amber)':'var(--red)';}if(btn)btn.textContent=_igtTimerRunning?'⏸':'▶';}
+function igtTimerToggle(){if(_igtTimerRunning){clearInterval(_igtTimerInterval);_igtTimerRunning=false;}else{_igtTimerInterval=setInterval(()=>{_igtTimerSecs--;igtTimerUpdate();},1000);_igtTimerRunning=true;}igtTimerUpdate();}
+function igtTimerReset(){clearInterval(_igtTimerInterval);_igtTimerInterval=null;_igtTimerRunning=false;_igtTimerSecs=_igtTimerDefault;igtTimerUpdate();}
+function igtTimerPreset(m){_igtTimerDefault=m*60;const mi=document.getElementById('igt-timer-min');const se=document.getElementById('igt-timer-sec');if(mi)mi.value=m;if(se)se.value=0;igtTimerReset();}
+function igtTimerSet(){const m=parseInt(document.getElementById('igt-timer-min').value)||0;const s=parseInt(document.getElementById('igt-timer-sec').value)||0;_igtTimerDefault=m*60+s;igtTimerReset();st('Timer set to '+igtTimerFmt(_igtTimerDefault),'var(--green)');}
+
+// ── RPS ───────────────────────────────────────────────────────────────────────
+let _igtRpsCounts={r:0,p:0,s:0};
+function igtRpsPick(pick){_igtRpsCounts[pick]++;const most=Object.entries(_igtRpsCounts).sort((a,b)=>b[1]-a[1])[0][0];const counter={r:'✋ Paper',p:'✌ Scissors',s:'✊ Rock'};const icons={r:'✊',p:'✋',s:'✌'};document.getElementById('igt-rps-img').textContent=icons[pick];document.getElementById('igt-rps-ans').textContent='Play '+counter[most];const t=_igtRpsCounts.r+_igtRpsCounts.p+_igtRpsCounts.s;document.getElementById('igt-rps-counts').innerHTML='✊ '+_igtRpsCounts.r+' &nbsp; ✋ '+_igtRpsCounts.p+' &nbsp; ✌ '+_igtRpsCounts.s+' <span style="color:var(--muted)">('+t+')</span>';}
+function igtRpsReset(){_igtRpsCounts={r:0,p:0,s:0};document.getElementById('igt-rps-img').textContent='🤜';document.getElementById('igt-rps-ans').textContent='';document.getElementById('igt-rps-counts').textContent='';}
+
+// ── RNG ───────────────────────────────────────────────────────────────────────
+let _igtRngHist=[];
+function igtRngRoll(){const min=parseInt(document.getElementById('igt-rng-min').value)||1;const max=parseInt(document.getElementById('igt-rng-max').value)||6;const r=Math.floor(Math.random()*(max-min+1))+min;document.getElementById('igt-rng-result').textContent=r;_igtRngHist.unshift(r);if(_igtRngHist.length>20)_igtRngHist.pop();document.getElementById('igt-rng-hist').innerHTML=_igtRngHist.map((n,i)=>'<span style="padding:2px 5px;background:var(--card2);border:1px solid '+(i===0?'var(--green)':'var(--border)')+';border-radius:3px;color:'+(i===0?'var(--green)':'var(--muted)')+'">'+n+'</span>').join('');}
+
+// ── PROBABILITY ───────────────────────────────────────────────────────────────
+function igtProbCalc(){const N=parseInt(document.getElementById('igt-prob-deck').value)||40;const n=parseInt(document.getElementById('igt-prob-hand').value)||5;const K=parseInt(document.getElementById('igt-prob-copies').value)||3;const k=parseInt(document.getElementById('igt-prob-want').value)||1;function comb(a,b){if(b>a||b<0)return 0;if(b===0||b===a)return 1;let r=1;for(let i=0;i<Math.min(b,a-b);i++)r=r*(a-i)/(i+1);return r;}let p=0;for(let i=k;i<=Math.min(K,n);i++)p+=comb(K,i)*comb(N-K,n-i)/comb(N,n);const pct=Math.round(p*10000)/100;const out=document.getElementById('igt-prob-result');out.textContent=pct+'% chance';out.style.color=pct>=70?'var(--green)':pct>=40?'var(--amber)':'var(--red)';}
+
+// ── PLAYER RANDOMIZER ─────────────────────────────────────────────────────────
+let _igtPrPlayers=[],_igtPrOrder=[];
+function igtPrAdd(){const inp=document.getElementById('igt-pr-inp');const name=(inp.value||'').trim();if(!name)return;_igtPrPlayers.push(name);inp.value='';igtPrRenderList();}
+function igtPrRenderList(){const el=document.getElementById('igt-pr-list');el.innerHTML='';_igtPrPlayers.forEach((p,i)=>{const row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center;padding:2px 6px;background:var(--card2);border:1px solid var(--border);border-radius:4px;font-size:11px';const n=document.createElement('span');n.style.flex='1';n.textContent=p;const del=document.createElement('button');del.textContent='✕';del.style.cssText='background:none;border:none;color:var(--dim);cursor:pointer;font-size:11px;padding:0';del.onclick=()=>{_igtPrPlayers.splice(i,1);igtPrRenderList();};row.appendChild(n);row.appendChild(del);el.appendChild(row);});}
+function igtPrPick(){const avail=_igtPrPlayers.filter(p=>!_igtPrOrder.includes(p));if(!avail.length){st('All picked — reset','var(--amber)');return;}const pick=avail[Math.floor(Math.random()*avail.length)];_igtPrOrder.push(pick);document.getElementById('igt-pr-result').textContent='#'+_igtPrOrder.length+': '+pick;const orderEl=document.getElementById('igt-pr-order');const row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center;padding:2px 6px;background:var(--card2);border:1px solid var(--border);border-radius:4px;font-size:11px';const num=document.createElement('span');num.style.cssText='color:var(--muted);min-width:18px';num.textContent='#'+_igtPrOrder.length;const nm=document.createElement('span');nm.textContent=pick;row.appendChild(num);row.appendChild(nm);orderEl.insertBefore(row,orderEl.firstChild);}
+function igtPrClear(){_igtPrPlayers=[];_igtPrOrder=[];igtPrRenderList();document.getElementById('igt-pr-order').innerHTML='';document.getElementById('igt-pr-result').textContent='';}
 
 function dlRelay() {
   fetch('/relay.user.js')
