@@ -4876,8 +4876,12 @@ async function openProfile(player, batches, records) {
                 ${r.eventLabel?`<span style="font-size:10px;color:var(--amber);font-family:monospace">🏆 ${r.eventLabel}</span>`:''}
               </div>
             </div>
-            <button onclick="event.stopPropagation();loadEventReplay('${r.replayId}')"
-              style="background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:10px;padding:4px 12px;border-radius:4px;cursor:pointer;flex-shrink:0">View</button>`;
+            <div style="display:flex;gap:5px;flex-shrink:0;align-items:center">
+              <a href="https://www.duelingbook.com/replay?id=${r.replayId}" target="_blank" onclick="event.stopPropagation()"
+                style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer;text-decoration:none;white-space:nowrap">▶ Watch</a>
+              <button onclick="event.stopPropagation();loadEventReplay('${r.replayId}')"
+                style="background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:10px;padding:4px 10px;border-radius:4px;cursor:pointer;white-space:nowrap">View</button>
+            </div>`;
           row.onclick=()=>loadEventReplay(r.replayId);
           matchList.appendChild(row);
         });
@@ -5138,20 +5142,12 @@ function renderEventDecks(player, batches, records) {
             style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:14px;padding:0">✕</button>
         </div>
       </div>
-      <div style="font-size:11px;color:var(--muted);margin-bottom:${taggedReplays.length?'10px':'0'}">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:${taggedReplays.length?'8px':'0'}">
         Deck ID: ${deck.deckId} &nbsp;·&nbsp; ${taggedReplays.length} tagged replay${taggedReplays.length!==1?'s':''}
       </div>
       ${taggedReplays.length ? `
-        <div style="display:flex;flex-direction:column;gap:4px">
-          ${taggedReplays.map(r => `
-            <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-top:1px solid var(--border);font-size:11px">
-              <span style="color:${r.matchWon?'var(--green)':'var(--red)'};font-weight:bold;min-width:20px">${r.matchWon?'W':'L'}</span>
-              <span style="color:var(--text)">vs ${r.oppName}</span>
-              <span style="color:var(--muted)">${r.score}</span>
-              <button onclick="event.stopPropagation();loadEventReplay('${r.replayId}')"
-                style="margin-left:auto;background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:10px;padding:3px 10px;border-radius:4px;cursor:pointer">View Batch</button>
-            </div>`).join('')}
-        </div>` : ''}
+        <button onclick="event.stopPropagation();loadEventReplay('${taggedReplays[0].replayId}')"
+          style="background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:11px;padding:4px 12px;border-radius:5px;cursor:pointer">View Batch</button>` : ''}
     `;
 
     card.onclick = () => openEventDeckModal(deck, player, taggedReplays);
