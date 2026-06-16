@@ -402,6 +402,11 @@ select{cursor:pointer}
       <button class="ntab" onclick="switchTab('ingame',this)">In-Game Tools</button>
     </div>
     <div class="topbar-right">
+      <button id="admin-panel-btn" onclick="openAdminPanel()" style="display:none;background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-size:10px;padding:2px 10px;border-radius:4px;cursor:pointer">⚙ Users</button>
+      <div id="dt-user-info" style="display:none;align-items:center;gap:6px;font-size:12px;color:var(--muted)">
+        <span id="dt-user-name"></span>
+        <button onclick="localStorage.removeItem('dt_token');location.reload()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer">Sign out</button>
+      </div>
       <div class="tpill" id="pill" style="font-size:12px">Ready — create or select a batch</div>
       <button class="tbtn" onclick="screenshot()">📷</button>
     </div>
@@ -6295,40 +6300,19 @@ function authHeaders() {
 }
 
 function applyRoleUI() {
-  if (document.getElementById('dt-user-info')) return;
   if (_authUser) {
-    const right = document.querySelector('.topbar-right');
-    if (right) {
-      const el = document.createElement('div');
-      el.id = 'dt-user-info';
-      el.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)';
-      const roleTag = _userRole === 'admin' ? ' <span style="color:var(--amber);font-size:10px">ADMIN</span>' : '';
-      const nameSpan = document.createElement('span');
-      nameSpan.innerHTML = '👤 '+(_authUser.name||_authUser.email)+roleTag;
-      const soBtn = document.createElement('button');
-      soBtn.textContent = 'Sign out';
-      soBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer';
-      soBtn.onclick = () => { localStorage.removeItem('dt_token'); location.reload(); };
-      el.appendChild(nameSpan); el.appendChild(soBtn);
-      right.insertBefore(el, right.firstChild);
-    }
+    const roleTag = _userRole === 'admin' ? ' <span style="color:var(--amber);font-size:10px">ADMIN</span>' : '';
+    const nameEl = document.getElementById('dt-user-name');
+    if (nameEl) nameEl.innerHTML = '👤 '+(_authUser.name||_authUser.email)+roleTag;
+    const infoEl = document.getElementById('dt-user-info');
+    if (infoEl) infoEl.style.display = 'flex';
+    const adminBtn = document.getElementById('admin-panel-btn');
+    if (adminBtn) adminBtn.style.display = _userRole === 'admin' ? 'inline-block' : 'none';
   }
   if (_userRole !== 'admin') {
     document.querySelectorAll('[onclick*="openBatchPanel"]').forEach(el => {
       if (!el.id || el.id !== 'add-to-batch-btn') el.style.display = 'none';
     });
-  }
-  // Show admin panel button if admin
-  if (_userRole === 'admin') {
-    const right = document.querySelector('.topbar-right');
-    if (right && !document.getElementById('admin-panel-btn')) {
-      const btn = document.createElement('button');
-      btn.id = 'admin-panel-btn';
-      btn.textContent = '⚙ Users';
-      btn.style.cssText = 'background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer';
-      btn.onclick = () => openAdminPanel();
-      right.insertBefore(btn, right.firstChild);
-    }
   }
 }
 
