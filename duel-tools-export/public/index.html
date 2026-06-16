@@ -6344,9 +6344,12 @@ async function openAdminPanel() {
     row.id = 'urow-'+u.id;
     row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px;font-size:12px';
     const approvedCol = u.approved ? 'var(--green)' : 'var(--amber)';
-    row.innerHTML = `<span style="flex:1;overflow:hidden;text-overflow:ellipsis">${u.name||''} <span style="color:var(--muted)">${u.email}</span></span>
-      <span style="color:${u.role==='admin'?'var(--amber)':'var(--muted)'};min-width:36px">${u.role}</span>
-      <span style="color:${approvedCol};min-width:54px">${u.approved?'Active':'Pending'}</span>
+    row.innerHTML = `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;display:flex;flex-direction:column;gap:1px">
+        <span style="color:var(--text);font-weight:bold">${u.email}</span>
+        ${u.name?`<span style="color:var(--muted);font-size:10px">${u.name}</span>`:''}
+      </span>
+      <span style="color:${u.role==='admin'?'var(--amber)':'var(--muted)'};min-width:40px;font-size:11px">${u.role}</span>
+      <span style="color:${approvedCol};min-width:54px;font-size:11px">${u.approved?'Active':'Pending'}</span>
       ${!u.approved?`<button class="dd-btn-sec" onclick="adminApprove('${u.id}',true)" style="font-size:10px;padding:2px 8px">Approve</button>`:''}
       <select onchange="adminSetRole('${u.id}',this.value)" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:3px;border-radius:4px;outline:none">
         <option value="user" ${u.role==='user'?'selected':''}>User</option>

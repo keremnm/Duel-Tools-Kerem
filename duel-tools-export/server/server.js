@@ -106,8 +106,10 @@ async function saveDB() {
 }
 
 // ── Auth helpers ──────────────────────────────────────────────────────────────
+// Password hashing uses a FIXED salt — never changes regardless of JWT_SECRET
+const PW_SALT = 'dueltools-pw-salt-v1';
 function hashPassword(pw) {
-  return crypto.createHmac('sha256', JWT_SECRET).update(pw).digest('hex');
+  return crypto.createHmac('sha256', PW_SALT).update(pw).digest('hex');
 }
 
 function makeToken(userId) {
