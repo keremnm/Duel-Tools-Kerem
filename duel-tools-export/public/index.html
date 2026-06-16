@@ -1502,6 +1502,8 @@ const pending = {};
 window.addEventListener('message', e => {
   if (!e.data || e.data.type !== 'rps-relay') return;
   const { id, plays, allPlays, timedOut, player1, player2 } = e.data;
+  console.log('[Relay received] id:', id, 'plays:', plays?.length, 'allPlays:', allPlays?.length, 'timedOut:', timedOut);
+  console.log('[Pending keys]', Object.keys(pending));
   // Find matching pending entry — handles plain numeric IDs and user-prefixed IDs
   let entry = pending[id];
   if (!entry) {
@@ -1532,24 +1534,29 @@ window.addEventListener('message', e => {
 
 function loadReplay(id) {
   return new Promise(resolve => {
+    console.log('[loadReplay] Loading id:', id);
     if (pending[id]) {
       clearTimeout(pending[id].timer);
       try{pending[id].iframe.remove();}catch(e){}
       delete pending[id];
     }
+    const ibox = document.getElementById('ibox');
+    if (!ibox) { console.error('[loadReplay] ibox not found!'); resolve({ id, plays:[], allPlays:[], timedOut:true }); return; }
     const iframe = document.createElement('iframe');
     iframe.style.cssText = 'width:1280px;height:960px;border:none';
-    // Ensure URL is always the full format
     iframe.src = `https://www.duelingbook.com/replay?id=${id}`;
+    console.log('[loadReplay] iframe src set to:', iframe.src);
     const entry = { resolve, iframe, origId: id };
     const timer = setTimeout(() => {
+      console.warn('[loadReplay] TIMEOUT for id:', id);
       try{iframe.remove();}catch(e){}
       Object.keys(pending).forEach(k => { if (pending[k] === entry) delete pending[k]; });
       resolve({ id, plays:[], allPlays:[], timedOut:true, player1:null, player2:null });
     }, 45000);
     entry.timer = timer;
     pending[id] = entry;
-    document.getElementById('ibox').appendChild(iframe);
+    ibox.appendChild(iframe);
+    console.log('[loadReplay] iframe appended, pending:', Object.keys(pending));
   });
 }
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
