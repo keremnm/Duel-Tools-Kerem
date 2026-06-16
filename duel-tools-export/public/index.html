@@ -5121,13 +5121,22 @@ function renderEventDecks(player, batches, records) {
     card.onmouseover = () => card.style.borderColor = 'var(--amber)';
     card.onmouseout  = () => card.style.borderColor = 'var(--border2)';
 
+    // Infer deck type from tagged replays
+    const deckTypes = taggedReplays.map(r => r.myDeck).filter(Boolean);
+    const deckType = deckTypes.length ? deckTypes.sort((a,b)=>deckTypes.filter(x=>x===b).length-deckTypes.filter(x=>x===a).length)[0] : null;
+
     card.innerHTML = `
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-        <span style="font-size:14px;font-weight:bold;color:var(--amber);font-family:monospace">🏆 ${deck.code}</span>
-        <a href="${deck.deckUrl}" target="_blank" onclick="event.stopPropagation()"
-           style="font-size:11px;color:var(--blue);text-decoration:none;margin-left:auto">View Deck ↗</a>
-        <button onclick="event.stopPropagation();deleteEventDeck('${player}','${deck.code}')"
-          style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:13px;padding:0">✕</button>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <span style="font-size:15px;font-weight:bold;color:var(--amber);font-family:monospace">🏆 ${deck.code}</span>
+        ${deckType ? `<span style="font-size:11px;color:var(--green);border:1px solid var(--green);border-radius:4px;padding:1px 8px">${deckType}</span>` : ''}
+        <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
+          <button onclick="event.stopPropagation();downloadEventDeckYDK('${deck.deckId}','${deck.code}')"
+            style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">⬇ YDK</button>
+          <a href="${deck.deckUrl}" target="_blank" onclick="event.stopPropagation()"
+             style="background:var(--blue);color:#fff;font-family:monospace;font-size:12px;font-weight:bold;padding:4px 12px;border-radius:5px;text-decoration:none">View Deck ↗</a>
+          <button onclick="event.stopPropagation();deleteEventDeck('${player}','${deck.code}')"
+            style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:14px;padding:0">✕</button>
+        </div>
       </div>
       <div style="font-size:11px;color:var(--muted);margin-bottom:${taggedReplays.length?'10px':'0'}">
         Deck ID: ${deck.deckId} &nbsp;·&nbsp; ${taggedReplays.length} tagged replay${taggedReplays.length!==1?'s':''}
@@ -5148,6 +5157,14 @@ function renderEventDecks(player, batches, records) {
     card.onclick = () => openEventDeckModal(deck, player, taggedReplays);
     el.appendChild(card);
   });
+}
+
+async function downloadEventDeckYDK(deckId, code) {
+  // Fetch deck data from YGOPRODeck using the deck ID
+  // Duelingbook deck IDs aren't accessible via API so we just open the deck URL
+  // Instead, build a YDK from the deck's cards if we have them stored
+  st('Opening deck page — use Export YDK from Duelingbook', 'var(--muted)');
+  window.open('https://www.duelingbook.com/deck?id='+deckId, '_blank');
 }
 
 function deleteEventDeck(player, code) {
@@ -6339,23 +6356,64 @@ async function openAdminPanel() {
   // User list
   const listEl = document.createElement('div');
   listEl.style.cssText = 'flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:5px';
-  users.sort((a,b)=>a.email.localeCompare(b.email)).forEach(u => {
+  users.sort((a,b)=>(a.email||'').localeCompare(b.email||'')).forEach(u => {
     const row = document.createElement('div');
     row.id = 'urow-'+u.id;
-    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px;font-size:12px';
+    row.style.cssText = 'display:grid;grid-template-columns:1fr auto auto auto auto;align-items:center;gap:10px;padding:10px 12px;background:var(--card);border:1px solid var(--border);border-radius:6px;font-size:12px';
     const approvedCol = u.approved ? 'var(--green)' : 'var(--amber)';
-    row.innerHTML = `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;display:flex;flex-direction:column;gap:1px">
-        <span style="color:var(--text);font-weight:bold">${u.email}</span>
-        ${u.name?`<span style="color:var(--muted);font-size:10px">${u.name}</span>`:''}
-      </span>
-      <span style="color:${u.role==='admin'?'var(--amber)':'var(--muted)'};min-width:40px;font-size:11px">${u.role}</span>
-      <span style="color:${approvedCol};min-width:54px;font-size:11px">${u.approved?'Active':'Pending'}</span>
-      ${!u.approved?`<button class="dd-btn-sec" onclick="adminApprove('${u.id}',true)" style="font-size:10px;padding:2px 8px">Approve</button>`:''}
-      <select onchange="adminSetRole('${u.id}',this.value)" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:3px;border-radius:4px;outline:none">
-        <option value="user" ${u.role==='user'?'selected':''}>User</option>
-        <option value="admin" ${u.role==='admin'?'selected':''}>Admin</option>
-      </select>
-      <button onclick="adminDeleteUser('${u.id}')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:13px;padding:0 2px">✕</button>`;
+
+    // Identity column
+    const identity = document.createElement('div');
+    identity.style.cssText = 'display:flex;flex-direction:column;gap:2px;min-width:0';
+    const emailEl = document.createElement('div');
+    emailEl.style.cssText = 'color:var(--text);font-weight:bold;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    emailEl.textContent = u.email || '(no email)';
+    identity.appendChild(emailEl);
+    if (u.name) {
+      const nameEl = document.createElement('div');
+      nameEl.style.cssText = 'color:var(--muted);font-size:10px';
+      nameEl.textContent = u.name;
+      identity.appendChild(nameEl);
+    }
+    row.appendChild(identity);
+
+    // Status
+    const statusEl = document.createElement('span');
+    statusEl.style.cssText = 'color:'+approvedCol+';font-size:11px;white-space:nowrap';
+    statusEl.textContent = u.approved ? 'Active' : 'Pending';
+    row.appendChild(statusEl);
+
+    // Approve button (pending only)
+    const approveEl = document.createElement('span');
+    if (!u.approved) {
+      const appBtn = document.createElement('button');
+      appBtn.className = 'dd-btn-sec';
+      appBtn.style.cssText = 'font-size:10px;padding:2px 8px;white-space:nowrap';
+      appBtn.textContent = 'Approve';
+      appBtn.onclick = () => adminApprove(u.id, true);
+      approveEl.appendChild(appBtn);
+    }
+    row.appendChild(approveEl);
+
+    // Role select
+    const sel = document.createElement('select');
+    sel.style.cssText = 'background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:3px 6px;border-radius:4px;outline:none';
+    ['user','admin'].forEach(r => {
+      const opt = document.createElement('option');
+      opt.value = r; opt.textContent = r === 'admin' ? 'Admin' : 'User';
+      if (u.role === r) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sel.onchange = () => adminSetRole(u.id, sel.value);
+    row.appendChild(sel);
+
+    // Delete
+    const delBtn = document.createElement('button');
+    delBtn.textContent = '✕';
+    delBtn.style.cssText = 'background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:0';
+    delBtn.onclick = () => adminDeleteUser(u.id);
+    row.appendChild(delBtn);
+
     listEl.appendChild(row);
   });
 
