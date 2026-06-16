@@ -1545,6 +1545,8 @@ function loadReplay(id) {
     const iframe = document.createElement('iframe');
     iframe.style.cssText = 'width:1280px;height:960px;border:none';
     iframe.src = `https://www.duelingbook.com/replay?id=${id}`;
+    iframe.onload = () => console.log('[loadReplay] iframe loaded for id:', id, 'src:', iframe.src, 'contentWindow accessible:', !!iframe.contentWindow);
+    iframe.onerror = (e) => console.error('[loadReplay] iframe ERROR for id:', id, e);
     console.log('[loadReplay] iframe src set to:', iframe.src);
     const entry = { resolve, iframe, origId: id };
     const timer = setTimeout(() => {
@@ -3282,13 +3284,12 @@ function renderGFWLHistory() {
   const listEl = document.getElementById('profile-gfwl-list');
   if (!sel || !listEl) return;
 
-  // GFWL seasons: event labels matching S followed by number (S1, S7, S10 etc)
-  const seasonRe = /^S(\d+)$/i;
-  const allGFWL = (records||[]).filter(r => seasonRe.test((r.eventLabel||'').trim()));
+  // GFWL seasons: event labels whose group key is S+number (S1, S7, S8: WK1, etc)
+  const allGFWL = (records||[]).filter(r => isGFWLSeason(eventGroupKey(r.eventLabel||'')));
 
-  // Populate dropdown with seasons that have data, sorted by season number desc
-  const seasons = [...new Set(allGFWL.map(r => r.eventLabel.toUpperCase().trim()))]
-    .sort((a,b) => parseInt(b.match(/\d+/)[0]) - parseInt(a.match(/\d+/)[0]));
+  // Get unique season keys
+  const seasons = [...new Set(allGFWL.map(r => eventGroupKey(r.eventLabel)))]
+    .sort((a,b) => parseInt(b.slice(1)) - parseInt(a.slice(1)));
   const curVal = sel.value;
   sel.innerHTML = '<option value="all">All Seasons</option>';
   seasons.forEach(s => {
@@ -3300,24 +3301,24 @@ function renderGFWLHistory() {
   });
 
   const filtered = sel.value === 'all' ? allGFWL
-    : allGFWL.filter(r => r.eventLabel.toUpperCase().trim() === sel.value);
+    : allGFWL.filter(r => eventGroupKey(r.eventLabel) === sel.value);
 
   listEl.innerHTML = '';
   if (!filtered.length) {
-    listEl.innerHTML = '<div style="font-size:12px;color:var(--muted)">No GFWL season matches found. Tag replays with S1, S7, S9, etc.</div>';
+    listEl.innerHTML = '<div style="font-size:12px;color:var(--muted)">No GFWL season matches found. Tag replays with S7, S8: WK1, etc.</div>';
     return;
   }
 
-  // Group by season, sorted desc
+  // Group by season key, sorted desc
   const bySeason = {};
   filtered.forEach(r => {
-    const s = r.eventLabel.toUpperCase().trim();
+    const s = eventGroupKey(r.eventLabel);
     if (!bySeason[s]) bySeason[s] = [];
     bySeason[s].push(r);
   });
 
   Object.entries(bySeason)
-    .sort(([a],[b]) => parseInt(b.match(/\d+/)[0]) - parseInt(a.match(/\d+/)[0]))
+    .sort(([a],[b]) => parseInt(b.slice(1)) - parseInt(a.slice(1)))
     .forEach(([season, recs]) => {
       const w = recs.filter(r=>r.matchWon).length;
       const l = recs.filter(r=>r.matchLost).length;
@@ -3325,7 +3326,7 @@ function renderGFWLHistory() {
       const hdr = document.createElement('div');
       hdr.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--card2);border:1px solid var(--border);border-radius:6px;cursor:pointer;margin-bottom:3px;user-select:none';
       hdr.innerHTML = `<span style="color:var(--amber);font-size:12px">▾</span>
-        <span style="font-weight:bold;color:var(--amber);flex:1">Season ${season.slice(1)}</span>
+        <span style="font-weight:bold;color:var(--amber);flex:1">Season ${season.replace(/^S/i,'')}</span>
         <span style="color:var(--green);font-size:12px">${w}W</span>
         <span style="color:var(--muted)">—</span>
         <span style="color:var(--red);font-size:12px">${l}L</span>
@@ -4795,6 +4796,21 @@ async function toggleTopPlayer(checked) {
   } catch(e) { st('Failed to save: '+e.message, 'var(--red)'); console.error(e); }
 }
 
+// ── Event label grouping helper ──────────────────────────────────────────────
+function eventGroupKey(label) {
+  if (!label || !label.trim()) return null;
+  const t = label.trim();
+  // Everything before colon: "S8: WK 1" -> "S8"
+  if (t.includes(':')) return t.split(':')[0].trim().toUpperCase();
+  // Everything before first space: "ACAD 2/13/2026" -> "ACAD", "FLC40" -> "FLC40"
+  return t.split(/\s+/)[0].trim().toUpperCase();
+}
+
+function isGFWLSeason(groupKey) {
+  // S1-S99
+  return /^S\d+$/i.test(groupKey);
+}
+
 // ── GFWL Teams ────────────────────────────────────────────────────────────────
 function addTeamEntry() {
   document.getElementById('add-team-form').style.display = 'block';
@@ -5075,17 +5091,20 @@ async function openProfile(player, batches, records) {
         return;
       }
 
-      // Group by event label (labeled first, then unlabeled)
-      const groups = {}; // label -> matches
+      // Group by event GROUP KEY (e.g. "S8: WK 1" -> "S8", "ACAD 2/13" -> "ACAD")
+      const groups = {};
       allFiltered.forEach(r => {
-        const key = (r.eventLabel||'').trim() || '__none__';
+        const key = eventGroupKey(r.eventLabel||'') || '__none__';
         if (!groups[key]) groups[key] = [];
         groups[key].push(r);
       });
 
-      // Sort groups: labeled first (by event label), then unlabeled
+      // Sort: GFWL seasons last (S1-S99), then other events alpha, then unlabeled
       const sortedKeys = Object.keys(groups).sort((a,b) => {
         if (a==='__none__') return 1; if (b==='__none__') return -1;
+        const aS = isGFWLSeason(a), bS = isGFWLSeason(b);
+        if (aS && !bS) return 1; if (!aS && bS) return -1;
+        if (aS && bS) return parseInt(b.slice(1)) - parseInt(a.slice(1));
         return a.localeCompare(b);
       });
 
@@ -5100,8 +5119,8 @@ async function openProfile(player, batches, records) {
         const hdr = document.createElement('div');
         hdr.style.cssText='display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--card2);border:1px solid var(--border);border-radius:6px;cursor:pointer;user-select:none;margin-bottom:2px';
         const arrow = document.createElement('span'); arrow.style.cssText='color:var(--muted);font-size:11px;min-width:10px'; arrow.textContent=isOpen?'▾':'▸';
-        const lbl = document.createElement('span'); lbl.style.cssText='font-weight:bold;flex:1;font-size:12px;color:'+(isNone?'var(--muted)':'var(--amber)');
-        lbl.textContent = isNone ? 'Untagged' : '🏆 '+key;
+        const lbl = document.createElement('span'); lbl.style.cssText='font-weight:bold;flex:1;font-size:12px;color:'+(isNone?'var(--muted)':isGFWLSeason(key)?'var(--purple)':'var(--amber)');
+        lbl.textContent = isNone ? 'Untagged' : isGFWLSeason(key) ? '🏟 Season '+key.slice(1) : '🏆 '+key;
         const rec = document.createElement('span'); rec.style.cssText='font-size:11px;color:var(--muted)';
         rec.innerHTML='<span style="color:var(--green)">'+w+'W</span> — <span style="color:var(--red)">'+l+'L</span> · '+recs.length+' match'+(recs.length!==1?'es':'');
         hdr.appendChild(arrow); hdr.appendChild(lbl); hdr.appendChild(rec);
