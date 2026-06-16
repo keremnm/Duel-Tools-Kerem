@@ -1501,36 +1501,52 @@ const pending = {};
 
 window.addEventListener('message', e => {
   if (!e.data || e.data.type !== 'rps-relay') return;
-  const { id, plays, allPlays, timedOut } = e.data;
-  // Try exact match first, then try to find by partial match (handles format differences)
+  const { id, plays, allPlays, timedOut, player1, player2 } = e.data;
+  // Find matching pending entry — handles plain numeric IDs and user-prefixed IDs
   let entry = pending[id];
   if (!entry) {
-    // Look for any pending entry whose id contains this id or vice versa
-    const key = Object.keys(pending).find(k => k === id || k.endsWith('-'+id) || id.endsWith('-'+k) || k === id.replace(/.*-/,''));
+    // Duelingbook sometimes redirects to a different ID format
+    // Try suffix match (82760627 matches 1009363-82760627) or strip prefix
+    const suffix = String(id).split('-').pop();
+    const key = Object.keys(pending).find(k =>
+      k === id ||
+      String(k).split('-').pop() === suffix ||
+      String(id).split('-').pop() === String(k).split('-').pop()
+    );
     if (key) entry = pending[key];
   }
   if (!entry) return;
   const resolveId = entry.origId || id;
   clearTimeout(entry.timer);
   try { entry.iframe.remove(); } catch(err) {}
-  entry.resolve({ id: resolveId, plays:plays||[], allPlays:allPlays||[], timedOut:!!timedOut });
-  // Clean up all keys for this entry
+  entry.resolve({
+    id: resolveId,
+    plays: plays||[],
+    allPlays: allPlays||[],
+    timedOut: !!timedOut,
+    player1: player1||null,
+    player2: player2||null
+  });
   Object.keys(pending).forEach(k => { if (pending[k] === entry) delete pending[k]; });
 });
 
 function loadReplay(id) {
   return new Promise(resolve => {
-    // Clean up any existing pending for this id
-    if (pending[id]) { clearTimeout(pending[id].timer); try{pending[id].iframe.remove();}catch(e){} delete pending[id]; }
+    if (pending[id]) {
+      clearTimeout(pending[id].timer);
+      try{pending[id].iframe.remove();}catch(e){}
+      delete pending[id];
+    }
     const iframe = document.createElement('iframe');
     iframe.style.cssText = 'width:1280px;height:960px;border:none';
-    iframe.src = replayUrl(id);
+    // Ensure URL is always the full format
+    iframe.src = `https://www.duelingbook.com/replay?id=${id}`;
     const entry = { resolve, iframe, origId: id };
     const timer = setTimeout(() => {
       try{iframe.remove();}catch(e){}
       Object.keys(pending).forEach(k => { if (pending[k] === entry) delete pending[k]; });
-      resolve({ id, plays:[], allPlays:[], timedOut:true });
-    }, 40000); // increased timeout for slower replays
+      resolve({ id, plays:[], allPlays:[], timedOut:true, player1:null, player2:null });
+    }, 45000);
     entry.timer = timer;
     pending[id] = entry;
     document.getElementById('ibox').appendChild(iframe);
@@ -1554,69 +1570,14 @@ function renderBatchList(list) {
   const displayList = [];
   if (_tempBatch) displayList.push(_tempBatch);
   displayList.push(...list.filter(b => !_tempBatch || b.id !== _tempBatch.id));
-
   if (!displayList.length) { el.innerHTML = '<div class="no-batches">No batches yet.</div>'; return; }
   el.innerHTML = '';
-
-  // Separate event-labeled batches from regular ones
-  // A batch is "event" if all/most replays share a single eventLabel
-  // Group by: ungrouped batches first, then folders by event label
-  const folders = {}; // eventLabel -> [batches]
-  const regular = [];
-
   displayList.forEach(b => {
-    if (b.isTemp) { regular.push(b); return; }
-    // Determine dominant event label from batch name or replays
-    const name = (b.name||'').toUpperCase();
-    // Check if batch name looks like an event code (e.g. FLC40, PWCQ88, GFC25, S7)
-    const eventCodeRe = /^([A-Z]{2,6}\d{1,3}|S\d{1,2})$/;
-    if (eventCodeRe.test(name.trim())) {
-      if (!folders[name]) folders[name] = [];
-      folders[name].push(b);
-    } else {
-      regular.push(b);
-    }
-  });
-
-  // Render regular batches first
-  regular.forEach(b => {
     const item = igtBuildBatchItem(b, list);
     el.appendChild(item);
   });
-
-  // Render folders
-  Object.entries(folders).sort(([a],[b]) => a.localeCompare(b)).forEach(([label, batches]) => {
-    const isOpen = _openFolders && _openFolders.has(label);
-    const folder = document.createElement('div');
-    folder.style.cssText = 'border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:2px';
-
-    const hdr = document.createElement('div');
-    hdr.style.cssText = 'display:flex;align-items:center;gap:6px;padding:7px 10px;cursor:pointer;background:var(--card2);user-select:none';
-    hdr.innerHTML = `<span style="color:var(--amber);font-size:11px">${isOpen?'▾':'▸'}</span>
-      <span style="color:var(--amber);font-size:12px;font-weight:bold;flex:1">📁 ${label}</span>
-      <span style="color:var(--muted);font-size:10px">${batches.length} batch${batches.length!==1?'es':''}</span>`;
-
-    const body = document.createElement('div');
-    body.style.display = isOpen ? 'block' : 'none';
-
-    batches.forEach(b => {
-      const item = igtBuildBatchItem(b, list, true);
-      body.appendChild(item);
-    });
-
-    hdr.onclick = () => {
-      if (!_openFolders) _openFolders = new Set();
-      if (_openFolders.has(label)) { _openFolders.delete(label); body.style.display='none'; hdr.querySelector('span').textContent='▸'; }
-      else { _openFolders.add(label); body.style.display='block'; hdr.querySelector('span').textContent='▾'; }
-    };
-
-    folder.appendChild(hdr);
-    folder.appendChild(body);
-    el.appendChild(folder);
-  });
 }
 
-let _openFolders = new Set();
 
 function igtBuildBatchItem(b, list, indented) {
   const isTemp = !!b.isTemp;
@@ -3314,48 +3275,87 @@ function renderGFWLHistory() {
   const listEl = document.getElementById('profile-gfwl-list');
   if (!sel || !listEl) return;
 
-  // Find all GFWL season matches (event label matches S + number)
-  const seasonRe = /^S\d+$/i;
+  // GFWL seasons: event labels matching S followed by number (S1, S7, S10 etc)
+  const seasonRe = /^S(\d+)$/i;
   const allGFWL = (records||[]).filter(r => seasonRe.test((r.eventLabel||'').trim()));
 
-  // Populate season dropdown with seasons that have data
-  const seasons = [...new Set(allGFWL.map(r => r.eventLabel.toUpperCase()))].sort((a,b) => {
-    return parseInt(b.slice(1)) - parseInt(a.slice(1));
-  });
+  // Populate dropdown with seasons that have data, sorted by season number desc
+  const seasons = [...new Set(allGFWL.map(r => r.eventLabel.toUpperCase().trim()))]
+    .sort((a,b) => parseInt(b.match(/\d+/)[0]) - parseInt(a.match(/\d+/)[0]));
   const curVal = sel.value;
   sel.innerHTML = '<option value="all">All Seasons</option>';
   seasons.forEach(s => {
     const opt = document.createElement('option');
-    opt.value = s; opt.textContent = s;
+    opt.value = s;
+    opt.textContent = 'Season ' + s.slice(1);
     if (s === curVal) opt.selected = true;
     sel.appendChild(opt);
   });
 
-  const filtered = sel.value === 'all' ? allGFWL : allGFWL.filter(r => r.eventLabel.toUpperCase() === sel.value);
+  const filtered = sel.value === 'all' ? allGFWL
+    : allGFWL.filter(r => r.eventLabel.toUpperCase().trim() === sel.value);
+
   listEl.innerHTML = '';
   if (!filtered.length) {
-    listEl.innerHTML = '<div style="font-size:12px;color:var(--muted)">No GFWL season matches found. Tag replays with S1, S2, etc.</div>';
+    listEl.innerHTML = '<div style="font-size:12px;color:var(--muted)">No GFWL season matches found. Tag replays with S1, S7, S9, etc.</div>';
     return;
   }
+
+  // Group by season, sorted desc
+  const bySeason = {};
   filtered.forEach(r => {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--card2);border:1px solid var(--border);border-radius:6px;font-size:12px';
-    const col = r.matchWon ? 'var(--green)' : r.matchLost ? 'var(--red)' : 'var(--muted)';
-    const myDeck = r.myDeck && r.myDeck!=='Unknown' ? r.myDeck : '';
-    const oppDeck = r.oppDeck && r.oppDeck!=='Unknown' ? r.oppDeck : '';
-    row.innerHTML = `
-      <span style="color:${col};font-weight:bold;min-width:30px">${r.matchWon?'W':r.matchLost?'L':'D'} ${r.score||''}</span>
-      <div style="flex:1;min-width:0">
-        <div>vs <strong>${r.oppName||'?'}</strong></div>
-        <div style="display:flex;gap:4px;margin-top:2px;flex-wrap:wrap">
-          ${myDeck?`<span style="font-size:10px;color:var(--green);border:1px solid var(--green);border-radius:3px;padding:0 5px">${myDeck}</span>`:''}
-          ${oppDeck?`<span style="font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:3px;padding:0 5px">vs ${oppDeck}</span>`:''}
-          <span style="font-size:10px;color:var(--amber);font-family:monospace">🏆 ${r.eventLabel}</span>
-        </div>
-      </div>
-      <a href="https://www.duelingbook.com/replay?id=${r.replayId}" target="_blank" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;text-decoration:none;white-space:nowrap">▶ Watch</a>`;
-    listEl.appendChild(row);
+    const s = r.eventLabel.toUpperCase().trim();
+    if (!bySeason[s]) bySeason[s] = [];
+    bySeason[s].push(r);
   });
+
+  Object.entries(bySeason)
+    .sort(([a],[b]) => parseInt(b.match(/\d+/)[0]) - parseInt(a.match(/\d+/)[0]))
+    .forEach(([season, recs]) => {
+      const w = recs.filter(r=>r.matchWon).length;
+      const l = recs.filter(r=>r.matchLost).length;
+      // Season header
+      const hdr = document.createElement('div');
+      hdr.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--card2);border:1px solid var(--border);border-radius:6px;cursor:pointer;margin-bottom:3px;user-select:none';
+      hdr.innerHTML = `<span style="color:var(--amber);font-size:12px">▾</span>
+        <span style="font-weight:bold;color:var(--amber);flex:1">Season ${season.slice(1)}</span>
+        <span style="color:var(--green);font-size:12px">${w}W</span>
+        <span style="color:var(--muted)">—</span>
+        <span style="color:var(--red);font-size:12px">${l}L</span>
+        <span style="color:var(--muted);font-size:11px">${recs.length} match${recs.length!==1?'es':''}</span>`;
+
+      const body = document.createElement('div');
+      body.style.cssText = 'display:flex;flex-direction:column;gap:3px;margin-bottom:6px;padding-left:8px';
+
+      recs.forEach(r => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:5px 8px;background:var(--card);border:1px solid var(--border);border-radius:5px;font-size:12px';
+        const col = r.matchWon ? 'var(--green)' : r.matchLost ? 'var(--red)' : 'var(--muted)';
+        const myDeck = r.myDeck && r.myDeck!=='Unknown' ? r.myDeck : '';
+        const oppDeck = r.oppDeck && r.oppDeck!=='Unknown' ? r.oppDeck : '';
+        const wEl = document.createElement('span'); wEl.style.cssText='color:'+col+';font-weight:bold;min-width:28px'; wEl.textContent=(r.matchWon?'W':r.matchLost?'L':'D')+' '+(r.score||'');
+        const infoEl = document.createElement('div'); infoEl.style.flex='1';
+        infoEl.innerHTML='vs <strong>'+(r.oppName||'?')+'</strong><div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:2px">'
+          +(myDeck?'<span style="font-size:10px;color:var(--green);border:1px solid var(--green);border-radius:3px;padding:0 5px">'+myDeck+'</span>':'')
+          +(oppDeck?'<span style="font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:3px;padding:0 5px">vs '+oppDeck+'</span>':'')
+          +'</div>';
+        const watchA = document.createElement('a');
+        watchA.href='https://www.duelingbook.com/replay?id='+r.replayId;
+        watchA.target='_blank';
+        watchA.style.cssText='background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;text-decoration:none;white-space:nowrap';
+        watchA.textContent='▶ Watch';
+        row.appendChild(wEl); row.appendChild(infoEl); row.appendChild(watchA);
+        body.appendChild(row);
+      });
+
+      hdr.onclick = () => {
+        const open = body.style.display !== 'none';
+        body.style.display = open ? 'none' : 'flex';
+        hdr.querySelector('span').textContent = open ? '▸' : '▾';
+      };
+      listEl.appendChild(hdr);
+      listEl.appendChild(body);
+    });
 }
 
 // Cards to exclude from quick-picks (too universal to be meaningful)
@@ -5029,45 +5029,90 @@ async function openProfile(player, batches, records) {
     searchInput.style.cssText='width:100%;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:7px 10px;border-radius:6px;outline:none;margin-bottom:10px';
     const matchList = document.createElement('div');
     matchList.style.cssText='display:flex;flex-direction:column;gap:4px';
+    function buildMatchRow(r) {
+      const row = document.createElement('div');
+      row.style.cssText='display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--card);border:1px solid var(--border);border-radius:5px;font-size:12px;cursor:pointer';
+      row.onmouseover=()=>row.style.borderColor='var(--green)';
+      row.onmouseout=()=>row.style.borderColor='var(--border)';
+      const rCol=r.matchWon?'var(--green)':r.matchLost?'var(--red)':'var(--muted)';
+      const myDeck = r.myDeck && r.myDeck!=='Unknown' ? r.myDeck : '';
+      const oppDeck = r.oppDeck && r.oppDeck!=='Unknown' ? r.oppDeck : '';
+      const wEl=document.createElement('span'); wEl.style.cssText='color:'+rCol+';font-weight:bold;min-width:28px'; wEl.textContent=(r.matchWon?'W':r.matchLost?'L':'D')+' '+(r.score||'');
+      const infoEl=document.createElement('div'); infoEl.style.flex='1';
+      infoEl.innerHTML='vs <strong>'+(r.oppName||'?')+'</strong><div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:2px">'+(myDeck?'<span style="font-size:10px;color:var(--green);border:1px solid var(--green);border-radius:3px;padding:0 5px">'+myDeck+'</span>':'')+(oppDeck?'<span style="font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:3px;padding:0 5px">vs '+oppDeck+'</span>':'')+'</div>';
+      const btns=document.createElement('div'); btns.style.cssText='display:flex;gap:4px;flex-shrink:0';
+      const watchA=document.createElement('a'); watchA.href='https://www.duelingbook.com/replay?id='+r.replayId; watchA.target='_blank'; watchA.onclick=ev=>ev.stopPropagation();
+      watchA.style.cssText='background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;text-decoration:none;white-space:nowrap';
+      watchA.textContent='▶ Watch';
+      const viewBtn=document.createElement('button'); viewBtn.style.cssText='background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:10px;padding:3px 10px;border-radius:4px;cursor:pointer;white-space:nowrap'; viewBtn.textContent='View';
+      viewBtn.onclick=ev=>{ev.stopPropagation();loadEventReplay(r.replayId);};
+      btns.appendChild(watchA); btns.appendChild(viewBtn);
+      row.appendChild(wEl); row.appendChild(infoEl); row.appendChild(btns);
+      row.onclick=()=>loadEventReplay(r.replayId);
+      return row;
+    }
+
+    const _openGroups = new Set();
+
     const displayMatches = (filter='') => {
       matchList.innerHTML='';
       const q=filter.toLowerCase();
-      // Sort: labeled first (by event), then by opponent name
-      const sorted=[...records].sort((a,b)=>{
-        const ea=a.eventLabel||'',eb=b.eventLabel||'';
-        if(ea&&!eb)return -1; if(!ea&&eb)return 1;
-        if(ea&&eb)return ea.localeCompare(eb);
-        return (a.oppName||'').localeCompare(b.oppName||'');
+      const allFiltered = [...records].filter(r=>!q||
+        (r.oppName||'').toLowerCase().includes(q)||
+        (r.eventLabel||'').toLowerCase().includes(q)||
+        (r.myDeck||'').toLowerCase().includes(q)||
+        (r.oppDeck||'').toLowerCase().includes(q)
+      );
+      if (!allFiltered.length) {
+        matchList.innerHTML='<div style="color:var(--muted);font-size:12px;padding:8px">No matches found.</div>';
+        return;
+      }
+
+      // Group by event label (labeled first, then unlabeled)
+      const groups = {}; // label -> matches
+      allFiltered.forEach(r => {
+        const key = (r.eventLabel||'').trim() || '__none__';
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(r);
       });
-      sorted.filter(r=>!q||r.oppName.toLowerCase().includes(q)||(r.eventLabel||'').toLowerCase().includes(q))
-        .forEach(r=>{
-          const row=document.createElement('div');
-          row.style.cssText='display:flex;align-items:center;gap:10px;padding:6px 8px;background:var(--card2);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:12px';
-          row.onmouseover=()=>row.style.borderColor='var(--green)';
-          row.onmouseout=()=>row.style.borderColor='var(--border)';
-          const rCol=r.matchWon?'var(--green)':r.matchLost?'var(--red)':'var(--muted)';
-          const myDeckLabel = r.myDeck && r.myDeck!=='Unknown' ? r.myDeck : '';
-          const oppDeckLabel = r.oppDeck && r.oppDeck!=='Unknown' ? r.oppDeck : '';
-          row.innerHTML=`
-            <span style="color:${rCol};font-weight:bold;min-width:30px">${r.matchWon?'W':r.matchLost?'L':'D'} ${r.score||''}</span>
-            <div style="flex:1;min-width:0">
-              <div style="color:var(--text);font-size:12px">vs <strong>${r.oppName}</strong></div>
-              <div style="display:flex;gap:4px;margin-top:2px;flex-wrap:wrap">
-                ${myDeckLabel?`<span style="font-size:10px;color:var(--green);border:1px solid var(--green);border-radius:3px;padding:0 5px">${myDeckLabel}</span>`:''}
-                ${oppDeckLabel?`<span style="font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:3px;padding:0 5px">vs ${oppDeckLabel}</span>`:''}
-                ${r.eventLabel?`<span style="font-size:10px;color:var(--amber);font-family:monospace">🏆 ${r.eventLabel}</span>`:''}
-              </div>
-            </div>
-            <div style="display:flex;gap:5px;flex-shrink:0;align-items:center">
-              <a href="https://www.duelingbook.com/replay?id=${r.replayId}" target="_blank" onclick="event.stopPropagation()"
-                style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer;text-decoration:none;white-space:nowrap">▶ Watch</a>
-              <button onclick="event.stopPropagation();loadEventReplay('${r.replayId}')"
-                style="background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:10px;padding:4px 10px;border-radius:4px;cursor:pointer;white-space:nowrap">View</button>
-            </div>`;
-          row.onclick=()=>loadEventReplay(r.replayId);
-          matchList.appendChild(row);
-        });
-      if(!matchList.children.length) matchList.innerHTML='<div style="color:var(--muted);font-size:12px;padding:8px">No matches found.</div>';
+
+      // Sort groups: labeled first (by event label), then unlabeled
+      const sortedKeys = Object.keys(groups).sort((a,b) => {
+        if (a==='__none__') return 1; if (b==='__none__') return -1;
+        return a.localeCompare(b);
+      });
+
+      sortedKeys.forEach(key => {
+        const recs = groups[key];
+        const isNone = key === '__none__';
+        const w = recs.filter(r=>r.matchWon).length;
+        const l = recs.filter(r=>r.matchLost).length;
+        const isOpen = _openGroups.has(key) || isNone;
+
+        // Group header
+        const hdr = document.createElement('div');
+        hdr.style.cssText='display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--card2);border:1px solid var(--border);border-radius:6px;cursor:pointer;user-select:none;margin-bottom:2px';
+        const arrow = document.createElement('span'); arrow.style.cssText='color:var(--muted);font-size:11px;min-width:10px'; arrow.textContent=isOpen?'▾':'▸';
+        const lbl = document.createElement('span'); lbl.style.cssText='font-weight:bold;flex:1;font-size:12px;color:'+(isNone?'var(--muted)':'var(--amber)');
+        lbl.textContent = isNone ? 'Untagged' : '🏆 '+key;
+        const rec = document.createElement('span'); rec.style.cssText='font-size:11px;color:var(--muted)';
+        rec.innerHTML='<span style="color:var(--green)">'+w+'W</span> — <span style="color:var(--red)">'+l+'L</span> · '+recs.length+' match'+(recs.length!==1?'es':'');
+        hdr.appendChild(arrow); hdr.appendChild(lbl); hdr.appendChild(rec);
+
+        const body = document.createElement('div');
+        body.style.cssText='display:flex;flex-direction:column;gap:3px;padding-left:8px;margin-bottom:6px'+(isOpen?'':';display:none');
+        recs.forEach(r => body.appendChild(buildMatchRow(r)));
+
+        hdr.onclick = () => {
+          const nowOpen = body.style.display !== 'none';
+          body.style.display = nowOpen ? 'none' : 'flex';
+          arrow.textContent = nowOpen ? '▸' : '▾';
+          if (nowOpen) _openGroups.delete(key); else _openGroups.add(key);
+        };
+
+        matchList.appendChild(hdr);
+        matchList.appendChild(body);
+      });
     };
     searchInput.oninput=()=>displayMatches(searchInput.value);
     displayMatches();
