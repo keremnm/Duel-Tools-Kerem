@@ -352,17 +352,43 @@ select{cursor:pointer}
   #igt-mt-tiles, #igt-ot-tiles { grid-template-columns: repeat(8, 56px) !important; }
 }
 </style>
-<script async crossorigin="anonymous" data-clerk-publishable-key="pk_test_Z2l2aW5nLXRlcnJpZXItNjMuY2xlcmsuYWNjb3VudHMuZGV2JA"
-  src="https://giving-terrier-63.clerk.accounts.dev/npm/@clerk/clerk-js@latest/dist/clerk.browser.js"
-  type="text/javascript">
-</script>
 </head>
 <body>
-<div id="auth-gate" style="position:fixed;inset:0;background:#06060c;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;font-family:monospace">
-  <div style="font-size:22px;font-weight:bold;color:#00e596;letter-spacing:.12em">🃏 DUEL TOOLS</div>
-  <div style="font-size:13px;color:#ccccdd;margin-bottom:4px">Sign in to continue</div>
-  <div id="clerk-mount" style="min-width:320px"></div>
-  <div id="auth-loading" style="font-size:12px;color:#8888bb">Loading...</div>
+<div id="auth-gate" style="position:fixed;inset:0;background:#06060c;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;font-family:monospace">
+  <div style="background:#0e0e1a;border:1px solid #252538;border-radius:12px;padding:32px 36px;width:340px;max-width:95vw;display:flex;flex-direction:column;gap:14px">
+    <div style="text-align:center;margin-bottom:6px">
+      <div style="font-size:24px;font-weight:bold;color:#00e596;letter-spacing:.1em">🃏 DUEL TOOLS</div>
+      <div style="font-size:12px;color:#8888bb;margin-top:4px">Goat Format Analytics</div>
+    </div>
+    <!-- Tabs -->
+    <div style="display:flex;border-bottom:1px solid #252538;margin-bottom:4px">
+      <button id="gate-tab-login" onclick="gateShowTab('login')" style="flex:1;background:none;border:none;color:#00e596;font-family:monospace;font-size:13px;padding:8px;cursor:pointer;border-bottom:2px solid #00e596">Sign In</button>
+      <button id="gate-tab-signup" onclick="gateShowTab('signup')" style="flex:1;background:none;border:none;color:#8888bb;font-family:monospace;font-size:13px;padding:8px;cursor:pointer;border-bottom:2px solid transparent">Sign Up</button>
+    </div>
+    <!-- Login form -->
+    <div id="gate-login-form">
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <input id="gate-email" type="email" placeholder="Email address" autocomplete="email"
+          style="background:#131320;border:1px solid #252538;border-radius:6px;color:#fff;font-family:monospace;font-size:14px;padding:10px 12px;outline:none;width:100%;box-sizing:border-box"/>
+        <input id="gate-pass" type="password" placeholder="Password" autocomplete="current-password"
+          style="background:#131320;border:1px solid #252538;border-radius:6px;color:#fff;font-family:monospace;font-size:14px;padding:10px 12px;outline:none;width:100%;box-sizing:border-box"/>
+        <button id="gate-login-btn" onclick="gateLogin()" style="background:#00e596;color:#050508;border:none;border-radius:6px;font-family:monospace;font-weight:bold;font-size:14px;padding:11px;cursor:pointer;width:100%">Sign In</button>
+      </div>
+    </div>
+    <!-- Signup form -->
+    <div id="gate-signup-form" style="display:none">
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <input id="gate-su-name" type="text" placeholder="Your name" autocomplete="name"
+          style="background:#131320;border:1px solid #252538;border-radius:6px;color:#fff;font-family:monospace;font-size:14px;padding:10px 12px;outline:none;width:100%;box-sizing:border-box"/>
+        <input id="gate-su-email" type="email" placeholder="Email address" autocomplete="email"
+          style="background:#131320;border:1px solid #252538;border-radius:6px;color:#fff;font-family:monospace;font-size:14px;padding:10px 12px;outline:none;width:100%;box-sizing:border-box"/>
+        <input id="gate-su-pass" type="password" placeholder="Password (min 6 chars)" autocomplete="new-password"
+          style="background:#131320;border:1px solid #252538;border-radius:6px;color:#fff;font-family:monospace;font-size:14px;padding:10px 12px;outline:none;width:100%;box-sizing:border-box"/>
+        <button id="gate-signup-btn" onclick="gateSignup()" style="background:#00e596;color:#050508;border:none;border-radius:6px;font-family:monospace;font-weight:bold;font-size:14px;padding:11px;cursor:pointer;width:100%">Request Access</button>
+      </div>
+    </div>
+    <div id="gate-msg" style="font-size:12px;text-align:center;min-height:18px;color:#ff5555"></div>
+  </div>
 </div>
 <div class="app">
   <header class="topbar">
@@ -6210,84 +6236,212 @@ setTimeout(wireUrlsInput, 200);
 
 </script>
 <script>
-// ── Clerk Authentication ──────────────────────────────────────────────────────
-let _clerkUser = null;
-let _userRole  = 'user'; // 'admin' or 'user'
+// ── Custom Auth ───────────────────────────────────────────────────────────────
+let _authToken = localStorage.getItem('dt_token') || null;
+let _authUser  = null;
+let _userRole  = 'user';
 
-async function initClerk() {
-  const gate    = document.getElementById('auth-gate');
-  const loading = document.getElementById('auth-loading');
+function gateShowTab(tab) {
+  const isLogin = tab === 'login';
+  document.getElementById('gate-login-form').style.display  = isLogin ? 'block' : 'none';
+  document.getElementById('gate-signup-form').style.display = isLogin ? 'none'  : 'block';
+  document.getElementById('gate-tab-login').style.cssText  = 'flex:1;background:none;border:none;font-family:monospace;font-size:13px;padding:8px;cursor:pointer;border-bottom:2px solid '+(isLogin?'#00e596':'transparent')+';color:'+(isLogin?'#00e596':'#8888bb');
+  document.getElementById('gate-tab-signup').style.cssText = 'flex:1;background:none;border:none;font-family:monospace;font-size:13px;padding:8px;cursor:pointer;border-bottom:2px solid '+(!isLogin?'#00e596':'transparent')+';color:'+(!isLogin?'#00e596':'#8888bb');
+  document.getElementById('gate-msg').textContent = '';
+}
+
+function gateMsg(msg, color) {
+  const el = document.getElementById('gate-msg');
+  if (el) { el.textContent = msg; el.style.color = color || '#ff5555'; }
+}
+
+async function gateLogin() {
+  const email = (document.getElementById('gate-email').value||'').trim();
+  const pass  = (document.getElementById('gate-pass').value||'').trim();
+  const btn   = document.getElementById('gate-login-btn');
+  if (!email || !pass) { gateMsg('Enter email and password'); return; }
+  btn.textContent = 'Signing in...'; btn.disabled = true;
   try {
-    await window.Clerk.load();
-    const user = window.Clerk.user;
-    if (user) {
-      // Already signed in
-      _clerkUser = user;
-      _userRole  = (user.publicMetadata && user.publicMetadata.role === 'admin') ? 'admin' : 'user';
-      gate.parentNode.removeChild(gate);
-      applyRoleUI();
-    } else {
-      // Show sign-in UI
-      if (loading) loading.style.display = 'none';
-      window.Clerk.mountSignIn(document.getElementById('clerk-mount'), {
-        afterSignInUrl: window.location.href,
-        afterSignUpUrl: window.location.href
-      });
-    }
-    // Listen for sign-in
-    window.Clerk.addListener(({ user }) => {
-      if (user) {
-        _clerkUser = user;
-        _userRole  = (user.publicMetadata && user.publicMetadata.role === 'admin') ? 'admin' : 'user';
-        const g = document.getElementById('auth-gate');
-        if (g) g.parentNode.removeChild(g);
-        applyRoleUI();
-      }
-    });
-  } catch(e) {
-    console.error('Clerk init failed:', e);
-    if (loading) loading.textContent = 'Auth unavailable — contact admin';
-  }
+    const res  = await fetch(API+'/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email, password: pass }) });
+    const data = await res.json();
+    if (!res.ok) { gateMsg(data.error || 'Sign in failed'); btn.textContent='Sign In'; btn.disabled=false; return; }
+    _authToken = data.token;
+    _authUser  = { email: data.email, name: data.name, role: data.role };
+    _userRole  = data.role;
+    localStorage.setItem('dt_token', _authToken);
+    document.getElementById('auth-gate').remove();
+    applyRoleUI();
+  } catch(e) { gateMsg('Network error'); btn.textContent='Sign In'; btn.disabled=false; }
+}
+
+async function gateSignup() {
+  const name  = (document.getElementById('gate-su-name').value||'').trim();
+  const email = (document.getElementById('gate-su-email').value||'').trim();
+  const pass  = (document.getElementById('gate-su-pass').value||'').trim();
+  const btn   = document.getElementById('gate-signup-btn');
+  if (!email || !pass) { gateMsg('Enter email and password'); return; }
+  btn.textContent = 'Requesting...'; btn.disabled = true;
+  try {
+    const res  = await fetch(API+'/auth/signup', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email, password: pass, name }) });
+    const data = await res.json();
+    if (!res.ok) { gateMsg(data.error || 'Sign up failed'); btn.textContent='Request Access'; btn.disabled=false; return; }
+    gateMsg('Account created! Waiting for admin approval.', '#00e596');
+    btn.textContent = 'Request Access'; btn.disabled = false;
+  } catch(e) { gateMsg('Network error'); btn.textContent='Request Access'; btn.disabled=false; }
+}
+
+function authHeaders() {
+  return _authToken ? { 'Content-Type':'application/json', 'Authorization':'Bearer '+_authToken } : { 'Content-Type':'application/json' };
 }
 
 function applyRoleUI() {
-  // Only inject once
-  if (document.getElementById('clerk-user-info')) return;
-  if (_clerkUser) {
-    const name = (_clerkUser.firstName || (_clerkUser.emailAddresses && _clerkUser.emailAddresses[0].emailAddress.split('@')[0])) || 'User';
-    const roleTag = _userRole === 'admin' ? ' <span style="color:var(--amber);font-size:10px">ADMIN</span>' : '';
+  if (document.getElementById('dt-user-info')) return;
+  if (_authUser) {
     const right = document.querySelector('.topbar-right');
     if (right) {
-      const userEl = document.createElement('div');
-      userEl.id = 'clerk-user-info';
-      userEl.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)';
+      const el = document.createElement('div');
+      el.id = 'dt-user-info';
+      el.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)';
+      const roleTag = _userRole === 'admin' ? ' <span style="color:var(--amber);font-size:10px">ADMIN</span>' : '';
       const nameSpan = document.createElement('span');
-      nameSpan.innerHTML = '👤 '+name+roleTag;
-      const signOutBtn = document.createElement('button');
-      signOutBtn.textContent = 'Sign out';
-      signOutBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer';
-      signOutBtn.onclick = () => window.Clerk.signOut().then(() => location.reload());
-      userEl.appendChild(nameSpan);
-      userEl.appendChild(signOutBtn);
-      right.insertBefore(userEl, right.firstChild);
+      nameSpan.innerHTML = '👤 '+(_authUser.name||_authUser.email)+roleTag;
+      const soBtn = document.createElement('button');
+      soBtn.textContent = 'Sign out';
+      soBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer';
+      soBtn.onclick = () => { localStorage.removeItem('dt_token'); location.reload(); };
+      el.appendChild(nameSpan); el.appendChild(soBtn);
+      right.insertBefore(el, right.firstChild);
     }
   }
-  // Admin-only UI
   if (_userRole !== 'admin') {
     document.querySelectorAll('[onclick*="openBatchPanel"]').forEach(el => {
       if (!el.id || el.id !== 'add-to-batch-btn') el.style.display = 'none';
     });
   }
+  // Show admin panel button if admin
+  if (_userRole === 'admin') {
+    const right = document.querySelector('.topbar-right');
+    if (right && !document.getElementById('admin-panel-btn')) {
+      const btn = document.createElement('button');
+      btn.id = 'admin-panel-btn';
+      btn.textContent = '⚙ Users';
+      btn.style.cssText = 'background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer';
+      btn.onclick = () => openAdminPanel();
+      right.insertBefore(btn, right.firstChild);
+    }
+  }
 }
 
-// Wait for Clerk script to load then init
-if (window.Clerk) {
-  initClerk();
-} else {
-  document.addEventListener('clerk-loaded', initClerk);
-  // Fallback timeout
-  setTimeout(() => { if (window.Clerk) initClerk(); }, 2000);
+// ── Admin user management panel ───────────────────────────────────────────────
+async function openAdminPanel() {
+  const res   = await fetch(API+'/admin/users', { headers: authHeaders() });
+  const users = await res.json();
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:20px;width:620px;max-width:95vw;max-height:85vh;display:flex;flex-direction:column;gap:12px';
+
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;gap:10px';
+  const title = document.createElement('div'); title.style.cssText='font-size:14px;font-weight:bold;color:var(--text);flex:1'; title.textContent='USER MANAGEMENT';
+  const closeBtn = document.createElement('button'); closeBtn.textContent='✕'; closeBtn.style.cssText='background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px'; closeBtn.onclick=()=>overlay.remove();
+  hdr.appendChild(title); hdr.appendChild(closeBtn);
+
+  // Add user form
+  const addRow = document.createElement('div');
+  addRow.style.cssText = 'display:flex;gap:7px;flex-wrap:wrap;padding:10px;background:var(--card);border:1px solid var(--border);border-radius:7px';
+  addRow.innerHTML = '<input id="au-name" placeholder="Name" style="flex:1;min-width:90px"/><input id="au-email" placeholder="Email" type="email" style="flex:2;min-width:140px"/><input id="au-pass" placeholder="Password" type="password" style="flex:1;min-width:90px"/><select id="au-role" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px;border-radius:5px;outline:none"><option value="user">User</option><option value="admin">Admin</option></select><button class="btn-go" onclick="adminAddUser()" style="font-size:12px;padding:6px 12px;white-space:nowrap">+ Add</button>';
+
+  // User list
+  const listEl = document.createElement('div');
+  listEl.style.cssText = 'flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:5px';
+  users.sort((a,b)=>a.email.localeCompare(b.email)).forEach(u => {
+    const row = document.createElement('div');
+    row.id = 'urow-'+u.id;
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px;font-size:12px';
+    const approvedCol = u.approved ? 'var(--green)' : 'var(--amber)';
+    row.innerHTML = `<span style="flex:1;overflow:hidden;text-overflow:ellipsis">${u.name||''} <span style="color:var(--muted)">${u.email}</span></span>
+      <span style="color:${u.role==='admin'?'var(--amber)':'var(--muted)'};min-width:36px">${u.role}</span>
+      <span style="color:${approvedCol};min-width:54px">${u.approved?'Active':'Pending'}</span>
+      ${!u.approved?`<button class="dd-btn-sec" onclick="adminApprove('${u.id}',true)" style="font-size:10px;padding:2px 8px">Approve</button>`:''}
+      <select onchange="adminSetRole('${u.id}',this.value)" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:3px;border-radius:4px;outline:none">
+        <option value="user" ${u.role==='user'?'selected':''}>User</option>
+        <option value="admin" ${u.role==='admin'?'selected':''}>Admin</option>
+      </select>
+      <button onclick="adminDeleteUser('${u.id}')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:13px;padding:0 2px">✕</button>`;
+    listEl.appendChild(row);
+  });
+
+  box.appendChild(hdr); box.appendChild(addRow); box.appendChild(listEl);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  overlay.onclick = e => { if(e.target===overlay) overlay.remove(); };
+  window._adminOverlay = overlay;
 }
+
+async function adminAddUser() {
+  const name  = document.getElementById('au-name').value.trim();
+  const email = document.getElementById('au-email').value.trim();
+  const pass  = document.getElementById('au-pass').value.trim();
+  const role  = document.getElementById('au-role').value;
+  if (!email || !pass) { st('Email and password required','var(--red)'); return; }
+  const res = await fetch(API+'/admin/users', { method:'POST', headers:authHeaders(), body:JSON.stringify({name,email,password:pass,role}) });
+  const data = await res.json();
+  if (!res.ok) { st(data.error||'Failed','var(--red)'); return; }
+  st('User added','var(--green)');
+  if (window._adminOverlay) { window._adminOverlay.remove(); openAdminPanel(); }
+}
+
+async function adminApprove(id, approved) {
+  await fetch(API+'/admin/users/'+id, { method:'PATCH', headers:authHeaders(), body:JSON.stringify({approved}) });
+  if (window._adminOverlay) { window._adminOverlay.remove(); openAdminPanel(); }
+}
+
+async function adminSetRole(id, role) {
+  await fetch(API+'/admin/users/'+id, { method:'PATCH', headers:authHeaders(), body:JSON.stringify({role}) });
+  st('Role updated','var(--green)');
+}
+
+async function adminDeleteUser(id) {
+  if (!confirm('Delete this user?')) return;
+  await fetch(API+'/admin/users/'+id, { method:'DELETE', headers:authHeaders() });
+  if (window._adminOverlay) { window._adminOverlay.remove(); openAdminPanel(); }
+}
+
+// ── Init auth ─────────────────────────────────────────────────────────────────
+async function initAuth() {
+  if (_authToken) {
+    try {
+      const res  = await fetch(API+'/auth/me', { headers: authHeaders() });
+      if (res.ok) {
+        const data = await res.json();
+        _authUser = data; _userRole = data.role;
+        const gate = document.getElementById('auth-gate');
+        if (gate) gate.remove();
+        applyRoleUI();
+        return;
+      }
+    } catch(e) {}
+    // Token invalid
+    localStorage.removeItem('dt_token');
+    _authToken = null;
+  }
+  // Show gate — wire up enter key
+  const gate = document.getElementById('auth-gate');
+  if (gate) {
+    gate.querySelectorAll('input').forEach(inp => {
+      inp.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+          const loginVisible = document.getElementById('gate-login-form').style.display !== 'none';
+          if (loginVisible) gateLogin(); else gateSignup();
+        }
+      });
+    });
+  }
+}
+
+// Run after app loads
+document.addEventListener('DOMContentLoaded', () => setTimeout(initAuth, 100));
 </script>
 </body>
 </html>
