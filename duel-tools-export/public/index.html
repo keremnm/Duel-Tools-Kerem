@@ -242,26 +242,114 @@ select{cursor:pointer}
 .igt-panel.igt-active { display:flex; }
 
 /* ── Mobile responsive ────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════
+   MOBILE — comprehensive responsive layout
+   ═══════════════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
+  /* ── Layout ── */
   .sidebar { display: none !important; }
-  .app { flex-direction: column; }
-  .topbar { padding: 8px 12px; }
-  .logo { font-size: 14px; }
-  .nav-tabs { gap: 1px; overflow-x: auto; scrollbar-width: none; flex-wrap: nowrap; }
+  .app { flex-direction: column; overflow: hidden; }
+
+  /* ── Topbar ── */
+  .topbar { padding: 6px 10px; flex-wrap: wrap; gap: 4px; }
+  .logo { font-size: 13px; }
+  .topbar-right { margin-left: auto; }
+  #clerk-user-info button { font-size: 9px !important; padding: 1px 6px !important; }
+  #pill { display: none !important; }
+
+  /* ── Nav tabs ── */
+  .nav-tabs {
+    gap: 0; overflow-x: auto; flex-wrap: nowrap;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch;
+    border-bottom: 1px solid var(--border);
+  }
   .nav-tabs::-webkit-scrollbar { display: none; }
-  .ntab { font-size: 10px; padding: 5px 8px; white-space: nowrap; }
-  .page { overflow-y: auto; }
-  #pg-profiles .profile-grid { grid-template-columns: 1fr !important; }
-  .deck-sb { width: 100% !important; max-width: 100% !important; border-right: none !important; border-bottom: 1px solid var(--border); max-height: 200px; }
-  .deck-main { flex: 1; }
-  #pg-deck { flex-direction: column !important; }
+  .ntab {
+    font-size: 11px; padding: 8px 12px; white-space: nowrap;
+    border-radius: 0; border-bottom: 2px solid transparent;
+    min-width: 0; flex-shrink: 0;
+  }
+  .ntab.on { border-bottom-color: var(--green); }
+
+  /* ── Pages ── */
+  .page { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  #pg-deckdata, #pg-stats { padding: 10px !important; }
+
+  /* ── Profiles ── */
+  #pg-profiles { padding: 10px !important; }
+  .profile-grid { grid-template-columns: 1fr 1fr !important; }
+  #profile-view { flex-direction: column !important; }
+  #profile-view > div { width: 100% !important; min-width: 0 !important; }
+  .profile-right-col { border-left: none !important; border-top: 1px solid var(--border) !important; }
+
+  /* ── Deck Viewer ── */
+  #pg-deck { flex-direction: column !important; overflow: hidden; }
+  .deck-sb {
+    width: 100% !important; max-width: 100% !important;
+    border-right: none !important; border-bottom: 1px solid var(--border) !important;
+    max-height: 45vw; overflow-y: auto;
+  }
+  .deck-main { flex: 1; overflow-y: auto; }
+
+  /* ── Deck Data ── */
   .dd-tabs { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
   .dd-tabs::-webkit-scrollbar { display: none; }
-  #pg-deckdata, #pg-stats, #pg-profiles { padding: 10px !important; }
-  .batch-panel-right { width: 100% !important; }
   .dd-table { font-size: 11px; }
-  /* Hide analysis-specific sidebar buttons on mobile */
+  .dd-table th, .dd-table td { padding: 5px 6px !important; }
+  #dd-deck-hotkeys, #dd-cwr-hotkeys {
+    overflow-x: auto; flex-wrap: nowrap !important;
+    scrollbar-width: none; gap: 3px !important;
+  }
+  #dd-deck-hotkeys::-webkit-scrollbar, #dd-cwr-hotkeys::-webkit-scrollbar { display: none; }
+  #dd-deck-hotkeys button, #dd-cwr-hotkeys button { font-size: 10px !important; padding: 3px 7px !important; white-space: nowrap; flex-shrink: 0; }
+
+  /* ── Stats ── */
+  #pg-stats .stats-grid { grid-template-columns: 1fr !important; }
+
+  /* ── Batch panel ── */
+  .batch-panel-right { width: 100% !important; right: 0 !important; }
+
+  /* ── In-Game Tools ── */
+  #pg-ingame .topbar-igt { flex-wrap: nowrap !important; overflow-x: auto; gap: 4px !important; }
+  [id^="igt-tab-"] { font-size: 10px !important; padding: 5px 7px !important; white-space: nowrap; flex-shrink: 0; }
+  /* Timer compact on mobile */
+  #igt-timer-display { font-size: 16px !important; min-width: 46px !important; }
+  #igt-timer-btn, #pg-ingame button[onclick="igtTimerReset()"] { font-size: 10px !important; padding: 3px 7px !important; }
+
+  /* Deck Builder — scroll horizontally */
+  #igt-main-tiles { grid-template-columns: repeat(10, 58px) !important; gap: 2px !important; overflow-x: auto; }
+  #igt-side-tiles  { grid-template-columns: repeat(15, 58px) !important; gap: 2px !important; overflow-x: auto; }
+  #igt-extra-tiles { grid-template-columns: repeat(15, 58px) !important; gap: 2px !important; }
+
+  /* Side Practice */
+  #igt-sp-main-tiles { grid-template-columns: repeat(10, 58px) !important; gap: 2px !important; overflow-x: auto; }
+  #igt-sp-side-tiles { grid-template-columns: repeat(15, 58px) !important; gap: 2px !important; overflow-x: auto; }
+
+  /* My Tracker / Opp Tracker */
+  #igt-mt-tiles, #igt-ot-tiles { grid-template-columns: repeat(10, 58px) !important; gap: 2px !important; overflow-x: auto; }
+  #igt-mt-side-tiles, #igt-ot-side-tiles { grid-template-columns: repeat(15, 58px) !important; gap: 2px !important; overflow-x: auto; }
+  /* Notes panel stacks below on mobile */
+  #igt-mytrack > div:last-child,
+  #igt-opptrack > div:last-child { grid-template-columns: 1fr !important; }
+  .igt-notes-col { border-left: none !important; border-top: 1px solid var(--border) !important; }
+
+  /* Tools — 2 col on mobile */
+  #igt-tools > div { grid-template-columns: 1fr 1fr !important; }
+  #igt-tools > div > div:last-child { grid-column: 1/-1 !important; }
+
+  /* Misc */
   #add-to-batch-btn { display: none !important; }
+  .slbl { font-size: 9px !important; }
+  input, select, textarea { font-size: 14px !important; } /* prevent iOS zoom */
+}
+
+@media (max-width: 420px) {
+  .ntab { font-size: 10px; padding: 7px 9px; }
+  .profile-grid { grid-template-columns: 1fr !important; }
+  #igt-tools > div { grid-template-columns: 1fr !important; }
+  #igt-main-tiles { grid-template-columns: repeat(8, 56px) !important; }
+  #igt-sp-main-tiles { grid-template-columns: repeat(8, 56px) !important; }
+  #igt-mt-tiles, #igt-ot-tiles { grid-template-columns: repeat(8, 56px) !important; }
 }
 </style>
 <script async crossorigin="anonymous" data-clerk-publishable-key="pk_test_Z2l2aW5nLXRlcnJpZXItNjMuY2xlcmsuYWNjb3VudHMuZGV2JA"
@@ -685,6 +773,8 @@ select{cursor:pointer}
                 <div class="slbl" style="margin:0">EVENT DECKLISTS</div>
                 <button onclick="showAddEventDecklist()" style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:4px;cursor:pointer">+ Add</button>
               </div>
+              <input id="profile-edl-search" type="text" placeholder="Search event code..." oninput="filterEventDecklists(this.value)"
+                style="width:100%;font-size:12px;margin-bottom:8px;padding:5px 8px"/>
               <div id="profile-event-decklists" style="display:flex;flex-direction:column;gap:6px">
                 <div style="font-size:12px;color:var(--muted)">No event decklists added yet.</div>
               </div>
@@ -751,7 +841,7 @@ select{cursor:pointer}
           </div>
           <div>
             <div class="slbl" style="margin-bottom:6px">SIDE DECK <span id="igt-side-count" style="color:var(--muted)">(0/15)</span></div>
-            <div id="igt-side-tiles" style="display:grid;grid-template-columns:repeat(5,80px);gap:3px"></div>
+            <div id="igt-side-tiles" style="display:grid;grid-template-columns:repeat(15,78px);gap:2px"></div>
           </div>
           <!-- hidden for compat -->
           <div style="display:none"><div id="igt-extra-tiles"></div><span id="igt-extra-count"></span></div>
@@ -852,112 +942,109 @@ select{cursor:pointer}
 
       <!-- TOOLS -->
       <div id="igt-tools" class="igt-panel" style="overflow-y:auto">
-        <div style="padding:16px 20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;align-items:start">
+        <div style="padding:16px 20px;display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;align-items:start">
 
           <!-- Timer Settings -->
           <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px">
-            <div class="slbl" style="margin-bottom:10px">⏱ TIMER SETTINGS</div>
-            <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Edit time here. Press Reset in top bar to apply.</div>
-            <div style="display:flex;gap:6px;margin-bottom:10px">
+            <div class="slbl" style="margin-bottom:8px">⏱ TIMER SETTINGS</div>
+            <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Edit duration here. Reset in top bar to apply.</div>
+            <div style="display:flex;gap:5px;margin-bottom:10px">
               <button class="dd-btn-sec" onclick="igtTimerPreset(40)" style="flex:1;font-size:12px">40m</button>
               <button class="dd-btn-sec" onclick="igtTimerPreset(50)" style="flex:1;font-size:12px">50m</button>
               <button class="dd-btn-sec" onclick="igtTimerPreset(60)" style="flex:1;font-size:12px">60m</button>
             </div>
-            <div style="display:flex;gap:8px;align-items:center">
-              <input id="igt-timer-min" type="number" value="50" min="0" style="flex:1;text-align:center;font-size:16px"/>
-              <span style="color:var(--muted)">:</span>
-              <input id="igt-timer-sec" type="number" value="0" min="0" max="59" style="flex:1;text-align:center;font-size:16px"/>
-              <button class="btn-go" onclick="igtTimerSet()" style="font-size:12px;padding:6px 14px">Set</button>
+            <div style="display:flex;gap:6px;align-items:center">
+              <input id="igt-timer-min" type="number" value="50" min="0" style="flex:1;text-align:center;font-size:18px;padding:6px"/>
+              <span style="color:var(--muted);font-size:20px;font-weight:bold">:</span>
+              <input id="igt-timer-sec" type="number" value="0" min="0" max="59" style="flex:1;text-align:center;font-size:18px;padding:6px"/>
+              <button class="btn-go" onclick="igtTimerSet()" style="font-size:12px;padding:7px 14px">Set</button>
             </div>
           </div>
 
           <!-- RPS Advisor -->
           <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center">
-            <div class="slbl" style="margin-bottom:10px">✊ RPS ADVISOR</div>
-            <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Track what your opponent picks</div>
-            <div id="igt-rps-img" style="font-size:52px;margin-bottom:6px;min-height:60px">🤜</div>
-            <div id="igt-rps-ans" style="font-size:16px;font-weight:bold;color:var(--green);margin-bottom:12px;min-height:22px"></div>
-            <div style="display:flex;gap:6px;margin-bottom:10px">
-              <button class="btn-go" onclick="igtRpsPick('r')" style="flex:1;font-size:13px;padding:8px">✊</button>
-              <button class="btn-go" onclick="igtRpsPick('p')" style="flex:1;font-size:13px;padding:8px">✋</button>
-              <button class="btn-go" onclick="igtRpsPick('s')" style="flex:1;font-size:13px;padding:8px">✌</button>
+            <div class="slbl" style="margin-bottom:6px">✊ RPS ADVISOR</div>
+            <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Track opponent picks · get best counter</div>
+            <div id="igt-rps-img" style="font-size:48px;margin-bottom:4px;min-height:56px;line-height:1.1">🤜</div>
+            <div id="igt-rps-ans" style="font-size:15px;font-weight:bold;color:var(--green);margin-bottom:10px;min-height:20px"></div>
+            <div style="display:flex;gap:5px;margin-bottom:8px">
+              <button class="btn-go" onclick="igtRpsPick('r')" style="flex:1;font-size:20px;padding:8px 0">✊</button>
+              <button class="btn-go" onclick="igtRpsPick('p')" style="flex:1;font-size:20px;padding:8px 0">✋</button>
+              <button class="btn-go" onclick="igtRpsPick('s')" style="flex:1;font-size:20px;padding:8px 0">✌</button>
             </div>
-            <div id="igt-rps-counts" style="font-size:12px;color:var(--muted);margin-bottom:8px"></div>
+            <div id="igt-rps-counts" style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.6"></div>
             <button class="dd-btn-sec" onclick="igtRpsReset()" style="width:100%;font-size:11px">↺ Reset</button>
           </div>
 
           <!-- RNG -->
           <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center">
-            <div class="slbl" style="margin-bottom:10px">🎲 RANDOM NUMBER</div>
-            <div style="display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:12px">
-              <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
-                <label class="lbl" style="margin:0">Min</label>
-                <input id="igt-rng-min" type="number" value="1" style="width:70px;text-align:center;font-size:18px"/>
+            <div class="slbl" style="margin-bottom:8px">🎲 RANDOM NUMBER</div>
+            <div style="display:flex;align-items:flex-end;gap:8px;justify-content:center;margin-bottom:10px">
+              <div style="display:flex;flex-direction:column;align-items:center;gap:3px">
+                <span style="font-size:10px;color:var(--muted);letter-spacing:.08em">MIN</span>
+                <input id="igt-rng-min" type="number" value="1" style="width:66px;text-align:center;font-size:20px;padding:6px"/>
               </div>
-              <span style="color:var(--muted);font-size:18px;margin-top:14px">–</span>
-              <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
-                <label class="lbl" style="margin:0">Max</label>
-                <input id="igt-rng-max" type="number" value="6" style="width:70px;text-align:center;font-size:18px"/>
+              <span style="color:var(--dim);font-size:20px;padding-bottom:8px">–</span>
+              <div style="display:flex;flex-direction:column;align-items:center;gap:3px">
+                <span style="font-size:10px;color:var(--muted);letter-spacing:.08em">MAX</span>
+                <input id="igt-rng-max" type="number" value="6" style="width:66px;text-align:center;font-size:20px;padding:6px"/>
               </div>
             </div>
-            <div id="igt-rng-result" style="font-size:64px;font-weight:bold;color:var(--blue);margin-bottom:10px;line-height:1;min-height:70px">—</div>
-            <button class="btn-go" onclick="igtRngRoll()" style="width:100%;font-size:14px;margin-bottom:8px">🎲 Roll</button>
+            <div id="igt-rng-result" style="font-size:72px;font-weight:bold;color:var(--blue);line-height:1;min-height:76px;margin-bottom:10px">—</div>
+            <button class="btn-go" onclick="igtRngRoll()" style="width:100%;font-size:14px;padding:9px;margin-bottom:8px">🎲 Roll</button>
             <div id="igt-rng-hist" style="display:flex;flex-wrap:wrap;gap:3px;justify-content:center;font-size:11px"></div>
           </div>
 
-          <!-- Deck Probability -->
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;grid-column:span 2">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
-              <div class="slbl">📊 DECK PROBABILITY</div>
+          <!-- Player Order -->
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px">
+            <div class="slbl" style="margin-bottom:8px">🔀 PLAYER ORDER</div>
+            <div style="display:flex;gap:6px;margin-bottom:8px">
+              <input id="igt-pr-inp" type="text" placeholder="Add player..." style="flex:1" onkeydown="if(event.key==='Enter')igtPrAdd()"/>
+              <button class="btn-go" onclick="igtPrAdd()" style="font-size:14px;padding:6px 12px">+</button>
             </div>
+            <div id="igt-pr-list" style="display:flex;flex-direction:column;gap:3px;margin-bottom:10px;min-height:24px"></div>
+            <div style="display:flex;gap:6px;margin-bottom:8px">
+              <button class="btn-go" onclick="igtPrPick()" style="flex:1;font-size:12px">🎲 Pick Random</button>
+              <button class="dd-btn-sec" onclick="igtPrClear()" style="font-size:11px;padding:6px 10px">✕</button>
+            </div>
+            <div id="igt-pr-result" style="font-size:14px;font-weight:bold;color:var(--green);text-align:center;min-height:20px;margin-bottom:6px"></div>
+            <div id="igt-pr-order" style="display:flex;flex-direction:column;gap:3px;max-height:120px;overflow-y:auto"></div>
+          </div>
+
+          <!-- Deck Probability — full width -->
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;grid-column:1/-1">
+            <div class="slbl" style="margin-bottom:4px">📊 DECK PROBABILITY</div>
             <div style="font-size:11px;color:var(--muted);margin-bottom:12px">Chance to draw specific cards in your opening hand.</div>
-            <div style="display:flex;gap:16px;margin-bottom:10px;flex-wrap:wrap">
+            <div style="display:flex;gap:20px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
               <div style="display:flex;align-items:center;gap:8px">
                 <label class="lbl" style="margin:0;white-space:nowrap">Deck Size</label>
-                <input id="igt-prob-deck" type="number" value="40" min="1" style="width:70px;text-align:center"/>
+                <input id="igt-prob-deck" type="number" value="40" min="1" style="width:72px;text-align:center;font-size:16px" oninput="igtProbUpdateMisc()"/>
               </div>
               <div style="display:flex;align-items:center;gap:8px">
                 <label class="lbl" style="margin:0;white-space:nowrap">Hand Size</label>
-                <input id="igt-prob-hand" type="number" value="6" min="1" style="width:70px;text-align:center"/>
+                <input id="igt-prob-hand" type="number" value="6" min="1" style="width:72px;text-align:center;font-size:16px" oninput="igtProbUpdateMisc()"/>
               </div>
             </div>
-            <!-- Card rows table -->
             <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:10px">
-              <div style="display:grid;grid-template-columns:1fr 80px 80px 80px 36px;background:var(--card2);padding:6px 10px;font-size:11px;color:var(--muted);letter-spacing:.08em;font-family:monospace;gap:8px">
+              <div style="display:grid;grid-template-columns:1fr 90px 90px 90px 36px;background:var(--card2);padding:8px 12px;font-size:11px;color:var(--muted);letter-spacing:.1em;font-family:monospace;gap:8px;border-bottom:1px solid var(--border)">
                 <span>CARD</span><span style="text-align:center">AMT</span><span style="text-align:center">MIN</span><span style="text-align:center">MAX</span><span></span>
               </div>
-              <div id="igt-prob-misc-row" style="display:grid;grid-template-columns:1fr 80px 80px 80px 36px;padding:6px 10px;border-top:1px solid var(--border);align-items:center;gap:8px;font-size:12px">
-                <span style="color:var(--muted)">Miscellaneous Cards</span>
+              <div id="igt-prob-misc-row" style="display:grid;grid-template-columns:1fr 90px 90px 90px 36px;padding:8px 12px;border-bottom:1px solid var(--border);align-items:center;gap:8px;font-size:13px">
+                <span style="color:var(--muted);font-style:italic">Miscellaneous Cards</span>
                 <span id="igt-prob-misc-amt" style="text-align:center;color:var(--muted)">40</span>
                 <span style="text-align:center;color:var(--dim)">0</span>
                 <span id="igt-prob-misc-max" style="text-align:center;color:var(--muted)">6</span>
                 <span></span>
               </div>
-              <div id="igt-prob-rows" style="display:flex;flex-direction:column"></div>
+              <div id="igt-prob-rows"></div>
             </div>
-            <div style="display:flex;gap:8px;margin-bottom:10px">
-              <button class="dd-btn-sec" onclick="igtProbAddRow()" style="font-size:12px;flex:1">+ Add card</button>
-              <button class="btn-go" onclick="igtProbCalc()" style="font-size:12px;flex:1">Calculate</button>
+            <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">
+              <button class="dd-btn-sec" onclick="igtProbAddRow()" style="font-size:12px;padding:7px 16px">+ Add card</button>
+              <button class="btn-go" onclick="igtProbCalc()" style="font-size:12px;padding:7px 24px;margin-left:auto">Calculate</button>
             </div>
-            <div id="igt-prob-result" style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center;font-size:13px;color:var(--text);min-height:48px;display:flex;align-items:center;justify-content:center">
-              Add cards and click Calculate.
+            <div id="igt-prob-result" style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center;font-size:14px;color:var(--text);min-height:52px;display:flex;align-items:center;justify-content:center">
+              Add cards above and click Calculate.
             </div>
-          </div>
-
-          <!-- Player Randomizer -->
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px">
-            <div class="slbl" style="margin-bottom:10px">🔀 PLAYER ORDER</div>
-            <div style="display:flex;gap:6px;margin-bottom:8px">
-              <input id="igt-pr-inp" type="text" placeholder="Player name..." style="flex:1" onkeydown="if(event.key==='Enter')igtPrAdd()"/>
-              <button class="btn-go" onclick="igtPrAdd()" style="font-size:13px;padding:6px 12px">+</button>
-            </div>
-            <div id="igt-pr-list" style="display:flex;flex-direction:column;gap:3px;margin-bottom:10px;min-height:28px"></div>
-            <div style="display:flex;gap:6px;margin-bottom:8px">
-              <button class="btn-go" onclick="igtPrPick()" style="flex:1">🎲 Pick Random</button>
-              <button class="dd-btn-sec" onclick="igtPrClear()" style="padding:6px 10px">✕ Clear</button>
-            </div>
-            <div id="igt-pr-result" style="font-size:14px;font-weight:bold;color:var(--green);text-align:center;min-height:20px;margin-bottom:6px"></div>
-            <div id="igt-pr-order" style="display:flex;flex-direction:column;gap:3px"></div>
           </div>
 
         </div>
@@ -1444,7 +1531,11 @@ function renderBatchList(list) {
 
     item.appendChild(nameRow);
     item.appendChild(metaEl);
-    item.onclick = () => selectBatch(b.id);
+    item.onclick = () => {
+      selectBatch(b.id);
+      // Also open their profile
+      if (b.player) setTimeout(() => { switchTab('profiles', document.querySelector('.ntab')); setTimeout(() => openPlayerByName(b.player), 200); }, 300);
+    };
     el.appendChild(item);
   });
 }
@@ -3992,6 +4083,16 @@ function getDeckColor(deck, idx) {
 }
 
 // ── Load stats tab ─────────────────────────────────────────────────────────
+function filterEventDecklists(query) {
+  const el = document.getElementById('profile-event-decklists');
+  if (!el) return;
+  const q = (query||'').toLowerCase().trim();
+  el.querySelectorAll('.edl-item').forEach(item => {
+    const code = (item.dataset.code||'').toLowerCase();
+    item.style.display = (!q || code.includes(q)) ? '' : 'none';
+  });
+}
+
 function showAddEventDecklist() {
   const form = document.getElementById('event-decklist-form');
   if (form) { form.style.display = form.style.display === 'none' ? 'block' : 'none'; }
@@ -4983,6 +5084,8 @@ function renderEventDecks(player, batches, records) {
     const taggedReplays = records.filter(r => (r.eventLabel||'').toUpperCase() === deck.code);
 
     const card = document.createElement('div');
+    card.className = 'edl-item';
+    card.dataset.code = deck.code;
     card.style.cssText = 'background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:12px;cursor:pointer;transition:border-color .15s';
     card.onmouseover = () => card.style.borderColor = 'var(--amber)';
     card.onmouseout  = () => card.style.borderColor = 'var(--border2)';
@@ -5372,20 +5475,29 @@ function igtTab(name, btn) {
 // ── YDKe decode ───────────────────────────────────────────────────────────────
 function igtDecodeYdke(code) {
   // Format: ydke:///[main_b64]![extra_b64]![side_b64]!
+  // The three sections are main, extra, side (not main, extra, side in that order per spec)
   try {
-    const match = code.match(/ydke:\/\/\/([^!]*)!([^!]*)!([^!]*)!/);
-    if (!match) return null;
+    const trimmed = code.trim();
+    if (!trimmed.startsWith('ydke:///')) return null;
+    const inner = trimmed.slice('ydke:///'.length);
+    const parts = inner.split('!');
+    // Need at least 3 parts (main, extra, side)
+    if (parts.length < 3) return null;
     const decode = b64 => {
-      if (!b64) return [];
-      const bin = atob(b64.replace(/-/g,'+').replace(/_/g,'/'));
+      if (!b64 || !b64.trim()) return [];
+      // Standard base64 — pad if needed
+      let s = b64.trim();
+      while (s.length % 4 !== 0) s += '=';
+      const bin = atob(s);
       const ids = [];
-      for (let i = 0; i < bin.length; i += 4) {
-        ids.push(bin.charCodeAt(i) | (bin.charCodeAt(i+1)<<8) | (bin.charCodeAt(i+2)<<16) | (bin.charCodeAt(i+3)<<24));
+      for (let i = 0; i + 3 < bin.length; i += 4) {
+        const id = bin.charCodeAt(i) | (bin.charCodeAt(i+1)<<8) | (bin.charCodeAt(i+2)<<16) | (bin.charCodeAt(i+3)<<24);
+        if (id > 0) ids.push(id >>> 0); // unsigned
       }
       return ids;
     };
-    return { main: decode(match[1]), extra: decode(match[2]), side: decode(match[3]) };
-  } catch(e) { return null; }
+    return { main: decode(parts[0]), extra: decode(parts[1]), side: decode(parts[2]) };
+  } catch(e) { console.error('YDKe decode error:', e); return null; }
 }
 
 async function igtFetchCardsByIds(ids) {
@@ -5735,10 +5847,15 @@ function igtMtRenderSection(cards, elId, countElId, gameState) {
   sorted.forEach((card, i) => {
     const key = elId+'_'+(card.id||card.name)+'_'+i;
     const status = gameState[key];
+    // Carry over Sided In/Out labels from Side Practice
+    const sidedIn  = card._sidedIn;
+    const sidedOut = card._sidedOut;
     let label = null, labelColor = null, borderColor = 'transparent';
-    if (status === 'not')    { label='NOT IN DECK'; labelColor='rgba(80,80,80,.9)';       borderColor='var(--dim)'; }
-    if (status === 'grave')  { label='GRAVEYARD';   labelColor='rgba(30,30,30,.92)';      borderColor='#666'; }
-    if (status === 'banish') { label='BANISHED';    labelColor='rgba(80,100,200,.9)';     borderColor='var(--blue)'; }
+    if (status === 'not')    { label='NOT IN DECK'; labelColor='rgba(80,80,80,.9)';     borderColor='var(--dim)'; }
+    else if (status === 'grave')  { label='GRAVEYARD';   labelColor='rgba(30,30,30,.92)';    borderColor='#666'; }
+    else if (status === 'banish') { label='BANISHED';    labelColor='rgba(80,100,200,.9)';   borderColor='var(--blue)'; }
+    else if (sidedIn)  { label='SIDED IN';  labelColor='rgba(0,180,110,.85)';  borderColor='var(--green)'; }
+    else if (sidedOut) { label='SIDED OUT'; labelColor='rgba(200,50,50,.85)';  borderColor='var(--red)'; }
     const tile = igtCardTile(card, { size:78, label, labelColor, borderColor });
     tile.onclick = () => {
       const cycle = [undefined, 'not', 'grave', 'banish'];
@@ -5819,18 +5936,34 @@ function igtOtImportYDK() { igtImportYDK('opp'); }
 function igtOtReset() {
   if (!confirm('Reset opponent tracker?')) return;
   _igtOppDeck = {main:[],side:[],extra:[]};
+  _igtOtStates = {};
   const arcEl=document.getElementById('igt-ot-archetype'); if(arcEl) arcEl.value='';
   const notesEl=document.getElementById('igt-ot-notes'); if(notesEl) notesEl.value='';
   igtOtRenderTiles();
 }
+
+let _igtOtStates = {}; // key -> status
 
 function igtOtRenderSection(cards, elId, countElId) {
   const el = document.getElementById(elId); if (!el) return;
   const countEl = document.getElementById(countElId);
   if (countEl) countEl.textContent = '('+cards.length+')';
   el.innerHTML = '';
-  igtSortCards(cards).forEach(card => {
-    const tile = igtCardTile(card, { size:78 });
+  igtSortCards(cards).forEach((card, i) => {
+    const key = elId+'_'+(card.id||card.name)+'_'+i;
+    const status = _igtOtStates[key];
+    let label = null, labelColor = null, borderColor = 'transparent';
+    if (status === 'not')    { label='NOT IN DECK'; labelColor='rgba(80,80,80,.9)';     borderColor='var(--dim)'; }
+    if (status === 'grave')  { label='GRAVEYARD';   labelColor='rgba(30,30,30,.92)';    borderColor='#666'; }
+    if (status === 'banish') { label='BANISHED';    labelColor='rgba(80,100,200,.9)';   borderColor='var(--blue)'; }
+    const tile = igtCardTile(card, { size:78, label, labelColor, borderColor });
+    tile.onclick = () => {
+      const cycle = [undefined, 'not', 'grave', 'banish'];
+      const cur = _igtOtStates[key];
+      const next = cycle[(cycle.indexOf(cur)+1) % cycle.length];
+      if (next === undefined) delete _igtOtStates[key]; else _igtOtStates[key] = next;
+      igtOtRenderTiles();
+    };
     el.appendChild(tile);
   });
 }
@@ -6118,24 +6251,30 @@ async function initClerk() {
 }
 
 function applyRoleUI() {
-  // Show user info in topbar
-  const pill = document.getElementById('pill');
-  if (pill && _clerkUser) {
-    const name = _clerkUser.firstName || _clerkUser.emailAddresses[0].emailAddress.split('@')[0];
-    const roleTag = _userRole === 'admin' ? '<span style="color:var(--amber);font-size:10px;margin-left:4px">ADMIN</span>' : '';
-    const signOutBtn = '<button onclick="window.Clerk.signOut().then(()=>location.reload())" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:8px">Sign out</button>';
+  // Only inject once
+  if (document.getElementById('clerk-user-info')) return;
+  if (_clerkUser) {
+    const name = (_clerkUser.firstName || (_clerkUser.emailAddresses && _clerkUser.emailAddresses[0].emailAddress.split('@')[0])) || 'User';
+    const roleTag = _userRole === 'admin' ? ' <span style="color:var(--amber);font-size:10px">ADMIN</span>' : '';
     const right = document.querySelector('.topbar-right');
     if (right) {
       const userEl = document.createElement('div');
-      userEl.style.cssText = 'display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted)';
-      userEl.innerHTML = '👤 '+name+roleTag+signOutBtn;
+      userEl.id = 'clerk-user-info';
+      userEl.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)';
+      const nameSpan = document.createElement('span');
+      nameSpan.innerHTML = '👤 '+name+roleTag;
+      const signOutBtn = document.createElement('button');
+      signOutBtn.textContent = 'Sign out';
+      signOutBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer';
+      signOutBtn.onclick = () => window.Clerk.signOut().then(() => location.reload());
+      userEl.appendChild(nameSpan);
+      userEl.appendChild(signOutBtn);
       right.insertBefore(userEl, right.firstChild);
     }
   }
-  // Admin-only UI elements
+  // Admin-only UI
   if (_userRole !== 'admin') {
-    // Hide batch creation buttons for non-admins
-    document.querySelectorAll('#add-to-batch-btn, [onclick*="openBatchPanel"]').forEach(el => {
+    document.querySelectorAll('[onclick*="openBatchPanel"]').forEach(el => {
       if (!el.id || el.id !== 'add-to-batch-btn') el.style.display = 'none';
     });
   }
