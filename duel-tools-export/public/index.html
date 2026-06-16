@@ -731,12 +731,23 @@ select{cursor:pointer}
                 <!-- Sub-tabs -->
                 <div style="display:flex;gap:2px;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:8px">
                   <button class="dd-tab on" id="profile-tab-matchups" onclick="profileSubTab('matchups',this)">Deck Matchups</button>
+                  <button class="dd-tab" id="profile-tab-gfwl" onclick="profileSubTab('gfwl',this)">GFWL History</button>
                   <button class="dd-tab" id="profile-tab-cardwr" onclick="profileSubTab('cardwr',this)">Card Win Rate</button>
                 </div>
                 <!-- Matchup table -->
                 <div id="profile-matchup-panel">
                   <div class="slbl" style="margin-bottom:8px;font-size:10px">WIN RATE VS OPPONENT DECK TYPE</div>
                   <div id="profile-matchup-table"></div>
+                </div>
+                <!-- GFWL History panel -->
+                <div id="profile-gfwl-panel" style="display:none">
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+                    <div class="slbl" style="margin:0;font-size:10px">GFWL SEASON HISTORY</div>
+                    <select id="profile-gfwl-season" onchange="renderGFWLHistory()" style="margin-left:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 8px;border-radius:5px;outline:none">
+                      <option value="all">All Seasons</option>
+                    </select>
+                  </div>
+                  <div id="profile-gfwl-list" style="display:flex;flex-direction:column;gap:4px"></div>
                 </div>
                 <!-- Card Win Rate panel -->
                 <div id="profile-cardwr-panel" style="display:none">
@@ -814,9 +825,14 @@ select{cursor:pointer}
               <div id="add-event-deck-form" style="display:none"></div>
               <div id="evt-code-inp" style="display:none"></div>
               <!-- Add decklist form -->
-              <div id="event-decklist-form" style="display:none;margin-top:10px;padding:10px;background:var(--card2);border:1px solid var(--border);border-radius:8px">
-                <input id="edl-event-code" type="text" placeholder="Event code (e.g. GFC25, PWCQ73)" style="font-size:12px;margin-bottom:6px"/>
-                <input id="edl-deck-url" type="text" placeholder="Duelingbook deck URL or ID" style="font-size:12px;margin-bottom:8px"/>
+              <div id="event-decklist-form" style="display:none;margin-top:10px;padding:12px;background:var(--card2);border:1px solid var(--border);border-radius:8px;display:flex;flex-direction:column;gap:8px">
+                <div style="font-size:11px;color:var(--muted)">Bulk add: one per line — <span style="color:var(--green);font-family:monospace">EVENTCODE YEAR deckURL</span></div>
+                <textarea id="edl-bulk-input" placeholder="FLC40 2026 https://www.duelingbook.com/deck?id=12345&#10;PWCQ88 2025 https://www.duelingbook.com/deck?id=67890" style="min-height:70px;background:var(--card);border:1px solid var(--border);border-radius:5px;color:var(--text);font-family:monospace;font-size:11px;padding:7px;resize:vertical;outline:none;width:100%;box-sizing:border-box"></textarea>
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+                  <input id="edl-event-code" type="text" placeholder="Event code (e.g. FLC40)" style="flex:1;min-width:100px;font-size:12px;text-transform:uppercase"/>
+                  <input id="edl-year" type="number" placeholder="Year" value="2026" style="width:80px;font-size:12px"/>
+                  <input id="edl-deck-url" type="text" placeholder="Deck URL or ID" style="flex:2;min-width:140px;font-size:12px"/>
+                </div>
                 <div style="display:flex;gap:6px">
                   <button onclick="saveEventDecklist()" class="btn-go" style="flex:1;font-size:11px;padding:5px">Save</button>
                   <button onclick="document.getElementById('event-decklist-form').style.display='none'" class="btn-sec" style="font-size:11px;padding:5px 8px">✕</button>
@@ -992,19 +1008,43 @@ select{cursor:pointer}
             </div>
           </div>
 
-          <!-- RPS Advisor -->
+          <!-- RPS Randomizer -->
           <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center">
-            <div class="slbl" style="margin-bottom:6px">✊ RPS ADVISOR</div>
-            <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Track opponent picks · get best counter</div>
-            <div id="igt-rps-img" style="font-size:48px;margin-bottom:4px;min-height:56px;line-height:1.1">🤜</div>
-            <div id="igt-rps-ans" style="font-size:15px;font-weight:bold;color:var(--green);margin-bottom:10px;min-height:20px"></div>
-            <div style="display:flex;gap:5px;margin-bottom:8px">
-              <button class="btn-go" onclick="igtRpsPick('r')" style="flex:1;font-size:20px;padding:8px 0">✊</button>
-              <button class="btn-go" onclick="igtRpsPick('p')" style="flex:1;font-size:20px;padding:8px 0">✋</button>
-              <button class="btn-go" onclick="igtRpsPick('s')" style="flex:1;font-size:20px;padding:8px 0">✌</button>
+            <div class="slbl" style="margin-bottom:6px">✊ RPS RANDOMIZER</div>
+            <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Click to get a random pick</div>
+            <div id="igt-rps-img" style="font-size:64px;margin-bottom:6px;min-height:72px;line-height:1">🎲</div>
+            <div id="igt-rps-ans" style="font-size:20px;font-weight:bold;color:var(--green);margin-bottom:14px;min-height:26px;letter-spacing:.05em"></div>
+            <button class="btn-go" onclick="igtRpsRoll()" style="width:100%;font-size:15px;padding:12px;margin-bottom:10px">🎲 Pick for me!</button>
+            <div id="igt-rps-counts" style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.8"></div>
+            <div id="igt-rps-hist" style="display:flex;flex-wrap:wrap;gap:4px;justify-content:center;margin-bottom:8px;max-height:60px;overflow:hidden"></div>
+            <button class="dd-btn-sec" onclick="igtRpsReset()" style="width:100%;font-size:11px">↺ Reset Session</button>
+          </div>
+
+          <!-- Calculator -->
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px">
+            <div class="slbl" style="margin-bottom:8px">🔢 CALCULATOR</div>
+            <div id="calc-display" style="background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:22px;font-family:monospace;text-align:right;color:var(--text);min-height:44px;margin-bottom:8px;word-break:break-all">0</div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px">
+              <button class="dd-btn-sec" onclick="calcInput('C')" style="font-size:13px;padding:9px;color:var(--red)">C</button>
+              <button class="dd-btn-sec" onclick="calcInput('±')" style="font-size:13px;padding:9px">±</button>
+              <button class="dd-btn-sec" onclick="calcInput('%')" style="font-size:13px;padding:9px">%</button>
+              <button class="btn-go" onclick="calcInput('/')" style="font-size:15px;padding:9px">÷</button>
+              <button class="dd-btn-sec" onclick="calcInput('7')" style="font-size:14px;padding:9px">7</button>
+              <button class="dd-btn-sec" onclick="calcInput('8')" style="font-size:14px;padding:9px">8</button>
+              <button class="dd-btn-sec" onclick="calcInput('9')" style="font-size:14px;padding:9px">9</button>
+              <button class="btn-go" onclick="calcInput('*')" style="font-size:15px;padding:9px">×</button>
+              <button class="dd-btn-sec" onclick="calcInput('4')" style="font-size:14px;padding:9px">4</button>
+              <button class="dd-btn-sec" onclick="calcInput('5')" style="font-size:14px;padding:9px">5</button>
+              <button class="dd-btn-sec" onclick="calcInput('6')" style="font-size:14px;padding:9px">6</button>
+              <button class="btn-go" onclick="calcInput('-')" style="font-size:15px;padding:9px">−</button>
+              <button class="dd-btn-sec" onclick="calcInput('1')" style="font-size:14px;padding:9px">1</button>
+              <button class="dd-btn-sec" onclick="calcInput('2')" style="font-size:14px;padding:9px">2</button>
+              <button class="dd-btn-sec" onclick="calcInput('3')" style="font-size:14px;padding:9px">3</button>
+              <button class="btn-go" onclick="calcInput('+')" style="font-size:15px;padding:9px">+</button>
+              <button class="dd-btn-sec" onclick="calcInput('0')" style="font-size:14px;padding:9px;grid-column:span 2">0</button>
+              <button class="dd-btn-sec" onclick="calcInput('.')" style="font-size:14px;padding:9px">.</button>
+              <button class="btn-go" onclick="calcInput('=')" style="font-size:15px;padding:9px;background:var(--green);color:#050508">=</button>
             </div>
-            <div id="igt-rps-counts" style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.6"></div>
-            <button class="dd-btn-sec" onclick="igtRpsReset()" style="width:100%;font-size:11px">↺ Reset</button>
           </div>
 
           <!-- RNG -->
@@ -1462,26 +1502,37 @@ const pending = {};
 window.addEventListener('message', e => {
   if (!e.data || e.data.type !== 'rps-relay') return;
   const { id, plays, allPlays, timedOut } = e.data;
-  const entry = pending[id];
+  // Try exact match first, then try to find by partial match (handles format differences)
+  let entry = pending[id];
+  if (!entry) {
+    // Look for any pending entry whose id contains this id or vice versa
+    const key = Object.keys(pending).find(k => k === id || k.endsWith('-'+id) || id.endsWith('-'+k) || k === id.replace(/.*-/,''));
+    if (key) entry = pending[key];
+  }
   if (!entry) return;
+  const resolveId = entry.origId || id;
   clearTimeout(entry.timer);
   try { entry.iframe.remove(); } catch(err) {}
-  entry.resolve({ id, plays:plays||[], allPlays:allPlays||[], timedOut:!!timedOut });
-  delete pending[id];
+  entry.resolve({ id: resolveId, plays:plays||[], allPlays:allPlays||[], timedOut:!!timedOut });
+  // Clean up all keys for this entry
+  Object.keys(pending).forEach(k => { if (pending[k] === entry) delete pending[k]; });
 });
 
 function loadReplay(id) {
   return new Promise(resolve => {
+    // Clean up any existing pending for this id
     if (pending[id]) { clearTimeout(pending[id].timer); try{pending[id].iframe.remove();}catch(e){} delete pending[id]; }
     const iframe = document.createElement('iframe');
     iframe.style.cssText = 'width:1280px;height:960px;border:none';
     iframe.src = replayUrl(id);
+    const entry = { resolve, iframe, origId: id };
     const timer = setTimeout(() => {
       try{iframe.remove();}catch(e){}
-      delete pending[id];
+      Object.keys(pending).forEach(k => { if (pending[k] === entry) delete pending[k]; });
       resolve({ id, plays:[], allPlays:[], timedOut:true });
-    }, 35000);
-    pending[id] = { resolve, timer, iframe };
+    }, 40000); // increased timeout for slower replays
+    entry.timer = timer;
+    pending[id] = entry;
     document.getElementById('ibox').appendChild(iframe);
   });
 }
@@ -1503,73 +1554,119 @@ function renderBatchList(list) {
   const displayList = [];
   if (_tempBatch) displayList.push(_tempBatch);
   displayList.push(...list.filter(b => !_tempBatch || b.id !== _tempBatch.id));
+
   if (!displayList.length) { el.innerHTML = '<div class="no-batches">No batches yet.</div>'; return; }
   el.innerHTML = '';
+
+  // Separate event-labeled batches from regular ones
+  // A batch is "event" if all/most replays share a single eventLabel
+  // Group by: ungrouped batches first, then folders by event label
+  const folders = {}; // eventLabel -> [batches]
+  const regular = [];
+
   displayList.forEach(b => {
-    const isTemp = !!b.isTemp;
-    const reg = window._playerRegistry && window._playerRegistry[(b.player||'').toLowerCase()];
-    const aliasNames = reg ? new Set([b.player.toLowerCase(), ...(reg.aliases||[]).map(a=>a.toLowerCase())]) : new Set([b.player.toLowerCase()]);
-    const totalCount = isTemp ? (b.replays||[]).length : list.filter(x => aliasNames.has((x.player||'').toLowerCase())).reduce((sum,x)=>sum+(x.replayCount||0),0);
-    const ownCount = b.replayCount || (b.replays||[]).length || 0;
-    const displayCount = Math.max(totalCount, ownCount);
-    const hasAliasReplays = !isTemp && totalCount > ownCount;
-
-    const item = document.createElement('div');
-    item.className = 'batch-item' + ((_activeBatch&&_activeBatch.id===b.id)?' on':'');
-    if (isTemp) item.style.borderLeft = '2px solid var(--amber)';
-
-    // Name row
-    const nameRow = document.createElement('div');
-    nameRow.style.cssText = 'display:flex;align-items:center;gap:4px';
-
-    const nameEl = document.createElement('div');
-    nameEl.className = 'bi-name';
-    nameEl.style.flex = '1';
-    nameEl.textContent = b.name;
-    if (isTemp) {
-      const tag = document.createElement('span');
-      tag.style.cssText = 'color:var(--amber);font-size:10px;margin-left:4px';
-      tag.textContent = '⚡TEMP';
-      nameEl.appendChild(tag);
+    if (b.isTemp) { regular.push(b); return; }
+    // Determine dominant event label from batch name or replays
+    const name = (b.name||'').toUpperCase();
+    // Check if batch name looks like an event code (e.g. FLC40, PWCQ88, GFC25, S7)
+    const eventCodeRe = /^([A-Z]{2,6}\d{1,3}|S\d{1,2})$/;
+    if (eventCodeRe.test(name.trim())) {
+      if (!folders[name]) folders[name] = [];
+      folders[name].push(b);
+    } else {
+      regular.push(b);
     }
-    nameRow.appendChild(nameEl);
+  });
 
-    if (!isTemp) {
-      const renBtn = document.createElement('button');
-      renBtn.className = 'bi-rename';
-      renBtn.textContent = '✎';
-      renBtn.onclick = e => renameBatch(e, b.id, b.player);
-      nameRow.appendChild(renBtn);
-    }
-
-    const delBtn = document.createElement('span');
-    delBtn.className = 'bi-del';
-    delBtn.textContent = '✕';
-    if (isTemp) delBtn.style.color = 'var(--amber)';
-    delBtn.onclick = e => isTemp ? clearTempBatch(e, b.id) : deleteBatch(e, b.id);
-    nameRow.appendChild(delBtn);
-
-    // Meta row
-    const metaEl = document.createElement('div');
-    metaEl.className = 'bi-meta';
-    metaEl.textContent = displayCount + ' replays';
-    if (hasAliasReplays) {
-      const tag = document.createElement('span');
-      tag.style.cssText = 'color:var(--dim);font-size:10px';
-      tag.textContent = ' (incl. aliases)';
-      metaEl.appendChild(tag);
-    }
-
-    item.appendChild(nameRow);
-    item.appendChild(metaEl);
-    item.onclick = () => {
-      selectBatch(b.id);
-      // Also open their profile
-      if (b.player) setTimeout(() => { switchTab('profiles', document.querySelector('.ntab')); setTimeout(() => openPlayerByName(b.player), 200); }, 300);
-    };
+  // Render regular batches first
+  regular.forEach(b => {
+    const item = igtBuildBatchItem(b, list);
     el.appendChild(item);
   });
+
+  // Render folders
+  Object.entries(folders).sort(([a],[b]) => a.localeCompare(b)).forEach(([label, batches]) => {
+    const isOpen = _openFolders && _openFolders.has(label);
+    const folder = document.createElement('div');
+    folder.style.cssText = 'border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:2px';
+
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;align-items:center;gap:6px;padding:7px 10px;cursor:pointer;background:var(--card2);user-select:none';
+    hdr.innerHTML = `<span style="color:var(--amber);font-size:11px">${isOpen?'▾':'▸'}</span>
+      <span style="color:var(--amber);font-size:12px;font-weight:bold;flex:1">📁 ${label}</span>
+      <span style="color:var(--muted);font-size:10px">${batches.length} batch${batches.length!==1?'es':''}</span>`;
+
+    const body = document.createElement('div');
+    body.style.display = isOpen ? 'block' : 'none';
+
+    batches.forEach(b => {
+      const item = igtBuildBatchItem(b, list, true);
+      body.appendChild(item);
+    });
+
+    hdr.onclick = () => {
+      if (!_openFolders) _openFolders = new Set();
+      if (_openFolders.has(label)) { _openFolders.delete(label); body.style.display='none'; hdr.querySelector('span').textContent='▸'; }
+      else { _openFolders.add(label); body.style.display='block'; hdr.querySelector('span').textContent='▾'; }
+    };
+
+    folder.appendChild(hdr);
+    folder.appendChild(body);
+    el.appendChild(folder);
+  });
 }
+
+let _openFolders = new Set();
+
+function igtBuildBatchItem(b, list, indented) {
+  const isTemp = !!b.isTemp;
+  const reg = window._playerRegistry && window._playerRegistry[(b.player||'').toLowerCase()];
+  const aliasNames = reg ? new Set([b.player.toLowerCase(), ...(reg.aliases||[]).map(a=>a.toLowerCase())]) : new Set([(b.player||'').toLowerCase()]);
+  const totalCount = isTemp ? (b.replays||[]).length : (list||[]).filter(x => aliasNames.has((x.player||'').toLowerCase())).reduce((sum,x)=>sum+(x.replayCount||0),0);
+  const ownCount = b.replayCount || (b.replays||[]).length || 0;
+  const displayCount = Math.max(totalCount, ownCount);
+
+  const item = document.createElement('div');
+  item.className = 'batch-item' + ((_activeBatch&&_activeBatch.id===b.id)?' on':'');
+  if (isTemp) item.style.borderLeft = '2px solid var(--amber)';
+  if (indented) item.style.paddingLeft = '18px';
+
+  const nameRow = document.createElement('div');
+  nameRow.style.cssText = 'display:flex;align-items:center;gap:4px';
+
+  const nameEl = document.createElement('div');
+  nameEl.className = 'bi-name'; nameEl.style.flex = '1';
+  nameEl.textContent = b.name;
+  if (isTemp) {
+    const tag = document.createElement('span');
+    tag.style.cssText = 'color:var(--amber);font-size:10px;margin-left:4px';
+    tag.textContent = '⚡TEMP'; nameEl.appendChild(tag);
+  }
+  nameRow.appendChild(nameEl);
+
+  if (!isTemp) {
+    const renBtn = document.createElement('button');
+    renBtn.className = 'bi-rename'; renBtn.textContent = '✎';
+    renBtn.onclick = e => renameBatch(e, b.id, b.player);
+    nameRow.appendChild(renBtn);
+  }
+
+  const delBtn = document.createElement('span');
+  delBtn.className = 'bi-del'; delBtn.textContent = '✕';
+  if (isTemp) delBtn.style.color = 'var(--amber)';
+  delBtn.onclick = e => isTemp ? clearTempBatch(e, b.id) : deleteBatch(e, b.id);
+  nameRow.appendChild(delBtn);
+
+  const metaEl = document.createElement('div');
+  metaEl.className = 'bi-meta';
+  metaEl.textContent = displayCount + ' replays';
+
+  item.appendChild(nameRow);
+  item.appendChild(metaEl);
+  item.onclick = () => selectBatch(b.id);
+  return item;
+}
+
 
 function clearTempBatch(e, id) {
   e.stopPropagation();
@@ -3201,11 +3298,64 @@ function ddCardWRGlobal() {
 let _profileRecords = []; // records for currently open profile
 
 function profileSubTab(tab, btn) {
-  document.querySelectorAll('#profile-tab-matchups, #profile-tab-cardwr').forEach(b => b.classList.remove('on'));
+  document.querySelectorAll('#profile-tab-matchups,#profile-tab-gfwl,#profile-tab-cardwr').forEach(b => b.classList.remove('on'));
   btn.classList.add('on');
-  document.getElementById('profile-matchup-panel').style.display = tab === 'matchups' ? 'block' : 'none';
-  document.getElementById('profile-cardwr-panel').style.display  = tab === 'cardwr'   ? 'block' : 'none';
+  document.getElementById('profile-matchup-panel').style.display = tab==='matchups' ? 'block' : 'none';
+  document.getElementById('profile-gfwl-panel').style.display    = tab==='gfwl'     ? 'block' : 'none';
+  document.getElementById('profile-cardwr-panel').style.display  = tab==='cardwr'   ? 'block' : 'none';
   if (tab === 'cardwr') profileCardWRQuickPicks();
+  if (tab === 'gfwl')   renderGFWLHistory();
+}
+
+function renderGFWLHistory() {
+  if (!_activeProfile) return;
+  const { records } = _activeProfile;
+  const sel = document.getElementById('profile-gfwl-season');
+  const listEl = document.getElementById('profile-gfwl-list');
+  if (!sel || !listEl) return;
+
+  // Find all GFWL season matches (event label matches S + number)
+  const seasonRe = /^S\d+$/i;
+  const allGFWL = (records||[]).filter(r => seasonRe.test((r.eventLabel||'').trim()));
+
+  // Populate season dropdown with seasons that have data
+  const seasons = [...new Set(allGFWL.map(r => r.eventLabel.toUpperCase()))].sort((a,b) => {
+    return parseInt(b.slice(1)) - parseInt(a.slice(1));
+  });
+  const curVal = sel.value;
+  sel.innerHTML = '<option value="all">All Seasons</option>';
+  seasons.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s; opt.textContent = s;
+    if (s === curVal) opt.selected = true;
+    sel.appendChild(opt);
+  });
+
+  const filtered = sel.value === 'all' ? allGFWL : allGFWL.filter(r => r.eventLabel.toUpperCase() === sel.value);
+  listEl.innerHTML = '';
+  if (!filtered.length) {
+    listEl.innerHTML = '<div style="font-size:12px;color:var(--muted)">No GFWL season matches found. Tag replays with S1, S2, etc.</div>';
+    return;
+  }
+  filtered.forEach(r => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--card2);border:1px solid var(--border);border-radius:6px;font-size:12px';
+    const col = r.matchWon ? 'var(--green)' : r.matchLost ? 'var(--red)' : 'var(--muted)';
+    const myDeck = r.myDeck && r.myDeck!=='Unknown' ? r.myDeck : '';
+    const oppDeck = r.oppDeck && r.oppDeck!=='Unknown' ? r.oppDeck : '';
+    row.innerHTML = `
+      <span style="color:${col};font-weight:bold;min-width:30px">${r.matchWon?'W':r.matchLost?'L':'D'} ${r.score||''}</span>
+      <div style="flex:1;min-width:0">
+        <div>vs <strong>${r.oppName||'?'}</strong></div>
+        <div style="display:flex;gap:4px;margin-top:2px;flex-wrap:wrap">
+          ${myDeck?`<span style="font-size:10px;color:var(--green);border:1px solid var(--green);border-radius:3px;padding:0 5px">${myDeck}</span>`:''}
+          ${oppDeck?`<span style="font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:3px;padding:0 5px">vs ${oppDeck}</span>`:''}
+          <span style="font-size:10px;color:var(--amber);font-family:monospace">🏆 ${r.eventLabel}</span>
+        </div>
+      </div>
+      <a href="https://www.duelingbook.com/replay?id=${r.replayId}" target="_blank" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;text-decoration:none;white-space:nowrap">▶ Watch</a>`;
+    listEl.appendChild(row);
+  });
 }
 
 // Cards to exclude from quick-picks (too universal to be meaningful)
@@ -4130,27 +4280,59 @@ function showAddEventDecklist() {
 }
 
 async function saveEventDecklist() {
-  const code = (document.getElementById('edl-event-code').value||'').trim().toUpperCase();
-  const url  = (document.getElementById('edl-deck-url').value||'').trim();
-  if (!code) { st('Enter an event code.', 'var(--red)'); return; }
-  if (!url)  { st('Enter a deck URL.', 'var(--red)'); return; }
-  const deckIdMatch = url.match(/deck\?id=(\d+)/);
-  const deckId = deckIdMatch ? deckIdMatch[1] : url.replace(/\D/g,'');
-  if (!deckId) { st('Could not parse deck ID from URL.', 'var(--red)'); return; }
   const player = _activeProfile && _activeProfile.player;
   if (!player) { st('No player profile open.', 'var(--red)'); return; }
   const decks = getEventDecks(player);
-  if (decks.find(d => d.code === code)) {
-    if (!confirm('Event "'+code+'" already has a decklist. Replace it?')) return;
-    const i = decks.findIndex(d => d.code === code); decks.splice(i, 1);
+
+  // Check for bulk input first
+  const bulkRaw = (document.getElementById('edl-bulk-input').value||'').trim();
+  const entries = [];
+
+  if (bulkRaw) {
+    // Parse bulk: each line is "EVENTCODE YEAR URL" or "EVENTCODE URL"
+    for (const line of bulkRaw.split('\n')) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 2) continue;
+      const code = parts[0].toUpperCase();
+      // Check if second part is a year (4 digits)
+      const hasYear = /^\d{4}$/.test(parts[1]);
+      const year = hasYear ? parseInt(parts[1]) : null;
+      const url = parts[hasYear ? 2 : 1];
+      if (!url) continue;
+      const m = url.match(/deck\?id=(\d+)/);
+      const deckId = m ? m[1] : url.replace(/\D/g,'');
+      if (!deckId) continue;
+      entries.push({ code, year, deckId });
+    }
+  } else {
+    // Single entry
+    const code = (document.getElementById('edl-event-code').value||'').trim().toUpperCase();
+    const url  = (document.getElementById('edl-deck-url').value||'').trim();
+    const year = parseInt(document.getElementById('edl-year').value||'0') || null;
+    if (!code || !url) { st('Enter event code and deck URL.', 'var(--red)'); return; }
+    const m = url.match(/deck\?id=(\d+)/);
+    const deckId = m ? m[1] : url.replace(/\D/g,'');
+    if (!deckId) { st('Could not parse deck ID from URL.', 'var(--red)'); return; }
+    entries.push({ code, year, deckId });
   }
-  decks.push({ code, deckId, deckUrl: 'https://www.duelingbook.com/deck?id='+deckId, addedAt: Date.now() });
+
+  if (!entries.length) { st('No valid entries found.', 'var(--red)'); return; }
+
+  let added = 0;
+  for (const { code, year, deckId } of entries) {
+    const existing = decks.findIndex(d => d.code === code);
+    if (existing >= 0) decks.splice(existing, 1);
+    decks.push({ code, year, deckId, deckUrl: 'https://www.duelingbook.com/deck?id='+deckId, addedAt: Date.now() });
+    added++;
+  }
+
   saveEventDecks(player, decks);
   document.getElementById('event-decklist-form').style.display = 'none';
+  document.getElementById('edl-bulk-input').value = '';
   document.getElementById('edl-event-code').value = '';
   document.getElementById('edl-deck-url').value = '';
   renderEventDecks(player, _activeProfile.batches||[], _activeProfile.records||[]);
-  st('Saved: '+code, 'var(--green)');
+  st('Saved '+added+' decklist'+(added!==1?'s':''), 'var(--green)');
 }
 
 function filterStatsPills(query) {
@@ -5114,7 +5296,13 @@ function renderEventDecks(player, batches, records) {
   }
 
   el.innerHTML = '';
-  decks.sort((a,b) => b.addedAt - a.addedAt).forEach(deck => {
+  // Sort: year desc, then extract number from code and sort desc (FLC40 > FLC39)
+  const extractNum = code => parseInt((code||'').match(/\d+$/)?.[0]||'0');
+  decks.sort((a,b) => {
+    const ya = a.year||0, yb = b.year||0;
+    if (yb !== ya) return yb - ya;
+    return extractNum(b.code) - extractNum(a.code);
+  }).forEach(deck => {
     // Find replays tagged with this event code
     const taggedReplays = records.filter(r => (r.eventLabel||'').toUpperCase() === deck.code);
 
@@ -5132,6 +5320,7 @@ function renderEventDecks(player, batches, records) {
     card.innerHTML = `
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
         <span style="font-size:15px;font-weight:bold;color:var(--amber);font-family:monospace">🏆 ${deck.code}</span>
+        ${deck.year ? `<span style="font-size:10px;color:var(--muted);font-family:monospace">${deck.year}</span>` : ''}
         ${deckType ? `<span style="font-size:11px;color:var(--green);border:1px solid var(--green);border-radius:4px;padding:1px 8px">${deckType}</span>` : ''}
         <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
           <button onclick="event.stopPropagation();downloadEventDeckYDK('${deck.deckId}','${deck.code}')"
@@ -6049,10 +6238,79 @@ function igtTimerReset(){clearInterval(_igtTimerInterval);_igtTimerInterval=null
 function igtTimerPreset(m){_igtTimerDefault=m*60;const mi=document.getElementById('igt-timer-min');const se=document.getElementById('igt-timer-sec');if(mi)mi.value=m;if(se)se.value=0;igtTimerReset();}
 function igtTimerSet(){const m=parseInt(document.getElementById('igt-timer-min').value)||0;const s=parseInt(document.getElementById('igt-timer-sec').value)||0;_igtTimerDefault=m*60+s;igtTimerReset();st('Timer set to '+igtTimerFmt(_igtTimerDefault),'var(--green)');}
 
-// ── RPS ───────────────────────────────────────────────────────────────────────
-let _igtRpsCounts={r:0,p:0,s:0};
-function igtRpsPick(pick){_igtRpsCounts[pick]++;const most=Object.entries(_igtRpsCounts).sort((a,b)=>b[1]-a[1])[0][0];const counter={r:'✋ Paper',p:'✌ Scissors',s:'✊ Rock'};const icons={r:'✊',p:'✋',s:'✌'};document.getElementById('igt-rps-img').textContent=icons[pick];document.getElementById('igt-rps-ans').textContent='Play '+counter[most];const t=_igtRpsCounts.r+_igtRpsCounts.p+_igtRpsCounts.s;document.getElementById('igt-rps-counts').innerHTML='✊ '+_igtRpsCounts.r+' &nbsp; ✋ '+_igtRpsCounts.p+' &nbsp; ✌ '+_igtRpsCounts.s+' <span style="color:var(--muted)">('+t+')</span>';}
-function igtRpsReset(){_igtRpsCounts={r:0,p:0,s:0};document.getElementById('igt-rps-img').textContent='🤜';document.getElementById('igt-rps-ans').textContent='';document.getElementById('igt-rps-counts').textContent='';}
+// ── RPS Randomizer ───────────────────────────────────────────────────────────
+let _igtRpsHistory = [];
+const _rpsOpts = [
+  {key:'r', label:'✊ ROCK',     icon:'✊', color:'var(--blue)'},
+  {key:'p', label:'✋ PAPER',    icon:'✋', color:'var(--green)'},
+  {key:'s', label:'✌ SCISSORS', icon:'✌', color:'var(--purple)'}
+];
+function igtRpsRoll() {
+  const pick = _rpsOpts[Math.floor(Math.random()*3)];
+  _igtRpsHistory.unshift(pick.key);
+  const imgEl    = document.getElementById('igt-rps-img');
+  const ansEl    = document.getElementById('igt-rps-ans');
+  const histEl   = document.getElementById('igt-rps-hist');
+  const countsEl = document.getElementById('igt-rps-counts');
+  if (imgEl) { imgEl.textContent = pick.icon; imgEl.style.color = pick.color; }
+  if (ansEl) { ansEl.textContent = pick.label; ansEl.style.color = pick.color; }
+  // Count breakdown
+  const r=_igtRpsHistory.filter(x=>x==='r').length;
+  const p=_igtRpsHistory.filter(x=>x==='p').length;
+  const s=_igtRpsHistory.filter(x=>x==='s').length;
+  if (countsEl) countsEl.innerHTML = `✊ ${r} &nbsp;·&nbsp; ✋ ${p} &nbsp;·&nbsp; ✌ ${s} &nbsp;<span style="color:var(--dim)">(${_igtRpsHistory.length} total)</span>`;
+  // History row
+  if (histEl) {
+    histEl.innerHTML = _igtRpsHistory.slice(0,20).map((k,i) => {
+      const o = _rpsOpts.find(x=>x.key===k);
+      return `<span style="font-size:18px;opacity:${i===0?1:Math.max(0.2,1-i*0.04)}">${o.icon}</span>`;
+    }).join('');
+  }
+}
+function igtRpsReset() {
+  _igtRpsHistory = [];
+  const imgEl    = document.getElementById('igt-rps-img');
+  const ansEl    = document.getElementById('igt-rps-ans');
+  const histEl   = document.getElementById('igt-rps-hist');
+  const countsEl = document.getElementById('igt-rps-counts');
+  if (imgEl)    { imgEl.textContent='🎲'; imgEl.style.color=''; }
+  if (ansEl)    ansEl.textContent = '';
+  if (histEl)   histEl.innerHTML  = '';
+  if (countsEl) countsEl.textContent = '';
+}
+// Keep igtRpsPick as no-op for any leftover calls
+function igtRpsPick(p) { igtRpsRoll(); }
+
+// ── Calculator ────────────────────────────────────────────────────────────────
+let _calcExpr = '', _calcResult = false;
+function calcInput(key) {
+  const disp = document.getElementById('calc-display');
+  if (!disp) return;
+  if (key === 'C') { _calcExpr = ''; _calcResult = false; disp.textContent = '0'; return; }
+  if (key === '=') {
+    try {
+      const val = Function('"use strict"; return ('+_calcExpr.replace(/×/g,'*').replace(/÷/g,'/')+')')();
+      _calcExpr = String(parseFloat(val.toFixed(10)));
+      _calcResult = true;
+      disp.textContent = _calcExpr;
+    } catch(e) { disp.textContent = 'Error'; _calcExpr = ''; }
+    return;
+  }
+  if (key === '±') {
+    if (_calcExpr && _calcExpr[0] === '-') _calcExpr = _calcExpr.slice(1);
+    else _calcExpr = '-' + (_calcExpr||'0');
+    disp.textContent = _calcExpr;
+    return;
+  }
+  if (key === '%') {
+    try { _calcExpr = String(parseFloat(Function('"use strict"; return ('+_calcExpr+')')()) / 100); } catch(e) {}
+    disp.textContent = _calcExpr;
+    return;
+  }
+  if (_calcResult && /[\d.]/.test(key)) { _calcExpr = ''; _calcResult = false; }
+  _calcExpr += key;
+  disp.textContent = _calcExpr || '0';
+}
 
 // ── RNG ───────────────────────────────────────────────────────────────────────
 let _igtRngHist=[];
