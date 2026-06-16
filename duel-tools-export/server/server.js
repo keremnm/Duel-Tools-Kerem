@@ -54,8 +54,9 @@ async function initDB() {
   } else {
     loadFileDB();
   }
-  // Bootstrap admin if no users exist
-  if (!Object.keys(db.users).length) {
+  // Bootstrap admin — always ensure admin account exists and password matches env
+  const existingAdmin = Object.values(db.users).find(u => u.email === BOOTSTRAP_EMAIL);
+  if (!existingAdmin) {
     const id = crypto.randomUUID();
     db.users[id] = {
       id, email: BOOTSTRAP_EMAIL,
@@ -64,6 +65,16 @@ async function initDB() {
     };
     await saveDB();
     console.log(`Bootstrap admin created: ${BOOTSTRAP_EMAIL}`);
+  } else {
+    // Always sync password from env (handles secret rotation)
+    const correctHash = hashPassword(BOOTSTRAP_PASSWORD);
+    if (existingAdmin.password !== correctHash) {
+      existingAdmin.password = correctHash;
+      existingAdmin.approved = true;
+      existingAdmin.role = 'admin';
+      await saveDB();
+      console.log(`Bootstrap admin password synced: ${BOOTSTRAP_EMAIL}`);
+    }
   }
 }
 
