@@ -469,7 +469,8 @@ const server = http.createServer(async (req, res) => {
         if (!b.replays) b.replays = [];
         b.replays.push({ replayId:data.replayId, plays:data.plays||[], allPlays:minPlays, timedOut:!!data.timedOut, eventLabel:data.eventLabel||'', oppName:data.oppName||'', player1:data.player1||null, player2:data.player2||null, savedAt:Date.now() });
         b.status = 'ready';
-        if (data.oppName) {
+        // Only cross-link when explicitly allowed (new batch creation, not manual add-to-batch)
+        if (data.oppName && !data.noCrossLink) {
           const cl = crossLinkReplay(data, data.oppName);
           if (cl) crossLinks.push(cl);
         }
@@ -483,6 +484,30 @@ const server = http.createServer(async (req, res) => {
       }
       return json(res, 200, { ok:true, duplicate:!!dup, crossLinks });
     });
+  }
+
+  // ── POST /api/batches/:id/cleanup — remove replays where player doesn't appear ──
+  if (parts[0]==='batches' && parts[2]==='cleanup' && method==='POST') {
+    const bId = parts[1];
+    const b = db.batches[bId];
+    if (!b) return json(res, 404, { error:'Batch not found' });
+    const player = (b.player||'').toLowerCase();
+    const aliases = (b.aliases||[]).map(a=>a.toLowerCase());
+    const isPlayer = u => {
+      if (!u) return false;
+      const ul = String(u).toLowerCase().trim();
+      return ul === player || aliases.includes(ul);
+    };
+    const before = b.replays.length;
+    b.replays = b.replays.filter(r => {
+      if (r.timedOut) return true;
+      if (!r.player1 && !r.player2) return true;
+      return isPlayer(r.player1) || isPlayer(r.player2);
+    });
+    const removed = before - b.replays.length;
+    if (removed > 0) await saveDB();
+    console.log(`[cleanup] Batch ${bId} (${b.name}): removed ${removed} invalid replays`);
+    return json(res, 200, { ok:true, removed, kept:b.replays.length });
   }
 
   // ── GET /api/proxy/replay?id=:replayId ──────────────────────────────────────

@@ -459,6 +459,7 @@ select{cursor:pointer}
       <button onclick="openBatchPanel('temp')" style="width:100%;background:var(--card);color:var(--amber);border:1px solid var(--amber);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">⚡ Temporary Batch</button>
       <button onclick="openBatchPanel('new')" style="width:100%;background:var(--green);color:#050508;border:none;border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:9px;cursor:pointer;text-align:left">＋ New Batch</button>
       <button id="add-to-batch-btn" onclick="openBatchPanel('add')" style="display:none;width:100%;background:var(--card);color:var(--blue);border:1px solid var(--blue);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">➕ Add to Existing Batch</button>
+      <button id="clean-batch-btn" onclick="cleanBatch()" style="display:none;width:100%;background:var(--card);color:var(--red);border:1px solid var(--red);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">🧹 Clean Invalid Replays</button>
       <div style="display:flex;gap:5px">
         <button class="btn-sec" onclick="exportBatch()" style="flex:1;font-size:11px;padding:5px">⬇ Export</button>
         <button class="btn-sec" onclick="importBatch()" style="flex:1;font-size:11px;padding:5px">⬆ Import</button>
@@ -825,17 +826,20 @@ select{cursor:pointer}
               <div id="evt-code-inp" style="display:none"></div>
               <!-- Add decklist form -->
               <div id="event-decklist-form" style="display:none;margin-top:10px;padding:12px;background:var(--card2);border:1px solid var(--border);border-radius:8px;display:flex;flex-direction:column;gap:8px">
-                <div style="font-size:11px;color:var(--muted)">Bulk add: one per line — <span style="color:var(--green);font-family:monospace">EVENTCODE YEAR deckURL</span></div>
-                <textarea id="edl-bulk-input" placeholder="FLC40 2026 https://www.duelingbook.com/deck?id=12345&#10;PWCQ88 2025 https://www.duelingbook.com/deck?id=67890" style="min-height:70px;background:var(--card);border:1px solid var(--border);border-radius:5px;color:var(--text);font-family:monospace;font-size:11px;padding:7px;resize:vertical;outline:none;width:100%;box-sizing:border-box"></textarea>
-                <div style="display:flex;gap:6px;flex-wrap:wrap">
-                  <input id="edl-event-code" type="text" placeholder="Event code (e.g. FLC40)" style="flex:1;min-width:100px;font-size:12px;text-transform:uppercase"/>
-                  <input id="edl-year" type="number" placeholder="Year" value="2026" style="width:80px;font-size:12px"/>
-                  <input id="edl-deck-url" type="text" placeholder="Deck URL or ID" style="flex:2;min-width:140px;font-size:12px"/>
+                <div style="font-size:10px;color:var(--muted);letter-spacing:.06em;font-weight:bold">ADD EVENT DECKLISTS</div>
+                <div id="edl-rows-container" style="display:flex;flex-direction:column;gap:5px">
+                  <!-- rows injected by JS -->
                 </div>
+                <button onclick="addEdlRow()" style="background:none;border:1px dashed var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:5px;border-radius:5px;cursor:pointer;width:100%">+ Add row</button>
                 <div style="display:flex;gap:6px">
                   <button onclick="saveEventDecklist()" class="btn-go" style="flex:1;font-size:11px;padding:5px">Save</button>
                   <button onclick="document.getElementById('event-decklist-form').style.display='none'" class="btn-sec" style="font-size:11px;padding:5px 8px">✕</button>
                 </div>
+                <!-- Hidden legacy inputs kept for saveEventDecklist compat -->
+                <input id="edl-event-code" type="hidden"/>
+                <input id="edl-year" type="hidden" value="2026"/>
+                <input id="edl-deck-url" type="hidden"/>
+                <textarea id="edl-bulk-input" style="display:none"></textarea>
               </div>
             </div>
 
@@ -1710,6 +1714,7 @@ async function selectBatch(id) {
     st(`Batch: ${_activeBatch.name}`, 'var(--green)');
     const addBtn = document.getElementById('add-to-batch-btn');
     if (addBtn) addBtn.style.display = 'block';
+    const _cb = document.getElementById('clean-batch-btn'); if (_cb) _cb.style.display = 'block';
   } catch(e) { st('Failed to load batch', 'var(--red)'); }
 }
 
@@ -2495,47 +2500,94 @@ function renderMatchSidebar(query) {
     list.innerHTML = '<div class="dno">No matches loaded.</div>';
     return;
   }
-  // Sort: event-labeled matches first (alphabetically by label), then unlabeled
-  const sorted = [..._matches].map((m,i)=>({m,i})).sort((a,b)=>{
-    const ea=a.m.eventLabel||'', eb=b.m.eventLabel||'';
-    if (ea&&!eb) return -1;
-    if (!ea&&eb) return 1;
-    if (ea&&eb) return ea.localeCompare(eb);
-    return 0;
+
+  // Group by event label (or 'Untagged')
+  const groups = {};
+  _matches.forEach((m, idx) => {
+    const key = m.eventLabel || 'Untagged';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push({m, idx});
   });
-  sorted.forEach(({m, i: idx}) => {
-    const item = document.createElement('div');
-    item.className = 'match-item';
-    item.dataset.opp   = (m.oppName||'').toLowerCase();
-    item.dataset.idx   = idx;
-    item.dataset.event = (m.eventLabel||'').toLowerCase();
-    const myDeckTag = classifyFromCards(m.allMine);
-    const myDeckLabel = m.myDeckOverride || (myDeckTag ? myDeckTag.dc : '');
-    const matchPrefix = m.result==='w'?'W ':m.result==='l'?'L ':'';
-    const scoreDisplay = m.draws>0 ? m.score : `${m.myW}-${m.oppW}`;
-    const rl = matchPrefix + scoreDisplay;
-    const titleRow = document.createElement('div');
-    titleRow.style.cssText = 'display:flex;align-items:center;gap:4px';
-    const titleEl = document.createElement('div');
-    titleEl.className = 'mi-title'; titleEl.style.flex='1';
-    titleEl.textContent = 'vs '+(m.oppName||'?');
-    const delBtn = document.createElement('button');
-    delBtn.textContent = '✕';
-    delBtn.style.cssText = 'background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px;padding:0 2px;font-family:monospace;flex-shrink:0;opacity:0;transition:opacity .15s';
-    delBtn.title = 'Delete match';
-    delBtn.onclick = e => { e.stopPropagation(); deleteMatch(idx, m); };
-    titleRow.appendChild(titleEl); titleRow.appendChild(delBtn);
-    item.appendChild(titleRow);
-    item.onmouseenter = () => delBtn.style.opacity = '1';
-    item.onmouseleave = () => delBtn.style.opacity = '0';
-    const scoreEl = document.createElement('div');
-    scoreEl.className = 'mi-score '+m.result; scoreEl.textContent = rl+' · '+m.games.length+'G';
-    item.appendChild(scoreEl);
-    if (myDeckLabel) { const dl=document.createElement('div'); dl.className='mi-deck-label'; dl.textContent=myDeckLabel; item.appendChild(dl); }
-    if (m.eventLabel) { const el2=document.createElement('div'); el2.className='mi-event-label'; el2.textContent='🏆 '+m.eventLabel; item.appendChild(el2); }
-    item.onclick = () => selectMatch(idx);
-    list.appendChild(item);
+
+  // Sort groups: events alphabetically, Untagged last
+  const sortedKeys = Object.keys(groups).sort((a,b) => {
+    if (a==='Untagged') return 1;
+    if (b==='Untagged') return -1;
+    return a.localeCompare(b);
   });
+
+  // Track which groups are collapsed (persist in window._matchGroupCollapsed)
+  if (!window._matchGroupCollapsed) window._matchGroupCollapsed = {};
+
+  sortedKeys.forEach(key => {
+    const items = groups[key];
+    const isCollapsed = window._matchGroupCollapsed[key] !== false; // default collapsed
+    const w = items.filter(({m})=>m.result==='w').length;
+    const l = items.filter(({m})=>m.result==='l').length;
+
+    // Group header
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;align-items:center;gap:6px;padding:5px 8px;background:var(--card2);border:1px solid var(--border);border-radius:5px;cursor:pointer;user-select:none;margin-bottom:1px';
+    const arrow = document.createElement('span');
+    arrow.style.cssText = 'color:var(--muted);font-size:10px;transition:transform .15s;display:inline-block';
+    arrow.textContent = isCollapsed ? '▶' : '▾';
+    const lbl = document.createElement('span');
+    lbl.style.cssText = key==='Untagged'?'color:var(--muted);font-size:11px;flex:1':'color:var(--amber);font-size:11px;font-weight:bold;font-family:monospace;flex:1';
+    lbl.textContent = (key!=='Untagged'?'🏆 ':'')+key;
+    const wl = document.createElement('span');
+    wl.style.cssText = 'font-size:10px;color:var(--muted)';
+    wl.innerHTML = `<span style="color:var(--green)">${w}W</span> <span style="color:var(--dim)">—</span> <span style="color:var(--red)">${l}L</span> <span style="color:var(--dim)">· ${items.length}</span>`;
+    hdr.appendChild(arrow); hdr.appendChild(lbl); hdr.appendChild(wl);
+
+    // Group body
+    const body = document.createElement('div');
+    body.style.cssText = 'display:flex;flex-direction:column;gap:2px;margin-bottom:4px;padding-left:4px';
+    body.style.display = isCollapsed ? 'none' : 'flex';
+
+    hdr.onclick = () => {
+      const collapsed = body.style.display === 'none';
+      body.style.display = collapsed ? 'flex' : 'none';
+      arrow.textContent = collapsed ? '▾' : '▶';
+      window._matchGroupCollapsed[key] = !collapsed;
+    };
+
+    items.forEach(({m, idx}) => {
+      const item = document.createElement('div');
+      item.className = 'match-item';
+      item.dataset.opp   = (m.oppName||'').toLowerCase();
+      item.dataset.idx   = idx;
+      item.dataset.event = (m.eventLabel||'').toLowerCase();
+      const myDeckTag = classifyFromCards(m.allMine);
+      const myDeckLabel = m.myDeckOverride || (myDeckTag ? myDeckTag.dc : '');
+      const matchPrefix = m.result==='w'?'W ':m.result==='l'?'L ':'';
+      const scoreDisplay = m.draws>0 ? m.score : `${m.myW}-${m.oppW}`;
+      const rl = matchPrefix + scoreDisplay;
+      const titleRow = document.createElement('div');
+      titleRow.style.cssText = 'display:flex;align-items:center;gap:4px';
+      const titleEl = document.createElement('div');
+      titleEl.className = 'mi-title'; titleEl.style.flex='1';
+      titleEl.textContent = 'vs '+(m.oppName||'?');
+      const delBtn = document.createElement('button');
+      delBtn.textContent = '✕';
+      delBtn.style.cssText = 'background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px;padding:0 2px;font-family:monospace;flex-shrink:0;opacity:0;transition:opacity .15s';
+      delBtn.title = 'Delete match';
+      delBtn.onclick = e => { e.stopPropagation(); deleteMatch(idx, m); };
+      titleRow.appendChild(titleEl); titleRow.appendChild(delBtn);
+      item.appendChild(titleRow);
+      item.onmouseenter = () => delBtn.style.opacity = '1';
+      item.onmouseleave = () => delBtn.style.opacity = '0';
+      const scoreEl = document.createElement('div');
+      scoreEl.className = 'mi-score '+m.result; scoreEl.textContent = rl+' · '+m.games.length+'G';
+      item.appendChild(scoreEl);
+      if (myDeckLabel) { const dl=document.createElement('div'); dl.className='mi-deck-label'; dl.textContent=myDeckLabel; item.appendChild(dl); }
+      item.onclick = () => selectMatch(idx);
+      body.appendChild(item);
+    });
+
+    list.appendChild(hdr);
+    list.appendChild(body);
+  });
+
   const q = (query||'').toLowerCase().trim();
   if (q) filterMatches(q);
 }
@@ -2571,21 +2623,33 @@ async function deleteMatch(idx, m) {
     }
   }
 
-  // Remove from server
+  // Remove from server — delete from ALL batches that contain this replay
+  // (cross-linked replays exist in multiple batches)
   if (_activeBatch && !_activeBatch.isTemp) {
     try {
       if (!batchId) {
         st('Match removed locally — could not find batch', 'var(--amber)'); return;
       }
-      console.log('[Delete] batchId:', batchId, 'replayId:', m.replayId, 'activeBatch.id:', _activeBatch?.id);
-      const res = await fetch(`${API}/batches/${batchId}/replay/${encodeURIComponent(m.replayId)}`, { method:'DELETE' });
-      console.log('[Delete] response status:', res.status);
-      const data = await res.json().catch(()=>({}));
-      if (data.ok) {
-        st(`Match vs ${m.oppName||'?'} deleted and saved`, 'var(--green)');
+      // Find every batch that has this replayId and delete from all of them
+      const batchesToDelete = new Set([batchId]);
+      if (_allProfileBatches) {
+        for (const b of _allProfileBatches) {
+          if (b.id && b.id !== batchId && (b.replays||[]).some(r => r.replayId === m.replayId)) {
+            batchesToDelete.add(b.id);
+          }
+        }
+      }
+      let allOk = true;
+      for (const bid of batchesToDelete) {
+        const res = await fetch(`${API}/batches/${bid}/replay/${encodeURIComponent(m.replayId)}`, { method:'DELETE' });
+        const data = await res.json().catch(()=>({}));
+        if (!data.ok) allOk = false;
+      }
+      if (allOk) {
+        st(`Match vs ${m.oppName||'?'} deleted`, 'var(--green)');
       } else {
-        console.warn('Server delete response:', data);
-        st(`Match removed locally — server error: ${data.error||'unknown'}`, 'var(--amber)');
+        console.warn('Some server deletes may have failed');
+        st(`Match removed locally — server error: ${m.oppName||'?'}`, 'var(--amber)');
       }
     } catch(e) {
       st(`Match removed locally — could not reach server`, 'var(--amber)');
@@ -3429,9 +3493,11 @@ function renderGFWLHistory() {
       const w = recs.filter(r=>r.matchWon).length;
       const l = recs.filter(r=>r.matchLost).length;
       // Season header
+      const isOpen = false; // default collapsed
       const hdr = document.createElement('div');
       hdr.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--card2);border:1px solid var(--border);border-radius:6px;cursor:pointer;margin-bottom:3px;user-select:none';
-      hdr.innerHTML = `<span style="color:var(--amber);font-size:12px">▾</span>
+      const arrowSpan = `<span class="gfwl-arrow" style="color:var(--muted);font-size:10px">${isOpen?'▾':'▶'}</span>`;
+      hdr.innerHTML = `${arrowSpan}
         <span style="font-weight:bold;color:var(--amber);flex:1">Season ${season.replace(/^S/i,'')}</span>
         <span style="color:var(--green);font-size:12px">${w}W</span>
         <span style="color:var(--muted)">—</span>
@@ -3440,6 +3506,7 @@ function renderGFWLHistory() {
 
       const body = document.createElement('div');
       body.style.cssText = 'display:flex;flex-direction:column;gap:3px;margin-bottom:6px;padding-left:8px';
+      body.style.display = isOpen ? 'flex' : 'none';
 
       recs.forEach(r => {
         const row = document.createElement('div');
@@ -3465,7 +3532,8 @@ function renderGFWLHistory() {
       hdr.onclick = () => {
         const open = body.style.display !== 'none';
         body.style.display = open ? 'none' : 'flex';
-        hdr.querySelector('span').textContent = open ? '▸' : '▾';
+        const arr = hdr.querySelector('.gfwl-arrow');
+        if (arr) arr.textContent = open ? '▶' : '▾';
       };
       listEl.appendChild(hdr);
       listEl.appendChild(body);
@@ -4274,11 +4342,19 @@ async function addToBatch() {
   for (let i=0; i<newIds.length; i++) {
     st('Loading '+( i+1)+'/'+newIds.length+' — '+newIds[i], 'var(--muted)');
     const result = await loadReplay(newIds[i]);
-    _activeBatch.replays.push({ replayId:result.id, plays:result.plays, allPlays:result.allPlays, timedOut:result.timedOut });
+    // Parse to get oppName with the batch's player context
+    const _bAliases = (_activeBatch.aliases||[]).map(a=>a.toLowerCase());
+    const _bPlayer  = (_activeBatch.player||'').toLowerCase();
+    const _isPlayer = u => { if(!u) return false; const ul=String(u).toLowerCase().trim(); return ul===_bPlayer || _bAliases.includes(ul); };
+    const _oppName  = [result.player1, result.player2].filter(Boolean).find(u => !_isPlayer(u)) || '';
+    _activeBatch.replays.push({ replayId:result.id, plays:result.plays, allPlays:result.allPlays, timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, oppName:_oppName });
     try {
       await fetch(API+'/batches/'+_activeBatch.id+'/replay', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ replayId:result.id, plays:result.plays, allPlays:result.allPlays, timedOut:result.timedOut })
+        // noCrossLink: true prevents server from auto-linking to other registered players
+        body: JSON.stringify({ replayId:result.id, plays:result.plays, allPlays:result.allPlays,
+          timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null,
+          oppName:_oppName, noCrossLink:true })
       });
     } catch(e) {}
     if (i<newIds.length-1) await sleep(1200);
@@ -4406,47 +4482,58 @@ function filterEventDecklists(query) {
 
 function showAddEventDecklist() {
   const form = document.getElementById('event-decklist-form');
-  if (form) { form.style.display = form.style.display === 'none' ? 'block' : 'none'; }
+  if (!form) return;
+  const isHidden = form.style.display === 'none' || form.style.display === '';
+  form.style.display = isHidden ? 'flex' : 'none';
+  if (isHidden) {
+    const container = document.getElementById('edl-rows-container');
+    if (container && !container.children.length) addEdlRow();
+  }
+}
+
+function addEdlRow() {
+  const container = document.getElementById('edl-rows-container');
+  if (!container) return;
+  const curYear = new Date().getFullYear();
+  const row = document.createElement('div');
+  row.style.cssText = 'display:grid;grid-template-columns:1fr 90px 2fr auto;gap:5px;align-items:center';
+  row.innerHTML = `
+    <input type="text" placeholder="Event ID (FLC40)" style="font-size:11px;text-transform:uppercase;background:var(--card);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:5px 7px;outline:none;font-family:monospace"/>
+    <select style="font-size:11px;background:var(--card);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:5px 4px;outline:none;font-family:monospace">
+      ${[0,1,2,3,4].map(i=>`<option value="${curYear-i}">${curYear-i}</option>`).join('')}
+    </select>
+    <input type="text" placeholder="Deck URL or ID" style="font-size:11px;background:var(--card);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:5px 7px;outline:none;font-family:monospace"/>
+    <button onclick="this.parentElement.remove()" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:14px;padding:0 3px;line-height:1">✕</button>
+  `;
+  container.appendChild(row);
+  row.querySelector('input').focus();
 }
 
 async function saveEventDecklist() {
   const player = _activeProfile && _activeProfile.player;
   if (!player) { st('No player profile open.', 'var(--red)'); return; }
   const decks = getEventDecks(player);
-
-  // Check for bulk input first
-  const bulkRaw = (document.getElementById('edl-bulk-input').value||'').trim();
   const entries = [];
 
-  if (bulkRaw) {
-    // Parse bulk: each line is "EVENTCODE YEAR URL" or "EVENTCODE URL"
-    for (const line of bulkRaw.split('\n')) {
-      const parts = line.trim().split(/\s+/);
-      if (parts.length < 2) continue;
-      const code = parts[0].toUpperCase();
-      // Check if second part is a year (4 digits)
-      const hasYear = /^\d{4}$/.test(parts[1]);
-      const year = hasYear ? parseInt(parts[1]) : null;
-      const url = parts[hasYear ? 2 : 1];
-      if (!url) continue;
+  // Read from the row-based form
+  const container = document.getElementById('edl-rows-container');
+  if (container) {
+    for (const row of container.children) {
+      const inputs = row.querySelectorAll('input');
+      const sel    = row.querySelector('select');
+      if (!inputs.length) continue;
+      const code = (inputs[0].value||'').trim().toUpperCase();
+      const year = sel ? parseInt(sel.value)||null : null;
+      const url  = (inputs[1]?.value||'').trim();
+      if (!code || !url) continue;
       const m = url.match(/deck\?id=(\d+)/);
       const deckId = m ? m[1] : url.replace(/\D/g,'');
       if (!deckId) continue;
       entries.push({ code, year, deckId });
     }
-  } else {
-    // Single entry
-    const code = (document.getElementById('edl-event-code').value||'').trim().toUpperCase();
-    const url  = (document.getElementById('edl-deck-url').value||'').trim();
-    const year = parseInt(document.getElementById('edl-year').value||'0') || null;
-    if (!code || !url) { st('Enter event code and deck URL.', 'var(--red)'); return; }
-    const m = url.match(/deck\?id=(\d+)/);
-    const deckId = m ? m[1] : url.replace(/\D/g,'');
-    if (!deckId) { st('Could not parse deck ID from URL.', 'var(--red)'); return; }
-    entries.push({ code, year, deckId });
   }
 
-  if (!entries.length) { st('No valid entries found.', 'var(--red)'); return; }
+  if (!entries.length) { st('Fill in at least one row with Event ID and Deck URL.', 'var(--red)'); return; }
 
   let added = 0;
   for (const { code, year, deckId } of entries) {
@@ -4458,9 +4545,7 @@ async function saveEventDecklist() {
 
   saveEventDecks(player, decks);
   document.getElementById('event-decklist-form').style.display = 'none';
-  document.getElementById('edl-bulk-input').value = '';
-  document.getElementById('edl-event-code').value = '';
-  document.getElementById('edl-deck-url').value = '';
+  if (container) container.innerHTML = '';
   renderEventDecks(player, _activeProfile.batches||[], _activeProfile.records||[]);
   st('Saved '+added+' decklist'+(added!==1?'s':''), 'var(--green)');
 }
@@ -5090,6 +5175,7 @@ async function openProfile(player, batches, records) {
     // Show Add to Current button
     const addBtn = document.getElementById('add-to-batch-btn');
     if (addBtn) addBtn.style.display = 'block';
+    const _cb = document.getElementById('clean-batch-btn'); if (_cb) _cb.style.display = 'block';
     loadBatches();
   }
 
@@ -5399,6 +5485,32 @@ async function retryFailed(btn) {
 }
 
 
+// Clean batch — remove replays where the batch player doesn't appear
+async function cleanBatch() {
+  if (!_activeBatch || _activeBatch.isTemp) return;
+  const player = _activeBatch.player || _activeBatch.name || 'this player';
+  const aliases = (_activeBatch.aliases||[]).join(', ');
+  const msg = `This will remove any replays from "${_activeBatch.name}" where "${player}"${aliases?' (or '+aliases+')':''} is not one of the two players.
+
+This fixes replays that were cross-linked from other players' batches.
+
+Continue?`;
+  if (!confirm(msg)) return;
+  try {
+    const res = await fetch(`${API}/batches/${_activeBatch.id}/cleanup`, { method:'POST' });
+    const data = await res.json();
+    if (data.removed > 0) {
+      st(`Cleaned batch — removed ${data.removed} invalid replay(s), ${data.kept} remain`, 'var(--green)');
+      // Reload the batch
+      await loadSpecificBatch(_activeBatch.id);
+    } else {
+      st('No invalid replays found — batch is clean', 'var(--green)');
+    }
+  } catch(e) {
+    st('Cleanup failed: ' + e.message, 'var(--red)');
+  }
+}
+
 // Remove all timed-out replays from the active batch
 async function removeTimedOutReplays() {
   if (!_activeBatch || !_activeBatch.replays) return;
@@ -5512,52 +5624,61 @@ function renderEventDecks(player, batches, records) {
     return;
   }
 
-  el.innerHTML = '';
-  // Sort: year desc, then extract number from code and sort desc (FLC40 > FLC39)
   const extractNum = code => parseInt((code||'').match(/\d+$/)?.[0]||'0');
-  decks.sort((a,b) => {
+  const sorted = [...decks].sort((a,b) => {
     const ya = a.year||0, yb = b.year||0;
     if (yb !== ya) return yb - ya;
     return extractNum(b.code) - extractNum(a.code);
-  }).forEach(deck => {
-    // Find replays tagged with this event code
+  });
+
+  // Build year dropdown
+  const years = [...new Set(sorted.map(d => d.year).filter(Boolean))].sort((a,b)=>b-a);
+  const selId = 'edl-year-filter';
+  let yearSel = document.getElementById(selId);
+  if (!yearSel) {
+    yearSel = document.createElement('select');
+    yearSel.id = selId;
+    yearSel.style.cssText = 'background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:3px 7px;border-radius:4px;outline:none;margin-bottom:6px';
+    yearSel.onchange = () => renderEventDecks(player, batches, records);
+    el.parentElement.insertBefore(yearSel, el);
+  }
+  const curYear = yearSel.value;
+  yearSel.innerHTML = '<option value="">All Years</option>' + years.map(y=>`<option value="${y}"${String(y)===curYear?'selected':''}>${y}</option>`).join('');
+  if (!curYear && years.length) yearSel.value = String(years[0]);
+
+  const filterYear = yearSel.value;
+  const visible = filterYear ? sorted.filter(d => String(d.year) === filterYear) : sorted;
+
+  el.innerHTML = '';
+  visible.forEach(deck => {
     const taggedReplays = records.filter(r => (r.eventLabel||'').toUpperCase() === deck.code);
-
-    const card = document.createElement('div');
-    card.className = 'edl-item';
-    card.dataset.code = deck.code;
-    card.style.cssText = 'background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:12px;cursor:pointer;transition:border-color .15s';
-    card.onmouseover = () => card.style.borderColor = 'var(--amber)';
-    card.onmouseout  = () => card.style.borderColor = 'var(--border2)';
-
-    // Infer deck type from tagged replays
     const deckTypes = taggedReplays.map(r => r.myDeck).filter(Boolean);
     const deckType = deckTypes.length ? deckTypes.sort((a,b)=>deckTypes.filter(x=>x===b).length-deckTypes.filter(x=>x===a).length)[0] : null;
 
-    card.innerHTML = `
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-        <span style="font-size:15px;font-weight:bold;color:var(--amber);font-family:monospace">🏆 ${deck.code}</span>
-        ${deck.year ? `<span style="font-size:10px;color:var(--muted);font-family:monospace">${deck.year}</span>` : ''}
-        ${deckType ? `<span style="font-size:11px;color:var(--green);border:1px solid var(--green);border-radius:4px;padding:1px 8px">${deckType}</span>` : ''}
-        <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
-          <button onclick="event.stopPropagation();downloadEventDeckYDK('${deck.deckId}','${deck.code}')"
-            style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">⬇ YDK</button>
-          <a href="${deck.deckUrl}" target="_blank" onclick="event.stopPropagation()"
-             style="background:var(--blue);color:#fff;font-family:monospace;font-size:12px;font-weight:bold;padding:4px 12px;border-radius:5px;text-decoration:none">View Deck ↗</a>
-          <button onclick="event.stopPropagation();deleteEventDeck('${player}','${deck.code}')"
-            style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:14px;padding:0">✕</button>
-        </div>
-      </div>
-      <div style="font-size:11px;color:var(--muted);margin-bottom:${taggedReplays.length?'8px':'0'}">
-        Deck ID: ${deck.deckId} &nbsp;·&nbsp; ${taggedReplays.length} tagged replay${taggedReplays.length!==1?'s':''}
-      </div>
-      ${taggedReplays.length ? `
-        <button onclick="event.stopPropagation();loadEventReplay('${taggedReplays[0].replayId}')"
-          style="background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:11px;padding:4px 12px;border-radius:5px;cursor:pointer">View Batch</button>` : ''}
+    const row = document.createElement('div');
+    row.className = 'edl-item';
+    row.dataset.code = deck.code;
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--card2);border:1px solid var(--border2);border-radius:6px;min-height:0';
+    row.innerHTML = `
+      <span style="font-weight:bold;color:var(--amber);font-family:monospace;font-size:13px;min-width:70px">🏆 ${deck.code}</span>
+      ${deckType ? `<span style="font-size:10px;color:var(--green);border:1px solid var(--green);border-radius:3px;padding:0 6px;white-space:nowrap">${deckType}</span>` : ''}
+      <span style="font-size:10px;color:var(--dim);font-family:monospace">⬇ YDK</span>
+      <span style="font-size:10px;color:var(--muted);margin-left:auto;white-space:nowrap">${taggedReplays.length} replay${taggedReplays.length!==1?'s':''}</span>
+      <a href="${deck.deckUrl}" target="_blank" onclick="event.stopPropagation()"
+         style="background:var(--blue);color:#fff;font-family:monospace;font-size:11px;font-weight:bold;padding:3px 10px;border-radius:4px;text-decoration:none;white-space:nowrap">View Deck ↗</a>
+      <button onclick="event.stopPropagation();deleteEventDeck('${player}','${deck.code}')"
+        style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:13px;padding:0;line-height:1">✕</button>
     `;
-
-    card.onclick = () => openEventDeckModal(deck, player, taggedReplays);
-    el.appendChild(card);
+    const ydkSpan = row.querySelector('span[style*="YDK"]');
+    if (ydkSpan) { ydkSpan.style.cursor='pointer'; ydkSpan.onclick = e => { e.stopPropagation(); downloadEventDeckYDK(deck.deckId, deck.code); }; }
+    if (taggedReplays.length) {
+      const vb = document.createElement('button');
+      vb.textContent = 'Batch';
+      vb.style.cssText = 'background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer;white-space:nowrap';
+      vb.onclick = e => { e.stopPropagation(); loadEventReplay(taggedReplays[0].replayId); };
+      row.insertBefore(vb, row.querySelector('a'));
+    }
+    el.appendChild(row);
   });
 }
 
@@ -5883,6 +6004,7 @@ function importBatch() {
       // Show add-to-batch button
       const addBtn = document.getElementById('add-to-batch-btn');
       if (addBtn) addBtn.style.display = 'block';
+    const _cb = document.getElementById('clean-batch-btn'); if (_cb) _cb.style.display = 'block';
 
       loadBatches();
       renderRPS();
