@@ -1512,13 +1512,17 @@ async function loadReplay(id) {
       player2_choice: p.player2_choice || p.p2pick || null,
     }));
 
+    // Extract username strings from player objects
+    const p1 = replay.player1 ? (replay.player1.username || replay.player1) : null;
+    const p2 = replay.player2 ? (replay.player2.username || replay.player2) : null;
+
     return {
       id,
       plays:    rps,
       allPlays: allPlays,
       timedOut: false,
-      player1:  replay.player1 || null,
-      player2:  replay.player2 || null,
+      player1:  p1,
+      player2:  p2,
     };
   } catch(e) {
     console.warn('loadReplay failed for', id, e.message);
@@ -1817,10 +1821,10 @@ async function go() {
     // Store in memory immediately (works even if server is down)
     if (!_activeBatch.replays) _activeBatch.replays = [];
     _activeBatch.replays = _activeBatch.replays.filter(r => r.replayId !== result.id);
-    _activeBatch.replays.push({ replayId:result.id, plays:result.plays, allPlays:result.allPlays, timedOut:result.timedOut });
+    _activeBatch.replays.push({ replayId:result.id, plays:result.plays, allPlays:result.allPlays, timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null });
     // Parse to get oppName for cross-linking
     const _aliases = _activeBatch.aliases || [];
-    const _parsed  = parseMatch(result.id, result.allPlays||result.plays||[], _activeBatch.player||'', _aliases);
+    const _parsed  = parseMatch(result.id, result.allPlays||result.plays||[], _activeBatch.player||'', _aliases, result.player1, result.player2);
     const _oppName = _parsed ? _parsed.oppName : '';
     // (temp batches already stored in memory above — no server save needed)
     // Save to server — server handles duplicate detection + cross-linking
@@ -1828,7 +1832,7 @@ async function go() {
       const saveRes = await fetch(`${API}/batches/${_activeBatch.id}/replay`, {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ replayId:result.id, plays:result.plays, allPlays:result.allPlays,
-          timedOut:result.timedOut, oppName:_oppName })
+          timedOut:result.timedOut, oppName:_oppName, player1:result.player1||null, player2:result.player2||null })
       });
       const saveData = await saveRes.json().catch(()=>({}));
       // Show duplicate warnings
@@ -2142,7 +2146,7 @@ function buildDeck() {
   for (const r of replays) {
     const plays = (r.allPlays&&r.allPlays.length) ? r.allPlays : r.plays;
     if (!plays||!plays.length) continue;
-    const m = parseMatch(r.replayId, plays, player, _buildDeckAliases);
+    const m = parseMatch(r.replayId, plays, player, _buildDeckAliases, r.player1||null, r.player2||null);
     if (m) {
       m.eventLabel = r.eventLabel || '';
       _matches.push(m);
@@ -2767,7 +2771,7 @@ async function renderMatchDisplay(m) {
 // 7. username comes from play.owner (falls back to play.username)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function parseMatch(replayId, plays, player, aliases) {
+function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlayer2) {
   if (!plays || !plays.length) return null;
   // Build set of all names this player goes by (lowercase)
   const _playerNames = new Set([player.toLowerCase(), ...(aliases||[]).map(a=>a.toLowerCase())]);
@@ -2894,16 +2898,19 @@ function parseMatch(replayId, plays, player, aliases) {
   // Try to find from the top-level replay data (sent by relay v2)
   // Look for usernames in plays
   const allUsernames = new Set();
+  // Add top-level player names from the replay response (most reliable source)
+  if (replayPlayer1) allUsernames.add(replayPlayer1);
+  if (replayPlayer2) allUsernames.add(replayPlayer2);
   for (const play of plays) {
     if (play.owner) allUsernames.add(play.owner);
     if (play.username) allUsernames.add(play.username);
     if (play.player1 && typeof play.player1 === 'string') allUsernames.add(play.player1);
     if (play.player2 && typeof play.player2 === 'string') allUsernames.add(play.player2);
-    if (Array.isArray(play.log)) {
-      for (const l of play.log) {
-        if (l.owner) allUsernames.add(l.owner);
-        if (l.username) allUsernames.add(l.username);
-      }
+    // log can be array or dict
+    const logList = Array.isArray(play.log) ? play.log : (play.log && typeof play.log === 'object' ? [play.log] : []);
+    for (const l of logList) {
+      if (l.owner) allUsernames.add(l.owner);
+      if (l.username) allUsernames.add(l.username);
     }
   }
   for (const u of allUsernames) {
@@ -3023,7 +3030,7 @@ function buildMatchRecord(replayResult, player, aliases) {
   if (!plays || !plays.length) {
     return null;
   }
-  const parsed = parseMatch(replayResult.replayId, plays, player, aliases);
+  const parsed = parseMatch(replayResult.replayId, plays, player, aliases, replayResult.player1||null, replayResult.player2||null);
   // Even if parse fails, try to build a basic record from play data
   if (!parsed) {
     // Try to extract basic match info from RPS plays
