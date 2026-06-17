@@ -316,9 +316,12 @@ const server = http.createServer(async (req, res) => {
     let totalReplays = 0, totalBatches = 0;
     const stripPlay = p => ({
       play:p.play,owner:p.owner,username:p.username,player1:p.player1,player2:p.player2,
-      cards:p.cards?p.cards.map(c=>({name:c.name,owner:c.owner})):undefined,
+      player1_choice:p.player1_choice||p.p1pick||undefined,
+      player2_choice:p.player2_choice||p.p2pick||undefined,
+      cards:p.cards?p.cards.map(c=>({name:c.name,owner:c.owner,id:c.id,serial_number:c.serial_number,card_type:c.card_type})):undefined,
+      card:p.card?{name:p.card.name,owner:p.card.owner,id:p.card.id,serial_number:p.card.serial_number,card_type:p.card.card_type}:undefined,
       winner:p.winner,loser:p.loser,game:p.game,pick:p.pick,p1pick:p.p1pick,p2pick:p.p2pick,
-      log:p.log?p.log.map(l=>({type:l.type,owner:l.owner,username:l.username,card:l.card?{name:l.card.name}:undefined,game:l.game})):undefined
+      log:Array.isArray(p.log)?p.log.map(l=>({type:l.type,owner:l.owner,username:l.username,card:l.card?{name:l.card.name,id:l.card.id,serial_number:l.card.serial_number}:undefined,game:l.game,public_log:l.public_log,private_log:l.private_log})):undefined
     });
     for (const batch of Object.values(db.batches)) {
       let changed = false;
@@ -453,9 +456,12 @@ const server = http.createServer(async (req, res) => {
         if (!b.replays) b.replays = [];
         const minPlays = (data.allPlays||[]).map(p => ({
           play:p.play,owner:p.owner,username:p.username,player1:p.player1,player2:p.player2,
-          cards:p.cards?p.cards.map(c=>({name:c.name,owner:c.owner})):undefined,
+          player1_choice:p.player1_choice||p.p1pick||undefined,
+          player2_choice:p.player2_choice||p.p2pick||undefined,
+          cards:p.cards?p.cards.map(c=>({name:c.name,owner:c.owner,id:c.id,serial_number:c.serial_number,card_type:c.card_type})):undefined,
+          card:p.card?{name:p.card.name,owner:p.card.owner,id:p.card.id,serial_number:p.card.serial_number,card_type:p.card.card_type}:undefined,
           winner:p.winner,loser:p.loser,game:p.game,pick:p.pick,p1pick:p.p1pick,p2pick:p.p2pick,
-          log:p.log?p.log.map(l=>({type:l.type,owner:l.owner,username:l.username,card:l.card?{name:l.card.name}:undefined,game:l.game})):undefined
+          log:Array.isArray(p.log)?p.log.map(l=>({type:l.type,owner:l.owner,username:l.username,card:l.card?{name:l.card.name,id:l.card.id,serial_number:l.card.serial_number}:undefined,game:l.game,public_log:l.public_log,private_log:l.private_log})):undefined
         }));
         b.replays.push({ replayId:data.replayId, plays:data.plays||[], allPlays:minPlays, timedOut:!!data.timedOut, eventLabel:data.eventLabel||'', oppName:data.oppName||'', savedAt:Date.now() });
         b.status = 'ready';
