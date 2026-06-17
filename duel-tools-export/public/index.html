@@ -2823,14 +2823,34 @@ function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlaye
     return null;
   }
 
-  function calcDeckChange(publicLog, privateLog) {
+  // Determine deck change.
+  // Primary signal: log text (most precise — says "from Deck" explicitly).
+  // Secondary signal: play type (used when log is absent/stripped).
+  function calcDeckChange(playType, publicLog, privateLog) {
+    const pt = String(playType || '').toLowerCase();
+
+    // Log-text check first (most reliable when logs exist)
     for (const log of [privateLog, publicLog]) {
       if (!log) continue;
-      // Revealed from Deck = not a draw
+      // Revealed from Deck = card stays in deck, not counted
       if (log.includes('Revealed') && log.includes('from Deck')) return 0;
-      if (log.includes('Drew') || log.includes('from Deck') || log.includes('from top of deck')) return 1;
+      // Drew = left the deck
+      if (log.includes('Drew')) return 1;
+      // "from Deck" confirms the card came from deck
+      if (log.includes('from Deck') || log.includes('from top of deck')) return 1;
+      // Returned to deck
       if (log.includes('to top of deck') || log.includes('to bottom of deck')) return -1;
     }
+
+    // Fallback: play type signal (when log was stripped by server)
+    // Only "Draw card" is unambiguous — always draws from deck
+    if (pt === 'draw card') return 1;
+    // Cards going back to deck
+    if (pt === 'to t deck' || pt === 'to b deck' || pt === 'to t deck fu' ||
+        pt === 'to t deck 2' || pt === 'to t deck 2 fu') return -1;
+    // For everything else (SS, To hand, Banish, To GY) we need log context
+    // to know if it's from deck vs field/hand/GY — without log, skip it
+    // (it will be caught via other draw/activation paths)
     return 0;
   }
 
@@ -2841,21 +2861,23 @@ function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlaye
   for (const play of plays) {
     // Username: prefer play.owner, fall back to play.username
     const baseUsername = play.owner || play.username || '';
-    const playType = String(play.play || '').toLowerCase();
+    const playType = String(play.play || '');
 
     // Determine game number from "Chose to go" in logs
     const logs = play.log;
     const logList = Array.isArray(logs) ? logs : (logs && typeof logs === 'object' ? [logs] : []);
 
     if (!logList.length) {
-      // No log entries — still check public_log on the play itself
+      // No log entries — use play type + play-level pub/priv
       const pub = play.public_log || '';
       const priv = play.private_log || '';
       if (pub.includes('Chose to go')) gameNumber++;
       const cardName = extractCardName(play, pub, priv);
-      const dc = calcDeckChange(pub, priv);
+      // For plays without logs, use play type as primary deck-change signal
+      // but only count if it's a card-leaving-deck play
+      const dc = calcDeckChange(playType, pub, priv);
       const username = baseUsername;
-      if (username && cardName) {
+      if (username && cardName && dc !== 0) {
         rows.push({ gameNumber, username, cardName, deckChange: dc });
       }
     } else {
@@ -2867,9 +2889,10 @@ function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlaye
         if (String(pub).includes('Chose to go')) gameNumber++;
 
         const cardName = extractCardName(play, pub, priv);
-        const dc = calcDeckChange(pub, priv);
+        // For plays WITH logs (like Pick first array), use log text for deck change detection
+        const dc = calcDeckChange(playType, pub, priv);
 
-        if (logUsername && cardName) {
+        if (logUsername && cardName && dc !== 0) {
           rows.push({ gameNumber, username: logUsername, cardName, deckChange: dc });
         }
       }
