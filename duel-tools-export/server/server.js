@@ -469,80 +469,35 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
-  // ── GET /api/proxy/replay?id=:replayId ────────────────────────────────────
-  if (parts[0]==='proxy' && parts[1]==='replay' && method==='GET') {
-    const replayId = url.searchParams.get('id');
-    if (!replayId) return json(res, 400, { error: 'id required' });
-    try {
-      const https = require('https');
+  // ── POST /api/relay/replay — receives data pushed by the Tampermonkey userscript ──
+  // The userscript runs on the real duelingbook page (no iframe), intercepts the replay
+  // data, and POSTs it directly here. The frontend polls waiting for it.
+  if (parts[0]==='relay' && parts[1]==='replay' && method==='POST') {
+    return readBody(req, async data => {
+      const { replayId, plays, allPlays, timedOut, player1, player2 } = data;
+      if (!replayId) return json(res, 400, { error: 'replayId required' });
+      // Store in a short-lived in-memory buffer keyed by replayId
+      // Frontend polls /api/relay/replay/:id to pick it up
+      if (!server._relayBuffer) server._relayBuffer = {};
+      server._relayBuffer[replayId] = { replayId, plays: plays||[], allPlays: allPlays||[], timedOut: !!timedOut, player1: player1||null, player2: player2||null, receivedAt: Date.now() };
+      console.log(`[relay] Received replay ${replayId} — ${(allPlays||[]).length} plays, timedOut=${timedOut}`);
+      return json(res, 200, { ok: true });
+    });
+  }
 
-      function fetchUrl(targetUrl) {
-        return new Promise((resolve, reject) => {
-          const req2 = https.get(targetUrl, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-              'Referer': 'https://www.duelingbook.com/',
-              'Accept': 'application/json, text/plain, */*',
-              'X-Requested-With': 'XMLHttpRequest',
-            }
-          }, (r2) => {
-            // Follow redirects
-            if (r2.statusCode >= 300 && r2.statusCode < 400 && r2.headers.location) {
-              r2.resume();
-              return fetchUrl(r2.headers.location).then(resolve).catch(reject);
-            }
-            let buf = '';
-            r2.on('data', d => buf += d);
-            r2.on('end', () => resolve({ body: buf, status: r2.statusCode, contentType: r2.headers['content-type'] || '' }));
-          });
-          req2.on('error', reject);
-          req2.setTimeout(15000, () => { req2.destroy(); reject(new Error('timeout')); });
-        });
-      }
-
-      // Duelingbook loads replay data via XHR after page load.
-      // The data endpoint pattern discovered from their source: php-scripts/load-replay.php
-      // Try all known patterns and log what we get for debugging.
-      const candidates = [
-        `https://www.duelingbook.com/php-scripts/load-replay.php?id=${encodeURIComponent(replayId)}`,
-        `https://www.duelingbook.com/php-scripts/get-replay.php?id=${encodeURIComponent(replayId)}`,
-        `https://www.duelingbook.com/view-replay?id=${encodeURIComponent(replayId)}`,
-      ];
-
-      let parsed = null;
-      let debugLog = [];
-
-      for (const candidate of candidates) {
-        try {
-          const { body, status, contentType } = await fetchUrl(candidate);
-          const preview = body.slice(0, 200);
-          debugLog.push({ url: candidate, status, contentType, preview });
-          console.log(`[proxy/replay] ${candidate} → ${status} ${contentType} | ${preview}`);
-
-          if (body.trim().startsWith('{') || body.trim().startsWith('[')) {
-            const maybeJson = JSON.parse(body);
-            // Must have a plays array to be valid replay data
-            if (maybeJson && (Array.isArray(maybeJson.plays) || Array.isArray(maybeJson))) {
-              parsed = maybeJson;
-              break;
-            }
-          }
-        } catch(e) {
-          debugLog.push({ url: candidate, error: e.message });
-          console.log(`[proxy/replay] ${candidate} → ERROR: ${e.message}`);
-        }
-      }
-
-      if (!parsed) {
-        console.error(`[proxy/replay] All candidates failed for ${replayId}`, debugLog);
-        return json(res, 502, { error: 'Could not retrieve replay data from duelingbook', debug: debugLog });
-      }
-
-      return json(res, 200, { ok: true, replay: parsed });
-    } catch(e) {
-      console.error(`[proxy/replay] ${replayId} fatal:`, e.message);
-      return json(res, 502, { error: 'Failed to fetch replay: ' + e.message });
+  // ── GET /api/relay/replay/:id — frontend polls this until data arrives ───────
+  if (parts[0]==='relay' && parts[1]==='replay' && parts[2] && method==='GET') {
+    const replayId = parts[2];
+    if (!server._relayBuffer) server._relayBuffer = {};
+    const entry = server._relayBuffer[replayId];
+    if (!entry) return json(res, 404, { ok: false, pending: true });
+    // Clean up entries older than 5 minutes
+    const now = Date.now();
+    for (const k of Object.keys(server._relayBuffer)) {
+      if (now - server._relayBuffer[k].receivedAt > 5 * 60 * 1000) delete server._relayBuffer[k];
     }
+    delete server._relayBuffer[replayId]; // consume it
+    return json(res, 200, { ok: true, ...entry });
   }
 
   return json(res, 404, { error:'Not found' });

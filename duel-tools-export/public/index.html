@@ -495,7 +495,7 @@ select{cursor:pointer}
       <div class="empty-pg" id="rps-empty">
         <div class="eico">✊</div>
         <div class="etxt">Create a batch above to get started.<br><br>
-          Paste replay URLs above and click <strong style="color:var(--text)">Parse Replays</strong> to get started.
+          Paste replay URLs above and click <strong style="color:var(--text)">Parse Replays</strong> to get started.<br><br>Requires the <strong style="color:var(--text)">Relay userscript</strong> in Tampermonkey — each replay will open briefly in a new tab and close automatically.
         </div>
       </div>
       <div id="rps-out" style="display:none"></div>
@@ -1494,39 +1494,42 @@ function extractIds(text) {
 const replayUrl = id => `https://www.duelingbook.com/replay?id=${id}`;
 
 // ══════════════════════════════════════════════════════════════════════
-// REPLAY LOADER (server-side proxy — no Tampermonkey needed)
+// REPLAY LOADER
+// Opens the duelingbook replay in a new tab so the Tampermonkey userscript
+// can intercept the data and POST it to our server. We poll until it arrives.
 // ══════════════════════════════════════════════════════════════════════
 async function loadReplay(id) {
-  try {
-    const r = await fetch(`${API}/proxy/replay?id=${encodeURIComponent(id)}`);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const { replay } = await r.json();
-    if (!replay) throw new Error('No replay data');
+  // Open the replay in a new tab — Tampermonkey will intercept & POST data to server
+  const tab = window.open(`https://www.duelingbook.com/replay?id=${id}`, '_blank');
 
-    const allPlays = Array.isArray(replay.plays) ? replay.plays : (Array.isArray(replay) ? replay : []);
+  // Poll /api/relay/replay/:id until the userscript delivers the data (or 40s timeout)
+  const POLL_INTERVAL = 1500;
+  const TIMEOUT = 40000;
+  const start = Date.now();
 
-    // Normalise RPS plays: duelingbook stores choices as p1pick/p2pick,
-    // but renderRPS() reads player1_choice/player2_choice — map both so both work.
-    const rps = allPlays
-      .filter(p => p.play === 'RPS')
-      .map(p => ({
-        ...p,
-        player1_choice: p.player1_choice || p.p1pick || null,
-        player2_choice: p.player2_choice || p.p2pick || null,
-      }));
-
-    return {
-      id,
-      plays:    rps,
-      allPlays: allPlays,
-      timedOut: false,
-      player1:  replay.player1 || null,
-      player2:  replay.player2 || null,
-    };
-  } catch(e) {
-    console.warn('loadReplay failed for', id, e.message);
-    return { id, plays: [], allPlays: [], timedOut: true, player1: null, player2: null };
+  while (Date.now() - start < TIMEOUT) {
+    await sleep(POLL_INTERVAL);
+    try {
+      const r = await fetch(`${API}/relay/replay/${encodeURIComponent(id)}`);
+      if (r.status === 200) {
+        const data = await r.json();
+        if (tab && !tab.closed) try { tab.close(); } catch(e) {}
+        return {
+          id,
+          plays:    data.plays    || [],
+          allPlays: data.allPlays || [],
+          timedOut: !!data.timedOut,
+          player1:  data.player1  || null,
+          player2:  data.player2  || null,
+        };
+      }
+      // 404 means not yet received — keep polling
+    } catch(e) { /* network blip, keep polling */ }
   }
+
+  // Timed out
+  if (tab && !tab.closed) try { tab.close(); } catch(e) {}
+  return { id, plays: [], allPlays: [], timedOut: true, player1: null, player2: null };
 }
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
