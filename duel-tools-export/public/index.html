@@ -2453,25 +2453,37 @@ function renderMatchSidebar(query) {
 async function deleteMatch(idx, m) {
   if (!confirm(`Delete match vs ${m.oppName||'?'} (${m.replayId})?\n\nThis cannot be undone.`)) return;
 
+  // Find the correct batch BEFORE modifying any in-memory state
+  let batchId = null;
+  if (_activeBatch && !_activeBatch.isTemp) {
+    // Check active batch first
+    const inActive = (_activeBatch.replays||[]).find(r => r.replayId === m.replayId);
+    if (inActive) {
+      batchId = _activeBatch.id;
+    } else if (_allProfileBatches && _allProfileBatches.length) {
+      // Search all profile batches
+      const ownerBatch = _allProfileBatches.find(b => (b.replays||[]).find(r => r.replayId === m.replayId));
+      if (ownerBatch) batchId = ownerBatch.id;
+    }
+  }
+
   // Remove from _matches in memory
   _matches.splice(idx, 1);
 
-  // Remove from _activeBatch.replays
+  // Remove from _activeBatch.replays in memory
   if (_activeBatch && _activeBatch.replays) {
     _activeBatch.replays = _activeBatch.replays.filter(r => r.replayId !== m.replayId);
   }
+  // Also remove from all profile batches in memory
+  if (_allProfileBatches) {
+    for (const b of _allProfileBatches) {
+      if (b.replays) b.replays = b.replays.filter(r => r.replayId !== m.replayId);
+    }
+  }
 
-  // Remove from server — find which batch this replay belongs to
+  // Remove from server
   if (_activeBatch && !_activeBatch.isTemp) {
     try {
-      // First try the active batch
-      let batchId = _activeBatch.id;
-      // If replay not in active batch replays, search all loaded batches
-      const inActive = (_activeBatch.replays||[]).find(r => r.replayId === m.replayId);
-      if (!inActive && _allProfileBatches && _allProfileBatches.length) {
-        const ownerBatch = _allProfileBatches.find(b => (b.replays||[]).find(r => r.replayId === m.replayId));
-        if (ownerBatch) batchId = ownerBatch.id;
-      }
       if (!batchId) {
         st('Match removed locally — could not find batch', 'var(--amber)'); return;
       }

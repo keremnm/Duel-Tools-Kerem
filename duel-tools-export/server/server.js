@@ -158,8 +158,8 @@ function findPlayerByUsername(username) {
   const ul = username.toLowerCase().trim();
   for (const entry of Object.values(db.players)) {
     const names = playerNames(entry);
+    // Exact match only — no substring fuzzy matching to avoid false cross-links
     if (names.includes(ul)) return entry;
-    if (names.some(n => n.includes(ul) || ul.includes(n))) return entry;
   }
   return null;
 }
