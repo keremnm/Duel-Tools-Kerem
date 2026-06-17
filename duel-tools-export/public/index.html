@@ -991,34 +991,36 @@ select{cursor:pointer}
 
       <!-- TOOLS -->
       <div id="igt-tools" class="igt-panel" style="overflow-y:auto">
-        <div style="padding:16px 20px;display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;align-items:start">
+        <div style="padding:16px 20px;display:flex;flex-direction:column;gap:14px">
+
+          <!-- TOP ROW: 4 equal cards -->
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:14px;align-items:start">
 
           <!-- Timer Settings -->
           <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px">
-            <div class="slbl" style="margin-bottom:8px">⏱ TIMER SETTINGS</div>
-            <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Edit duration here. Reset in top bar to apply.</div>
+            <div class="slbl" style="margin-bottom:10px">⏱ TIMER SETTINGS</div>
             <div style="display:flex;gap:5px;margin-bottom:10px">
               <button class="dd-btn-sec" onclick="igtTimerPreset(40)" style="flex:1;font-size:12px">40m</button>
               <button class="dd-btn-sec" onclick="igtTimerPreset(50)" style="flex:1;font-size:12px">50m</button>
               <button class="dd-btn-sec" onclick="igtTimerPreset(60)" style="flex:1;font-size:12px">60m</button>
             </div>
-            <div style="display:flex;gap:6px;align-items:center">
-              <input id="igt-timer-min" type="number" value="50" min="0" style="flex:1;text-align:center;font-size:18px;padding:6px"/>
-              <span style="color:var(--muted);font-size:20px;font-weight:bold">:</span>
-              <input id="igt-timer-sec" type="number" value="0" min="0" max="59" style="flex:1;text-align:center;font-size:18px;padding:6px"/>
-              <button class="btn-go" onclick="igtTimerSet()" style="font-size:12px;padding:7px 14px">Set</button>
+            <div style="display:flex;gap:6px;align-items:center;margin-bottom:12px">
+              <input id="igt-timer-min" type="number" value="50" min="0" style="flex:1;text-align:center;font-size:22px;padding:8px"/>
+              <span style="color:var(--muted);font-size:22px;font-weight:bold">:</span>
+              <input id="igt-timer-sec" type="number" value="0" min="0" max="59" style="flex:1;text-align:center;font-size:22px;padding:8px"/>
             </div>
+            <button class="btn-go" onclick="igtTimerSet()" style="width:100%;font-size:13px;padding:8px">Apply</button>
           </div>
 
           <!-- RPS Randomizer -->
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center">
-            <div class="slbl" style="margin-bottom:4px">✊ RPS RANDOMIZER</div>
-            <div id="igt-rps-img" style="font-size:52px;margin:6px 0 2px;line-height:1">🎲</div>
-            <div id="igt-rps-ans" style="font-size:17px;font-weight:bold;color:var(--green);margin-bottom:10px;min-height:22px;letter-spacing:.05em"></div>
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center;display:flex;flex-direction:column;align-items:center">
+            <div class="slbl" style="margin-bottom:8px">✊ RPS</div>
+            <div id="igt-rps-img" style="font-size:48px;margin-bottom:4px;line-height:1">🎲</div>
+            <div id="igt-rps-ans" style="font-size:16px;font-weight:bold;color:var(--green);margin-bottom:12px;min-height:20px;letter-spacing:.05em"></div>
             <button class="btn-go" onclick="igtRpsRoll()" style="width:100%;font-size:14px;padding:10px;margin-bottom:8px">🎲 Pick for me!</button>
             <div id="igt-rps-counts" style="font-size:11px;color:var(--muted);margin-bottom:6px"></div>
-            <div id="igt-rps-hist" style="display:flex;gap:5px;justify-content:center;margin-bottom:8px"></div>
-            <button class="dd-btn-sec" onclick="igtRpsReset()" style="width:100%;font-size:11px">↺ Reset Session</button>
+            <div id="igt-rps-hist" style="display:flex;gap:6px;justify-content:center;margin-bottom:8px"></div>
+            <button class="dd-btn-sec" onclick="igtRpsReset()" style="width:100%;font-size:11px">↺ Reset</button>
           </div>
 
           <!-- Calculator -->
@@ -1048,40 +1050,39 @@ select{cursor:pointer}
             </div>
           </div>
 
-          <!-- RNG -->
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center">
-            <div class="slbl" style="margin-bottom:8px">🎲 RANDOM NUMBER</div>
-            <div style="display:flex;align-items:flex-end;gap:8px;justify-content:center;margin-bottom:10px">
-              <div style="display:flex;flex-direction:column;align-items:center;gap:3px">
-                <span style="font-size:10px;color:var(--muted);letter-spacing:.08em">MIN</span>
-                <input id="igt-rng-min" type="number" value="1" style="width:66px;text-align:center;font-size:20px;padding:6px"/>
-              </div>
-              <span style="color:var(--dim);font-size:20px;padding-bottom:8px">–</span>
-              <div style="display:flex;flex-direction:column;align-items:center;gap:3px">
-                <span style="font-size:10px;color:var(--muted);letter-spacing:.08em">MAX</span>
-                <input id="igt-rng-max" type="number" value="6" style="width:66px;text-align:center;font-size:20px;padding:6px"/>
-              </div>
-            </div>
-            <div id="igt-rng-result" style="font-size:72px;font-weight:bold;color:var(--blue);line-height:1;min-height:76px;margin-bottom:10px">—</div>
-            <button class="btn-go" onclick="igtRngRoll()" style="width:100%;font-size:14px;padding:9px;margin-bottom:8px">🎲 Roll</button>
-            <div id="igt-rng-hist" style="display:flex;flex-wrap:wrap;gap:3px;justify-content:center;font-size:11px"></div>
-          </div>
+          <!-- RNG + Player Order stacked -->
+          <div style="display:flex;flex-direction:column;gap:14px">
 
-          <!-- Player Order -->
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px">
-            <div class="slbl" style="margin-bottom:8px">🔀 PLAYER ORDER</div>
-            <div style="display:flex;gap:6px;margin-bottom:8px">
-              <input id="igt-pr-inp" type="text" placeholder="Add player..." style="flex:1" onkeydown="if(event.key==='Enter')igtPrAdd()"/>
-              <button class="btn-go" onclick="igtPrAdd()" style="font-size:14px;padding:6px 12px">+</button>
+            <!-- RNG -->
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center">
+              <div class="slbl" style="margin-bottom:8px">🎲 RANDOM NUMBER</div>
+              <div style="display:flex;align-items:center;gap:6px;justify-content:center;margin-bottom:10px">
+                <input id="igt-rng-min" type="number" value="1" style="width:60px;text-align:center;font-size:18px;padding:5px"/>
+                <span style="color:var(--dim);font-size:16px">–</span>
+                <input id="igt-rng-max" type="number" value="6" style="width:60px;text-align:center;font-size:18px;padding:5px"/>
+              </div>
+              <div id="igt-rng-result" style="font-size:56px;font-weight:bold;color:var(--blue);line-height:1;margin-bottom:10px">—</div>
+              <button class="btn-go" onclick="igtRngRoll()" style="width:100%;font-size:13px;padding:8px;margin-bottom:6px">🎲 Roll</button>
+              <div id="igt-rng-hist" style="display:flex;flex-wrap:wrap;gap:3px;justify-content:center;font-size:11px"></div>
             </div>
-            <div id="igt-pr-list" style="display:flex;flex-direction:column;gap:3px;margin-bottom:10px;min-height:24px"></div>
-            <div style="display:flex;gap:6px;margin-bottom:8px">
-              <button class="btn-go" onclick="igtPrPick()" style="flex:1;font-size:12px">🎲 Pick Random</button>
-              <button class="dd-btn-sec" onclick="igtPrClear()" style="font-size:11px;padding:6px 10px">✕</button>
+
+            <!-- Player Order -->
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px">
+              <div class="slbl" style="margin-bottom:8px">🔀 PLAYER ORDER</div>
+              <div style="display:flex;gap:6px;margin-bottom:8px">
+                <input id="igt-pr-inp" type="text" placeholder="Add player..." style="flex:1;font-size:12px" onkeydown="if(event.key==='Enter')igtPrAdd()"/>
+                <button class="btn-go" onclick="igtPrAdd()" style="font-size:13px;padding:5px 10px">+</button>
+              </div>
+              <div id="igt-pr-list" style="display:flex;flex-direction:column;gap:3px;margin-bottom:8px;min-height:0"></div>
+              <div style="display:flex;gap:6px">
+                <button class="btn-go" onclick="igtPrPick()" style="flex:1;font-size:12px">🎲 Pick</button>
+                <button class="dd-btn-sec" onclick="igtPrClear()" style="font-size:11px;padding:6px 10px">↺</button>
+              </div>
+              <div id="igt-pr-result" style="font-size:14px;font-weight:bold;color:var(--green);text-align:center;margin-top:8px;min-height:18px"></div>
             </div>
-            <div id="igt-pr-result" style="font-size:14px;font-weight:bold;color:var(--green);text-align:center;min-height:20px;margin-bottom:6px"></div>
-            <div id="igt-pr-order" style="display:flex;flex-direction:column;gap:3px;max-height:120px;overflow-y:auto"></div>
-          </div>
+
+          </div><!-- /RNG+PlayerOrder -->
+          </div><!-- /top-row -->
 
           <!-- Deck Probability — full width -->
           <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;grid-column:1/-1">
@@ -2501,18 +2502,21 @@ function renderMatchSidebar(query) {
     return;
   }
 
-  // Group by event label (or 'Untagged')
+  // Group by event GROUP KEY (S8: WK 1 -> S8, FLC40 WK1 -> FLC40, bare -> Untagged)
   const groups = {};
   _matches.forEach((m, idx) => {
-    const key = m.eventLabel || 'Untagged';
+    const key = eventGroupKey(m.eventLabel||'') || 'Untagged';
     if (!groups[key]) groups[key] = [];
     groups[key].push({m, idx});
   });
 
-  // Sort groups: events alphabetically, Untagged last
+  // Sort: GFWL seasons (S#) descending numeric, then events alpha, Untagged last
   const sortedKeys = Object.keys(groups).sort((a,b) => {
     if (a==='Untagged') return 1;
     if (b==='Untagged') return -1;
+    const aS = isGFWLSeason(a), bS = isGFWLSeason(b);
+    if (aS && !bS) return 1; if (!aS && bS) return -1;
+    if (aS && bS) return parseInt(b.slice(1)) - parseInt(a.slice(1));
     return a.localeCompare(b);
   });
 
@@ -2532,8 +2536,9 @@ function renderMatchSidebar(query) {
     arrow.style.cssText = 'color:var(--muted);font-size:10px;transition:transform .15s;display:inline-block';
     arrow.textContent = isCollapsed ? '▶' : '▾';
     const lbl = document.createElement('span');
-    lbl.style.cssText = key==='Untagged'?'color:var(--muted);font-size:11px;flex:1':'color:var(--amber);font-size:11px;font-weight:bold;font-family:monospace;flex:1';
-    lbl.textContent = (key!=='Untagged'?'🏆 ':'')+key;
+    const _isGS = typeof isGFWLSeason === 'function' && isGFWLSeason(key);
+    lbl.style.cssText = key==='Untagged'?'color:var(--muted);font-size:11px;flex:1':(_isGS?'color:var(--purple);font-size:11px;font-weight:bold;font-family:monospace;flex:1':'color:var(--amber);font-size:11px;font-weight:bold;font-family:monospace;flex:1');
+    lbl.textContent = key==='Untagged' ? 'Untagged' : _isGS ? '🏟 Season '+key.slice(1) : '🏆 '+key;
     const wl = document.createElement('span');
     wl.style.cssText = 'font-size:10px;color:var(--muted)';
     wl.innerHTML = `<span style="color:var(--green)">${w}W</span> <span style="color:var(--dim)">—</span> <span style="color:var(--red)">${l}L</span> <span style="color:var(--dim)">· ${items.length}</span>`;
@@ -5658,26 +5663,52 @@ function renderEventDecks(player, batches, records) {
     const row = document.createElement('div');
     row.className = 'edl-item';
     row.dataset.code = deck.code;
-    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--card2);border:1px solid var(--border2);border-radius:6px;min-height:0';
-    row.innerHTML = `
-      <span style="font-weight:bold;color:var(--amber);font-family:monospace;font-size:13px;min-width:70px">🏆 ${deck.code}</span>
-      ${deckType ? `<span style="font-size:10px;color:var(--green);border:1px solid var(--green);border-radius:3px;padding:0 6px;white-space:nowrap">${deckType}</span>` : ''}
-      <span style="font-size:10px;color:var(--dim);font-family:monospace">⬇ YDK</span>
-      <span style="font-size:10px;color:var(--muted);margin-left:auto;white-space:nowrap">${taggedReplays.length} replay${taggedReplays.length!==1?'s':''}</span>
-      <a href="${deck.deckUrl}" target="_blank" onclick="event.stopPropagation()"
-         style="background:var(--blue);color:#fff;font-family:monospace;font-size:11px;font-weight:bold;padding:3px 10px;border-radius:4px;text-decoration:none;white-space:nowrap">View Deck ↗</a>
-      <button onclick="event.stopPropagation();deleteEventDeck('${player}','${deck.code}')"
-        style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:13px;padding:0;line-height:1">✕</button>
-    `;
-    const ydkSpan = row.querySelector('span[style*="YDK"]');
-    if (ydkSpan) { ydkSpan.style.cursor='pointer'; ydkSpan.onclick = e => { e.stopPropagation(); downloadEventDeckYDK(deck.deckId, deck.code); }; }
-    if (taggedReplays.length) {
-      const vb = document.createElement('button');
-      vb.textContent = 'Batch';
-      vb.style.cssText = 'background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer;white-space:nowrap';
-      vb.onclick = e => { e.stopPropagation(); loadEventReplay(taggedReplays[0].replayId); };
-      row.insertBefore(vb, row.querySelector('a'));
+    row.style.cssText = 'display:flex;align-items:center;gap:7px;padding:7px 10px;background:var(--card2);border:1px solid var(--border2);border-radius:6px';
+
+    // Code + deck type
+    const codeSpan = document.createElement('span');
+    codeSpan.style.cssText = 'font-weight:bold;color:var(--amber);font-family:monospace;font-size:12px;min-width:62px';
+    codeSpan.textContent = '🏆 '+deck.code;
+    row.appendChild(codeSpan);
+
+    if (deckType) {
+      const dtBadge = document.createElement('span');
+      dtBadge.style.cssText = 'font-size:10px;color:var(--green);border:1px solid var(--green);border-radius:3px;padding:0 5px;white-space:nowrap';
+      dtBadge.textContent = deckType;
+      row.appendChild(dtBadge);
     }
+
+    // Replay count
+    const rcSpan = document.createElement('span');
+    rcSpan.style.cssText = 'font-size:10px;color:var(--dim);margin-left:auto;white-space:nowrap';
+    rcSpan.textContent = taggedReplays.length+' replay'+(taggedReplays.length!==1?'s':'');
+    row.appendChild(rcSpan);
+
+    // View Deck button
+    const viewBtn = document.createElement('a');
+    viewBtn.href = deck.deckUrl; viewBtn.target = '_blank';
+    viewBtn.style.cssText = 'background:var(--blue);color:#fff;font-family:monospace;font-size:10px;font-weight:bold;padding:3px 9px;border-radius:4px;text-decoration:none;white-space:nowrap';
+    viewBtn.textContent = 'View Deck ↗';
+    viewBtn.onclick = e => e.stopPropagation();
+    row.appendChild(viewBtn);
+
+    // View Batch button
+    if (taggedReplays.length) {
+      const batchBtn = document.createElement('button');
+      batchBtn.style.cssText = 'background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer;white-space:nowrap';
+      batchBtn.textContent = 'Batch';
+      batchBtn.onclick = e => { e.stopPropagation(); loadEventReplay(taggedReplays[0].replayId); };
+      row.appendChild(batchBtn);
+    }
+
+    // Delete button
+    const delBtn = document.createElement('button');
+    delBtn.style.cssText = 'background:none;border:none;color:var(--dim);cursor:pointer;font-size:13px;padding:0 2px;line-height:1;flex-shrink:0';
+    delBtn.textContent = '✕';
+    delBtn.title = 'Delete decklist';
+    delBtn.onclick = e => { e.stopPropagation(); deleteEventDeck(player, deck.code); };
+    row.appendChild(delBtn);
+
     el.appendChild(row);
   });
 }
