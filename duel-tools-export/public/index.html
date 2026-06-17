@@ -1515,7 +1515,7 @@ function loadReplay(id) {
     if (pending[id]) { clearTimeout(pending[id].timer); try{pending[id].iframe.remove();}catch(e){} delete pending[id]; }
     const iframe = document.createElement('iframe');
     iframe.style.cssText = 'width:1280px;height:960px;border:none';
-    iframe.src = replayUrl(id);
+    iframe.src = `https://www.duelingbook.com/replay?id=${id}`;
     const timer = setTimeout(() => {
       try{iframe.remove();}catch(e){}
       delete pending[id];

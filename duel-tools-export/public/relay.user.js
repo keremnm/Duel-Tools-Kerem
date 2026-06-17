@@ -17,7 +17,6 @@
 
   function send(rawData) {
     if (sent) return; sent = true;
-    // Send full raw replay object — player1, player2, plays[] with log/owner intact
     const plays = rawData.plays || rawData;
     const rps = Array.isArray(plays) ? plays.filter(p => p.play === 'RPS') : [];
     window.parent.postMessage({
@@ -25,7 +24,6 @@
       id,
       plays: rps,
       allPlays: Array.isArray(plays) ? plays : [],
-      // Pass full metadata needed by the nedhmn parser
       player1: rawData.player1 || null,
       player2: rawData.player2 || null,
       date:    rawData.date    || null,
@@ -45,11 +43,8 @@
 
   function tryValue(v) {
     if (sent) return false;
-    // Full replay object with player1/player2/plays
     if (isReplay(v)) { send(v); return true; }
-    // Raw plays array
     if (isPlays(v)) { send({ plays: v }); return true; }
-    // JSON string
     if (typeof v === 'string' && v.length > 100) {
       try {
         const i = v.indexOf('{');
@@ -92,7 +87,6 @@
     return p;
   };
 
-  // Poll window globals
   const t = setInterval(() => {
     if (sent) { clearInterval(t); return; }
     try {
