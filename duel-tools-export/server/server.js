@@ -469,6 +469,32 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
+  // ── GET /api/proxy/replay?id=:replayId ────────────────────────────────────
+  if (parts[0]==='proxy' && parts[1]==='replay' && method==='GET') {
+    const replayId = url.searchParams.get('id');
+    if (!replayId) return json(res, 400, { error: 'id required' });
+    try {
+      const https = require('https');
+      const raw = await new Promise((resolve, reject) => {
+        const req2 = https.get(
+          `https://www.duelingbook.com/php-scripts/load-replay.php?id=${encodeURIComponent(replayId)}`,
+          { headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.duelingbook.com/' } },
+          (r2) => {
+            let buf = '';
+            r2.on('data', d => buf += d);
+            r2.on('end', () => resolve(buf));
+          }
+        );
+        req2.on('error', reject);
+        req2.setTimeout(15000, () => { req2.destroy(); reject(new Error('timeout')); });
+      });
+      const parsed = JSON.parse(raw);
+      return json(res, 200, { ok: true, replay: parsed });
+    } catch(e) {
+      return json(res, 502, { error: 'Failed to fetch replay: ' + e.message });
+    }
+  }
+
   return json(res, 404, { error:'Not found' });
 });
 
