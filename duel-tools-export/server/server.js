@@ -469,35 +469,115 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
-  // ── POST /api/relay/replay — receives data pushed by the Tampermonkey userscript ──
-  // The userscript runs on the real duelingbook page (no iframe), intercepts the replay
-  // data, and POSTs it directly here. The frontend polls waiting for it.
-  if (parts[0]==='relay' && parts[1]==='replay' && method==='POST') {
-    return readBody(req, async data => {
-      const { replayId, plays, allPlays, timedOut, player1, player2 } = data;
-      if (!replayId) return json(res, 400, { error: 'replayId required' });
-      // Store in a short-lived in-memory buffer keyed by replayId
-      // Frontend polls /api/relay/replay/:id to pick it up
-      if (!server._relayBuffer) server._relayBuffer = {};
-      server._relayBuffer[replayId] = { replayId, plays: plays||[], allPlays: allPlays||[], timedOut: !!timedOut, player1: player1||null, player2: player2||null, receivedAt: Date.now() };
-      console.log(`[relay] Received replay ${replayId} — ${(allPlays||[]).length} plays, timedOut=${timedOut}`);
-      return json(res, 200, { ok: true });
-    });
-  }
+  // ── GET /api/proxy/replay?id=:replayId ──────────────────────────────────────
+  // Solves Cloudflare Turnstile via CapSolver, then POSTs to duelingbook view-replay
+  if (parts[0]==='proxy' && parts[1]==='replay' && method==='GET') {
+    const replayId = url.searchParams.get('id');
+    if (!replayId) return json(res, 400, { error: 'id required' });
 
-  // ── GET /api/relay/replay/:id — frontend polls this until data arrives ───────
-  if (parts[0]==='relay' && parts[1]==='replay' && parts[2] && method==='GET') {
-    const replayId = parts[2];
-    if (!server._relayBuffer) server._relayBuffer = {};
-    const entry = server._relayBuffer[replayId];
-    if (!entry) return json(res, 404, { ok: false, pending: true });
-    // Clean up entries older than 5 minutes
-    const now = Date.now();
-    for (const k of Object.keys(server._relayBuffer)) {
-      if (now - server._relayBuffer[k].receivedAt > 5 * 60 * 1000) delete server._relayBuffer[k];
+    const CAPSOLVER_API_KEY = process.env.CAPSOLVER_API_KEY;
+    const TURNSTILE_SITE_KEY = '0x4AAAAAAC17T9xSOtcacJq5';
+    const DUELINGBOOK_URL = 'https://www.duelingbook.com';
+
+    if (!CAPSOLVER_API_KEY) return json(res, 500, { error: 'CAPSOLVER_API_KEY not set in environment' });
+
+    try {
+      const https = require('https');
+
+      // Step 1: Ask CapSolver to solve the Turnstile
+      function httpsPost(hostname, path, body) {
+        return new Promise((resolve, reject) => {
+          const data = JSON.stringify(body);
+          const req2 = https.request({ hostname, path, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } }, (r2) => {
+            let buf = '';
+            r2.on('data', d => buf += d);
+            r2.on('end', () => { try { resolve(JSON.parse(buf)); } catch(e) { reject(new Error('Bad JSON: ' + buf.slice(0, 100))); } });
+          });
+          req2.on('error', reject);
+          req2.setTimeout(30000, () => { req2.destroy(); reject(new Error('timeout')); });
+          req2.write(data);
+          req2.end();
+        });
+      }
+
+      // Create task
+      const taskRes = await httpsPost('api.capsolver.com', '/createTask', {
+        clientKey: CAPSOLVER_API_KEY,
+        task: {
+          type: 'AntiTurnstileTaskProxyLess',
+          websiteURL: DUELINGBOOK_URL,
+          websiteKey: TURNSTILE_SITE_KEY,
+        }
+      });
+
+      if (taskRes.errorId) throw new Error('CapSolver createTask error: ' + taskRes.errorDescription);
+      const taskId = taskRes.taskId;
+      console.log(`[proxy/replay] CapSolver taskId=${taskId} for replay ${replayId}`);
+
+      // Poll for solution (max 30s)
+      let token = null;
+      let userAgent = null;
+      for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 1500));
+        const resultRes = await httpsPost('api.capsolver.com', '/getTaskResult', { clientKey: CAPSOLVER_API_KEY, taskId });
+        if (resultRes.status === 'ready') {
+          token = resultRes.solution?.token;
+          userAgent = resultRes.solution?.userAgent;
+          break;
+        }
+        if (resultRes.errorId) throw new Error('CapSolver poll error: ' + resultRes.errorDescription);
+      }
+      if (!token) throw new Error('CapSolver timed out waiting for token');
+      console.log(`[proxy/replay] Got Turnstile token for ${replayId}`);
+
+      // Step 2: POST to duelingbook view-replay with the token as multipart form data
+      const replayData = await new Promise((resolve, reject) => {
+        const boundary = '----FormBoundary' + Math.random().toString(36).slice(2);
+        function field(name, value) {
+          return `--${boundary}
+Content-Disposition: form-data; name="${name}"
+
+${value}
+`;
+        }
+        const body = field('token', token) + field('turnstile', 'true') + field('master', 'false') + `--${boundary}--
+`;
+        const bodyBuf = Buffer.from(body);
+
+        const req2 = https.request({
+          hostname: 'www.duelingbook.com',
+          path: `/view-replay?id=${encodeURIComponent(replayId)}`,
+          method: 'POST',
+          headers: {
+            'Content-Type': `multipart/form-data; boundary=${boundary}`,
+            'Content-Length': bodyBuf.length,
+            'User-Agent': userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': DUELINGBOOK_URL + '/',
+            'Origin': DUELINGBOOK_URL,
+          }
+        }, (r2) => {
+          let buf = '';
+          r2.on('data', d => buf += d);
+          r2.on('end', () => {
+            try { resolve(JSON.parse(buf)); }
+            catch(e) { reject(new Error('Duelingbook returned non-JSON: ' + buf.slice(0, 200))); }
+          });
+        });
+        req2.on('error', reject);
+        req2.setTimeout(20000, () => { req2.destroy(); reject(new Error('duelingbook timeout')); });
+        req2.write(bodyBuf);
+        req2.end();
+      });
+
+      if (replayData.action === 'Error') throw new Error('Duelingbook error: ' + replayData.message);
+
+      console.log(`[proxy/replay] Got replay data for ${replayId} — ${(replayData.plays||[]).length} plays`);
+      return json(res, 200, { ok: true, replay: replayData });
+
+    } catch(e) {
+      console.error(`[proxy/replay] Failed for ${replayId}:`, e.message);
+      return json(res, 502, { error: e.message });
     }
-    delete server._relayBuffer[replayId]; // consume it
-    return json(res, 200, { ok: true, ...entry });
   }
 
   return json(res, 404, { error:'Not found' });
