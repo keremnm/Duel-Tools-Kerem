@@ -450,11 +450,11 @@ const server = http.createServer(async (req, res) => {
     const b = db.batches[parts[1]];
     if (!b) return json(res, 404, { error:'Not found' });
     return readBody(req, async data => {
-      const dup = (b.replays||[]).find(r => r.replayId === data.replayId);
+      const dupIdx = (b.replays||[]).findIndex(r => r.replayId === data.replayId);
+      const dup = dupIdx >= 0 ? b.replays[dupIdx] : null;
       const crossLinks = [];
-      if (!dup) {
-        if (!b.replays) b.replays = [];
-        const minPlays = (data.allPlays||[]).map(p => ({
+
+      const minPlays = (data.allPlays||[]).map(p => ({
           play:p.play,owner:p.owner,username:p.username,player1:p.player1,player2:p.player2,
           player1_choice:p.player1_choice||p.p1pick||undefined,
           player2_choice:p.player2_choice||p.p2pick||undefined,
@@ -462,13 +462,23 @@ const server = http.createServer(async (req, res) => {
           card:p.card?{name:p.card.name,owner:p.card.owner,id:p.card.id,serial_number:p.card.serial_number,card_type:p.card.card_type}:undefined,
           winner:p.winner,loser:p.loser,game:p.game,pick:p.pick,p1pick:p.p1pick,p2pick:p.p2pick,
           log:Array.isArray(p.log)?p.log.map(l=>({type:l.type,owner:l.owner,username:l.username,card:l.card?{name:l.card.name,id:l.card.id,serial_number:l.card.serial_number}:undefined,game:l.game,public_log:l.public_log,private_log:l.private_log})):(p.log&&typeof p.log==='object'?{type:p.log.type,owner:p.log.owner,username:p.log.username,public_log:p.log.public_log,private_log:p.log.private_log}:undefined)
-        }));
+      }));
+
+      if (!dup) {
+        // New replay — insert
+        if (!b.replays) b.replays = [];
         b.replays.push({ replayId:data.replayId, plays:data.plays||[], allPlays:minPlays, timedOut:!!data.timedOut, eventLabel:data.eventLabel||'', oppName:data.oppName||'', player1:data.player1||null, player2:data.player2||null, savedAt:Date.now() });
         b.status = 'ready';
         if (data.oppName) {
           const cl = crossLinkReplay(data, data.oppName);
           if (cl) crossLinks.push(cl);
         }
+        await saveDB();
+      } else if (dup.timedOut && !data.timedOut) {
+        // Existing timed-out entry being updated with real data — overwrite it
+        b.replays[dupIdx] = { replayId:data.replayId, plays:data.plays||[], allPlays:minPlays, timedOut:false, eventLabel:dup.eventLabel||data.eventLabel||'', oppName:data.oppName||dup.oppName||'', player1:data.player1||dup.player1||null, player2:data.player2||dup.player2||null, savedAt:Date.now() };
+        b.status = 'ready';
+        console.log(`[replay] Updated timed-out replay ${data.replayId} with real data`);
         await saveDB();
       }
       return json(res, 200, { ok:true, duplicate:!!dup, crossLinks });
