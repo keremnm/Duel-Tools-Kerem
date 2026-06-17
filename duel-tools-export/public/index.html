@@ -458,7 +458,7 @@ select{cursor:pointer}
     <div style="padding:10px 12px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:6px;flex-shrink:0">
       <button onclick="openBatchPanel('temp')" style="width:100%;background:var(--card);color:var(--amber);border:1px solid var(--amber);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">⚡ Temporary Batch</button>
       <button onclick="openBatchPanel('new')" style="width:100%;background:var(--green);color:#050508;border:none;border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:9px;cursor:pointer;text-align:left">＋ New Batch</button>
-      <button id="add-to-batch-btn" onclick="openBatchPanel('add')" style="display:none;width:100%;background:var(--card);color:var(--blue);border:1px solid var(--blue);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">➕ Add to Current Batch</button>
+      <button id="add-to-batch-btn" onclick="openBatchPanel('add')" style="display:none;width:100%;background:var(--card);color:var(--blue);border:1px solid var(--blue);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">➕ Add to Existing Batch</button>
       <div style="display:flex;gap:5px">
         <button class="btn-sec" onclick="exportBatch()" style="flex:1;font-size:11px;padding:5px">⬇ Export</button>
         <button class="btn-sec" onclick="importBatch()" style="flex:1;font-size:11px;padding:5px">⬆ Import</button>
@@ -901,10 +901,9 @@ select{cursor:pointer}
           <span style="font-size:12px;color:var(--muted)">OUT: <span id="igt-sp-out-count" style="color:var(--red);font-weight:bold">0</span> &nbsp; IN: <span id="igt-sp-in-count" style="color:var(--green);font-weight:bold">0</span></span>
           <button class="dd-btn" onclick="igtSpSwap()" style="font-size:11px;padding:4px 12px">⇄ Swap</button>
           <button class="dd-btn-sec" onclick="igtSpSaveProfile()" style="font-size:11px">💾 Save Profile</button>
-          <select id="igt-sp-profile-sel" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 8px;border-radius:5px;outline:none">
+          <select id="igt-sp-profile-sel" onchange="igtSpLoadProfile()" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 8px;border-radius:5px;outline:none">
             <option value="">— Load Profile —</option>
           </select>
-          <button class="dd-btn-sec" onclick="igtSpLoadProfile()" style="font-size:11px">Load</button>
           <button class="dd-btn-sec" onclick="igtSpReset()" style="font-size:11px">↺ Reset</button>
           <button class="dd-btn-sec" onclick="igtExportImage()" style="font-size:11px">🖼 Decklist Image</button>
         </div>
@@ -1008,14 +1007,13 @@ select{cursor:pointer}
           </div>
 
           <!-- RPS Randomizer -->
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center">
-            <div class="slbl" style="margin-bottom:6px">✊ RPS RANDOMIZER</div>
-            <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Click to get a random pick</div>
-            <div id="igt-rps-img" style="font-size:64px;margin-bottom:6px;min-height:72px;line-height:1">🎲</div>
-            <div id="igt-rps-ans" style="font-size:20px;font-weight:bold;color:var(--green);margin-bottom:14px;min-height:26px;letter-spacing:.05em"></div>
-            <button class="btn-go" onclick="igtRpsRoll()" style="width:100%;font-size:15px;padding:12px;margin-bottom:10px">🎲 Pick for me!</button>
-            <div id="igt-rps-counts" style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.8"></div>
-            <div id="igt-rps-hist" style="display:flex;flex-wrap:wrap;gap:4px;justify-content:center;margin-bottom:8px;max-height:60px;overflow:hidden"></div>
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center">
+            <div class="slbl" style="margin-bottom:4px">✊ RPS RANDOMIZER</div>
+            <div id="igt-rps-img" style="font-size:52px;margin:6px 0 2px;line-height:1">🎲</div>
+            <div id="igt-rps-ans" style="font-size:17px;font-weight:bold;color:var(--green);margin-bottom:10px;min-height:22px;letter-spacing:.05em"></div>
+            <button class="btn-go" onclick="igtRpsRoll()" style="width:100%;font-size:14px;padding:10px;margin-bottom:8px">🎲 Pick for me!</button>
+            <div id="igt-rps-counts" style="font-size:11px;color:var(--muted);margin-bottom:6px"></div>
+            <div id="igt-rps-hist" style="display:flex;gap:5px;justify-content:center;margin-bottom:8px"></div>
             <button class="dd-btn-sec" onclick="igtRpsReset()" style="width:100%;font-size:11px">↺ Reset Session</button>
           </div>
 
@@ -1066,7 +1064,7 @@ select{cursor:pointer}
           </div>
 
           <!-- Player Order -->
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px">
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px">
             <div class="slbl" style="margin-bottom:8px">🔀 PLAYER ORDER</div>
             <div style="display:flex;gap:6px;margin-bottom:8px">
               <input id="igt-pr-inp" type="text" placeholder="Add player..." style="flex:1" onkeydown="if(event.key==='Enter')igtPrAdd()"/>
@@ -1934,9 +1932,82 @@ function openBatchPanel(mode) {
     playerRow.style.display  = 'block';
     tempBadge.style.display  = 'inline-block';
   } else {
-    title.textContent        = 'ADD TO CURRENT BATCH';
+    title.textContent        = 'ADD TO EXISTING BATCH';
     playerRow.style.display  = 'none';
     tempBadge.style.display  = 'none';
+    // Build batch dropdown
+    setTimeout(() => {
+      let batchRow = document.getElementById('add-batch-select-row');
+      if (!batchRow) {
+        batchRow = document.createElement('div');
+        batchRow.id = 'add-batch-select-row';
+        batchRow.style.cssText = 'display:flex;flex-direction:column;gap:6px;margin-bottom:4px';
+        const lbl = document.createElement('div');
+        lbl.style.cssText = 'font-size:10px;color:var(--muted);letter-spacing:.08em;font-weight:bold';
+        lbl.textContent = 'SELECT BATCH';
+        const searchWrap = document.createElement('div');
+        searchWrap.style.cssText = 'position:relative';
+        const searchInp = document.createElement('input');
+        searchInp.id = 'add-batch-search';
+        searchInp.placeholder = 'Search batches…';
+        searchInp.style.cssText = 'width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--border);border-radius:5px;color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;outline:none';
+        const batchList = document.createElement('div');
+        batchList.id = 'add-batch-list';
+        batchList.style.cssText = 'max-height:140px;overflow-y:auto;background:var(--card);border:1px solid var(--border);border-radius:5px;margin-top:3px;display:none';
+        searchWrap.appendChild(searchInp);
+        searchWrap.appendChild(batchList);
+        const aliasLbl = document.createElement('div');
+        aliasLbl.style.cssText = 'font-size:10px;color:var(--muted);letter-spacing:.08em;font-weight:bold;margin-top:6px';
+        aliasLbl.textContent = 'ADD ALIASES (optional, comma-separated)';
+        const aliasInp = document.createElement('input');
+        aliasInp.id = 'add-batch-aliases';
+        aliasInp.placeholder = 'e.g. senju, senjumode';
+        aliasInp.style.cssText = 'width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--border);border-radius:5px;color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;outline:none';
+        batchRow.appendChild(lbl);
+        batchRow.appendChild(searchWrap);
+        batchRow.appendChild(aliasLbl);
+        batchRow.appendChild(aliasInp);
+        const urlsLabel = document.getElementById('urls-inp') && document.getElementById('urls-inp').previousElementSibling;
+        const panel = document.getElementById('batch-panel-body') || document.getElementById('urls-inp').parentElement.parentElement;
+        panel.insertBefore(batchRow, document.getElementById('urls-inp').parentElement);
+      }
+      // Populate batch list
+      const batchList = document.getElementById('add-batch-list');
+      const searchInp = document.getElementById('add-batch-search');
+      window._addBatchSelected = _activeBatch ? _activeBatch.id : null;
+      const allBatches = Object.values(db && db.batches ? db.batches : {});
+      function renderBatchList(filter) {
+        if (!batchList) return;
+        const batches = _allProfileBatches || [];
+        const filtered = filter ? batches.filter(b => (b.name||'').toLowerCase().includes(filter.toLowerCase()) || (b.player||'').toLowerCase().includes(filter.toLowerCase())) : batches;
+        batchList.innerHTML = '';
+        batchList.style.display = filtered.length ? 'block' : 'none';
+        filtered.forEach(b => {
+          const item = document.createElement('div');
+          item.style.cssText = 'padding:7px 10px;cursor:pointer;font-size:12px;font-family:monospace;color:var(--text);border-bottom:1px solid var(--border);' + (window._addBatchSelected===b.id?'background:var(--card2);color:var(--green)':'');
+          item.textContent = b.name + (b.player && b.player !== b.name ? ' ('+b.player+')' : '') + ' — ' + (b.replays||[]).length + ' replays';
+          item.onmouseenter = () => item.style.background='var(--card2)';
+          item.onmouseleave = () => item.style.background = window._addBatchSelected===b.id ? 'var(--card2)' : '';
+          item.onclick = () => {
+            window._addBatchSelected = b.id;
+            searchInp.value = b.name;
+            batchList.style.display = 'none';
+            // Pre-fill aliases
+            const aliasInp = document.getElementById('add-batch-aliases');
+            if (aliasInp) aliasInp.value = (b.aliases||[]).join(', ');
+          };
+          batchList.appendChild(item);
+        });
+      }
+      if (searchInp) {
+        searchInp.value = _activeBatch ? (_activeBatch.name||'') : '';
+        searchInp.oninput = () => renderBatchList(searchInp.value);
+        searchInp.onfocus = () => renderBatchList(searchInp.value);
+        searchInp.onblur = () => setTimeout(() => { if(batchList) batchList.style.display='none'; }, 200);
+      }
+      const aliasInp = document.getElementById('add-batch-aliases');
+      if (aliasInp) aliasInp.value = _activeBatch ? (_activeBatch.aliases||[]).join(', ') : '';
+    }, 0);
   }
   setTimeout(() => document.getElementById('urls-inp').focus(), 50);
 }
@@ -3031,7 +3102,17 @@ function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlaye
         cards.push({ id: info.id || info.serial_number || '', name, displayCount, raw: stat.max });
       }
     }
-    return cards.sort((a,b) => a.name.localeCompare(b.name));
+    const typeOrder = n => {
+      const t = (cardIdMap[n] && cardIdMap[n].card_type) ? cardIdMap[n].card_type.toLowerCase() : '';
+      if (t.includes('monster')) return 0;
+      if (t.includes('spell'))   return 1;
+      if (t.includes('trap'))    return 2;
+      return 3;
+    };
+    return cards.sort((a,b) => {
+      const td = typeOrder(a.name) - typeOrder(b.name);
+      return td !== 0 ? td : a.name.localeCompare(b.name);
+    });
   }
 
   // Build all games
@@ -4147,7 +4228,23 @@ function renderQuickPicks(cards) {
 // ADD TO BATCH — append new replay URLs to the currently loaded batch
 // ══════════════════════════════════════════════════════════════════════
 async function addToBatch() {
-  if (!_activeBatch) { st('No active batch. Select one first.', 'var(--red)'); return; }
+  // Get selected batch from dropdown if in add mode
+  const selectedBatchId = window._addBatchSelected;
+  if (selectedBatchId && _allProfileBatches) {
+    const found = _allProfileBatches.find(b => b.id === selectedBatchId);
+    if (found) {
+      // Apply any new aliases
+      const aliasInp = document.getElementById('add-batch-aliases');
+      if (aliasInp && aliasInp.value.trim()) {
+        const newAliases = aliasInp.value.split(',').map(a=>a.trim()).filter(Boolean);
+        found.aliases = newAliases;
+        // Save aliases to server
+        try { await fetch(API+'/batches/'+found.id, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({aliases:newAliases})}); } catch(e) {}
+      }
+      _activeBatch = found;
+    }
+  }
+  if (!_activeBatch) { st('No batch selected. Choose one from the dropdown.', 'var(--red)'); return; }
   const raw = (document.getElementById('urls-inp').value||'').trim();
   if (!raw) { st('Paste some replay URLs to add.', 'var(--red)'); return; }
   const ids = extractIds(raw);
@@ -5838,16 +5935,18 @@ function igtDecodeYdke(code) {
     if (parts.length < 3) return null;
     const decode = b64 => {
       if (!b64 || !b64.trim()) return [];
-      // Standard base64 — pad if needed
-      let s = b64.trim();
+      // YDKe uses URL-safe base64 (- and _ instead of + and /)
+      let s = b64.trim().replace(/-/g,'+').replace(/_/g,'/');
       while (s.length % 4 !== 0) s += '=';
-      const bin = atob(s);
-      const ids = [];
-      for (let i = 0; i + 3 < bin.length; i += 4) {
-        const id = bin.charCodeAt(i) | (bin.charCodeAt(i+1)<<8) | (bin.charCodeAt(i+2)<<16) | (bin.charCodeAt(i+3)<<24);
-        if (id > 0) ids.push(id >>> 0); // unsigned
-      }
-      return ids;
+      try {
+        const bin = atob(s);
+        const ids = [];
+        for (let i = 0; i + 3 < bin.length; i += 4) {
+          const id = bin.charCodeAt(i) | (bin.charCodeAt(i+1)<<8) | (bin.charCodeAt(i+2)<<16) | (bin.charCodeAt(i+3)<<24);
+          if (id > 0) ids.push(id >>> 0);
+        }
+        return ids;
+      } catch(e) { console.error('YDKe base64 decode failed:', e); return []; }
     };
     return { main: decode(parts[0]), extra: decode(parts[1]), side: decode(parts[2]) };
   } catch(e) { console.error('YDKe decode error:', e); return null; }
@@ -6381,7 +6480,7 @@ function igtRpsRoll() {
   if (countsEl) countsEl.innerHTML = `✊ ${r} &nbsp;·&nbsp; ✋ ${p} &nbsp;·&nbsp; ✌ ${s} &nbsp;<span style="color:var(--dim)">(${_igtRpsHistory.length} total)</span>`;
   // History row
   if (histEl) {
-    histEl.innerHTML = _igtRpsHistory.slice(0,20).map((k,i) => {
+    histEl.innerHTML = _igtRpsHistory.slice(0,5).map((k,i) => {
       const o = _rpsOpts.find(x=>x.key===k);
       return `<span style="font-size:18px;opacity:${i===0?1:Math.max(0.2,1-i*0.04)}">${o.icon}</span>`;
     }).join('');
