@@ -2083,7 +2083,7 @@ function renderRPS() {
   [[replays.length,'Replays'],[found,'With '+player],[rounds,'Total rounds'],[tat,'Post-tie picks']].forEach(([v,l])=>{
     const x=mk(ch,'chip'); E(x,'span',String(v),'chipv'); E(x,'span',l,'chipl');
   });
-  if(tos){ const w=document.createElement('div'); w.style.cssText='font-size:11px;color:var(--amber);margin-top:8px;padding:5px 9px;background:rgba(245,166,35,.08);border:1px solid rgba(245,166,35,.2);border-radius:6px'; w.innerHTML=`⚠ ${tos} replay(s) timed out. &nbsp;<button onclick="manualRetryTimedOut()" style="background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:11px;padding:3px 12px;border-radius:4px;cursor:pointer">↺ Retry Now</button>`; s1.appendChild(w); }
+  if(tos){ const w=document.createElement('div'); w.style.cssText='font-size:11px;color:var(--amber);margin-top:8px;padding:5px 9px;background:rgba(245,166,35,.08);border:1px solid rgba(245,166,35,.2);border-radius:6px;display:flex;align-items:center;gap:8px'; w.innerHTML=`⚠ ${tos} replay(s) timed out. &nbsp;<button onclick="manualRetryTimedOut()" style="background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:11px;padding:3px 12px;border-radius:4px;cursor:pointer">↺ Retry Now</button>&nbsp;<button onclick="removeTimedOutReplays()" style="background:var(--red);color:#fff;border:none;font-family:monospace;font-weight:bold;font-size:11px;padding:3px 12px;border-radius:4px;cursor:pointer">✕ Remove Timed Out</button>`; s1.appendChild(w); }
 
   HR(c);
   const s2=S(c,'OVERALL PICK DISTRIBUTION  ('+rounds+' rounds)');
@@ -2123,7 +2123,26 @@ function renderRPS() {
   const ll=mk(s5,'ll');
   log.forEach(item=>{
     const row=mk(ll,'lr'); E(row,'span','…'+item.id.slice(-10),'lid');
-    if(item.err){ E(row,'span',item.err,'bdg be'); }
+    if(item.err){
+      E(row,'span',item.err,'bdg be');
+      // Add remove button for failed replays (timed out or player not found)
+      const xBtn = document.createElement('button');
+      xBtn.textContent = '✕';
+      xBtn.title = 'Remove this replay from batch';
+      xBtn.style.cssText = 'margin-left:6px;background:var(--red);color:#fff;border:none;font-family:monospace;font-weight:bold;font-size:10px;padding:1px 7px;border-radius:3px;cursor:pointer;line-height:1.5';
+      xBtn.onclick = async () => {
+        if (!_activeBatch) return;
+        const rid = item.id;
+        _activeBatch.replays = (_activeBatch.replays||[]).filter(r => r.replayId !== rid);
+        if (_activeBatch.id) {
+          try { await fetch(`${API}/batches/${_activeBatch.id}/replay/${encodeURIComponent(rid)}`, { method:'DELETE' }); } catch(e) {}
+        }
+        st('Replay removed', 'var(--green)');
+        renderRPS();
+        buildDeck();
+      };
+      row.appendChild(xBtn);
+    }
     else{ E(row,'span',(IC[item.my]||'')+' '+item.my,'lpk'); E(row,'span','vs '+item.their,'lvs'); E(row,'span',item.oc,'bdg '+(OCC[item.oc]||'be')); }
   });
 }
@@ -5283,6 +5302,23 @@ async function retryFailed(btn) {
 }
 
 
+// Remove all timed-out replays from the active batch
+async function removeTimedOutReplays() {
+  if (!_activeBatch || !_activeBatch.replays) return;
+  const timedOut = _activeBatch.replays.filter(r => r.timedOut).map(r => r.replayId);
+  if (!timedOut.length) return;
+  if (!confirm(`Remove ${timedOut.length} timed-out replay(s) from this batch?`)) return;
+  for (const rid of timedOut) {
+    _activeBatch.replays = _activeBatch.replays.filter(r => r.replayId !== rid);
+    if (_activeBatch.id) {
+      try { await fetch(`${API}/batches/${_activeBatch.id}/replay/${encodeURIComponent(rid)}`, { method:'DELETE' }); } catch(e) {}
+    }
+  }
+  st(`Removed ${timedOut.length} timed-out replay(s)`, 'var(--green)');
+  renderRPS();
+  buildDeck();
+}
+
 // Manual retry for timed-out replays — called from RPS warning button
 async function manualRetryTimedOut() {
   if (!_activeBatch || !_activeBatch.replays) return;
@@ -5294,28 +5330,35 @@ async function manualRetryTimedOut() {
 
   for (let i=0; i<timedOut.length; i++) {
     st('Retrying '+(i+1)+'/'+timedOut.length+' — '+timedOut[i], 'var(--amber)');
-    await sleep(5000);
     const result = await loadReplay(timedOut[i]);
     // Replace the old timed-out entry
     _activeBatch.replays = _activeBatch.replays.filter(r => r.replayId !== result.id);
+    const aliases = _activeBatch.aliases||[];
+    const _aliases = aliases.map(a=>a.toLowerCase());
+    const _isPlayer = u => { if(!u) return false; const ul=String(u).toLowerCase().trim(); if(ul===(_activeBatch.player||'').toLowerCase()) return true; return _aliases.some(a=>ul===a); };
+    const _oppName = [result.player1, result.player2].filter(Boolean).find(u => !_isPlayer(u)) || '';
     _activeBatch.replays.push({
       replayId: result.id,
       plays: result.plays,
       allPlays: result.allPlays,
-      timedOut: result.timedOut
+      timedOut: result.timedOut,
+      player1: result.player1||null,
+      player2: result.player2||null,
+      oppName: _oppName,
     });
     // Save to server
     try {
       await fetch(API+'/batches/'+_activeBatch.id+'/replay', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({replayId:result.id, plays:result.plays, allPlays:result.allPlays, timedOut:result.timedOut})
+        body: JSON.stringify({replayId:result.id, plays:result.plays, allPlays:result.allPlays,
+          timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, oppName:_oppName})
       });
     } catch(e) {}
     if (result.timedOut) stillFailing.push(result.id);
   }
 
   if (stillFailing.length) {
-    st(stillFailing.length+' replay(s) still timing out — Duelingbook may be slow. Try again later.', 'var(--red)');
+    st(stillFailing.length+' replay(s) still timing out — try removing them and re-adding later', 'var(--red)');
   } else {
     st('All retries successful!', 'var(--green)');
   }
