@@ -4572,23 +4572,41 @@ function renderQuickPicks(cards) {
 // ADD TO BATCH — append new replay URLs to the currently loaded batch
 // ══════════════════════════════════════════════════════════════════════
 async function addToBatch() {
-  // Get selected batch from dropdown if in add mode
+  // Resolve selected batch — fetch full data from server if needed
   const selectedBatchId = window._addBatchSelected;
-  if (selectedBatchId && _allProfileBatches) {
-    const found = _allProfileBatches.find(b => b.id === selectedBatchId);
-    if (found) {
-      // Apply any new aliases
-      const aliasInp = document.getElementById('add-batch-aliases');
-      if (aliasInp && aliasInp.value.trim()) {
-        const newAliases = aliasInp.value.split(',').map(a=>a.trim()).filter(Boolean);
-        found.aliases = newAliases;
-        // Save aliases to server
-        try { await fetch(API+'/batches/'+found.id, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({aliases:newAliases})}); } catch(e) {}
-      }
-      _activeBatch = found;
-    }
+  if (!selectedBatchId) { st('No batch selected. Choose a player from the dropdown.', 'var(--red)'); return; }
+
+  st('Loading batch...', 'var(--muted)');
+  let targetBatch = null;
+  // Try memory first
+  const memBatch = (_allProfileBatches||[]).find(b => b.id === selectedBatchId);
+  if (memBatch && memBatch.replays) {
+    targetBatch = memBatch;
+  } else {
+    // Fetch full batch from server
+    try {
+      const r = await fetch(API+'/batches/'+selectedBatchId);
+      targetBatch = await r.json();
+    } catch(e) { st('Could not load batch from server: '+e.message, 'var(--red)'); return; }
   }
-  if (!_activeBatch) { st('No batch selected. Choose one from the dropdown.', 'var(--red)'); return; }
+  if (!targetBatch || !targetBatch.id) { st('Batch not found.', 'var(--red)'); return; }
+
+  // Apply any new aliases
+  const aliasInp = document.getElementById('add-batch-aliases');
+  if (aliasInp && aliasInp.value.trim()) {
+    const newAliases = aliasInp.value.split(',').map(a=>a.trim()).filter(Boolean);
+    targetBatch.aliases = newAliases;
+    try { await fetch(API+'/batches/'+targetBatch.id, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({aliases:newAliases})}); } catch(e) {}
+  }
+
+  // Set as active batch
+  _activeBatch = targetBatch;
+  // Update in _allProfileBatches
+  if (_allProfileBatches) {
+    const idx = _allProfileBatches.findIndex(b => b.id === targetBatch.id);
+    if (idx >= 0) _allProfileBatches[idx] = targetBatch;
+  }
+
   const raw = (document.getElementById('urls-inp').value||'').trim();
   if (!raw) { st('Paste some replay URLs to add.', 'var(--red)'); return; }
   const ids = extractIds(raw);
@@ -4599,53 +4617,49 @@ async function addToBatch() {
   const dupIds = ids.filter(id => existing.has(id));
   const newIds = ids.filter(id => !existing.has(id));
   if (!newIds.length) {
-    alert('All '+ids.length+' replay(s) are already in this batch.\n\nDuplicates: ' + dupIds.slice(0,5).join(', ') + (dupIds.length>5?'…':''));
+    alert('All '+ids.length+' replay(s) are already in this batch.');
     return;
   }
   if (dupIds.length > 0) {
-    const proceed = confirm(dupIds.length+' replay(s) already in batch will be skipped:\n' + dupIds.slice(0,5).join('\n') + (dupIds.length>5?'\n…':'')+
-      '\n\nAdd the '+newIds.length+' new replay(s)?');
+    const proceed = confirm(dupIds.length+' replay(s) already in batch will be skipped. Add the '+newIds.length+' new replay(s)?');
     if (!proceed) return;
   }
 
   const btn = document.getElementById('gobtn');
-  btn.disabled = true;
-  btn.textContent = 'Adding...';
-  st('Adding '+newIds.length+' replay(s) to '+_activeBatch.name+'...', 'var(--amber)');
-
+  btn.disabled = true; btn.textContent = 'Adding...';
+  st('Adding '+newIds.length+' replay(s) to '+(_activeBatch.name||_activeBatch.player)+'...', 'var(--amber)');
   if (!_activeBatch.replays) _activeBatch.replays = [];
 
+  const _batchEventLabel = (document.getElementById('batch-event-label-inp')?.value||'').trim().toUpperCase();
+
   for (let i=0; i<newIds.length; i++) {
-    st('Loading '+( i+1)+'/'+newIds.length+' — '+newIds[i], 'var(--muted)');
+    st('Loading '+(i+1)+'/'+newIds.length+' — '+newIds[i], 'var(--muted)');
     const result = await loadReplay(newIds[i]);
-    // Parse to get oppName with the batch's player context
     const _bAliases = (_activeBatch.aliases||[]).map(a=>a.toLowerCase());
     const _bPlayer  = (_activeBatch.player||'').toLowerCase();
     const _isPlayer = u => { if(!u) return false; const ul=String(u).toLowerCase().trim(); return ul===_bPlayer || _bAliases.includes(ul); };
     const _oppName  = [result.player1, result.player2].filter(Boolean).find(u => !_isPlayer(u)) || '';
-    const _rp3 = (result.allPlays||result.plays||[]).filter(p=>p.play==='RPS').map(p=>({game:p.game||null,player1:p.player1||null,player2:p.player2||null,player1_choice:p.player1_choice||p.p1pick||null,player2_choice:p.player2_choice||p.p2pick||null,pick:p.pick||null}));
-    const _pp3 = parseMatch(result.id, result.allPlays||result.plays||[], _activeBatch.player||'', _activeBatch.aliases||[], result.player1, result.player2);
-    const _ps3 = _pp3 ? { games:_pp3.games, allMine:_pp3.allMine, allOpp:_pp3.allOpp, oppName:_pp3.oppName, myW:_pp3.myW, oppW:_pp3.oppW, draws:_pp3.draws, score:_pp3.score, result:_pp3.result } : null;
-    _activeBatch.replays.push({ replayId:result.id, plays:_rp3, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, oppName:_oppName, parsed:_ps3 });
+    const _rpsA = (result.allPlays||result.plays||[]).filter(p=>p.play==='RPS').map(p=>({game:p.game||null,player1:p.player1||null,player2:p.player2||null,player1_choice:p.player1_choice||p.p1pick||null,player2_choice:p.player2_choice||p.p2pick||null,pick:p.pick||null}));
+    const _ppA = parseMatch(result.id, result.allPlays||result.plays||[], _activeBatch.player||'', _activeBatch.aliases||[], result.player1, result.player2);
+    const _psA = _ppA ? { games:_ppA.games, allMine:_ppA.allMine, allOpp:_ppA.allOpp, oppName:_ppA.oppName, myW:_ppA.myW, oppW:_ppA.oppW, draws:_ppA.draws, score:_ppA.score, result:_ppA.result } : null;
+    const replayEntry = { replayId:result.id, plays:_rpsA, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, oppName:_oppName, parsed:_psA, eventLabel:_batchEventLabel||'' };
+    _activeBatch.replays.push(replayEntry);
     try {
       await fetch(API+'/batches/'+_activeBatch.id+'/replay', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        // noCrossLink: true prevents server from auto-linking to other registered players
-        body: JSON.stringify({ replayId:result.id, plays:_rpsPlays, allPlays:[],
+        body: JSON.stringify({ replayId:result.id, plays:_rpsA, allPlays:[],
           timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null,
-          oppName:_oppName, noCrossLink:true,
-          parsed: _parsed ? { games:_parsed.games, allMine:_parsed.allMine, allOpp:_parsed.allOpp, oppName:_parsed.oppName, myW:_parsed.myW, oppW:_parsed.oppW, draws:_parsed.draws, score:_parsed.score, result:_parsed.result } : null })
+          oppName:_oppName, noCrossLink:true, eventLabel:_batchEventLabel||'',
+          parsed:_psA })
       });
-    } catch(e) {}
+    } catch(e) { console.error('Failed to save replay', result.id, e); }
     if (i<newIds.length-1) await sleep(1200);
   }
 
-  document.getElementById('urls-inp').value = '';
-  document.getElementById('extracted-ids-list').innerHTML = '';
-  document.getElementById('extracted-ids-label').style.display = 'none';
-  btn.disabled = false; btn.textContent = '▶ Analyze';
+  clearForm();
   closeBatchPanel();
-  st(_activeBatch.name+' — '+_activeBatch.replays.length+' replays total', 'var(--green)');
+  btn.disabled = false; btn.textContent = '▶ Analyze';
+  st((_activeBatch.name||_activeBatch.player)+' — '+_activeBatch.replays.length+' replays total', 'var(--green)');
   loadBatches();
   renderRPS();
   buildDeck();
