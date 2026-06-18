@@ -208,7 +208,8 @@ function crossLinkReplay(replayData, opponentUsername) {
   const exists = (batch.replays||[]).find(r => r.replayId === replayData.replayId);
   if (exists) return { linked: false, duplicate: true, batchId: batch.id, player: opponentEntry.name };
   if (!batch.replays) batch.replays = [];
-  batch.replays.push({ replayId: replayData.replayId, plays: replayData.plays||[], allPlays: (replayData.allPlays||[]).map(stripPlay), timedOut: !!replayData.timedOut, eventLabel: replayData.eventLabel||'', oppName: replayData.oppName||'', crossLinked: true, savedAt: Date.now() });
+  const clParsed = replayData.parsed || null;
+  batch.replays.push({ replayId: replayData.replayId, plays: replayData.plays||[], allPlays: clParsed?[]:(replayData.allPlays||[]).map(stripPlay), parsed: clParsed, timedOut: !!replayData.timedOut, eventLabel: replayData.eventLabel||'', oppName: replayData.oppName||'', crossLinked: true, savedAt: Date.now() });
   batch.status = 'ready';
   return { linked: true, duplicate: false, batchId: batch.id, player: opponentEntry.name };
 }
@@ -447,6 +448,23 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok:true, removed: before - b.replays.length });
   }
 
+  // ── PATCH /api/batches/:id/replay/:replayId/parsed — store parsed result, clear allPlays ──
+  if (parts[0]==='batches' && parts[1] && parts[2]==='replay' && parts[3] && parts[4]==='parsed' && method==='PATCH') {
+    const b = db.batches[parts[1]];
+    if (!b) return json(res, 404, { error:'Not found' });
+    return readBody(req, async data => {
+      const r = (b.replays||[]).find(r => r.replayId === decodeURIComponent(parts[3]));
+      if (r) {
+        if (data.parsed) r.parsed = data.parsed;
+        if (data.plays)  r.plays  = data.plays;
+        r.allPlays = []; // clear raw plays once parsed
+        await saveDB();
+        console.log(`[parsed] Migrated replay ${r.replayId} — allPlays cleared`);
+      }
+      return json(res, 200, { ok:true });
+    });
+  }
+
   // ── PATCH /api/batches/:id/replay/:replayId/override ───────────────────────
   if (parts[0]==='batches' && parts[1] && parts[2]==='replay' && parts[3] && parts[4]==='override' && method==='PATCH') {
     const b = db.batches[parts[1]];
@@ -495,8 +513,10 @@ const server = http.createServer(async (req, res) => {
       if (!dup) {
         // New replay — insert
         if (!b.replays) b.replays = [];
+        // Store parsed result if provided; strip allPlays either way
         const strippedPlays = (minPlays||[]).map(stripPlay);
-        b.replays.push({ replayId:data.replayId, plays:data.plays||[], allPlays:strippedPlays, timedOut:!!data.timedOut, eventLabel:data.eventLabel||'', oppName:data.oppName||'', player1:data.player1||null, player2:data.player2||null, savedAt:Date.now() });
+        const parsedData = data.parsed || null;
+        b.replays.push({ replayId:data.replayId, plays:data.plays||[], allPlays:parsedData?[]:strippedPlays, parsed:parsedData, timedOut:!!data.timedOut, eventLabel:data.eventLabel||'', oppName:data.oppName||'', player1:data.player1||null, player2:data.player2||null, savedAt:Date.now() });
         b.status = 'ready';
         // Only cross-link when explicitly allowed (new batch creation, not manual add-to-batch)
         if (data.oppName && !data.noCrossLink) {
@@ -506,7 +526,8 @@ const server = http.createServer(async (req, res) => {
         await saveDB();
       } else if (dup.timedOut && !data.timedOut) {
         // Existing timed-out entry being updated with real data — overwrite it
-        b.replays[dupIdx] = { replayId:data.replayId, plays:data.plays||[], allPlays:(minPlays||[]).map(stripPlay), timedOut:false, eventLabel:dup.eventLabel||data.eventLabel||'', oppName:data.oppName||dup.oppName||'', player1:data.player1||dup.player1||null, player2:data.player2||dup.player2||null, savedAt:Date.now() };
+        const parsedData2 = data.parsed || null;
+        b.replays[dupIdx] = { replayId:data.replayId, plays:data.plays||[], allPlays:parsedData2?[]:(minPlays||[]).map(stripPlay), parsed:parsedData2, timedOut:false, eventLabel:dup.eventLabel||data.eventLabel||'', oppName:data.oppName||dup.oppName||'', player1:data.player1||dup.player1||null, player2:data.player2||dup.player2||null, savedAt:Date.now() };
         b.status = 'ready';
         console.log(`[replay] Updated timed-out replay ${data.replayId} with real data`);
         await saveDB();

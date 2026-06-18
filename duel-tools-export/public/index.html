@@ -1825,18 +1825,23 @@ async function go() {
     // Store in memory immediately (works even if server is down)
     if (!_activeBatch.replays) _activeBatch.replays = [];
     _activeBatch.replays = _activeBatch.replays.filter(r => r.replayId !== result.id);
-    _activeBatch.replays.push({ replayId:result.id, plays:result.plays, allPlays:result.allPlays, timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null });
-    // Parse to get oppName for cross-linking
+    // Parse immediately — store parsed result, not raw allPlays
     const _aliases = _activeBatch.aliases || [];
     const _parsed  = parseMatch(result.id, result.allPlays||result.plays||[], _activeBatch.player||'', _aliases, result.player1, result.player2);
     const _oppName = _parsed ? _parsed.oppName : '';
-    // (temp batches already stored in memory above — no server save needed)
+    const _rpsPlays = (result.allPlays||result.plays||[]).filter(p=>p.play==='RPS').map(p=>({
+      game:p.game||null, player1:p.player1||null, player2:p.player2||null,
+      player1_choice:p.player1_choice||p.p1pick||null,
+      player2_choice:p.player2_choice||p.p2pick||null, pick:p.pick||null
+    }));
+    const _parsedStore = _parsed ? { games:_parsed.games, allMine:_parsed.allMine, allOpp:_parsed.allOpp, oppName:_parsed.oppName, myW:_parsed.myW, oppW:_parsed.oppW, draws:_parsed.draws, score:_parsed.score, result:_parsed.result } : null;
+    _activeBatch.replays.push({ replayId:result.id, plays:_rpsPlays, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, parsed:_parsedStore, oppName:_oppName });
     // Save to server — server handles duplicate detection + cross-linking
     if (!_activeBatch.isTemp) try {
       const saveRes = await fetch(`${API}/batches/${_activeBatch.id}/replay`, {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ replayId:result.id, plays:result.plays, allPlays:result.allPlays,
-          timedOut:result.timedOut, oppName:_oppName, player1:result.player1||null, player2:result.player2||null })
+        body: JSON.stringify({ replayId:result.id, plays:_rpsPlays, allPlays:[],
+          timedOut:result.timedOut, oppName:_oppName, player1:result.player1||null, player2:result.player2||null, parsed:_parsedStore })
       });
       const saveData = await saveRes.json().catch(()=>({}));
       // Show duplicate warnings
@@ -1871,11 +1876,14 @@ async function go() {
         await sleep(delay);
         const result = await loadReplay(remaining[i]);
         _activeBatch.replays = (_activeBatch.replays||[]).filter(r=>r.replayId!==result.id);
-        _activeBatch.replays.push({replayId:result.id,plays:result.plays,allPlays:result.allPlays,timedOut:result.timedOut});
+        const _rp2 = (result.allPlays||result.plays||[]).filter(p=>p.play==='RPS').map(p=>({game:p.game||null,player1:p.player1||null,player2:p.player2||null,player1_choice:p.player1_choice||p.p1pick||null,player2_choice:p.player2_choice||p.p2pick||null,pick:p.pick||null}));
+        const _pp2 = parseMatch(result.id, result.allPlays||result.plays||[], _activeBatch.player||'', _activeBatch.aliases||[], result.player1, result.player2);
+        const _ps2 = _pp2 ? { games:_pp2.games, allMine:_pp2.allMine, allOpp:_pp2.allOpp, oppName:_pp2.oppName, myW:_pp2.myW, oppW:_pp2.oppW, draws:_pp2.draws, score:_pp2.score, result:_pp2.result } : null;
+        _activeBatch.replays.push({replayId:result.id,plays:_rp2,allPlays:[],timedOut:result.timedOut,parsed:_ps2,oppName:_pp2?_pp2.oppName:''});
         try {
           await fetch(API+'/batches/'+_activeBatch.id+'/replay', {
             method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({replayId:result.id,plays:result.plays,allPlays:result.allPlays,timedOut:result.timedOut})
+            body: JSON.stringify({replayId:result.id,plays:_rp2,allPlays:[],timedOut:result.timedOut,parsed:_ps2,oppName:_pp2?_pp2.oppName:''})
           });
         } catch(e) {}
         if (result.timedOut) stillFailing.push(remaining[i]);
@@ -2117,7 +2125,13 @@ function renderRPS() {
   };
 
   for (const r of replays) {
-    const rps = r.plays||[];
+    // Use stored RPS plays; fallback: filter from allPlays for legacy replays
+    const rps = (r.plays&&r.plays.length) ? r.plays :
+      (r.allPlays||[]).filter(p=>p.play==='RPS').map(p=>({
+        game:p.game||null, player1:p.player1||null, player2:p.player2||null,
+        player1_choice:p.player1_choice||p.p1pick||null,
+        player2_choice:p.player2_choice||p.p2pick||null, pick:p.pick||null
+      }));
     if (!rps.length) {
       miss++; if(r.timedOut)tos++;
       log.push({id:r.replayId, err:r.timedOut?'Timeout':'No RPS data'}); continue;
@@ -2240,9 +2254,17 @@ function buildDeck() {
   })();
 
   for (const r of replays) {
-    const plays = (r.allPlays&&r.allPlays.length) ? r.allPlays : r.plays;
-    if (!plays||!plays.length) continue;
-    const m = parseMatch(r.replayId, plays, player, _buildDeckAliases, r.player1||null, r.player2||null);
+    let m = null;
+    if (r.parsed && r.parsed.games && r.parsed.games.length) {
+      // Fast path: use pre-parsed data
+      m = { replayId:r.replayId, player, oppName:r.parsed.oppName||r.oppName||'', games:r.parsed.games, allMine:r.parsed.allMine||[], allOpp:r.parsed.allOpp||[], myW:r.parsed.myW, oppW:r.parsed.oppW, draws:r.parsed.draws, score:r.parsed.score, result:r.parsed.result };
+    } else {
+      // Legacy: parse from raw allPlays and migrate in background
+      const plays = (r.allPlays&&r.allPlays.length) ? r.allPlays : r.plays;
+      if (!plays||!plays.length) continue;
+      m = parseMatch(r.replayId, plays, player, _buildDeckAliases, r.player1||null, r.player2||null);
+      if (m) migrateReplayToParseFormat(r, m, _activeBatch);
+    }
     if (m) {
       m.eventLabel       = r.eventLabel       || '';
       m.myDeckOverride   = r.myDeckOverride   || null;
@@ -3285,8 +3307,77 @@ function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlaye
 }
 
 
+// ── Background migration: converts legacy allPlays replay to parsed format ────
+async function migrateReplayToParseFormat(r, parsedMatch, batch) {
+  if (!batch || !batch.id || batch.isTemp) return;
+  const rpsPlays = (r.allPlays||r.plays||[]).filter(p=>p.play==='RPS').map(p=>({
+    game:p.game||null, player1:p.player1||null, player2:p.player2||null,
+    player1_choice:p.player1_choice||p.p1pick||null,
+    player2_choice:p.player2_choice||p.p2pick||null, pick:p.pick||null
+  }));
+  const parsedData = {
+    games:   parsedMatch.games,
+    allMine: parsedMatch.allMine,
+    allOpp:  parsedMatch.allOpp,
+    oppName: parsedMatch.oppName,
+    myW: parsedMatch.myW, oppW: parsedMatch.oppW, draws: parsedMatch.draws,
+    score: parsedMatch.score, result: parsedMatch.result
+  };
+  // Update in memory
+  r.parsed   = parsedData;
+  r.plays    = rpsPlays;
+  r.allPlays = [];
+  // Persist to server
+  try {
+    await fetch(`${API}/batches/${batch.id}/replay/${encodeURIComponent(r.replayId)}/parsed`, {
+      method: 'PATCH', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ parsed: parsedData, plays: rpsPlays })
+    });
+  } catch(e) { console.warn('[migrate] Failed to save parsed for', r.replayId, e.message); }
+}
+
 function buildMatchRecord(replayResult, player, aliases) {
   const replayId = replayResult.replayId || '';
+
+  // Fast path: use pre-parsed data if available
+  if (replayResult.parsed && replayResult.parsed.games && replayResult.parsed.games.length) {
+    const p = replayResult.parsed;
+    const myClass  = classifyWithG1Bias ? classifyWithG1Bias(p.games.map(g=>g.mine)) : classifyFromCards(p.allMine||[]);
+    const oppClass = classifyWithG1Bias ? classifyWithG1Bias(p.games.map(g=>g.opp))  : classifyFromCards(p.allOpp||[]);
+    const myDeckFinal  = replayResult.myDeckOverride  || (myClass  ? myClass.dc  : 'Unknown');
+    const oppDeckFinal = replayResult.oppDeckOverride || (oppClass ? oppClass.dc : 'Unknown');
+    const gameRecords  = p.games.map(g => ({
+      gameNum:  g.gameNum,
+      winner:   g.winner,
+      myWon:    g.winner && g.winner.toLowerCase() === player.toLowerCase(),
+      myCards:  (g.mine||[]).map(c=>c.name.toLowerCase()),
+      oppCards: (g.opp||[]).map(c=>c.name.toLowerCase()),
+    }));
+    return {
+      replayId, player,
+      oppName:  p.oppName || replayResult.oppName || '',
+      eventLabel: replayResult.eventLabel || '',
+      myDeckOverride:  replayResult.myDeckOverride  || null,
+      oppDeckOverride: replayResult.oppDeckOverride || null,
+      myDeck:    myDeckFinal,
+      oppDeck:   oppDeckFinal,
+      myDeckConf:  replayResult.myDeckOverride ? 'Override' : (myClass  ? myClass.conf  : 'Low'),
+      oppDeckConf: replayResult.oppDeckOverride ? 'Override' : (oppClass ? oppClass.conf : 'Low'),
+      matchWon:  p.result === 'w',
+      matchLost: p.result === 'l',
+      result:    p.result,
+      score:     p.score,
+      myW:       p.myW,
+      oppW:      p.oppW,
+      draws:     p.draws,
+      games:     gameRecords,
+      allMine:   p.allMine || [],
+      allOpp:    p.allOpp  || [],
+      allMyCards: (p.allMine||[]).map(c=>c.name.toLowerCase()),
+    };
+  }
+
+  // Legacy path: parse from allPlays
   const plays = (replayResult.allPlays && replayResult.allPlays.length)
     ? replayResult.allPlays : (replayResult.plays||[]);
   if (!plays || !plays.length) {
@@ -4454,14 +4545,18 @@ async function addToBatch() {
     const _bPlayer  = (_activeBatch.player||'').toLowerCase();
     const _isPlayer = u => { if(!u) return false; const ul=String(u).toLowerCase().trim(); return ul===_bPlayer || _bAliases.includes(ul); };
     const _oppName  = [result.player1, result.player2].filter(Boolean).find(u => !_isPlayer(u)) || '';
-    _activeBatch.replays.push({ replayId:result.id, plays:result.plays, allPlays:result.allPlays, timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, oppName:_oppName });
+    const _rp3 = (result.allPlays||result.plays||[]).filter(p=>p.play==='RPS').map(p=>({game:p.game||null,player1:p.player1||null,player2:p.player2||null,player1_choice:p.player1_choice||p.p1pick||null,player2_choice:p.player2_choice||p.p2pick||null,pick:p.pick||null}));
+    const _pp3 = parseMatch(result.id, result.allPlays||result.plays||[], _activeBatch.player||'', _activeBatch.aliases||[], result.player1, result.player2);
+    const _ps3 = _pp3 ? { games:_pp3.games, allMine:_pp3.allMine, allOpp:_pp3.allOpp, oppName:_pp3.oppName, myW:_pp3.myW, oppW:_pp3.oppW, draws:_pp3.draws, score:_pp3.score, result:_pp3.result } : null;
+    _activeBatch.replays.push({ replayId:result.id, plays:_rp3, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, oppName:_oppName, parsed:_ps3 });
     try {
       await fetch(API+'/batches/'+_activeBatch.id+'/replay', {
         method:'POST', headers:{'Content-Type':'application/json'},
         // noCrossLink: true prevents server from auto-linking to other registered players
-        body: JSON.stringify({ replayId:result.id, plays:result.plays, allPlays:result.allPlays,
+        body: JSON.stringify({ replayId:result.id, plays:_rpsPlays, allPlays:[],
           timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null,
-          oppName:_oppName, noCrossLink:true })
+          oppName:_oppName, noCrossLink:true,
+          parsed: _parsed ? { games:_parsed.games, allMine:_parsed.allMine, allOpp:_parsed.allOpp, oppName:_parsed.oppName, myW:_parsed.myW, oppW:_parsed.oppW, draws:_parsed.draws, score:_parsed.score, result:_parsed.result } : null })
       });
     } catch(e) {}
     if (i<newIds.length-1) await sleep(1200);
@@ -5009,58 +5104,88 @@ function renderProfileGrid(batches) {
     let totalReplays = 0;
     for (const b of pBatches) totalReplays += b.replayCount || (b.replays||[]).length;
 
-    // Build records from pre-loaded batch data (replays already fetched in loadProfiles)
-    let W=0, L=0, WR=0, topDeck='—', topDeckColor='var(--green)';
-    let records = [];
+    // Render card immediately with basic info, enrich with stats in background
     const isActive = _activeBatch && _activeBatch.player === player && _matches && _matches.length;
-    if (isActive) {
-      records = _matches.map(m => ({ result:m.result, allMine:m.allMine, matchWon:m.result==='w', matchLost:m.result==='l' }));
-    } else {
-      for (const b of pBatches) {
-        const _pgAliases = (() => {
-          const key = (b.player||player).toLowerCase();
-          return (window._playerRegistry && window._playerRegistry[key])
-            ? window._playerRegistry[key].aliases : (b.aliases||[]);
-        })();
-        for (const r of (b.replays||[])) {
-          try {
-            const rec = buildMatchRecord(r, player, _pgAliases);
-            if (rec) records.push(rec);
-          } catch(e) { console.warn('buildMatchRecord failed for', r.replayId, e.message); }
-        }
-      }
-    }
-    // W/L/topDeck shown after profile is opened — not needed for grid card
-    const allRecords = [];
 
-    // Card
+    // Card shell — renders instantly
     const card = document.createElement('div');
     card.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;cursor:pointer;transition:all .15s;position:relative;overflow:hidden';
     card.onmouseover = () => { card.style.borderColor='var(--green)'; card.style.transform='translateY(-2px)'; card.style.boxShadow='0 6px 20px rgba(0,229,150,.1)'; };
     card.onmouseout  = () => { card.style.borderColor='var(--border)'; card.style.transform=''; card.style.boxShadow=''; };
     card.onclick = () => openProfile(player, pBatches, []);
 
+    // Current GFWL team from player registry
+    const _pReg = window._playerRegistry && window._playerRegistry[player.toLowerCase()];
+    const _teams = _pReg ? (_pReg.gfwlTeams || _pReg.teams || []) : [];
+    const _latestTeam = _teams.length ? [..._teams].sort((a,b) => b.season.localeCompare(a.season))[0] : null;
+
     card.innerHTML = `
-      <div style="position:absolute;top:0;left:0;right:0;height:3px;background:${topDeckColor}"></div>
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;margin-top:4px">
+      <div class="pc-bar" style="position:absolute;top:0;left:0;right:0;height:3px;background:var(--green)"></div>
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;margin-top:4px">
         <div>
           <div style="font-size:15px;font-weight:bold;color:var(--text);margin-bottom:3px">${player}</div>
           <div style="font-size:11px;color:var(--muted)">${pBatches.length} batch${pBatches.length!==1?'es':''} · ${totalReplays} replay${totalReplays!==1?'s':''}</div>
         </div>
-        <div style="text-align:right">
-          <div style="font-size:20px;font-weight:bold;color:${WR>=50?'var(--green)':WR>0?'var(--red)':'var(--muted)'}">${records.length?WR+'%':'—'}</div>
-          <div style="font-size:10px;color:var(--muted)">${records.length?'Win Rate':'No data yet'}</div>
+        <div class="pc-wr" style="text-align:right">
+          <div style="font-size:20px;font-weight:bold;color:var(--muted)">—</div>
+          <div style="font-size:10px;color:var(--muted)">loading...</div>
         </div>
       </div>
-      ${records.length?`<div style="display:flex;gap:8px;margin-bottom:8px">
-        <span style="font-size:13px;font-weight:bold;color:var(--green)">${W}W</span>
-        <span style="color:var(--muted)">—</span>
-        <span style="font-size:13px;font-weight:bold;color:var(--red)">${L}L</span>
-      </div>`:''}
-      <div style="display:inline-block;background:rgba(0,0,0,.3);border:1px solid ${topDeckColor};color:${topDeckColor};font-family:monospace;font-size:11px;padding:2px 10px;border-radius:20px">${topDeck}</div>
+      <div class="pc-wl" style="display:flex;gap:8px;margin-bottom:8px;min-height:20px"></div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <div class="pc-deck" style="display:inline-block;background:rgba(0,0,0,.3);border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:20px">…</div>
+        ${_latestTeam ? `<div style="font-size:10px;color:var(--amber);font-family:monospace">${_latestTeam.season} · ${_latestTeam.team}</div>` : ''}
+      </div>
     `;
-    console.log('[Profiles] Appending card for player:', player);
     grid.appendChild(card);
+
+    // Enrich card in background — fetch full batch data and compute stats
+    (async () => {
+      try {
+        let records = [];
+        if (isActive) {
+          records = _matches.map(m => ({ result:m.result, allMine:m.allMine, matchWon:m.result==='w', matchLost:m.result==='l' }));
+        } else {
+          const aliases = _pReg ? (_pReg.aliases||[]) : (pBatches[0]?.aliases||[]);
+          const fullBatches = await Promise.all(pBatches.map(async b => {
+            if (b.replays && b.replays.length > 0) return b;
+            try { const r = await fetch(API+'/batches/'+b.id); return await r.json(); } catch(e) { return b; }
+          }));
+          // Update pBatches in _allProfileBatches with full data for when profile is clicked
+          fullBatches.forEach(fb => {
+            const idx = _allProfileBatches.findIndex(x => x.id === fb.id);
+            if (idx >= 0) _allProfileBatches[idx] = fb;
+          });
+          for (const b of fullBatches) {
+            for (const r of (b.replays||[])) {
+              try { const rec = buildMatchRecord(r, player, aliases); if (rec) records.push(rec); } catch(e) {}
+            }
+          }
+        }
+        if (!records.length) {
+          card.querySelector('.pc-wr').innerHTML = '<div style="font-size:14px;font-weight:bold;color:var(--muted)">—</div><div style="font-size:10px;color:var(--muted)">No data</div>';
+          card.querySelector('.pc-deck').textContent = '—';
+          return;
+        }
+        const W = records.filter(r=>r.matchWon).length;
+        const L = records.filter(r=>r.matchLost).length;
+        const WR = pct(W, records.length);
+        const dc = {};
+        records.forEach(r => { const d = r.myDeck || (classifyFromCards(r.allMine||[])||{dc:'Unknown'}).dc; dc[d]=(dc[d]||0)+1; });
+        const topDeck = Object.entries(dc).sort((a,b)=>b[1]-a[1])[0]?.[0] || '—';
+        const topDeckColor = getDeckColor(topDeck, 0);
+        // Update card elements
+        card.querySelector('.pc-bar').style.background = topDeckColor;
+        card.querySelector('.pc-wr').innerHTML = `<div style="font-size:20px;font-weight:bold;color:${WR>=50?'var(--green)':'var(--red)'}">${WR}%</div><div style="font-size:10px;color:var(--muted)">Win Rate</div>`;
+        card.querySelector('.pc-wl').innerHTML = `<span style="font-size:13px;font-weight:bold;color:var(--green)">${W}W</span><span style="color:var(--muted)">—</span><span style="font-size:13px;font-weight:bold;color:var(--red)">${L}L</span>`;
+        const deckEl = card.querySelector('.pc-deck');
+        deckEl.textContent = topDeck;
+        deckEl.style.borderColor = topDeckColor;
+        deckEl.style.color = topDeckColor;
+      } catch(e) {
+        card.querySelector('.pc-wr').innerHTML = '<div style="font-size:14px;color:var(--muted)">—</div>';
+      }
+    })();
   });
 }
 
@@ -5636,27 +5761,21 @@ async function manualRetryTimedOut() {
   for (let i=0; i<timedOut.length; i++) {
     st('Retrying '+(i+1)+'/'+timedOut.length+' — '+timedOut[i], 'var(--amber)');
     const result = await loadReplay(timedOut[i]);
-    // Replace the old timed-out entry
-    _activeBatch.replays = _activeBatch.replays.filter(r => r.replayId !== result.id);
+    // Parse immediately
+    const _rp5 = (result.allPlays||result.plays||[]).filter(p=>p.play==='RPS').map(p=>({game:p.game||null,player1:p.player1||null,player2:p.player2||null,player1_choice:p.player1_choice||p.p1pick||null,player2_choice:p.player2_choice||p.p2pick||null,pick:p.pick||null}));
+    const _pp5 = parseMatch(result.id, result.allPlays||result.plays||[], _activeBatch.player||'', _activeBatch.aliases||[], result.player1, result.player2);
+    const _ps5 = _pp5 ? { games:_pp5.games, allMine:_pp5.allMine, allOpp:_pp5.allOpp, oppName:_pp5.oppName, myW:_pp5.myW, oppW:_pp5.oppW, draws:_pp5.draws, score:_pp5.score, result:_pp5.result } : null;
     const aliases = _activeBatch.aliases||[];
     const _aliases = aliases.map(a=>a.toLowerCase());
     const _isPlayer = u => { if(!u) return false; const ul=String(u).toLowerCase().trim(); if(ul===(_activeBatch.player||'').toLowerCase()) return true; return _aliases.some(a=>ul===a); };
     const _oppName = [result.player1, result.player2].filter(Boolean).find(u => !_isPlayer(u)) || '';
-    _activeBatch.replays.push({
-      replayId: result.id,
-      plays: result.plays,
-      allPlays: result.allPlays,
-      timedOut: result.timedOut,
-      player1: result.player1||null,
-      player2: result.player2||null,
-      oppName: _oppName,
-    });
+    _activeBatch.replays = _activeBatch.replays.filter(r => r.replayId !== result.id);
+    _activeBatch.replays.push({ replayId:result.id, plays:_rp5, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, oppName:_oppName, parsed:_ps5 });
     // Save to server
     try {
       await fetch(API+'/batches/'+_activeBatch.id+'/replay', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({replayId:result.id, plays:result.plays, allPlays:result.allPlays,
-          timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, oppName:_oppName})
+        body: JSON.stringify({replayId:result.id, plays:_rp5, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, oppName:_oppName, parsed:_ps5})
       });
     } catch(e) {}
     if (result.timedOut) stillFailing.push(result.id);
