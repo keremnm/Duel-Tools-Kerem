@@ -2244,7 +2244,11 @@ function buildDeck() {
     if (!plays||!plays.length) continue;
     const m = parseMatch(r.replayId, plays, player, _buildDeckAliases, r.player1||null, r.player2||null);
     if (m) {
-      m.eventLabel = r.eventLabel || '';
+      m.eventLabel       = r.eventLabel       || '';
+      m.myDeckOverride   = r.myDeckOverride   || null;
+      m.oppDeckOverride  = r.oppDeckOverride  || null;
+      if (m.myDeckOverride)  m.myDeck  = m.myDeckOverride;
+      if (m.oppDeckOverride) m.oppDeck = m.oppDeckOverride;
       _matches.push(m);
     }
   }
@@ -2772,17 +2776,48 @@ async function editDeckType(m, isOpp, badgeEl, refreshFn) {
     // Also update myDeck/oppDeck so stats/profiles reflect the fix
     if (isOpp) m.oppDeck = val; else m.myDeck = val;
 
-    // Persist to server — store override on the replay in the active batch
-    if (_activeBatch && !_activeBatch.isTemp) {
+    // Persist to server — find every batch that contains this replay and update all
+    const allBatchSources = [
+      _activeBatch,
+      ...(_allProfileBatches||[]),
+      ...(_activeProfile?.batches||[]),
+    ].filter(Boolean).filter(b => b.id && !b.isTemp);
+    const seenIds = new Set();
+    let savedToServer = false;
+    for (const b of allBatchSources) {
+      if (seenIds.has(b.id)) continue;
+      seenIds.add(b.id);
+      const rep = (b.replays||[]).find(r => r.replayId === m.replayId);
+      if (rep) {
+        rep.myDeckOverride  = m.myDeckOverride  || null;
+        rep.oppDeckOverride = m.oppDeckOverride || null;
+        try {
+          const res = await fetch(`${API}/batches/${b.id}/replay/${encodeURIComponent(m.replayId)}/override`, {
+            method:'PATCH', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ myDeckOverride: m.myDeckOverride||null, oppDeckOverride: m.oppDeckOverride||null })
+          });
+          if (res.ok) { savedToServer = true; console.log('[Override] Saved to batch', b.id); }
+        } catch(e) { console.warn('Override save failed for batch', b.id, e.message); }
+      }
+    }
+    // If not found in memory batches, fetch batch list from server and try all
+    if (!savedToServer) {
       try {
-        await fetch(`${API}/batches/${_activeBatch.id}/replay/${m.replayId}/override`, {
-          method:'PATCH', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ myDeckOverride: m.myDeckOverride||null, oppDeckOverride: m.oppDeckOverride||null })
-        });
-      } catch(e) { console.warn('Override save failed:', e.message); }
-      // Also update in _activeBatch.replays
-      const rep = (_activeBatch.replays||[]).find(r=>r.replayId===m.replayId);
-      if (rep) { rep.myDeckOverride=m.myDeckOverride||null; rep.oppDeckOverride=m.oppDeckOverride||null; }
+        const list = await fetch(API+'/batches').then(r=>r.json());
+        for (const b of list) {
+          if (!b.replayCount) continue;
+          const bData = await fetch(API+'/batches/'+b.id).then(r=>r.json());
+          const rep = (bData.replays||[]).find(r => r.replayId === m.replayId);
+          if (rep) {
+            await fetch(`${API}/batches/${b.id}/replay/${encodeURIComponent(m.replayId)}/override`, {
+              method:'PATCH', headers:{'Content-Type':'application/json'},
+              body: JSON.stringify({ myDeckOverride: m.myDeckOverride||null, oppDeckOverride: m.oppDeckOverride||null })
+            });
+            console.log('[Override] Found and saved via server scan to batch', b.id);
+            break;
+          }
+        }
+      } catch(e) { console.warn('[Override] Server scan failed:', e.message); }
     }
     // Re-render match list badge
     buildDeckMatchList(_matches);
@@ -3307,16 +3342,26 @@ function buildMatchRecord(replayResult, player, aliases) {
     return { dc: top[0], score: top[1], conf: top[1]>=3?'High':top[1]>=2?'Medium':'Low' };
   }
 
-  // Game 1 classification gets extra weight — cards seen only in G2/G3 are likely sided in
+  // Game 1 classification gets exclusive weight — cards only in G2/G3 are likely sided in
   function classifyWithG1Bias(gamesCards) {
     if (!gamesCards.length) return null;
+
+    // Step 1: Try classifying from Game 1 alone
+    const g1Result = gamesCards[0] && gamesCards[0].length ? classifyFromCards(gamesCards[0]) : null;
+
+    // Step 2: If G1 is conclusive (High or Medium confidence), trust it exclusively
+    if (g1Result && (g1Result.conf === 'High' || g1Result.conf === 'Medium')) {
+      return g1Result;
+    }
+
+    // Step 3: G1 inconclusive — vote across all games but heavily weight G1
     const votes = {};
     gamesCards.forEach((gc, idx) => {
-      const g1Multiplier = idx === 0 ? 2.0 : 0.6; // Game 1 = 2x weight, later games = 0.6x
+      const mult = idx === 0 ? 3.0 : 0.4; // G1 = 3x, later games barely count
       const r = classifyFromCards(gc);
-      if (r) votes[r.dc] = (votes[r.dc]||0) + (r.conf==='High'?3:r.conf==='Medium'?2:1) * g1Multiplier;
+      if (r) votes[r.dc] = (votes[r.dc]||0) + (r.conf==='High'?3:r.conf==='Medium'?2:1) * mult;
     });
-    if (!Object.keys(votes).length) return null;
+    if (!Object.keys(votes).length) return g1Result;
     const top = Object.entries(votes).sort((a,b)=>b[1]-a[1])[0];
     return { dc: top[0], score: top[1], conf: top[1]>=6?'High':top[1]>=3?'Medium':'Low' };
   }
@@ -5301,11 +5346,14 @@ async function openProfile(player, batches, records) {
     chips.appendChild(ch);
   });
 
-  // Deck usage donut (my decks)
+  // Deck usage donut — will be updated by renderGFWLHistory with correct season filter
+  // For now build it from all records; renderGFWLHistory will rebuild it immediately after
   const myDeckUsage = {};
   records.forEach(r => { myDeckUsage[r.myDeck||'Unknown'] = (myDeckUsage[r.myDeck||'Unknown']||0)+1; });
   const sortedMy = Object.entries(myDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,10);
   buildDonutChart('profile-deck-chart','profile-deck-legend', sortedMy, player+' — All Seasons');
+  // Trigger GFWL history render now so pie syncs with season filter immediately
+  setTimeout(() => renderGFWLHistory(), 0);
 
   // Matchup table
   _profileRecords = records;
@@ -5662,18 +5710,43 @@ function getEventDecks(player) {
 function saveEventDecks(player, list) {
   // Save to localStorage as backup
   try { localStorage.setItem('edl_' + player, JSON.stringify(list)); } catch(e) {}
-  // Save to active batch if player matches
-  if (_activeBatch && _activeBatch.player === player) {
-    _activeBatch.eventDecklists = list;
-    // Persist to server
-    fetch(API + '/batches/' + _activeBatch.id, {
-      method: 'PATCH', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ eventDecklists: list })
-    }).catch(() => {});
-  }
-  // Update _activeProfile batches
+
+  // Find all batches belonging to this player (active batch or profile batches)
+  const batchesToUpdate = [];
+  if (_activeBatch && _activeBatch.player === player) batchesToUpdate.push(_activeBatch);
   if (_activeProfile && _activeProfile.player === player) {
-    _activeProfile.batches.forEach(b => { b.eventDecklists = list; });
+    (_activeProfile.batches||[]).forEach(b => {
+      if (!batchesToUpdate.find(x => x.id === b.id)) batchesToUpdate.push(b);
+    });
+  }
+  if (_allProfileBatches) {
+    _allProfileBatches.filter(b => b.player === player).forEach(b => {
+      if (!batchesToUpdate.find(x => x.id === b.id)) batchesToUpdate.push(b);
+    });
+  }
+
+  // Update all matching batches in memory + persist to server
+  batchesToUpdate.forEach(b => {
+    b.eventDecklists = list;
+    if (b.id) {
+      fetch(API + '/batches/' + b.id, {
+        method: 'PATCH', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ eventDecklists: list })
+      }).catch(() => {});
+    }
+  });
+
+  // If no batch found yet, try fetching from server to find player's batch
+  if (!batchesToUpdate.length) {
+    fetch(API + '/batches').then(r => r.json()).then(list2 => {
+      const playerBatch = list2.find(b => (b.player||'').toLowerCase() === player.toLowerCase());
+      if (playerBatch) {
+        fetch(API + '/batches/' + playerBatch.id, {
+          method: 'PATCH', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ eventDecklists: list })
+        }).catch(() => {});
+      }
+    }).catch(() => {});
   }
 }
 
@@ -5721,11 +5794,11 @@ function renderEventDecks(player, batches, records) {
     const row = document.createElement('div');
     row.className = 'edl-item';
     row.dataset.code = deck.code;
-    row.style.cssText = 'display:flex;align-items:center;gap:7px;padding:7px 10px;background:var(--card2);border:1px solid var(--border2);border-radius:6px';
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--card2);border:1px solid var(--border2);border-radius:6px;overflow:hidden;min-width:0';
 
     // Code + deck type
     const codeSpan = document.createElement('span');
-    codeSpan.style.cssText = 'font-weight:bold;color:var(--amber);font-family:monospace;font-size:12px;min-width:62px';
+    codeSpan.style.cssText = 'font-weight:bold;color:var(--amber);font-family:monospace;font-size:12px;min-width:0;white-space:nowrap';
     codeSpan.textContent = '🏆 '+deck.code;
     row.appendChild(codeSpan);
 
@@ -5742,11 +5815,12 @@ function renderEventDecks(player, batches, records) {
     rcSpan.textContent = taggedReplays.length+' replay'+(taggedReplays.length!==1?'s':'');
     row.appendChild(rcSpan);
 
-    // View Deck button
+    // View Deck link — just an arrow icon to save space
     const viewBtn = document.createElement('a');
     viewBtn.href = deck.deckUrl; viewBtn.target = '_blank';
-    viewBtn.style.cssText = 'background:var(--blue);color:#fff;font-family:monospace;font-size:10px;font-weight:bold;padding:3px 9px;border-radius:4px;text-decoration:none;white-space:nowrap';
-    viewBtn.textContent = 'View Deck ↗';
+    viewBtn.style.cssText = 'background:var(--blue);color:#fff;font-family:monospace;font-size:11px;font-weight:bold;padding:3px 8px;border-radius:4px;text-decoration:none;flex-shrink:0;line-height:1.4';
+    viewBtn.textContent = '↗';
+    viewBtn.title = 'View Deck on Duelingbook';
     viewBtn.onclick = e => e.stopPropagation();
     row.appendChild(viewBtn);
 
