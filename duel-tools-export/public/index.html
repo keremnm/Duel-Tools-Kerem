@@ -5254,14 +5254,12 @@ async function openProfile(player, batches, records) {
     }));
     batches = fullBatches;
     records = [];
-    // Fetch aliases for this player
-    let _openAliases = [];
-    try {
-      const _pr = await fetch(API+'/players');
-      const _players = await _pr.json();
-      const _entry = _players.find(p => p.name.toLowerCase() === player.toLowerCase());
-      _openAliases = _entry ? (_entry.aliases||[]) : [];
-    } catch(e) {}
+    // Use cached player registry instead of fetching /players again
+    const _openAliases = (() => {
+      const key = player.toLowerCase();
+      return (window._playerRegistry && window._playerRegistry[key])
+        ? (window._playerRegistry[key].aliases||[]) : [];
+    })();
     for (const batch of batches) {
       for (const r of (batch.replays||[])) {
         const m = buildMatchRecord(r, player, _openAliases);
@@ -5299,13 +5297,8 @@ async function openProfile(player, batches, records) {
   const updEl = document.getElementById('profile-view-updated');
   if (updEl) updEl.textContent = lastUpdated ? 'Last updated: '+new Date(lastUpdated).toLocaleDateString() : '';
 
-  // Load player registry entry for this profile
-  let _profileEntry = null;
-  try {
-    const pr = await fetch(API+'/players');
-    const players = await pr.json();
-    _profileEntry = players.find(p => p.name.toLowerCase() === player.toLowerCase()) || null;
-  } catch(e) {}
+  // Use cached player registry instead of fetching /players again
+  const _profileEntry = (window._playerRegistry && window._playerRegistry[player.toLowerCase()]) || null;
   const _profileAliases = _profileEntry ? (_profileEntry.aliases||[]) : [];
 
   const aliasEl = document.getElementById('profile-view-aliases');
