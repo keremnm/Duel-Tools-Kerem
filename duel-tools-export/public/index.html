@@ -2144,12 +2144,29 @@ function openBatchPanel(mode) {
           item.innerHTML = `<span style="color:var(--green);font-weight:bold">${displayName}</span><span style="color:var(--dim);font-size:10px"> · ${replayCount} replays</span>`;
           item.onmouseenter = () => { if (!isSelected) item.style.background='var(--card2)'; };
           item.onmouseleave = () => { if (!isSelected) item.style.background='transparent'; };
-          item.onclick = () => {
+          item.onclick = async () => {
             window._addBatchSelected = b.id;
             searchInp.value = b.player || b.name;
             batchList.style.display = 'none';
             const aliasInp = document.getElementById('add-batch-aliases');
-            if (aliasInp) aliasInp.value = (b.aliases||[]).join(', ');
+            // Use known aliases, or fetch from server if not available
+            let aliases = b.aliases || [];
+            if (!aliases.length) {
+              // Try player registry first
+              const regEntry = window._playerRegistry && window._playerRegistry[(b.player||'').toLowerCase()];
+              if (regEntry && regEntry.aliases && regEntry.aliases.length) {
+                aliases = regEntry.aliases;
+              } else {
+                // Fetch batch to get aliases
+                try {
+                  const bd = await fetch(API+'/batches/'+b.id).then(r=>r.json());
+                  aliases = bd.aliases || [];
+                  // Update in memory
+                  b.aliases = aliases;
+                } catch(e) {}
+              }
+            }
+            if (aliasInp) aliasInp.value = aliases.join(', ');
           };
           batchList.appendChild(item);
         });
@@ -2161,8 +2178,18 @@ function openBatchPanel(mode) {
         searchInp.onfocus = () => renderBatchList(searchInp.value);
         searchInp.onblur = () => setTimeout(() => { if(batchList) batchList.style.display='none'; }, 200);
       }
+      // Don't pre-fill aliases — they auto-fill when a batch is selected from dropdown
+      // Only pre-fill if _addBatchSelected already matches a batch
       const aliasInp = document.getElementById('add-batch-aliases');
-      if (aliasInp) aliasInp.value = _activeBatch ? (_activeBatch.aliases||[]).join(', ') : '';
+      if (aliasInp) {
+        if (window._addBatchSelected && _allProfileBatches) {
+          const preSelected = _allProfileBatches.find(b => b.id === window._addBatchSelected);
+          aliasInp.value = preSelected ? (preSelected.aliases||[]).join(', ') : '';
+        } else {
+          aliasInp.value = '';
+        }
+        aliasInp.placeholder = 'Auto-filled from saved batch — edit to add more';
+      }
     }, 0);
   }
   setTimeout(() => document.getElementById('urls-inp').focus(), 50);
@@ -2263,13 +2290,16 @@ function renderRPS() {
   const log=[]; let rounds=0, miss=0, tos=0;
 
   const _rpsAliases = (_activeBatch.aliases||[]).map(a=>a.toLowerCase());
-  const _rpsNames = new Set([player.toLowerCase(), ..._rpsAliases]);
+  // Also pull from player registry in case batch aliases are stale
+  const _regEntry = window._playerRegistry && window._playerRegistry[player.toLowerCase()];
+  const _regAliases = _regEntry ? (_regEntry.aliases||[]).map(a=>a.toLowerCase()) : [];
+  const _rpsNames = new Set([player.toLowerCase(), ..._rpsAliases, ..._regAliases]);
   const _rpsIsPlayer = u => {
     if (!u) return false;
     const ul = String(u).toLowerCase().trim();
     if (_rpsNames.has(ul)) return true;
-    // Partial match fallback — handles trailing spaces, emoji, extra chars
-    for (const n of _rpsNames) { if (ul.includes(n) || n.includes(ul)) return true; }
+    // Partial match — handles "Player 1." vs actual names won't match, but real aliases will
+    for (const n of _rpsNames) { if (n.length > 3 && (ul === n || ul.startsWith(n) || n.startsWith(ul))) return true; }
     return false;
   };
 
@@ -2365,11 +2395,40 @@ function renderRPS() {
     const row=mk(ll,'lr'); E(row,'span','…'+item.id.slice(-10),'lid');
     if(item.err){
       E(row,'span',item.err,'bdg be');
-      // Add remove button for failed replays (timed out or player not found)
+      // Retry button — re-fetch and re-parse
+      if (item.err.includes('Timeout') || item.err.includes('not found')) {
+        const retryBtn = document.createElement('button');
+        retryBtn.textContent = '↺';
+        retryBtn.title = 'Retry fetching this replay';
+        retryBtn.style.cssText = 'margin-left:6px;background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:10px;padding:1px 7px;border-radius:3px;cursor:pointer;line-height:1.5';
+        retryBtn.onclick = async () => {
+          if (!_activeBatch) return;
+          retryBtn.disabled = true; retryBtn.textContent = '…';
+          const rid = item.id;
+          try {
+            const result = await loadReplay(rid);
+            if (result.timedOut) { retryBtn.disabled=false; retryBtn.textContent='↺'; st('Still timing out — try again later', 'var(--red)'); return; }
+            const _rpa = (result.allPlays||result.plays||[]).filter(p=>p.play==='RPS').map(p=>({game:p.game||null,player1:p.player1||null,player2:p.player2||null,player1_choice:p.player1_choice||p.p1pick||null,player2_choice:p.player2_choice||p.p2pick||null,pick:p.pick||null}));
+            const _ppa = parseMatch(result.id, result.allPlays||result.plays||[], _activeBatch.player||'', _activeBatch.aliases||[], result.player1, result.player2);
+            const _psa = _ppa ? { games:_ppa.games, allMine:_ppa.allMine, allOpp:_ppa.allOpp, oppName:_ppa.oppName, myW:_ppa.myW, oppW:_ppa.oppW, draws:_ppa.draws, score:_ppa.score, result:_ppa.result } : null;
+            _activeBatch.replays = (_activeBatch.replays||[]).filter(r => r.replayId !== rid);
+            const _oppName = _ppa ? _ppa.oppName : '';
+            const entry = { replayId:rid, plays:_rpa, allPlays:[], timedOut:false, player1:result.player1||null, player2:result.player2||null, oppName:_oppName, parsed:_psa, eventLabel:(_activeBatch.replays.find(r=>r.replayId===rid)||{}).eventLabel||'' };
+            _activeBatch.replays.push(entry);
+            if (_activeBatch.id) {
+              try { await fetch(`${API}/batches/${_activeBatch.id}/replay`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({replayId:rid,plays:_rpa,allPlays:[],timedOut:false,oppName:_oppName,player1:result.player1||null,player2:result.player2||null,parsed:_psa}) }); } catch(e){}
+            }
+            st('Retry successful: '+rid, 'var(--green)');
+            renderRPS(); buildDeck();
+          } catch(e) { retryBtn.disabled=false; retryBtn.textContent='↺'; st('Retry failed: '+e.message, 'var(--red)'); }
+        };
+        row.appendChild(retryBtn);
+      }
+      // Remove button
       const xBtn = document.createElement('button');
       xBtn.textContent = '✕';
       xBtn.title = 'Remove this replay from batch';
-      xBtn.style.cssText = 'margin-left:6px;background:var(--red);color:#fff;border:none;font-family:monospace;font-weight:bold;font-size:10px;padding:1px 7px;border-radius:3px;cursor:pointer;line-height:1.5';
+      xBtn.style.cssText = 'margin-left:4px;background:var(--red);color:#fff;border:none;font-family:monospace;font-weight:bold;font-size:10px;padding:1px 7px;border-radius:3px;cursor:pointer;line-height:1.5';
       xBtn.onclick = async () => {
         if (!_activeBatch) return;
         const rid = item.id;
@@ -2378,8 +2437,7 @@ function renderRPS() {
           try { await fetch(`${API}/batches/${_activeBatch.id}/replay/${encodeURIComponent(rid)}`, { method:'DELETE' }); } catch(e) {}
         }
         st('Replay removed', 'var(--green)');
-        renderRPS();
-        buildDeck();
+        renderRPS(); buildDeck();
       };
       row.appendChild(xBtn);
     }
