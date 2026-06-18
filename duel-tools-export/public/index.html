@@ -536,6 +536,9 @@ select{cursor:pointer}
             <button class="dd-btn-sec" onclick="ddSetDeckFilter('Chaos Control',this)">Chaos Control</button>
             <button class="dd-btn-sec" onclick="ddSetDeckFilter('Warrior',this)">Warrior</button>
             <button class="dd-btn-sec" onclick="ddSetDeckFilter('Chaos Warrior',this)">Chaos Warrior</button>
+            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Thunder Clap',this)">Thunder Clap</button>
+            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Gearfried Warriors',this)">Gearfried</button>
+            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Zombie',this)">Zombie</button>
             <button class="dd-btn-sec" onclick="ddSetDeckFilter('Goat Control',this)">Goat Control</button>
             <button class="dd-btn-sec" onclick="ddSetDeckFilter('Earth Aggro',this)">Earth Aggro</button>
             <button class="dd-btn-sec" onclick="ddSetDeckFilter('Panda Burn',this)">Panda Burn</button>
@@ -565,6 +568,9 @@ select{cursor:pointer}
             <button class="dd-btn-sec" onclick="ddSetCWRFilter('Chaos Control',this)">Chaos Control</button>
             <button class="dd-btn-sec" onclick="ddSetCWRFilter('Warrior',this)">Warrior</button>
             <button class="dd-btn-sec" onclick="ddSetCWRFilter('Chaos Warrior',this)">Chaos Warrior</button>
+            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Thunder Clap',this)">Thunder Clap</button>
+            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Gearfried Warriors',this)">Gearfried</button>
+            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Zombie',this)">Zombie</button>
             <button class="dd-btn-sec" onclick="ddSetCWRFilter('Goat Control',this)">Goat Control</button>
             <button class="dd-btn-sec" onclick="ddSetCWRFilter('Earth Aggro',this)">Earth Aggro</button>
             <button class="dd-btn-sec" onclick="ddSetCWRFilter('Panda Burn',this)">Panda Burn</button>
@@ -1150,6 +1156,7 @@ const DECK_CATEGORY = {
   'Warrior':                'Aggro',
   'Chaos Warrior':          'Aggro',
   'Gearfried Warriors':     'Aggro',
+  'Thunder Clap':           'Aggro',
   'Earth Aggro':            'Aggro',
   'Aggro Lockdown':         'Aggro',
   'Gumo':                   'Aggro',
@@ -1240,9 +1247,7 @@ const TFIDF_WEIGHTS = {
   'd.d. assailant':                    { 'Warrior': 0.45, 'Earth Aggro': 0.50, 'Aggro Lockdown': 0.45 },
   'warrior returning alive':           { 'Warrior': 0.55, 'Chaos Warrior': 0.40, 'Gearfried Warriors': 0.55 },
   'zombyra the dark':                  { 'Chaos Warrior': 0.75 },
-  'gearfried the iron knight':         { 'Gearfried Warriors': 0.90, 'Warrior': 0.30 },
-  'blast with chain':                  { 'Gearfried Warriors': 0.88 },
-  'smoke grenade of the thief':        { 'Gearfried Warriors': 0.88 },
+  // Gearfried weights now handled above
   'jurai gumo':                        { 'Aggro Lockdown': 0.95 },
   'skill drain':                       { 'Aggro Lockdown': 0.72, 'Drain Burn': 0.40 },
   'time seal':                         { 'Aggro Lockdown': 0.85 },
@@ -1256,7 +1261,16 @@ const TFIDF_WEIGHTS = {
   'the rock spirit':                   { 'Earth Aggro': 0.95 },
   'gemini elf':                        { 'Earth Aggro': 0.65, 'Aggro Lockdown': 0.30 },
   'exarion universe':                  { 'Earth Aggro': 0.60, 'Chaos Control': 0.30 },
-  'ryu kokki':                         { 'Zombie': 0.85 },
+  'ryu kokki':                         { 'Zombie': 0.90, 'Thunder Clap': 0.05 },
+  'spirit reaper':                     { 'Zombie': 0.78 },
+  'despair from the dark':             { 'Zombie': 0.80 },
+  'call of the mummy':                 { 'Zombie': 0.90 },
+  'card of safe return':               { 'Zombie': 0.75 },
+  'gearfried the iron knight':         { 'Gearfried Warriors': 0.92, 'Warrior': 0.20 },
+  'blast with chain':                  { 'Gearfried Warriors': 0.90, 'Warrior': 0.15 },
+  'smoke grenade of the thief':        { 'Gearfried Warriors': 0.85, 'Warrior': 0.15 },
+  'zaborg the thunder monarch':        { 'Thunder Clap': 0.55, 'Monarch': 0.55 },
+  'brain control':                     { 'Thunder Clap': 0.45, 'Warrior': 0.20, 'Earth Aggro': 0.20 },
   'pyramid turtle':                    { 'Zombie': 0.82 },
   'vampire lord':                      { 'Zombie': 0.80 },
   'regenerating mummy':                { 'Zombie': 0.78 },
@@ -2523,7 +2537,68 @@ function classifyFromCards(cards) {
   }
   const bkEquips=['axe of despair','big bang shot','united we stand'].filter(has);
   if (bkEquips.length>=2) scores['Ben Kai OTK']+=0.40;
-  if (has('pyramid turtle')||has('ryu kokki')) scores['Zombie']+=0.40;
+  // ── Zombie co-occurrence rules ───────────────────────────────────────────────
+  const zombieMonsters = ['ryu kokki','vampire lord','pyramid turtle','spirit reaper',
+    'regenerating mummy','double coston','despair from the dark'].filter(has);
+  const zombieSpells   = ['book of life','call of the mummy','card of safe return'].filter(has);
+  if (zombieMonsters.length >= 2) {
+    scores['Zombie'] += 1.20;
+    ['Warrior','Chaos Warrior','Earth Aggro','Goat Control','Chaos Turbo'].forEach(k => scores[k] = Math.max(0, scores[k]*0.15));
+  } else if (zombieMonsters.length === 1) {
+    scores['Zombie'] += 0.50;
+  }
+  if (zombieSpells.length >= 1) {
+    scores['Zombie'] += 0.55 * zombieSpells.length;
+  }
+  if (zombieMonsters.length >= 1 && zombieSpells.length >= 1) {
+    scores['Zombie'] += 0.60;
+    Object.keys(scores).filter(k=>k!=='Zombie').forEach(k => scores[k] = Math.max(0, scores[k]*0.20));
+  }
+
+  // ── Thunder Clap co-occurrence rules ─────────────────────────────────────────
+  // Thunder Clap: 2-3 Zaborgs, no Thestalos/Granmarg, often Brain Control, Goblin Attack Force
+  const zaborgCount = cnt('zaborg the thunder monarch');
+  const hasThestalos = has('thestalos the firestorm monarch');
+  const hasMobius    = has('mobius the frost monarch');
+  const hasGranmarg  = has('granmarg the rock monarch');
+  const hasSoulEx    = has('soul exchange');
+  if (zaborgCount >= 2 && !hasThestalos && !hasGranmarg) {
+    scores['Thunder Clap'] += 1.00;
+    scores['Monarch'] = Math.max(0, scores['Monarch'] * 0.15);
+    // Confirm with earth aggro signals
+    if (has('goblin attack force') || has('brain control') || has('giant rat')) {
+      scores['Thunder Clap'] += 0.60;
+      ['Monarch','Warrior','Chaos Warrior'].forEach(k => scores[k] = Math.max(0, scores[k]*0.10));
+    }
+  } else if (zaborgCount >= 1 && !hasThestalos && !hasGranmarg && !hasSoulEx && (has('goblin attack force') || has('brain control'))) {
+    // 1 Zaborg + earth aggro engine = likely Thunder Clap
+    scores['Thunder Clap'] += 0.65;
+    scores['Monarch'] = Math.max(0, scores['Monarch'] * 0.30);
+  }
+  // Zaborg + soul exchange = Monarch, not Thunder Clap
+  if (hasSoulEx && has('zaborg the thunder monarch')) {
+    scores['Thunder Clap'] = Math.max(0, scores['Thunder Clap'] * 0.10);
+    scores['Monarch'] += 0.50;
+  }
+  // Goblin attack force without gigantes = more likely Thunder Clap or Warrior than Earth Aggro
+  if (has('goblin attack force') && !has('gigantes') && zaborgCount >= 1) {
+    scores['Earth Aggro'] = Math.max(0, scores['Earth Aggro'] * 0.40);
+    scores['Thunder Clap'] += 0.30;
+  }
+
+  // ── Gearfried co-occurrence rules ─────────────────────────────────────────────
+  if (has('gearfried the iron knight')) {
+    scores['Gearfried Warriors'] += 0.60;
+    scores['Warrior'] = Math.max(0, scores['Warrior'] * 0.40); // suppress plain Warrior
+    if (has('blast with chain') || has('smoke grenade of the thief')) {
+      scores['Gearfried Warriors'] += 0.80;
+      Object.keys(scores).filter(k=>k!=='Gearfried Warriors').forEach(k => scores[k] = Math.max(0, scores[k]*0.20));
+    }
+    // Gearfried + warrior returning alive = strong confirm
+    if (has('warrior returning alive') || has('reinforcement of the army')) {
+      scores['Gearfried Warriors'] += 0.40;
+    }
+  }
   Object.keys(scores).forEach(k=>{if(scores[k]<0)scores[k]=0;});
 
   const sorted = Object.entries(scores).sort((a,b)=>b[1]-a[1]);
@@ -5882,6 +5957,13 @@ function renderEventDecks(player, batches, records) {
     return extractNum(b.code) - extractNum(a.code);
   });
 
+  // Reset year filter if switching players
+  const existingYearSel = document.getElementById('edl-year-filter');
+  if (existingYearSel && existingYearSel.dataset.forPlayer !== player) {
+    existingYearSel.value = '';
+    existingYearSel.dataset.forPlayer = player;
+  }
+
   // Build year dropdown
   const years = [...new Set(sorted.map(d => d.year).filter(Boolean))].sort((a,b)=>b-a);
   const selId = 'edl-year-filter';
@@ -5890,9 +5972,10 @@ function renderEventDecks(player, batches, records) {
     yearSel = document.createElement('select');
     yearSel.id = selId;
     yearSel.style.cssText = 'background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:3px 7px;border-radius:4px;outline:none;margin-bottom:6px';
-    yearSel.onchange = () => renderEventDecks(player, batches, records);
     el.parentElement.insertBefore(yearSel, el);
   }
+  // Always update onchange with current player/batches/records — prevents stale closure bleed
+  yearSel.onchange = () => renderEventDecks(player, batches, records);
   const curYear = yearSel.value;
   yearSel.innerHTML = '<option value="">All Years</option>' + years.map(y=>`<option value="${y}"${String(y)===curYear?'selected':''}>${y}</option>`).join('');
   if (!curYear && years.length) yearSel.value = String(years[0]);
