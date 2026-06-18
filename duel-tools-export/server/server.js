@@ -474,9 +474,15 @@ const server = http.createServer(async (req, res) => {
       if (r) {
         if (data.myDeckOverride  !== undefined) r.myDeckOverride  = data.myDeckOverride;
         if (data.oppDeckOverride !== undefined) r.oppDeckOverride = data.oppDeckOverride;
+        // Also update parsed if available
+        if (r.parsed) {
+          if (data.myDeckOverride)  r.parsed.myDeck  = data.myDeckOverride;
+          if (data.oppDeckOverride) r.parsed.oppDeck = data.oppDeckOverride;
+        }
         await saveDB();
+        return json(res, 200, { ok:true, found:true });
       }
-      return json(res, 200, { ok:true });
+      return json(res, 200, { ok:true, found:false });
     });
   }
 
