@@ -2388,7 +2388,20 @@ function classifyFromCards(cards) {
     const wc=['blade knight','don zaloog','mystic swordsman lv2','zombyra the dark'].filter(has).length;
     if (wc<3) scores['Chaos Turbo']+=0.50; else scores['Chaos Warrior']+=0.35;
   }
-  if (hasc('scapegoat','metamorphosis')) { scores['Goat Control']+=0.55; scores['Chaos Control']+=0.20; if(!has('thunder dragon'))scores['Goat Control']+=0.25; }
+  // Scapegoat + Metamorphosis: weight by how many copies seen
+  // If only 1 of each seen (likely sided in game 2), reduce weight significantly
+  const scapeCount = cnt('scapegoat');
+  const metaCount  = cnt('metamorphosis');
+  if (has('scapegoat') && has('metamorphosis')) {
+    const sidedWeight = (scapeCount <= 1 && metaCount <= 1) ? 0.25 : 1.0; // low copies = likely sided
+    scores['Goat Control'] += 0.55 * sidedWeight;
+    scores['Chaos Control'] += 0.20 * sidedWeight;
+    if (!has('thunder dragon')) scores['Goat Control'] += 0.25 * sidedWeight;
+  } else if (has('scapegoat') && !has('metamorphosis')) {
+    // Scapegoat without metamorphosis could be many decks
+    scores['Goat Control'] += 0.15;
+    scores['Chaos Control'] += 0.10;
+  }
   if (has('thousand-eyes restrict')) scores['Goat Control']+=0.35;
   if (has('abyss soldier')) scores['Chaos Control']+=0.45;
   if (has('reinforcement of the army')) {
@@ -2406,11 +2419,21 @@ function classifyFromCards(cards) {
   if (has('blowback dragon')&&has('reasoning')) scores['Reasoning Gate Machine']+=0.40;
   if (has('cyber-stein')&&has('amazoness archer')) scores['SWAG']+=0.50;
   else if (has('cyber-stein')) scores['Stein OTK']+=0.45;
+  // ── Chaos Return guard: if strong Chaos Return signals present, suppress Monarch ──
+  // Chaos Return runs Zaborg as a beater, not a tribute engine — don't let it lock Monarch
+  const isChaosReturn = has('return from the different dimension') &&
+    (has('shining angel') || has('dekoichi the battlechanted locomotive') || has('roulette barrel'));
+  if (isChaosReturn) {
+    // Suppress Monarch heavily — Zaborg is just a beater here
+    scores['Monarch'] = Math.max(0, scores['Monarch'] * 0.10);
+    scores['Chaos Return'] += 0.60;
+  }
+
   // ── Monarch co-occurrence rules ─────────────────────────────────────────────
   const monarchCards = ['soul exchange','thestalos the firestorm monarch','mobius the frost monarch',
     'granmarg the rock monarch','zaborg the thunder monarch'].filter(has);
-  if (monarchCards.length >= 1) {
-    // Any monarch card is strong evidence
+  if (monarchCards.length >= 1 && !isChaosReturn) {
+    // Any monarch card is strong evidence (only when not Chaos Return)
     scores['Monarch'] += 0.60 * monarchCards.length;
     // Soul exchange alone is nearly definitive
     if (has('soul exchange')) {
@@ -2766,7 +2789,7 @@ async function editDeckType(m, isOpp, badgeEl, refreshFn) {
     refreshFn();
   };
 
-  sel.onchange = () => { if (sel.value !== '__custom__') {} }; // let save button handle it
+  sel.onchange = () => { if (sel.value && sel.value !== '__custom__') doSave(); };
   saveBtn.onclick = doSave;
   cancelBtn.onclick = refreshFn;
   sel.onkeydown = e => { if(e.key==='Enter') doSave(); if(e.key==='Escape') refreshFn(); };
@@ -3284,10 +3307,24 @@ function buildMatchRecord(replayResult, player, aliases) {
     return { dc: top[0], score: top[1], conf: top[1]>=3?'High':top[1]>=2?'Medium':'Low' };
   }
 
+  // Game 1 classification gets extra weight — cards seen only in G2/G3 are likely sided in
+  function classifyWithG1Bias(gamesCards) {
+    if (!gamesCards.length) return null;
+    const votes = {};
+    gamesCards.forEach((gc, idx) => {
+      const g1Multiplier = idx === 0 ? 2.0 : 0.6; // Game 1 = 2x weight, later games = 0.6x
+      const r = classifyFromCards(gc);
+      if (r) votes[r.dc] = (votes[r.dc]||0) + (r.conf==='High'?3:r.conf==='Medium'?2:1) * g1Multiplier;
+    });
+    if (!Object.keys(votes).length) return null;
+    const top = Object.entries(votes).sort((a,b)=>b[1]-a[1])[0];
+    return { dc: top[0], score: top[1], conf: top[1]>=6?'High':top[1]>=3?'Medium':'Low' };
+  }
+
   const myGamesCards  = parsed.games.map(g => g.mine);
   const oppGamesCards = parsed.games.map(g => g.opp);
-  const myClass  = classifyMajority(myGamesCards)  || classifyFromCards(parsed.allMine);
-  const oppClass = classifyMajority(oppGamesCards) || classifyFromCards(parsed.allOpp);
+  const myClass  = classifyWithG1Bias(myGamesCards)  || classifyFromCards(parsed.allMine);
+  const oppClass = classifyWithG1Bias(oppGamesCards) || classifyFromCards(parsed.allOpp);
 
   // Per-game card lists for card win rate calculation
   const gameRecords = parsed.games.map(g => ({
@@ -3477,6 +3514,17 @@ function renderGFWLHistory() {
 
   const filtered = sel.value === 'all' ? allGFWL
     : allGFWL.filter(r => eventGroupKey(r.eventLabel) === sel.value);
+
+  // Update deck usage pie chart based on selected season filter
+  const player = _activeProfile && _activeProfile.player;
+  if (player && typeof buildDonutChart === 'function') {
+    const pieRecords = sel.value === 'all' ? (records||[]) : filtered;
+    const myDeckUsage = {};
+    pieRecords.forEach(r => { myDeckUsage[r.myDeck||'Unknown'] = (myDeckUsage[r.myDeck||'Unknown']||0)+1; });
+    const sortedMy = Object.entries(myDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,10);
+    const label = sel.value === 'all' ? 'All GFWL Seasons' : 'Season '+sel.value.slice(1);
+    buildDonutChart('profile-deck-chart','profile-deck-legend', sortedMy, player+' — '+label);
+  }
 
   listEl.innerHTML = '';
   if (!filtered.length) {
@@ -3896,36 +3944,45 @@ function buildMatchupTable(records, container, player) {
 }
 
 
-// ── Card Win Rate from batch ───────────────────────────────────────────
-function ddCardWRFromBatch() {
-  if (!_activeBatch || !_activeBatch.replays || !_activeBatch.replays.length) {
-    alert('No batch loaded. Run an analysis first.');
-    return;
-  }
+// ── Card Win Rate from ALL batches ─────────────────────────────────────
+async function ddCardWRFromBatch() {
   const cardInput = document.getElementById('dd-card-name').value.trim().toLowerCase();
   if (!cardInput) { alert('Enter a card name to search for.'); return; }
 
-  const player = _activeBatch.player;
-  // Use _matches (already parsed with cards) — fall back to buildMatchRecord
-  let allRecords = [];
-  if (_matches && _matches.length) {
-    allRecords = _matches.map(m => ({
-      replayId: m.replayId, player, oppName: m.oppName,
-      eventLabel: m.eventLabel||'',
-      myDeck:  (classifyFromCards(m.allMine)||{dc:'Unknown'}).dc,
-      oppDeck: (classifyFromCards(m.allOpp)||{dc:'Unknown'}).dc,
-      matchWon: m.result==='w', matchLost: m.result==='l',
-      result: m.result, score: m.score, myW: m.myW, oppW: m.oppW, draws: m.draws,
-      allMine: m.allMine, allOpp: m.allOpp,
-      allMyCards: m.allMine.map(x=>x.name.toLowerCase()),
+  // Load all batches (same as Stats tab)
+  let allBatches = [];
+  try {
+    const res = await fetch(API+'/batches');
+    const list = await res.json();
+    const fetched = await Promise.all(list.map(async b => {
+      if (!b.replayCount) return null;
+      if (_activeBatch && b.id === _activeBatch.id) return _activeBatch;
+      try { const r = await fetch(API+'/batches/'+b.id); return await r.json(); } catch(e) { return null; }
     }));
-  } else {
-    const _cwrAliases = (() => {
-      const key = (_activeBatch.player||'').toLowerCase();
-      return (window._playerRegistry && window._playerRegistry[key])
-        ? (window._playerRegistry[key].aliases||[]) : (_activeBatch.aliases||[]);
-    })();
-    allRecords = _activeBatch.replays.map(r => buildMatchRecord(r, player, _cwrAliases)).filter(Boolean);
+    allBatches = fetched.filter(Boolean);
+  } catch(e) { if (_activeBatch) allBatches = [_activeBatch]; }
+  if (_activeBatch && !allBatches.find(b => b.id === _activeBatch.id)) allBatches.unshift(_activeBatch);
+
+  // Build records from all batches
+  let allRecords = [];
+  for (const batch of allBatches) {
+    const player = batch.player;
+    if (_activeBatch && batch.id === _activeBatch.id && _matches && _matches.length) {
+      _matches.forEach(m => allRecords.push({
+        replayId: m.replayId, player, oppName: m.oppName, eventLabel: m.eventLabel||'',
+        myDeck: (classifyFromCards(m.allMine)||{dc:'Unknown'}).dc,
+        oppDeck: (classifyFromCards(m.allOpp)||{dc:'Unknown'}).dc,
+        matchWon: m.result==='w', matchLost: m.result==='l',
+        result: m.result, score: m.score, myW: m.myW, oppW: m.oppW, draws: m.draws,
+        allMine: m.allMine, allOpp: m.allOpp,
+        allMyCards: m.allMine.map(x=>x.name.toLowerCase()),
+      }));
+    } else {
+      const _cwrAliases = (batch.aliases||[]);
+      for (const r of (batch.replays||[])) {
+        try { const rec = buildMatchRecord(r, player, _cwrAliases); if (rec) allRecords.push(rec); } catch(e) {}
+      }
+    }
   }
   const qpDeckFilter = (document.getElementById('dd-cwr-my-deck')||{value:'All'}).value;
   renderQuickPicks(buildQuickPicks(allRecords, qpDeckFilter));
@@ -4501,12 +4558,12 @@ function addEdlRow() {
   if (!container) return;
   const curYear = new Date().getFullYear();
   const row = document.createElement('div');
-  row.style.cssText = 'display:grid;grid-template-columns:1fr 90px 2fr auto;gap:5px;align-items:center';
+  row.style.cssText = 'display:grid;grid-template-columns:68px 1fr 2fr auto;gap:5px;align-items:center';
   row.innerHTML = `
-    <input type="text" placeholder="Event ID (FLC40)" style="font-size:11px;text-transform:uppercase;background:var(--card);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:5px 7px;outline:none;font-family:monospace"/>
     <select style="font-size:11px;background:var(--card);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:5px 4px;outline:none;font-family:monospace">
       ${[0,1,2,3,4].map(i=>`<option value="${curYear-i}">${curYear-i}</option>`).join('')}
     </select>
+    <input type="text" placeholder="Event ID (FLC40)" style="font-size:11px;text-transform:uppercase;background:var(--card);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:5px 7px;outline:none;font-family:monospace"/>
     <input type="text" placeholder="Deck URL or ID" style="font-size:11px;background:var(--card);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:5px 7px;outline:none;font-family:monospace"/>
     <button onclick="this.parentElement.remove()" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:14px;padding:0 3px;line-height:1">✕</button>
   `;
@@ -4527,8 +4584,9 @@ async function saveEventDecklist() {
       const inputs = row.querySelectorAll('input');
       const sel    = row.querySelector('select');
       if (!inputs.length) continue;
-      const code = (inputs[0].value||'').trim().toUpperCase();
+      // Column order: Year (select) | Event ID (input[0]) | Deck URL (input[1])
       const year = sel ? parseInt(sel.value)||null : null;
+      const code = (inputs[0].value||'').trim().toUpperCase();
       const url  = (inputs[1]?.value||'').trim();
       if (!code || !url) continue;
       const m = url.match(/deck\?id=(\d+)/);
@@ -5247,7 +5305,7 @@ async function openProfile(player, batches, records) {
   const myDeckUsage = {};
   records.forEach(r => { myDeckUsage[r.myDeck||'Unknown'] = (myDeckUsage[r.myDeck||'Unknown']||0)+1; });
   const sortedMy = Object.entries(myDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,10);
-  buildDonutChart('profile-deck-chart','profile-deck-legend', sortedMy, player+' Deck Usage');
+  buildDonutChart('profile-deck-chart','profile-deck-legend', sortedMy, player+' — All Seasons');
 
   // Matchup table
   _profileRecords = records;
