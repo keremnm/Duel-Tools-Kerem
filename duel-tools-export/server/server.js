@@ -88,8 +88,6 @@ function loadFileDB() {
       if (!db.users)   db.users   = {};
     }
   } catch(e) { console.error('File DB load error:', e.message); }
-  // Strip bloated allPlays data on every startup to keep memory lean
-  stripAllPlaysInDB();
 }
 
 async function saveDB() {
@@ -121,6 +119,7 @@ function stripPlay(p) {
 }
 
 // ── stripAllPlays: strip allPlays on all batches in DB (run on startup) ───────
+// stripAllPlaysInDB kept for admin endpoint only — not called on startup
 function stripAllPlaysInDB() {
   let count = 0;
   for (const batch of Object.values(db.batches)) {
@@ -131,10 +130,7 @@ function stripAllPlaysInDB() {
       }
     }
   }
-  if (count > 0) {
-    console.log(`[startup] Stripped allPlays on ${count} replays`);
-    saveDB();
-  }
+  return count;
 }
 
 // ── Auth helpers ──────────────────────────────────────────────────────────────
