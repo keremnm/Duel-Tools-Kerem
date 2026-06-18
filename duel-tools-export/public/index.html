@@ -775,7 +775,7 @@ select{cursor:pointer}
           </div>
 
           <!-- RIGHT: teams + event decklists panel -->
-          <div style="width:300px;flex-shrink:0;border-left:1px solid var(--border);background:var(--panel);overflow-y:auto;display:flex;flex-direction:column">
+          <div style="width:380px;flex-shrink:0;border-left:1px solid var(--border);background:var(--panel);overflow-y:auto;display:flex;flex-direction:column">
 
             <!-- Top Player flag -->
             <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
@@ -5146,10 +5146,11 @@ async function saveTeamEntry() {
   try {
     await fetch(`${API}/players/${encodeURIComponent(player)}/aliases`, {
       method:'PATCH', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ teams })
+      body: JSON.stringify({ gfwlTeams: teams })
     });
     if (window._playerRegistry && window._playerRegistry[key]) {
       window._playerRegistry[key].teams = teams;
+      window._playerRegistry[key].gfwlTeams = teams;
     }
     document.getElementById('team-season-inp').value = '';
     document.getElementById('team-name-inp').value   = '';
@@ -5324,8 +5325,15 @@ async function openProfile(player, batches, records) {
     if (topLabel) topLabel.textContent = topFlag.checked ? '⭐ Top Player' : 'Flag as Top Player';
   }
 
-  // Teams
-  renderProfileTeams(player, _profileEntry ? (_profileEntry.teams||[]) : []);
+  // Teams — check gfwlTeams (server key) and teams (legacy)
+  const _teamList = _profileEntry ? (_profileEntry.gfwlTeams || _profileEntry.teams || []) : [];
+  renderProfileTeams(player, _teamList);
+  // Sync eventDecklists from registry into _playerRegistry for getEventDecks to find
+  if (_profileEntry && Array.isArray(_profileEntry.eventDecklists) && _profileEntry.eventDecklists.length) {
+    if (!window._playerRegistry) window._playerRegistry = {};
+    if (!window._playerRegistry[player.toLowerCase()]) window._playerRegistry[player.toLowerCase()] = {};
+    window._playerRegistry[player.toLowerCase()].eventDecklists = _profileEntry.eventDecklists;
+  }
 
   // Stat chips
   const chips = document.getElementById('profile-stat-chips');
@@ -5694,13 +5702,18 @@ async function manualRetryTimedOut() {
 
 // Storage key: eventDecklists_{player} → [{eventCode, deckUrl, cards[], addedAt}]
 function getEventDecks(player) {
-  // Check active batch first (source of truth)
-  if (_activeBatch && _activeBatch.player === player && Array.isArray(_activeBatch.eventDecklists)) {
+  // Check player registry first (most persistent)
+  const key = player.toLowerCase();
+  if (window._playerRegistry && window._playerRegistry[key] && Array.isArray(window._playerRegistry[key].eventDecklists) && window._playerRegistry[key].eventDecklists.length) {
+    return window._playerRegistry[key].eventDecklists;
+  }
+  // Check active batch
+  if (_activeBatch && _activeBatch.player === player && Array.isArray(_activeBatch.eventDecklists) && _activeBatch.eventDecklists.length) {
     return _activeBatch.eventDecklists;
   }
   // Check active profile batches
   if (_activeProfile && _activeProfile.player === player) {
-    for (const b of _activeProfile.batches) {
+    for (const b of (_activeProfile.batches||[])) {
       if (Array.isArray(b.eventDecklists) && b.eventDecklists.length) return b.eventDecklists;
     }
   }
@@ -5736,7 +5749,13 @@ function saveEventDecks(player, list) {
     }
   });
 
-  // If no batch found yet, try fetching from server to find player's batch
+  // Always also save to the player registry (persistent, batch-independent)
+  fetch(`${API}/players/${encodeURIComponent(player)}/aliases`, {
+    method: 'PATCH', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ eventDecklists: list })
+  }).then(() => console.log('[EDL] Saved to player registry')).catch(() => {});
+
+  // If no batch found in memory, scan server batches
   if (!batchesToUpdate.length) {
     fetch(API + '/batches').then(r => r.json()).then(list2 => {
       const playerBatch = list2.find(b => (b.player||'').toLowerCase() === player.toLowerCase());
