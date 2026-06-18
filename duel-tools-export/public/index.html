@@ -1563,15 +1563,78 @@ async function loadBatches() {
 
 function renderBatchList(list) {
   const el = document.getElementById('batch-list');
-  const displayList = [];
-  if (_tempBatch) displayList.push(_tempBatch);
-  displayList.push(...list.filter(b => !_tempBatch || b.id !== _tempBatch.id));
-  if (!displayList.length) { el.innerHTML = '<div class="no-batches">No batches yet.</div>'; return; }
   el.innerHTML = '';
-  displayList.forEach(b => {
-    const item = igtBuildBatchItem(b, list);
+
+  // Always show temp batch first
+  if (_tempBatch) el.appendChild(igtBuildBatchItem(_tempBatch, list));
+
+  // Group real batches by player (case-insensitive)
+  const byPlayer = {};
+  list.filter(b => !b.isTemp && (!_tempBatch || b.id !== _tempBatch.id)).forEach(b => {
+    const key = (b.player||b.name||'').toLowerCase();
+    if (!byPlayer[key]) byPlayer[key] = [];
+    byPlayer[key].push(b);
+  });
+
+  // Sort players alphabetically
+  const playerKeys = Object.keys(byPlayer).sort();
+  if (!playerKeys.length && !_tempBatch) {
+    el.innerHTML = '<div class="no-batches">No batches yet.</div>'; return;
+  }
+
+  playerKeys.forEach(key => {
+    const batches = byPlayer[key];
+    const totalReplays = batches.reduce((s, b) => s + (b.replayCount || (b.replays||[]).length || 0), 0);
+    const primaryBatch = batches[0];
+    const isActive = _activeBatch && batches.some(b => b.id === _activeBatch.id);
+
+    const item = document.createElement('div');
+    item.className = 'batch-item' + (isActive ? ' on' : '');
+
+    const nameRow = document.createElement('div');
+    nameRow.style.cssText = 'display:flex;align-items:center;gap:4px';
+    const nameEl = document.createElement('div');
+    nameEl.className = 'bi-name'; nameEl.style.flex = '1';
+    nameEl.textContent = primaryBatch.player || primaryBatch.name;
+    if (batches.length > 1) {
+      const tag = document.createElement('span');
+      tag.style.cssText = 'color:var(--dim);font-size:9px;margin-left:4px';
+      tag.textContent = batches.length+'b';
+      nameEl.appendChild(tag);
+    }
+    nameRow.appendChild(nameEl);
+
+    const renBtn = document.createElement('button');
+    renBtn.className = 'bi-rename'; renBtn.textContent = '✎';
+    renBtn.onclick = e => renameBatch(e, primaryBatch.id, primaryBatch.player);
+    nameRow.appendChild(renBtn);
+
+    const delBtn = document.createElement('span');
+    delBtn.className = 'bi-del'; delBtn.textContent = '✕';
+    delBtn.onclick = e => { e.stopPropagation(); deletePlayerBatches(e, batches); };
+    nameRow.appendChild(delBtn);
+
+    const metaEl = document.createElement('div');
+    metaEl.className = 'bi-meta';
+    metaEl.textContent = totalReplays + ' replay' + (totalReplays!==1?'s':'');
+
+    item.appendChild(nameRow);
+    item.appendChild(metaEl);
+    // Click: load all batches for this player merged
+    item.onclick = () => selectPlayerBatches(batches.map(b=>b.id));
     el.appendChild(item);
   });
+}
+
+async function deletePlayerBatches(e, batches) {
+  e.stopPropagation();
+  const player = batches[0].player || batches[0].name;
+  if (!confirm('Delete all batches for ' + player + '?')) return;
+  for (const b of batches) {
+    await fetch(API+'/batches/'+b.id, { method:'DELETE' });
+    if (_activeBatch && _activeBatch.id === b.id) _activeBatch = null;
+  }
+  loadBatches();
 }
 
 
@@ -1712,6 +1775,40 @@ async function openPlayerByName(name) {
   if (pBatches.length) openProfile(name, pBatches, []);
 }
 
+async function selectPlayerBatches(ids) {
+  // Fetch all batches for this player and merge replays (deduplicated)
+  try {
+    const batches = await Promise.all(ids.map(id => fetch(API+'/batches/'+id).then(r=>r.json())));
+    const primary = batches[0];
+    const seenIds = new Set();
+    const mergedReplays = [];
+    for (const b of batches) {
+      for (const r of (b.replays||[])) {
+        if (!seenIds.has(r.replayId)) {
+          seenIds.add(r.replayId);
+          mergedReplays.push(r);
+        }
+      }
+    }
+    // Create a merged virtual batch
+    _activeBatch = {
+      ...primary,
+      replays: mergedReplays,
+      replayCount: mergedReplays.length,
+      _mergedIds: ids, // track all constituent batch IDs
+    };
+    _allProfileBatches = batches;
+    loadBatches();
+    renderRPS();
+    buildDeck();
+    const addBtn = document.getElementById('add-to-batch-btn');
+    if (addBtn) addBtn.style.display = 'block';
+    const cleanBtn = document.getElementById('clean-batch-btn');
+    if (cleanBtn) cleanBtn.style.display = 'block';
+    st('Loaded: '+primary.player+' ('+mergedReplays.length+' replays)', 'var(--green)');
+  } catch(e) { st('Failed to load batches', 'var(--red)'); console.error(e); }
+}
+
 async function selectBatch(id) {
   // Handle temp batch click — it lives in memory only
   if (_tempBatch && id === _tempBatch.id) {
@@ -1805,14 +1902,33 @@ async function go() {
     _activeBatch = _tempBatch;
     loadBatches(); // refresh list to show temp batch
   } else {
-    // Always create a new batch named after the player
+    // Check if batch(es) for this player already exist — merge into them
     try {
-      const r = await fetch(API+'/batches', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ name: player, player, aliases })
-      });
-      _activeBatch = await r.json();
-      _activeBatch.aliases = aliases;
+      const existingList = await fetch(API+'/batches').then(r=>r.json()).catch(()=>[]);
+      const existingBatches = existingList.filter(b => (b.player||'').toLowerCase() === player.toLowerCase());
+      if (existingBatches.length > 0) {
+        // Load full data from all existing batches and merge
+        const fullBatches = await Promise.all(existingBatches.map(b => fetch(API+'/batches/'+b.id).then(r=>r.json()).catch(()=>b)));
+        const seenIds = new Set();
+        const mergedReplays = [];
+        for (const b of fullBatches) {
+          for (const r of (b.replays||[])) {
+            if (!seenIds.has(r.replayId)) { seenIds.add(r.replayId); mergedReplays.push(r); }
+          }
+        }
+        const primary = fullBatches[0];
+        _activeBatch = { ...primary, aliases: aliases.length ? aliases : (primary.aliases||[]), replays: mergedReplays, _mergedIds: existingBatches.map(b=>b.id) };
+        _allProfileBatches = fullBatches;
+        st('Adding to existing batch for '+player+' ('+mergedReplays.length+' existing replays)...', 'var(--amber)');
+      } else {
+        // Create new batch
+        const r = await fetch(API+'/batches', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ name: player, player, aliases })
+        });
+        _activeBatch = await r.json();
+        _activeBatch.aliases = aliases;
+      }
     } catch(e) {
       console.warn('Server unavailable, using local batch:', e.message);
       _activeBatch = { id:'local-'+Date.now(), name:player, player, aliases, replays:[], createdAt:Date.now(), status:'pending' };
@@ -1855,7 +1971,8 @@ async function go() {
     _activeBatch.replays.push({ replayId:result.id, plays:_rpsPlays, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, parsed:_parsedStore, oppName:_oppName, eventLabel:_batchEventLabel||'' });
     // Save to server — server handles duplicate detection + cross-linking
     if (!_activeBatch.isTemp) try {
-      const saveRes = await fetch(`${API}/batches/${_activeBatch.id}/replay`, {
+      const targetBatchId = (_activeBatch._mergedIds && _activeBatch._mergedIds[0]) || _activeBatch.id;
+      const saveRes = await fetch(`${API}/batches/${targetBatchId}/replay`, {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ replayId:result.id, plays:_rpsPlays, allPlays:[],
           timedOut:result.timedOut, oppName:_oppName, player1:result.player1||null, player2:result.player2||null, parsed:_parsedStore, eventLabel:_batchEventLabel||'' })
@@ -4645,7 +4762,8 @@ async function addToBatch() {
     const replayEntry = { replayId:result.id, plays:_rpsA, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, oppName:_oppName, parsed:_psA, eventLabel:_batchEventLabel||'' };
     _activeBatch.replays.push(replayEntry);
     try {
-      await fetch(API+'/batches/'+_activeBatch.id+'/replay', {
+      const _saveId = (_activeBatch._mergedIds && _activeBatch._mergedIds[0]) || _activeBatch.id;
+      await fetch(API+'/batches/'+_saveId+'/replay', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ replayId:result.id, plays:_rpsA, allPlays:[],
           timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null,
