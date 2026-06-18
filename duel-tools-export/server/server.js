@@ -88,6 +88,8 @@ function loadFileDB() {
       if (!db.users)   db.users   = {};
     }
   } catch(e) { console.error('File DB load error:', e.message); }
+  // Strip bloated allPlays data on every startup to keep memory lean
+  stripAllPlaysInDB();
 }
 
 async function saveDB() {
@@ -102,6 +104,36 @@ async function saveDB() {
   } else {
     try { fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2)); }
     catch(e) { console.error('File DB save error:', e.message); }
+  }
+}
+
+// ── stripPlay: remove bloat from play objects before storing ─────────────────
+function stripPlay(p) {
+  return {
+    play:p.play, owner:p.owner, username:p.username, player1:p.player1, player2:p.player2,
+    player1_choice:p.player1_choice||p.p1pick||undefined,
+    player2_choice:p.player2_choice||p.p2pick||undefined,
+    cards:p.cards?p.cards.map(c=>({name:c.name,owner:c.owner,id:c.id,serial_number:c.serial_number,card_type:c.card_type})):undefined,
+    card:p.card?{name:p.card.name,owner:p.card.owner,id:p.card.id,serial_number:p.card.serial_number,card_type:p.card.card_type}:undefined,
+    winner:p.winner, loser:p.loser, game:p.game, pick:p.pick, p1pick:p.p1pick, p2pick:p.p2pick,
+    log:Array.isArray(p.log)?p.log.map(l=>({type:l.type,owner:l.owner,username:l.username,card:l.card?{name:l.card.name,id:l.card.id,serial_number:l.card.serial_number}:undefined,game:l.game,public_log:l.public_log,private_log:l.private_log})):(p.log&&typeof p.log==='object'?{type:p.log.type,owner:p.log.owner,username:p.log.username,public_log:p.log.public_log,private_log:p.log.private_log}:undefined)
+  };
+}
+
+// ── stripAllPlays: strip allPlays on all batches in DB (run on startup) ───────
+function stripAllPlaysInDB() {
+  let count = 0;
+  for (const batch of Object.values(db.batches)) {
+    for (const replay of (batch.replays||[])) {
+      if (replay.allPlays && replay.allPlays.length) {
+        replay.allPlays = replay.allPlays.map(stripPlay);
+        count++;
+      }
+    }
+  }
+  if (count > 0) {
+    console.log(`[startup] Stripped allPlays on ${count} replays`);
+    saveDB();
   }
 }
 
@@ -180,7 +212,7 @@ function crossLinkReplay(replayData, opponentUsername) {
   const exists = (batch.replays||[]).find(r => r.replayId === replayData.replayId);
   if (exists) return { linked: false, duplicate: true, batchId: batch.id, player: opponentEntry.name };
   if (!batch.replays) batch.replays = [];
-  batch.replays.push({ replayId: replayData.replayId, plays: replayData.plays||[], allPlays: replayData.allPlays||[], timedOut: !!replayData.timedOut, eventLabel: replayData.eventLabel||'', oppName: replayData.oppName||'', crossLinked: true, savedAt: Date.now() });
+  batch.replays.push({ replayId: replayData.replayId, plays: replayData.plays||[], allPlays: (replayData.allPlays||[]).map(stripPlay), timedOut: !!replayData.timedOut, eventLabel: replayData.eventLabel||'', oppName: replayData.oppName||'', crossLinked: true, savedAt: Date.now() });
   batch.status = 'ready';
   return { linked: true, duplicate: false, batchId: batch.id, player: opponentEntry.name };
 }
@@ -467,7 +499,8 @@ const server = http.createServer(async (req, res) => {
       if (!dup) {
         // New replay — insert
         if (!b.replays) b.replays = [];
-        b.replays.push({ replayId:data.replayId, plays:data.plays||[], allPlays:minPlays, timedOut:!!data.timedOut, eventLabel:data.eventLabel||'', oppName:data.oppName||'', player1:data.player1||null, player2:data.player2||null, savedAt:Date.now() });
+        const strippedPlays = (minPlays||[]).map(stripPlay);
+        b.replays.push({ replayId:data.replayId, plays:data.plays||[], allPlays:strippedPlays, timedOut:!!data.timedOut, eventLabel:data.eventLabel||'', oppName:data.oppName||'', player1:data.player1||null, player2:data.player2||null, savedAt:Date.now() });
         b.status = 'ready';
         // Only cross-link when explicitly allowed (new batch creation, not manual add-to-batch)
         if (data.oppName && !data.noCrossLink) {
@@ -477,7 +510,7 @@ const server = http.createServer(async (req, res) => {
         await saveDB();
       } else if (dup.timedOut && !data.timedOut) {
         // Existing timed-out entry being updated with real data — overwrite it
-        b.replays[dupIdx] = { replayId:data.replayId, plays:data.plays||[], allPlays:minPlays, timedOut:false, eventLabel:dup.eventLabel||data.eventLabel||'', oppName:data.oppName||dup.oppName||'', player1:data.player1||dup.player1||null, player2:data.player2||dup.player2||null, savedAt:Date.now() };
+        b.replays[dupIdx] = { replayId:data.replayId, plays:data.plays||[], allPlays:(minPlays||[]).map(stripPlay), timedOut:false, eventLabel:dup.eventLabel||data.eventLabel||'', oppName:data.oppName||dup.oppName||'', player1:data.player1||dup.player1||null, player2:data.player2||dup.player2||null, savedAt:Date.now() };
         b.status = 'ready';
         console.log(`[replay] Updated timed-out replay ${data.replayId} with real data`);
         await saveDB();
@@ -639,3 +672,20 @@ server.listen(PORT, '0.0.0.0', () => {
 
 process.on('SIGINT',  () => { saveDB().then(() => process.exit(0)); });
 process.on('SIGTERM', () => { saveDB().then(() => process.exit(0)); });
+
+
+// ── Keep-alive ping — prevents Railway cold starts ───────────────────────────
+const APP_URL = process.env.RAILWAY_PUBLIC_DOMAIN
+  ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+  : null;
+if (APP_URL) {
+  setInterval(() => {
+    const https = require('https');
+    https.get(APP_URL + '/api/batches', res => {
+      console.log('[keepalive] ping', res.statusCode);
+    }).on('error', e => {
+      console.warn('[keepalive] ping failed:', e.message);
+    });
+  }, 4 * 60 * 1000); // every 4 minutes
+  console.log('[keepalive] enabled for', APP_URL);
+}
