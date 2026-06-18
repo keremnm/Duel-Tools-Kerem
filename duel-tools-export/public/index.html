@@ -3816,8 +3816,24 @@ function profileSubTab(tab, btn) {
   document.getElementById('profile-matchup-panel').style.display = tab==='matchups' ? 'block' : 'none';
   document.getElementById('profile-gfwl-panel').style.display    = tab==='gfwl'     ? 'block' : 'none';
   document.getElementById('profile-cardwr-panel').style.display  = tab==='cardwr'   ? 'block' : 'none';
-  if (tab === 'cardwr') profileCardWRQuickPicks();
-  if (tab === 'gfwl')   renderGFWLHistory();
+  if (tab === 'cardwr') {
+    profileCardWRQuickPicks();
+    // Ensure card WR uses all profile records, not just active batch
+    const cardWRHdr = document.getElementById('profile-cardwr-header');
+    if (cardWRHdr && _activeProfile) cardWRHdr.textContent = 'CARD WIN RATE — ALL REPLAYS ('+(_profileRecords||[]).length+' matches)';
+  }
+  if (tab === 'gfwl') {
+    renderGFWLHistory(); // pie switches to GFWL-only when this tab is active
+  } else if (tab === 'matchups') {
+    // Restore all-time pie when switching away from GFWL
+    if (_activeProfile && typeof buildDonutChart === 'function') {
+      const allRecs = _activeProfile.records || [];
+      const du = {};
+      allRecs.forEach(r => { du[r.myDeck||'Unknown'] = (du[r.myDeck||'Unknown']||0)+1; });
+      const sorted = Object.entries(du).sort((a,b)=>b[1]-a[1]).slice(0,10);
+      buildDonutChart('profile-deck-chart','profile-deck-legend', sorted, _activeProfile.player+' — All Time');
+    }
+  }
 }
 
 function renderGFWLHistory() {
@@ -3849,7 +3865,8 @@ function renderGFWLHistory() {
   // Update deck usage pie chart based on selected season filter
   const player = _activeProfile && _activeProfile.player;
   if (player && typeof buildDonutChart === 'function') {
-    const pieRecords = sel.value === 'all' ? (records||[]) : filtered;
+    // "All Seasons" = all GFWL records combined; specific season = just that season
+    const pieRecords = sel.value === 'all' ? allGFWL : filtered;
     const myDeckUsage = {};
     pieRecords.forEach(r => { myDeckUsage[r.myDeck||'Unknown'] = (myDeckUsage[r.myDeck||'Unknown']||0)+1; });
     const sortedMy = Object.entries(myDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,10);
@@ -5539,6 +5556,14 @@ Adding new ones will retroactively scan all saved replays.`,
     const data = await res.json();
     aliasEl.dataset.aliases = JSON.stringify(aliases);
     aliasEl.textContent = aliases.length ? `aka: ${aliases.join(', ')} ✎` : '+ add aliases ✎';
+    // Update in-memory registry so subsequent profile loads use new aliases
+    if (!window._playerRegistry) window._playerRegistry = {};
+    const _regKey = player.toLowerCase();
+    if (!window._playerRegistry[_regKey]) window._playerRegistry[_regKey] = { name: player };
+    window._playerRegistry[_regKey].aliases = aliases;
+    // Also update active batch aliases in memory
+    if (_activeBatch && _activeBatch.player === player) _activeBatch.aliases = aliases;
+    if (_allProfileBatches) _allProfileBatches.filter(b => b.player === player).forEach(b => b.aliases = aliases);
     if (data.rescanned > 0) {
       st(`Aliases saved — ${data.rescanned} new replay(s) linked retroactively`, 'var(--green)');
     } else {
@@ -5672,12 +5697,16 @@ async function openProfile(player, batches, records) {
   records.forEach(r => { myDeckUsage[r.myDeck||'Unknown'] = (myDeckUsage[r.myDeck||'Unknown']||0)+1; });
   const sortedMy = Object.entries(myDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,10);
   buildDonutChart('profile-deck-chart','profile-deck-legend', sortedMy, player+' — All Seasons');
-  // Trigger GFWL history render now so pie syncs with season filter immediately
-  setTimeout(() => renderGFWLHistory(), 0);
+  // Initial pie shows ALL records (all-time deck usage)
+  // Pie will switch to GFWL-only when user clicks GFWL History tab
+  // Don't auto-trigger renderGFWLHistory here as it would immediately override the all-time pie
 
-  // Matchup table
+  // Matchup table — use ALL records for this player (all batches)
   _profileRecords = records;
   buildProfileMatchupTable(records);
+  // Update matchup header to confirm source
+  const matchupHdr = document.getElementById('profile-matchup-header');
+  if (matchupHdr) matchupHdr.textContent = 'WIN RATE VS OPPONENT DECK TYPE — ALL REPLAYS ('+records.length+' matches)';
 
   // Event decklists
   renderEventDecks(player, batches, records);
