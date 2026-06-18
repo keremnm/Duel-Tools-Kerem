@@ -4943,25 +4943,17 @@ async function loadProfiles() {
       return;
     }
 
-    // Fetch full replay data for every batch in parallel
-    const fullBatches = await Promise.all(serverList.map(async b => {
+    // Use lightweight list — only fetch full batch data when a profile is clicked
+    const lightBatches = serverList.map(b => {
       if (_activeBatch && b.id === _activeBatch.id) return _activeBatch;
-      if (!b.replayCount) return b;
-      try {
-        const r = await fetch(API+'/batches/'+b.id);
-        return await r.json();
-      } catch(e) { return b; }
-    }));
+      return b; // has: id, name, player, replayCount, createdAt
+    });
 
-    // If active batch not yet on server, prepend it
-    if (_activeBatch && !fullBatches.find(b => b.id === _activeBatch.id)) {
-      fullBatches.unshift(_activeBatch);
+    if (_activeBatch && !lightBatches.find(b => b.id === _activeBatch.id)) {
+      lightBatches.unshift(_activeBatch);
     }
 
-    _allProfileBatches = fullBatches.filter(b => b && b.player);
-
-    console.log('[Profiles] fullBatches:', fullBatches.map(b => b ? (b.player + ' replays=' + (b.replays||[]).length) : 'null'));
-    console.log('[Profiles] _allProfileBatches:', _allProfileBatches.map(b => b.player + ' id=' + b.id));
+    _allProfileBatches = lightBatches.filter(b => b && b.player);
 
     if (!_allProfileBatches.length) {
       grid.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:20px">No profiles yet. Analyze or import a batch first.</div>';
@@ -5038,15 +5030,7 @@ function renderProfileGrid(batches) {
         }
       }
     }
-    if (records.length) {
-      W = records.filter(r=>r.matchWon).length;
-      L = records.filter(r=>r.matchLost).length;
-      WR = pct(W, records.length);
-      const dc = {};
-      records.forEach(r => { const cards=r.allMine||[]; const d=(classifyFromCards(cards)||{dc:'Unknown'}).dc; dc[d]=(dc[d]||0)+1; });
-      topDeck = Object.entries(dc).sort((a,b)=>b[1]-a[1])[0]?.[0]||'—';
-      topDeckColor = getDeckColor(topDeck, 0);
-    }
+    // W/L/topDeck shown after profile is opened — not needed for grid card
     const allRecords = [];
 
     // Card
@@ -5246,9 +5230,9 @@ async function openProfile(player, batches, records) {
     // Make sure active batch is in the list
     if (!batches.find(b => b.id === _activeBatch.id)) batches = [_activeBatch, ...batches];
   } else {
-    // For other players — try to load batch data from server
+    // Fetch full batch data for this player's batches only (not all batches)
     const fullBatches = await Promise.all(batches.map(async b => {
-      if (b.replays && b.replays.length > 0) return b;
+      if (b.replays && b.replays.length > 0) return b; // already loaded
       try { const r = await fetch(API+'/batches/'+b.id); return await r.json(); }
       catch(e) { return b; }
     }));
