@@ -2650,8 +2650,29 @@ function classifyFromCards(cards) {
   if (has('time seal')) scores['Aggro Lockdown']+=0.45;
   if (hasc('reasoning','monster gate')) { scores['Reasoning Gate Turbo']+=0.65; scores['Reasoning Gate Machine']+=0.60; scores['Chaos Turbo']=Math.max(0,scores['Chaos Turbo']-0.30); }
   if (has('blowback dragon')&&has('reasoning')) scores['Reasoning Gate Machine']+=0.40;
-  if (has('cyber-stein')&&has('amazoness archer')) scores['SWAG']+=0.50;
-  else if (has('cyber-stein')) scores['Stein OTK']+=0.45;
+  // ── Stein OTK vs SWAG distinction ─────────────────────────────────────────
+  if (has('cyber-stein') && has('megamorph')) {
+    if (has('amazoness archer')) {
+      // Amazoness Archer = SWAG, not Stein OTK
+      scores['SWAG'] += 1.20;
+      scores['Stein OTK'] = Math.max(0, scores['Stein OTK'] * 0.10);
+    } else if (has('secret barrel')) {
+      // Secret Barrel = Burn variant, not Stein OTK
+      scores['Burn'] += 0.60;
+      scores['Stein OTK'] = Math.max(0, scores['Stein OTK'] * 0.20);
+    } else {
+      // Cyber-Stein + Megamorph, no Archer, no Secret Barrel = Stein OTK
+      scores['Stein OTK'] += 1.50;
+      Object.keys(scores).filter(k=>k!=='Stein OTK').forEach(k => scores[k] = Math.max(0, scores[k]*0.15));
+    }
+  } else if (has('cyber-stein') && has('amazoness archer')) {
+    scores['SWAG'] += 0.80;
+    scores['Stein OTK'] = Math.max(0, scores['Stein OTK'] * 0.20);
+  } else if (has('cyber-stein')) {
+    // Cyber-Stein alone — lean Stein OTK but not definitive
+    scores['Stein OTK'] += 0.55;
+    scores['SWAG'] += 0.20;
+  }
   // ── Chaos Return guard: if strong Chaos Return signals present, suppress Monarch ──
   // Chaos Return runs Zaborg as a beater, not a tribute engine — don't let it lock Monarch
   const isChaosReturn = has('return from the different dimension') &&
@@ -2905,6 +2926,8 @@ function renderMatchSidebar(query) {
       scoreEl.className = 'mi-score '+m.result; scoreEl.textContent = rl+' · '+m.games.length+'G';
       item.appendChild(scoreEl);
       if (myDeckLabel) { const dl=document.createElement('div'); dl.className='mi-deck-label'; dl.textContent=myDeckLabel; item.appendChild(dl); }
+      // Show event ID under deck label if match has one and it's not already shown in group header
+      if (m.eventLabel) { const el2=document.createElement('div'); el2.style.cssText='font-size:9px;color:var(--amber);font-family:monospace;margin-top:1px'; el2.textContent='🏆 '+m.eventLabel; item.appendChild(el2); }
       item.onclick = () => selectMatch(idx);
       body.appendChild(item);
     });
@@ -3023,7 +3046,7 @@ const DECK_TYPE_LIST = [
   'Chaos Return','Chaos Recruiter','Gravekeeper','Burn','Panda Burn','Drain Burn',
   'Last Turn','Pacman','Ben Kai OTK','Relinquished','Chaos Relinquished',
   'Library FTK','Gumo','Rescue Cat Earth Aggro','SWAG Rescue Cat','Rescue Cat OTK',
-  'Rescue Cat Burn','Gearfried Warriors','Thunder Clap','Zombie','Unknown'
+  'Rescue Cat Burn','Gearfried Warriors','Thunder Clap','Zombie','Stein OTK','Unknown'
 ].sort();
 
 async function editDeckType(m, isOpp, badgeEl, refreshFn) {
@@ -3979,12 +4002,25 @@ function renderGFWLHistory() {
           +(myDeck?'<span style="font-size:10px;color:var(--green);border:1px solid var(--green);border-radius:3px;padding:0 5px">'+myDeck+'</span>':'')
           +(oppDeck?'<span style="font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:3px;padding:0 5px">vs '+oppDeck+'</span>':'')
           +'</div>';
+        // Event ID badge
+        if (r.eventLabel) {
+          const evtBadge = document.createElement('span');
+          evtBadge.style.cssText='font-size:9px;color:var(--amber);font-family:monospace;border:1px solid var(--amber);border-radius:3px;padding:0 5px;white-space:nowrap';
+          evtBadge.textContent='🏆 '+r.eventLabel;
+          infoEl.querySelector('div').appendChild(evtBadge);
+        }
+        // Copy link button
+        const copyBtn = document.createElement('button');
+        copyBtn.textContent = '⎘';
+        copyBtn.title = 'Copy replay link';
+        copyBtn.style.cssText='background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 6px;border-radius:4px;cursor:pointer;white-space:nowrap';
+        copyBtn.onclick = e => { e.stopPropagation(); navigator.clipboard.writeText('https://www.duelingbook.com/replay?id='+r.replayId).then(()=>{ copyBtn.textContent='✓'; setTimeout(()=>copyBtn.textContent='⎘',1500); }); };
         const watchA = document.createElement('a');
         watchA.href='https://www.duelingbook.com/replay?id='+r.replayId;
         watchA.target='_blank';
         watchA.style.cssText='background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;text-decoration:none;white-space:nowrap';
         watchA.textContent='▶ Watch';
-        row.appendChild(wEl); row.appendChild(infoEl); row.appendChild(watchA);
+        row.appendChild(wEl); row.appendChild(infoEl); row.appendChild(copyBtn); row.appendChild(watchA);
         body.appendChild(row);
       });
 
