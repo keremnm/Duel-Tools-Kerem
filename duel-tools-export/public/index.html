@@ -3615,12 +3615,26 @@ async function migrateReplayToParseFormat(r, parsedMatch, batch) {
 function buildMatchRecord(replayResult, player, aliases) {
   const replayId = replayResult.replayId || '';
 
+  // Check event decklist for deck type override (works even without myDeckOverride)
+  function getEventDeckType(eventLabel, player) {
+    if (!eventLabel) return null;
+    const code = eventLabel.split(':')[0].trim().toUpperCase(); // "S8: WK 1" -> "S8"
+    // Excluded: GFWL Seasons (S#), LADDER, ACAD — too varied for a single deck type
+    if (/^S\d+$/i.test(code)) return null;
+    if (code === 'LADDER' || code === 'ACAD') return null;
+    const evDecks = getEventDecks(player);
+    const match = evDecks && evDecks.find(d => d.code === code || d.code === eventLabel.trim().toUpperCase());
+    return match ? (match.deckTypeOverride || null) : null;
+  }
+
   // Fast path: use pre-parsed data if available
   if (replayResult.parsed && replayResult.parsed.games && replayResult.parsed.games.length) {
     const p = replayResult.parsed;
     const myClass  = classifyWithG1Bias ? classifyWithG1Bias(p.games.map(g=>g.mine)) : classifyFromCards(p.allMine||[]);
     const oppClass = classifyWithG1Bias ? classifyWithG1Bias(p.games.map(g=>g.opp))  : classifyFromCards(p.allOpp||[]);
-    const myDeckFinal  = replayResult.myDeckOverride  || (myClass  ? myClass.dc  : 'Unknown');
+    // Check event decklist deck type (if user saved a deck type for this event)
+    const eventDeckType = getEventDeckType(replayResult.eventLabel, player);
+    const myDeckFinal  = replayResult.myDeckOverride  || eventDeckType || (myClass  ? myClass.dc  : 'Unknown');
     const oppDeckFinal = replayResult.oppDeckOverride || (oppClass ? oppClass.dc : 'Unknown');
     const gameRecords  = p.games.map(g => ({
       gameNum:  g.gameNum,
@@ -3750,7 +3764,8 @@ function buildMatchRecord(replayResult, player, aliases) {
   }));
 
   // Apply manual overrides if present
-  const myDeckFinal  = replayResult.myDeckOverride  || (myClass  ? myClass.dc  : 'Unknown');
+  const eventDeckType2 = getEventDeckType(replayResult.eventLabel, player);
+  const myDeckFinal  = replayResult.myDeckOverride  || eventDeckType2 || (myClass  ? myClass.dc  : 'Unknown');
   const oppDeckFinal = replayResult.oppDeckOverride || (oppClass ? oppClass.dc : 'Unknown');
 
   return {
@@ -6220,6 +6235,7 @@ function renderEventDecks(player, batches, records) {
   if (existingYearSel && existingYearSel.dataset.forPlayer !== player) {
     existingYearSel.value = '';
     existingYearSel.dataset.forPlayer = player;
+    delete existingYearSel.dataset.initialized; // reset so new player defaults to most recent year
   }
 
   // Build year dropdown
@@ -6235,8 +6251,14 @@ function renderEventDecks(player, batches, records) {
   // Always update onchange with current player/batches/records — prevents stale closure bleed
   yearSel.onchange = () => renderEventDecks(player, batches, records);
   const curYear = yearSel.value;
+  // Only auto-select most recent year on FIRST render (when no value set yet and not explicitly "All Years")
+  const isFirstRender = !yearSel.dataset.initialized;
   yearSel.innerHTML = '<option value="">All Years</option>' + years.map(y=>`<option value="${y}"${String(y)===curYear?'selected':''}>${y}</option>`).join('');
-  if (!curYear && years.length) yearSel.value = String(years[0]);
+  if (isFirstRender && years.length) {
+    yearSel.value = String(years[0]); // default to most recent year on first load
+    yearSel.dataset.initialized = '1';
+  }
+  // If user explicitly selected "All Years" (curYear === ''), keep it
 
   const filterYear = yearSel.value;
   const visible = filterYear ? sorted.filter(d => String(d.year) === filterYear) : sorted;
@@ -6258,10 +6280,13 @@ function renderEventDecks(player, batches, records) {
     codeSpan.textContent = '🏆 '+deck.code;
     row.appendChild(codeSpan);
 
-    if (deckType) {
+    const displayDeckType = deck.deckTypeOverride || deckType;
+    if (displayDeckType) {
       const dtBadge = document.createElement('span');
-      dtBadge.style.cssText = 'font-size:10px;color:var(--green);border:1px solid var(--green);border-radius:3px;padding:0 5px;white-space:nowrap';
-      dtBadge.textContent = deckType;
+      const isOverride = !!deck.deckTypeOverride;
+      dtBadge.style.cssText = `font-size:10px;color:${isOverride?'var(--amber)':'var(--green)'};border:1px solid ${isOverride?'var(--amber)':'var(--green)'};border-radius:3px;padding:0 5px;white-space:nowrap`;
+      dtBadge.textContent = displayDeckType;
+      dtBadge.title = isOverride ? 'Manually set deck type (click ✎ to change)' : 'Auto-detected from replays';
       row.appendChild(dtBadge);
     }
 
@@ -6270,6 +6295,27 @@ function renderEventDecks(player, batches, records) {
     rcSpan.style.cssText = 'font-size:10px;color:var(--dim);margin-left:auto;white-space:nowrap';
     rcSpan.textContent = taggedReplays.length+' replay'+(taggedReplays.length!==1?'s':'');
     row.appendChild(rcSpan);
+
+    // Edit deck type button
+    const editDtBtn = document.createElement('button');
+    editDtBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:2px 6px;border-radius:3px;cursor:pointer;flex-shrink:0';
+    editDtBtn.textContent = '✎';
+    editDtBtn.title = 'Set deck type for this event';
+    editDtBtn.onclick = e => {
+      e.stopPropagation();
+      const currentType = deck.deckTypeOverride || '';
+      const newType = prompt('Set deck type for '+deck.code+' (leave blank to auto-detect):', currentType);
+      if (newType === null) return; // cancelled
+      const decks = getEventDecks(player);
+      const d = decks.find(x => x.code === deck.code);
+      if (d) {
+        d.deckTypeOverride = newType.trim() || null;
+        saveEventDecks(player, decks);
+        renderEventDecks(player, batches, records);
+        st('Deck type set for '+deck.code, 'var(--green)');
+      }
+    };
+    row.appendChild(editDtBtn);
 
     // View Deck link — just an arrow icon to save space
     const viewBtn = document.createElement('a');
