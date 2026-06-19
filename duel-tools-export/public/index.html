@@ -507,7 +507,10 @@ select{cursor:pointer}
     <div class="page" id="pg-deck">
       <div class="deck-sb">
         <div class="dsb-hdr">
-          <div class="dsb-hl">Matches</div>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+            <div class="dsb-hl" style="margin-bottom:0">Matches</div>
+            <button id="deck-goto-profile-btn" onclick="gotoActiveProfile()" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:9px;padding:2px 7px;border-radius:4px;cursor:pointer;white-space:nowrap" title="Go to this player's profile">→ Profile</button>
+          </div>
           <input class="dsearch" id="dsearch" type="text" placeholder="Search opponent…" oninput="filterMatches(this.value)"/>
         </div>
         <div class="match-list" id="match-list"><div class="dno">Select a batch first.</div></div>
@@ -1775,6 +1778,22 @@ async function openPlayerByName(name) {
   if (pBatches.length) openProfile(name, pBatches, []);
 }
 
+async function gotoActiveProfile() {
+  if (!_activeBatch || !_activeBatch.player || _activeBatch.isTemp) return;
+  const player = _activeBatch.player;
+  // Switch to profiles tab and open this player
+  const profilesTab = document.querySelector('.ntab[onclick*="profiles"]');
+  switchTab('profiles', profilesTab);
+  await loadProfiles();
+  // Find batches for this player and open their profile
+  const playerBatches = (_allProfileBatches||[]).filter(b => (b.player||'').toLowerCase() === player.toLowerCase());
+  if (playerBatches.length) {
+    await openProfile(player, playerBatches, []);
+  } else {
+    st('Profile not found for '+player, 'var(--amber)');
+  }
+}
+
 async function selectPlayerBatches(ids) {
   // Fetch all batches for this player and merge replays (deduplicated)
   try {
@@ -1805,6 +1824,8 @@ async function selectPlayerBatches(ids) {
     if (addBtn) addBtn.style.display = 'block';
     const cleanBtn = document.getElementById('clean-batch-btn');
     if (cleanBtn) cleanBtn.style.display = 'block';
+    const profileBtn = document.getElementById('deck-goto-profile-btn');
+    if (profileBtn) profileBtn.style.display = primary.isTemp ? 'none' : 'inline-block';
     st('Loaded: '+primary.player+' ('+mergedReplays.length+' replays)', 'var(--green)');
   } catch(e) { st('Failed to load batches', 'var(--red)'); console.error(e); }
 }
@@ -2349,6 +2370,15 @@ function renderRPS() {
   const tp=sv(picks), tat=sv(aft), tfp=sv(fp);
 
   const s1=S(c,'SUMMARY');
+  // Add → Profile button if batch has a real player
+  if (_activeBatch && !_activeBatch.isTemp && _activeBatch.player) {
+    const profBtn = document.createElement('button');
+    profBtn.textContent = '→ Profile';
+    profBtn.title = 'Go to '+_activeBatch.player+"'s profile";
+    profBtn.style.cssText = 'float:right;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:9px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-top:-2px';
+    profBtn.onclick = () => gotoActiveProfile();
+    s1.appendChild(profBtn);
+  }
   const ch=mk(s1,'chips');
   [[replays.length,'Replays'],[found,'With '+player],[rounds,'Total rounds'],[tat,'Post-tie picks']].forEach(([v,l])=>{
     const x=mk(ch,'chip'); E(x,'span',String(v),'chipv'); E(x,'span',l,'chipl');
@@ -4035,7 +4065,30 @@ function renderGFWLHistory() {
         watchA.target='_blank';
         watchA.style.cssText='background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;text-decoration:none;white-space:nowrap';
         watchA.textContent='▶ Watch';
-        row.appendChild(wEl); row.appendChild(infoEl); row.appendChild(copyBtn); row.appendChild(watchA);
+        // View Batch button — loads the player's batch in Deck Viewer and jumps to this replay
+        const batchBtn = document.createElement('button');
+        batchBtn.textContent = 'Batch';
+        batchBtn.title = 'View this replay in Deck Viewer';
+        batchBtn.style.cssText='background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer;white-space:nowrap';
+        batchBtn.onclick = async () => {
+          if (!_activeProfile) return;
+          // Find the batch containing this replay
+          for (const b of (_activeProfile.batches||[])) {
+            const found = (b.replays||[]).find(rep => rep.replayId === r.replayId);
+            if (found) {
+              await loadSpecificBatch(b.id);
+              // Select the match in deck viewer
+              setTimeout(() => {
+                const idx = _matches.findIndex(m => m.replayId === r.replayId);
+                if (idx >= 0) selectMatch(idx);
+              }, 500);
+              switchTab('deck', document.querySelector('.ntab[onclick*="deck"]'));
+              return;
+            }
+          }
+          st('Replay not found in loaded batches', 'var(--amber)');
+        };
+        row.appendChild(wEl); row.appendChild(infoEl); row.appendChild(copyBtn); row.appendChild(batchBtn); row.appendChild(watchA);
         body.appendChild(row);
       });
 
