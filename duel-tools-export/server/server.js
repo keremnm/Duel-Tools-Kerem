@@ -566,6 +566,33 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok:true, removed, kept:b.replays.length });
   }
 
+  // ── GET /api/proxy/deck-ydk?id=:deckId ──────────────────────────────────────
+  if (parts[0]==='proxy' && parts[1]==='deck-ydk' && method==='GET') {
+    const deckId = new URL('http://x'+req.url).searchParams.get('id');
+    if (!deckId) return json(res, 400, { error:'Missing id' });
+    try {
+      const https = require('https');
+      const ydkText = await new Promise((resolve, reject) => {
+        const options = {
+          hostname: 'www.duelingbook.com',
+          path: `/deck-ydk?id=${deckId}`,
+          headers: { 'User-Agent': 'Mozilla/5.0' }
+        };
+        const req2 = https.get(options, res2 => {
+          let data = '';
+          res2.on('data', c => data += c);
+          res2.on('end', () => resolve(data));
+        });
+        req2.on('error', reject);
+        req2.setTimeout(10000, () => { req2.destroy(); reject(new Error('timeout')); });
+      });
+      res.writeHead(200, { 'Content-Type': 'text/plain', 'Content-Disposition': `attachment; filename="${deckId}.ydk"` });
+      res.end(ydkText);
+    } catch(e) {
+      return json(res, 500, { error: e.message });
+    }
+  }
+
   // ── GET /api/proxy/replay?id=:replayId ──────────────────────────────────────
   // Solves Cloudflare Turnstile via CapSolver, then POSTs to duelingbook view-replay
   if (parts[0]==='proxy' && parts[1]==='replay' && method==='GET') {

@@ -338,7 +338,7 @@ select{cursor:pointer}
   #igt-tools > div > div:last-child { grid-column: 1/-1 !important; }
 
   /* Misc */
-  #add-to-batch-btn { display: none !important; }
+  #add-to-batch-btn { display: none; }
   .slbl { font-size: 9px !important; }
   input, select, textarea { font-size: 14px !important; } /* prevent iOS zoom */
 }
@@ -460,7 +460,7 @@ select{cursor:pointer}
     <div style="padding:10px 12px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:6px;flex-shrink:0">
       <button onclick="openBatchPanel('temp')" style="width:100%;background:var(--card);color:var(--amber);border:1px solid var(--amber);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">⚡ Temporary Batch</button>
       <button onclick="openBatchPanel('new')" style="width:100%;background:var(--green);color:#050508;border:none;border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:9px;cursor:pointer;text-align:left">＋ New Batch</button>
-      <button id="add-to-batch-btn" onclick="openBatchPanel('add')" style="display:none;width:100%;background:var(--card);color:var(--blue);border:1px solid var(--blue);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">➕ Add to Existing Batch</button>
+      <button id="add-to-batch-btn" onclick="openBatchPanel('add')" style="display:block;width:100%;background:var(--card);color:var(--blue);border:1px solid var(--blue);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">➕ Add to Existing Batch</button>
       <button id="clean-batch-btn" onclick="cleanBatch()" style="display:none;width:100%;background:var(--card);color:var(--red);border:1px solid var(--red);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">🧹 Clean Invalid Replays</button>
       <div style="display:flex;gap:5px">
         <button class="btn-sec" onclick="exportBatch()" style="flex:1;font-size:11px;padding:5px">⬇ Export</button>
@@ -786,7 +786,7 @@ select{cursor:pointer}
           </div>
 
           <!-- RIGHT: teams + event decklists panel -->
-          <div style="width:380px;flex-shrink:0;border-left:1px solid var(--border);background:var(--panel);overflow-y:auto;display:flex;flex-direction:column">
+          <div style="width:480px;flex-shrink:0;border-left:1px solid var(--border);background:var(--panel);overflow-y:auto;display:flex;flex-direction:column">
 
             <!-- Top Player flag -->
             <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
@@ -824,9 +824,13 @@ select{cursor:pointer}
             <div style="padding:14px 16px;flex:1">
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
                 <div class="slbl" style="margin:0">EVENT DECKLISTS</div>
-                <button onclick="showAddEventDecklist()" style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:4px;cursor:pointer">+ Add</button>
+                <div style="display:flex;gap:4px;margin-left:auto">
+                  <button onclick="triggerYDKImport()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:4px;cursor:pointer" title="Import YDK files">⬆ YDK</button>
+                  <button onclick="showAddEventDecklist()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:4px;cursor:pointer">+ Add</button>
+                  <input type="file" id="ydk-import-input" accept=".ydk" multiple style="display:none" onchange="handleYDKImport(this)"/>
+                </div>
               </div>
-              <input id="profile-edl-search" type="text" placeholder="Search event code..." oninput="filterEventDecklists(this.value)"
+              <input id="profile-edl-search" class="edl-search" type="text" placeholder="Search event code..." oninput="(()=>{const p=_activeProfile&&_activeProfile.player;if(p)renderEventDecks(p,_activeProfile.batches||[],_activeProfile.records||[]);})()"
                 style="width:100%;font-size:12px;margin-bottom:8px;padding:5px 8px"/>
               <div id="profile-event-decklists" style="display:flex;flex-direction:column;gap:6px">
                 <div style="font-size:12px;color:var(--muted)">No event decklists added yet.</div>
@@ -2928,9 +2932,15 @@ function renderMatchSidebar(query) {
     if (a==='Untagged') return 1;
     if (b==='Untagged') return -1;
     const aS = isGFWLSeason(a), bS = isGFWLSeason(b);
-    if (aS && !bS) return 1; if (!aS && bS) return -1;
+    // Seasons first (S9→S1)
+    if (aS && !bS) return -1;
+    if (!aS && bS) return 1;
     if (aS && bS) return parseInt(b.slice(1)) - parseInt(a.slice(1));
-    return a.localeCompare(b);
+    // Events: sort by prefix alpha then trailing number descending (FLC40→FLC39)
+    const extractN = k => parseInt((k||'').match(/\d+$/)?.[0]||'0');
+    const aP = (a||'').replace(/\d+$/, ''), bP = (b||'').replace(/\d+$/, '');
+    if (aP !== bP) return aP.localeCompare(bP);
+    return extractN(b) - extractN(a);
   });
 
   // Track which groups are collapsed (persist in window._matchGroupCollapsed)
@@ -5117,6 +5127,112 @@ function filterEventDecklists(query) {
   });
 }
 
+// ── YDK Import ───────────────────────────────────────────────────────────────
+function triggerYDKImport() {
+  const inp = document.getElementById('ydk-import-input');
+  if (inp) inp.click();
+}
+
+async function handleYDKImport(input) {
+  const player = _activeProfile && _activeProfile.player;
+  if (!player) { st('Open a player profile first', 'var(--red)'); return; }
+  const files = Array.from(input.files);
+  if (!files.length) return;
+  let added = 0;
+  const decks = getEventDecks(player);
+
+  for (const file of files) {
+    const name = file.name.replace(/\.ydk$/i, '');
+    // Parse PlayerName-EventID pattern
+    let eventId = null;
+    let filePlayer = player;
+    const dashIdx = name.lastIndexOf('-');
+    if (dashIdx > 0) {
+      const possibleEvent = name.slice(dashIdx + 1).trim().toUpperCase();
+      const possiblePlayer = name.slice(0, dashIdx).trim();
+      // Validate: event ID should be alphanumeric
+      if (/^[A-Z0-9]+$/.test(possibleEvent)) {
+        eventId = possibleEvent;
+        // Check if player part matches current profile (case-insensitive)
+        if (possiblePlayer.toLowerCase() !== player.toLowerCase()) {
+          const confirm = window.confirm(`File "${file.name}" seems to be for player "${possiblePlayer}", not "${player}". Add to ${player}'s profile anyway?`);
+          if (!confirm) continue;
+        }
+      }
+    }
+    if (!eventId) {
+      eventId = window.prompt(`Could not detect event ID from filename "${file.name}".
+Enter event ID (e.g. FLC40):`, '');
+      if (!eventId) continue;
+      eventId = eventId.trim().toUpperCase();
+    }
+
+    // Read YDK file
+    const text = await file.text();
+    const passcodes = parseYDK(text);
+    if (!passcodes.length) { st('No cards found in '+file.name, 'var(--red)'); continue; }
+
+    // Classify deck type from passcodes
+    const cardNames = passcodes.map(p => cardIdMap[String(p)]?.name).filter(Boolean);
+    const deckClass = classifyFromCards(cardNames.map(n => ({ name: n })));
+    const deckType = deckClass ? deckClass.dc : null;
+
+    // Store YDK data
+    const ydkData = btoa(text); // base64 encode for storage
+    const existing = decks.findIndex(d => d.code === eventId);
+    const entry = {
+      code: eventId,
+      deckId: null, // no duelingbook ID
+      deckUrl: null,
+      ydkData, // stored YDK content
+      ydkFileName: file.name,
+      deckTypeOverride: deckType || null,
+      addedAt: Date.now()
+    };
+    if (existing >= 0) decks.splice(existing, 1, entry);
+    else decks.push(entry);
+    added++;
+  }
+
+  input.value = ''; // reset for next import
+  if (added > 0) {
+    saveEventDecks(player, decks);
+    renderEventDecks(player, _activeProfile.batches||[], _activeProfile.records||[]);
+    st('Imported '+added+' YDK file'+(added!==1?'s':''), 'var(--green)');
+  }
+}
+
+function parseYDK(text) {
+  const passcodes = [];
+  let inMain = false, inExtra = false;
+  for (const line of text.split(/\r?\n/)) {
+    const t = line.trim();
+    if (t === '#main') { inMain = true; inExtra = false; continue; }
+    if (t === '#extra') { inExtra = true; inMain = false; continue; }
+    if (t.startsWith('!') || t.startsWith('#')) { inMain = false; inExtra = false; continue; }
+    if ((inMain || inExtra) && /^\d+$/.test(t)) passcodes.push(parseInt(t));
+  }
+  return passcodes;
+}
+
+function downloadYDK(deck) {
+  if (deck.ydkData) {
+    // Stored YDK
+    const text = atob(deck.ydkData);
+    const blob = new Blob([text], { type: 'text/plain' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = deck.ydkFileName || deck.code + '.ydk'; a.click();
+  } else if (deck.deckId) {
+    // Fetch from Duelingbook
+    fetch(`${API}/proxy/deck-ydk?id=${deck.deckId}`)
+      .then(r => r.text()).then(text => {
+        const blob = new Blob([text], { type: 'text/plain' });
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+        a.download = deck.code + '.ydk'; a.click();
+      }).catch(() => window.open(deck.deckUrl, '_blank'));
+  }
+}
+
 function showAddEventDecklist() {
   const form = document.getElementById('event-decklist-form');
   if (!form) return;
@@ -5979,9 +6095,15 @@ async function openProfile(player, batches, records) {
       const sortedKeys = Object.keys(groups).sort((a,b) => {
         if (a==='__none__') return 1; if (b==='__none__') return -1;
         const aS = isGFWLSeason(a), bS = isGFWLSeason(b);
-        if (aS && !bS) return 1; if (!aS && bS) return -1;
+        // Seasons first (S9→S1)
+        if (aS && !bS) return -1;
+        if (!aS && bS) return 1;
         if (aS && bS) return parseInt(b.slice(1)) - parseInt(a.slice(1));
-        return a.localeCompare(b);
+        // Events: prefix alpha then trailing number descending
+        const extractN = k => parseInt((k||'').match(/\d+$/)?.[0]||'0');
+        const aP = (a||'').replace(/\d+$/, ''), bP = (b||'').replace(/\d+$/, '');
+        if (aP !== bP) return aP.localeCompare(bP);
+        return extractN(b) - extractN(a);
       });
 
       sortedKeys.forEach(key => {
@@ -6315,7 +6437,16 @@ function saveEventDecks(player, list) {
 function renderEventDecks(player, batches, records) {
   const el = document.getElementById('profile-event-decklists') || document.getElementById('profile-event-decks');
   if (!el) return;
+
+  // Remove old year filter dropdown if present
+  const oldSel = document.getElementById('edl-year-filter');
+  if (oldSel) oldSel.remove();
+
   const decks = getEventDecks(player);
+
+  // Search filter
+  const searchEl = el.parentElement.querySelector('.edl-search');
+  const searchQ = searchEl ? searchEl.value.toLowerCase().trim() : '';
 
   if (!decks.length) {
     el.innerHTML = '<div style="font-size:12px;color:var(--muted)">No event decklists added yet.</div>';
@@ -6323,44 +6454,25 @@ function renderEventDecks(player, batches, records) {
   }
 
   const extractNum = code => parseInt((code||'').match(/\d+$/)?.[0]||'0');
+
+  // Sort: Seasons (S#) first descending numeric, then events by trailing number descending
+  const isSeasonCode = code => /^S\d+$/i.test(code);
   const sorted = [...decks].sort((a,b) => {
-    const ya = a.year||0, yb = b.year||0;
-    if (yb !== ya) return yb - ya;
-    return extractNum(b.code) - extractNum(a.code);
+    const aS = isSeasonCode(a.code), bS = isSeasonCode(b.code);
+    if (aS && !bS) return -1; // seasons first
+    if (!aS && bS) return 1;
+    if (aS && bS) return extractNum(b.code) - extractNum(a.code); // S9 > S8
+    // Both events: sort by prefix alpha then trailing number desc
+    const aPrefix = (a.code||'').replace(/\d+$/, '');
+    const bPrefix = (b.code||'').replace(/\d+$/, '');
+    if (aPrefix !== bPrefix) return aPrefix.localeCompare(bPrefix);
+    return extractNum(b.code) - extractNum(a.code); // FLC40 > FLC39
   });
 
-  // Reset year filter if switching players
-  const existingYearSel = document.getElementById('edl-year-filter');
-  if (existingYearSel && existingYearSel.dataset.forPlayer !== player) {
-    existingYearSel.value = '';
-    existingYearSel.dataset.forPlayer = player;
-    delete existingYearSel.dataset.initialized; // reset so new player defaults to most recent year
-  }
-
-  // Build year dropdown
-  const years = [...new Set(sorted.map(d => d.year).filter(Boolean))].sort((a,b)=>b-a);
-  const selId = 'edl-year-filter';
-  let yearSel = document.getElementById(selId);
-  if (!yearSel) {
-    yearSel = document.createElement('select');
-    yearSel.id = selId;
-    yearSel.style.cssText = 'background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:3px 7px;border-radius:4px;outline:none;margin-bottom:6px';
-    el.parentElement.insertBefore(yearSel, el);
-  }
-  // Always update onchange with current player/batches/records — prevents stale closure bleed
-  yearSel.onchange = () => renderEventDecks(player, batches, records);
-  const curYear = yearSel.value;
-  // Only auto-select most recent year on FIRST render (when no value set yet and not explicitly "All Years")
-  const isFirstRender = !yearSel.dataset.initialized;
-  yearSel.innerHTML = '<option value="">All Years</option>' + years.map(y=>`<option value="${y}"${String(y)===curYear?'selected':''}>${y}</option>`).join('');
-  if (isFirstRender && years.length) {
-    yearSel.value = String(years[0]); // default to most recent year on first load
-    yearSel.dataset.initialized = '1';
-  }
-  // If user explicitly selected "All Years" (curYear === ''), keep it
-
-  const filterYear = yearSel.value;
-  const visible = filterYear ? sorted.filter(d => String(d.year) === filterYear) : sorted;
+  const visible = searchQ ? sorted.filter(d =>
+    (d.code||'').toLowerCase().includes(searchQ) ||
+    (d.deckTypeOverride||'').toLowerCase().includes(searchQ)
+  ) : sorted;
 
   el.innerHTML = '';
   visible.forEach(deck => {
@@ -6416,14 +6528,24 @@ function renderEventDecks(player, batches, records) {
     };
     row.appendChild(editDtBtn);
 
-    // View Deck link — just an arrow icon to save space
-    const viewBtn = document.createElement('a');
-    viewBtn.href = deck.deckUrl; viewBtn.target = '_blank';
-    viewBtn.style.cssText = 'background:var(--blue);color:#fff;font-family:monospace;font-size:11px;font-weight:bold;padding:3px 8px;border-radius:4px;text-decoration:none;flex-shrink:0;line-height:1.4';
-    viewBtn.textContent = '↗';
-    viewBtn.title = 'View Deck on Duelingbook';
-    viewBtn.onclick = e => e.stopPropagation();
-    row.appendChild(viewBtn);
+    // Download YDK button
+    const dlBtn = document.createElement('button');
+    dlBtn.textContent = '⬇';
+    dlBtn.title = 'Download YDK';
+    dlBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:2px 7px;border-radius:4px;cursor:pointer;flex-shrink:0;line-height:1.4';
+    dlBtn.onclick = e => { e.stopPropagation(); downloadYDK(deck); };
+    row.appendChild(dlBtn);
+
+    // View Deck link (Duelingbook) or YDK preview
+    if (deck.deckUrl) {
+      const viewBtn = document.createElement('a');
+      viewBtn.href = deck.deckUrl; viewBtn.target = '_blank';
+      viewBtn.style.cssText = 'background:var(--blue);color:#fff;font-family:monospace;font-size:11px;font-weight:bold;padding:3px 8px;border-radius:4px;text-decoration:none;flex-shrink:0;line-height:1.4';
+      viewBtn.textContent = '↗';
+      viewBtn.title = 'View Deck on Duelingbook';
+      viewBtn.onclick = e => e.stopPropagation();
+      row.appendChild(viewBtn);
+    }
 
     // View Batch button
     if (taggedReplays.length) {
