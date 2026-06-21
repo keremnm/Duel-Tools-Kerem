@@ -429,7 +429,7 @@ select{cursor:pointer}
       <div style="font-size:11px;color:var(--muted);letter-spacing:.12em;margin-bottom:4px">EVENT LABEL <span style="color:var(--dim)">(optional)</span></div>
       <input id="batch-event-label-inp" type="text" placeholder="e.g. FLC40, PWCQ87, S8: WK 3" style="margin-bottom:10px;text-transform:uppercase;font-size:12px"/>
       <div style="font-size:11px;color:var(--muted);letter-spacing:.12em;margin-bottom:6px">PASTE REPLAY URLS</div>
-      <textarea id="urls-inp" style="min-height:120px;font-size:12px;resize:vertical" placeholder="Paste replay URLs here — IDs are extracted automatically"></textarea>
+      <textarea id="urls-inp" style="min-height:120px;font-size:12px;resize:vertical" placeholder="Paste replay URLs here — or paste from Excel/Sheets with event_id in column A, replay_link in column B"></textarea>
     </div>
     <!-- Extracted IDs list -->
     <div style="flex:1;overflow-y:auto;padding:0 16px 12px">
@@ -1515,6 +1515,42 @@ function extractIds(text) {
 }
 const replayUrl = id => `https://www.duelingbook.com/replay?id=${id}`;
 
+// Parses pasted text — handles both plain URLs and tab-separated (event_id \t replay_link)
+// Returns [{id, eventLabel}] — eventLabel is '' if not provided
+function extractIdsWithEvents(text) {
+  const results = [], seen = new Set();
+  const reUrl = /(?:https?:\/\/)?(?:www\.)?duelingbook\.com\/(?:replay|view-replay)\?(?:[^\s"<]*[&?])?id=([A-Za-z0-9_-]+)/;
+  const reId  = /^([0-9]{4,9}-[0-9]{5,10})$/;
+
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  // Detect tab-separated: if any line has a tab, treat as event_id \t replay_link
+  const hasTabFormat = lines.some(l => l.includes('\t'));
+
+  if (hasTabFormat) {
+    for (const line of lines) {
+      const parts = line.split('\t');
+      if (parts.length < 2) continue;
+      const eventLabel = (parts[0]||'').trim().toUpperCase();
+      // Skip header row
+      if (eventLabel === 'EVENT_ID' || eventLabel === 'EVENTID' || eventLabel === 'EVENT ID') continue;
+      const urlOrId = (parts[1]||'').trim();
+      // Extract replay ID from the URL in column B
+      const mUrl = reUrl.exec(urlOrId);
+      const mId  = reId.exec(urlOrId);
+      const id = mUrl ? mUrl[1] : mId ? mId[1] : null;
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        results.push({ id, eventLabel: eventLabel || '' });
+      }
+    }
+  } else {
+    // Plain URL format — use existing extractIds logic
+    const ids = extractIds(text);
+    ids.forEach(id => results.push({ id, eventLabel: '' }));
+  }
+  return results;
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // REPLAY LOADER
 // Server solves Cloudflare Turnstile via CapSolver, POSTs to duelingbook,
@@ -1907,11 +1943,15 @@ async function go() {
 
   if (!player) { st('Enter a player username.', 'var(--red)'); return; }
   if (!rawText) { st('Paste replay URLs.', 'var(--red)'); return; }
-  const ids = extractIds(rawText);
+  const idEvents = extractIdsWithEvents(rawText);
+  const ids = idEvents.map(x => x.id);
   if (!ids.length) {
-    st('No replay URLs or IDs found. Paste full URLs or bare IDs like 393021-78406956', 'var(--red)');
+    st('No replay URLs or IDs found. Paste full URLs, bare IDs, or a two-column spreadsheet (event_id \t replay_link)', 'var(--red)');
     return;
   }
+  // Build a map of id -> eventLabel from the pasted data
+  const _idEventMap = {};
+  idEvents.forEach(x => { if (x.eventLabel) _idEventMap[x.id] = x.eventLabel; });
 
   const aliasRaw = (document.getElementById('aliases-inp').value||'').trim();
   const aliases = aliasRaw ? aliasRaw.split(',').map(a=>a.trim()).filter(Boolean) : [];
@@ -1989,14 +2029,16 @@ async function go() {
       player2_choice:p.player2_choice||p.p2pick||null, pick:p.pick||null
     }));
     const _parsedStore = _parsed ? { games:_parsed.games, allMine:_parsed.allMine, allOpp:_parsed.allOpp, oppName:_parsed.oppName, myW:_parsed.myW, oppW:_parsed.oppW, draws:_parsed.draws, score:_parsed.score, result:_parsed.result } : null;
-    _activeBatch.replays.push({ replayId:result.id, plays:_rpsPlays, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, parsed:_parsedStore, oppName:_oppName, eventLabel:_batchEventLabel||'' });
+    // Per-replay event label: from tab-separated data takes priority, then batch-level label
+    const _replayEventLabel = _idEventMap[result.id] || _batchEventLabel || '';
+    _activeBatch.replays.push({ replayId:result.id, plays:_rpsPlays, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, parsed:_parsedStore, oppName:_oppName, eventLabel:_replayEventLabel });
     // Save to server — server handles duplicate detection + cross-linking
     if (!_activeBatch.isTemp) try {
       const targetBatchId = (_activeBatch._mergedIds && _activeBatch._mergedIds[0]) || _activeBatch.id;
       const saveRes = await fetch(`${API}/batches/${targetBatchId}/replay`, {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ replayId:result.id, plays:_rpsPlays, allPlays:[],
-          timedOut:result.timedOut, oppName:_oppName, player1:result.player1||null, player2:result.player2||null, parsed:_parsedStore, eventLabel:_batchEventLabel||'' })
+          timedOut:result.timedOut, oppName:_oppName, player1:result.player1||null, player2:result.player2||null, parsed:_parsedStore, eventLabel:_replayEventLabel })
       });
       const saveData = await saveRes.json().catch(()=>({}));
       // Show duplicate warnings
@@ -4905,8 +4947,11 @@ async function addToBatch() {
 
   const raw = (document.getElementById('urls-inp').value||'').trim();
   if (!raw) { st('Paste some replay URLs to add.', 'var(--red)'); return; }
-  const ids = extractIds(raw);
-  if (!ids.length) { alert('No Duelingbook replay URLs found.'); return; }
+  const idEvents = extractIdsWithEvents(raw);
+  const ids = idEvents.map(x => x.id);
+  if (!ids.length) { alert('No Duelingbook replay URLs found. Paste URLs or a two-column spreadsheet (event_id \t replay_link).'); return; }
+  const _idEventMapA = {};
+  idEvents.forEach(x => { if (x.eventLabel) _idEventMapA[x.id] = x.eventLabel; });
 
   // Filter out already-loaded replays
   const existing = new Set((_activeBatch.replays||[]).map(r => r.replayId));
@@ -4938,7 +4983,8 @@ async function addToBatch() {
     const _rpsA = (result.allPlays||result.plays||[]).filter(p=>p.play==='RPS').map(p=>({game:p.game||null,player1:p.player1||null,player2:p.player2||null,player1_choice:p.player1_choice||p.p1pick||null,player2_choice:p.player2_choice||p.p2pick||null,pick:p.pick||null}));
     const _ppA = parseMatch(result.id, result.allPlays||result.plays||[], _activeBatch.player||'', _activeBatch.aliases||[], result.player1, result.player2);
     const _psA = _ppA ? { games:_ppA.games, allMine:_ppA.allMine, allOpp:_ppA.allOpp, oppName:_ppA.oppName, myW:_ppA.myW, oppW:_ppA.oppW, draws:_ppA.draws, score:_ppA.score, result:_ppA.result } : null;
-    const replayEntry = { replayId:result.id, plays:_rpsA, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, oppName:_oppName, parsed:_psA, eventLabel:_batchEventLabel||'' };
+    const _replayEventLabelA = (_idEventMapA && _idEventMapA[result.id]) || _batchEventLabel || '';
+    const replayEntry = { replayId:result.id, plays:_rpsA, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, oppName:_oppName, parsed:_psA, eventLabel:_replayEventLabelA };
     _activeBatch.replays.push(replayEntry);
     try {
       const _saveId = (_activeBatch._mergedIds && _activeBatch._mergedIds[0]) || _activeBatch.id;
@@ -4946,7 +4992,7 @@ async function addToBatch() {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ replayId:result.id, plays:_rpsA, allPlays:[],
           timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null,
-          oppName:_oppName, noCrossLink:true, eventLabel:_batchEventLabel||'',
+          oppName:_oppName, noCrossLink:true, eventLabel:_replayEventLabelA,
           parsed:_psA })
       });
     } catch(e) { console.error('Failed to save replay', result.id, e); }
