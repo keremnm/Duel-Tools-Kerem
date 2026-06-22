@@ -5520,14 +5520,12 @@ async function saveEventDecklist() {
   const decks = getEventDecks(player);
   const entries = [];
 
-  // Read from the row-based form
   const container = document.getElementById('edl-rows-container');
   if (container) {
     for (const row of container.children) {
       const inputs = row.querySelectorAll('input');
       const sel    = row.querySelector('select');
       if (!inputs.length) continue;
-      // Column order: Year (select) | Event ID (input[0]) | Deck URL (input[1])
       const year = sel ? parseInt(sel.value)||null : null;
       const code = (inputs[0].value||'').trim().toUpperCase();
       const url  = (inputs[1]?.value||'').trim();
@@ -5541,11 +5539,31 @@ async function saveEventDecklist() {
 
   if (!entries.length) { st('Fill in at least one row with Event ID and Deck URL.', 'var(--red)'); return; }
 
+  st('Saving '+entries.length+' decklist'+(entries.length!==1?'s':'')+'...', 'var(--amber)');
   let added = 0;
   for (const { code, year, deckId } of entries) {
+    const deckUrl = 'https://www.duelingbook.com/deck?id='+deckId;
+    const entry = { code, year, deckId, deckUrl, addedAt: Date.now() };
+    // Fetch YDK from Duelingbook and classify deck type
+    try {
+      const res = await fetch(`${API}/proxy/deck-ydk?id=${deckId}`);
+      if (res.ok) {
+        const ydkText = await res.text();
+        const passcodes = parseYDK(ydkText);
+        if (passcodes.length) {
+          await lookupPasscodeNames(passcodes);
+          const cardObjects = buildCardObjectsFromPasscodes(passcodes);
+          const deckClass = cardObjects.length ? classifyFromCards(cardObjects) : null;
+          if (deckClass && deckClass.dc) entry.deckTypeOverride = deckClass.dc;
+          // Store YDK data
+          try { entry.ydkData = btoa(unescape(encodeURIComponent(ydkText))); } catch(e) { entry.ydkData = btoa(ydkText); }
+          entry.ydkFileName = code + '.ydk';
+        }
+      }
+    } catch(e) { console.warn('Could not fetch YDK for', code, e.message); }
     const existing = decks.findIndex(d => d.code === code);
     if (existing >= 0) decks.splice(existing, 1);
-    decks.push({ code, year, deckId, deckUrl: 'https://www.duelingbook.com/deck?id='+deckId, addedAt: Date.now() });
+    decks.push(entry);
     added++;
   }
 
@@ -6619,25 +6637,32 @@ async function manualRetryTimedOut() {
 
 // Storage key: eventDecklists_{player} → [{eventCode, deckUrl, cards[], addedAt}]
 function getEventDecks(player) {
-  // Check player registry first (most persistent)
+  // Always return a copy to avoid stale reference mutations
   const key = player.toLowerCase();
   if (window._playerRegistry && window._playerRegistry[key] && Array.isArray(window._playerRegistry[key].eventDecklists) && window._playerRegistry[key].eventDecklists.length) {
-    return window._playerRegistry[key].eventDecklists;
+    return [...window._playerRegistry[key].eventDecklists];
   }
-  // Check active batch
   if (_activeBatch && _activeBatch.player === player && Array.isArray(_activeBatch.eventDecklists) && _activeBatch.eventDecklists.length) {
-    return _activeBatch.eventDecklists;
+    return [..._activeBatch.eventDecklists];
   }
-  // Check active profile batches
   if (_activeProfile && _activeProfile.player === player) {
     for (const b of (_activeProfile.batches||[])) {
-      if (Array.isArray(b.eventDecklists) && b.eventDecklists.length) return b.eventDecklists;
+      if (Array.isArray(b.eventDecklists) && b.eventDecklists.length) return [...b.eventDecklists];
     }
   }
-  // Fall back to localStorage
   try { return JSON.parse(localStorage.getItem('edl_' + player) || '[]'); } catch(e) { return []; }
 }
 function saveEventDecks(player, list) {
+  // Update _playerRegistry immediately so getEventDecks returns fresh data
+  if (!window._playerRegistry) window._playerRegistry = {};
+  const _key = player.toLowerCase();
+  if (!window._playerRegistry[_key]) window._playerRegistry[_key] = { name: player };
+  window._playerRegistry[_key].eventDecklists = list;
+  // Also update _activeProfile if it matches
+  if (_activeProfile && _activeProfile.player === player) {
+    _activeProfile.eventDecklists = list;
+    if (_activeProfile.batches) _activeProfile.batches.forEach(b => b.eventDecklists = list);
+  }
   // Save to localStorage as backup
   try { localStorage.setItem('edl_' + player, JSON.stringify(list)); } catch(e) {}
 
