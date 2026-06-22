@@ -352,6 +352,7 @@ select{cursor:pointer}
   #igt-mt-tiles, #igt-ot-tiles { grid-template-columns: repeat(8, 56px) !important; }
 }
 </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 </head>
 <body>
 <div id="auth-gate" style="position:fixed;inset:0;background:#06060c;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;font-family:monospace">
@@ -5221,6 +5222,144 @@ function parseYDK(text) {
   return passcodes;
 }
 
+async function showDeckViewPopup(deck) {
+  // Get passcodes from YDK data or fetch from Duelingbook
+  let passcodes = [];
+  if (deck.ydkData) {
+    try {
+      const text = decodeURIComponent(escape(atob(deck.ydkData)));
+      passcodes = parseYDK(text);
+    } catch(e) { passcodes = parseYDK(atob(deck.ydkData)); }
+  } else if (deck.deckId) {
+    try {
+      const res = await fetch(`${API}/proxy/deck-ydk?id=${deck.deckId}`);
+      const text = await res.text();
+      passcodes = parseYDK(text);
+    } catch(e) {}
+  }
+
+  // Build popup overlay
+  const overlay = document.createElement('div');
+  overlay.id = 'deck-view-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;overflow-y:auto;padding:20px';
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+
+  const popup = document.createElement('div');
+  popup.id = 'deck-view-popup';
+  popup.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:900px;width:100%;position:relative';
+
+  // Header
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap';
+  const title = document.createElement('div');
+  title.style.cssText = 'font-size:15px;font-weight:bold;color:var(--amber);font-family:monospace;flex:1';
+  title.textContent = '🏆 ' + deck.code + (deck.deckTypeOverride ? ' — '+deck.deckTypeOverride : '');
+  const screenshotBtn = document.createElement('button');
+  screenshotBtn.textContent = '📷 Screenshot';
+  screenshotBtn.style.cssText = 'background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:5px 12px;border-radius:5px;cursor:pointer';
+  screenshotBtn.onclick = () => screenshotDeckView(deck.code);
+  const dlBtn2 = document.createElement('button');
+  dlBtn2.textContent = '⬇ YDK';
+  dlBtn2.style.cssText = 'background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:5px 12px;border-radius:5px;cursor:pointer';
+  dlBtn2.onclick = () => downloadYDK(deck);
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = 'background:none;border:none;color:var(--dim);font-size:18px;cursor:pointer;padding:0 4px;font-family:monospace';
+  closeBtn.onclick = () => overlay.remove();
+  hdr.appendChild(title); hdr.appendChild(screenshotBtn); hdr.appendChild(dlBtn2); hdr.appendChild(closeBtn);
+  popup.appendChild(hdr);
+
+  // Loading state
+  const loading = document.createElement('div');
+  loading.style.cssText = 'color:var(--muted);font-size:12px;font-family:monospace;text-align:center;padding:20px';
+  loading.textContent = 'Loading card images...';
+  popup.appendChild(loading);
+  overlay.appendChild(popup);
+  document.body.appendChild(overlay);
+
+  if (!passcodes.length) {
+    loading.textContent = 'No card data available for this deck.';
+    return;
+  }
+
+  // Fetch card names and render
+  const cardNames = await lookupPasscodeNames(passcodes);
+  // Build {name: count} map preserving order
+  const cardMap = {}, cardOrder = [];
+  passcodes.forEach((p, i) => {
+    const name = window._passcodeCache[p] || ('Card '+p);
+    if (!cardMap[name]) { cardMap[name] = { count:0, passcode:p }; cardOrder.push(name); }
+    cardMap[name].count++;
+  });
+
+  loading.remove();
+
+  // Section headers
+  const mainPasscodes = [], extraPasscodes = [];
+  let inMain = false, inExtra = false;
+  const ydkText = deck.ydkData ? (() => { try { return decodeURIComponent(escape(atob(deck.ydkData))); } catch(e) { return atob(deck.ydkData); } })() : '';
+  if (ydkText) {
+    for (const line of ydkText.split(/\r?\n/)) {
+      const t = line.trim();
+      if (t === '#main') { inMain=true; inExtra=false; continue; }
+      if (t === '#extra') { inExtra=true; inMain=false; continue; }
+      if (t.startsWith('!') || t.startsWith('#')) { inMain=false; inExtra=false; continue; }
+      if (/^\d+$/.test(t)) { const p = parseInt(t); if (inMain) mainPasscodes.push(p); else if (inExtra) extraPasscodes.push(p); }
+    }
+  } else { passcodes.forEach(p => mainPasscodes.push(p)); }
+
+  async function renderSection(title, pList) {
+    if (!pList.length) return;
+    const secTitle = document.createElement('div');
+    secTitle.style.cssText = 'font-size:10px;color:var(--muted);letter-spacing:.12em;margin-bottom:8px;margin-top:12px';
+    secTitle.textContent = title + ' (' + pList.length + ')';
+    popup.appendChild(secTitle);
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(68px,1fr));gap:6px;margin-bottom:8px';
+    popup.appendChild(grid);
+    for (const p of pList) {
+      const name = window._passcodeCache[p] || '';
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'position:relative;text-align:center';
+      const img = document.createElement('img');
+      img.style.cssText = 'width:100%;border-radius:4px;display:block;min-height:96px;background:var(--card2)';
+      img.title = name;
+      img.alt = name;
+      img.loading = 'lazy';
+      const src = p ? `https://images.ygoprodeck.com/images/cards/${p}.jpg` : null;
+      if (src) img.src = src;
+      img.onerror = () => { img.style.display='none'; wrap.style.background='var(--card2)'; wrap.style.borderRadius='4px'; wrap.style.padding='4px'; const n=document.createElement('div'); n.style.cssText='font-size:8px;color:var(--muted);font-family:monospace;word-break:break-word'; n.textContent=name; wrap.appendChild(n); };
+      wrap.appendChild(img);
+      grid.appendChild(wrap);
+    }
+  }
+
+  await renderSection('MAIN DECK', mainPasscodes);
+  if (extraPasscodes.length) await renderSection('EXTRA DECK', extraPasscodes);
+}
+
+async function screenshotDeckView(code) {
+  const popup = document.getElementById('deck-view-popup');
+  if (!popup) return;
+  try {
+    // Use html2canvas if available, otherwise instruct user
+    if (typeof html2canvas !== 'undefined') {
+      const canvas = await html2canvas(popup, { backgroundColor: '#0a0a12', scale: 1.5 });
+      const a = document.createElement('a');
+      a.href = canvas.toDataURL('image/png');
+      a.download = (code||'deck') + '-screenshot.png';
+      a.click();
+    } else {
+      // Fallback: open print dialog focused on popup
+      const w = window.open('', '_blank', 'width=960,height=800');
+      const imgs = Array.from(popup.querySelectorAll('img')).map(i => `<img src="${i.src}" style="width:68px;border-radius:4px;margin:2px">`).join('');
+      w.document.write(`<html><body style="background:#0a0a12;padding:16px">${imgs}</body></html>`);
+      w.document.close();
+      w.print();
+    }
+  } catch(e) { st('Screenshot failed: '+e.message, 'var(--red)'); }
+}
+
 function downloadYDK(deck) {
   if (deck.ydkData) {
     // Stored YDK — decode UTF-8 safe base64
@@ -6535,6 +6674,14 @@ function renderEventDecks(player, batches, records) {
     };
     row.appendChild(editDtBtn);
 
+    // View Deck button (popup)
+    const viewPopupBtn = document.createElement('button');
+    viewPopupBtn.textContent = 'View';
+    viewPopupBtn.title = 'View deck cards';
+    viewPopupBtn.style.cssText = 'background:var(--blue);color:#fff;border:none;font-family:monospace;font-weight:bold;font-size:10px;padding:3px 9px;border-radius:4px;cursor:pointer;flex-shrink:0;line-height:1.4';
+    viewPopupBtn.onclick = async e => { e.stopPropagation(); await showDeckViewPopup(deck); };
+    row.appendChild(viewPopupBtn);
+
     // Download YDK button
     const dlBtn = document.createElement('button');
     dlBtn.textContent = '⬇';
@@ -6543,15 +6690,15 @@ function renderEventDecks(player, batches, records) {
     dlBtn.onclick = e => { e.stopPropagation(); downloadYDK(deck); };
     row.appendChild(dlBtn);
 
-    // View Deck link (Duelingbook) or YDK preview
+    // View on Duelingbook link (if available)
     if (deck.deckUrl) {
-      const viewBtn = document.createElement('a');
-      viewBtn.href = deck.deckUrl; viewBtn.target = '_blank';
-      viewBtn.style.cssText = 'background:var(--blue);color:#fff;font-family:monospace;font-size:11px;font-weight:bold;padding:3px 8px;border-radius:4px;text-decoration:none;flex-shrink:0;line-height:1.4';
-      viewBtn.textContent = '↗';
-      viewBtn.title = 'View Deck on Duelingbook';
-      viewBtn.onclick = e => e.stopPropagation();
-      row.appendChild(viewBtn);
+      const dbBtn = document.createElement('a');
+      dbBtn.href = deck.deckUrl; dbBtn.target = '_blank';
+      dbBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:2px 7px;border-radius:4px;text-decoration:none;flex-shrink:0;line-height:1.4';
+      dbBtn.textContent = '↗';
+      dbBtn.title = 'View on Duelingbook';
+      dbBtn.onclick = e => e.stopPropagation();
+      row.appendChild(dbBtn);
     }
 
     // View Batch button
