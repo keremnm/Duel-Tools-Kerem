@@ -827,6 +827,7 @@ select{cursor:pointer}
                 <div class="slbl" style="margin:0">EVENT DECKLISTS</div>
                 <div style="display:flex;gap:4px;margin-left:auto">
                   <button onclick="triggerYDKImport()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:4px;cursor:pointer" title="Import YDK files">⬆ YDK</button>
+                  <button onclick="reclassifyAllDecklists()" style="background:none;border:1px solid var(--border);color:var(--amber);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:4px;cursor:pointer" title="Re-classify all YDK decklists">↺ Types</button>
                   <button onclick="showAddEventDecklist()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:4px;cursor:pointer">+ Add</button>
                   <input type="file" id="ydk-import-input" accept=".ydk" multiple style="display:none" onchange="handleYDKImport(this)"/>
                 </div>
@@ -5129,6 +5130,47 @@ function filterEventDecklists(query) {
 }
 
 // ── YDK Import ───────────────────────────────────────────────────────────────
+async function reclassifyAllDecklists() {
+  const player = _activeProfile && _activeProfile.player;
+  if (!player) { st('Open a player profile first', 'var(--red)'); return; }
+  const decks = getEventDecks(player);
+  const ydkDecks = decks.filter(d => d.ydkData);
+  if (!ydkDecks.length) { st('No YDK-imported decklists to re-classify', 'var(--amber)'); return; }
+
+  st(`Re-classifying ${ydkDecks.length} decklists...`, 'var(--amber)');
+  let updated = 0;
+
+  for (let i = 0; i < ydkDecks.length; i++) {
+    const deck = ydkDecks[i];
+    st(`Re-classifying ${i+1}/${ydkDecks.length}: ${deck.code}...`, 'var(--muted)');
+    try {
+      // Decode YDK
+      let text;
+      try { text = decodeURIComponent(escape(atob(deck.ydkData))); } catch(e) { text = atob(deck.ydkData); }
+      const passcodes = parseYDK(text);
+      if (!passcodes.length) continue;
+      // Fetch full card data
+      await lookupPasscodeNames(passcodes);
+      const cardObjects = buildCardObjectsFromPasscodes(passcodes);
+      if (!cardObjects.length) continue;
+      const deckClass = classifyFromCards(cardObjects);
+      if (deckClass && deckClass.dc) {
+        const oldType = deck.deckTypeOverride;
+        deck.deckTypeOverride = deckClass.dc;
+        if (oldType !== deckClass.dc) updated++;
+      }
+    } catch(e) { console.warn('Re-classify failed for', deck.code, e); }
+  }
+
+  if (updated > 0) {
+    saveEventDecks(player, decks);
+    renderEventDecks(player, _activeProfile.batches||[], _activeProfile.records||[]);
+    st(`Re-classified ${ydkDecks.length} decklists — ${updated} type${updated!==1?'s':''} updated`, 'var(--green)');
+  } else {
+    st(`Re-classified ${ydkDecks.length} decklists — no changes`, 'var(--green)');
+  }
+}
+
 function triggerYDKImport() {
   const inp = document.getElementById('ydk-import-input');
   if (inp) inp.click();
@@ -5137,8 +5179,11 @@ function triggerYDKImport() {
 // Global passcode→name cache
 window._passcodeCache = window._passcodeCache || {};
 
+// Full card data cache: passcode → {name, type} where type is ygoprodeck card type string
+window._cardDataCache = window._cardDataCache || {};
+
 async function lookupPasscodeNames(passcodes) {
-  const unknown = passcodes.filter(p => !window._passcodeCache[p]);
+  const unknown = passcodes.filter(p => !window._cardDataCache[p]);
   if (unknown.length) {
     const chunks = [];
     for (let i = 0; i < unknown.length; i += 30) chunks.push(unknown.slice(i, i+30));
@@ -5146,11 +5191,31 @@ async function lookupPasscodeNames(passcodes) {
       try {
         const res = await fetch(`https://db.ygoprodeck.com/api/v7/cardinfo.php?id=${chunk.join('%7C')}`);
         const data = await res.json();
-        if (data && data.data) data.data.forEach(c => { window._passcodeCache[c.id] = c.name; });
+        if (data && data.data) {
+          data.data.forEach(c => {
+            window._cardDataCache[c.id] = { name: c.name, card_type: c.type || '' };
+            window._passcodeCache[c.id] = c.name; // keep for backwards compat
+          });
+        }
       } catch(e) {}
     }
   }
-  return passcodes.map(p => window._passcodeCache[p]).filter(Boolean);
+  return passcodes.map(p => window._cardDataCache[p]?.name || window._passcodeCache[p]).filter(Boolean);
+}
+
+// Build card objects with name + card_type for classifyFromCards
+function buildCardObjectsFromPasscodes(passcodes) {
+  return passcodes.map(p => {
+    const d = window._cardDataCache[p];
+    if (!d) return null;
+    // Map ygoprodeck type to our card_type format
+    let card_type = 'Unknown';
+    const t = (d.card_type || '').toLowerCase();
+    if (t.includes('spell')) card_type = 'Spell Card';
+    else if (t.includes('trap')) card_type = 'Trap Card';
+    else if (t.includes('monster') || t.includes('fusion') || t.includes('synchro') || t.includes('xyz') || t.includes('link')) card_type = 'Monster';
+    return { name: d.name, card_type };
+  }).filter(Boolean);
 }
 
 async function handleYDKImport(input) {
@@ -5187,8 +5252,9 @@ async function handleYDKImport(input) {
     const text = await file.text();
     const passcodes = parseYDK(text);
     if (!passcodes.length) { st('No cards in '+file.name, 'var(--red)'); skipped++; continue; }
-    const cardNames = await lookupPasscodeNames(passcodes);
-    const deckClass = cardNames.length ? classifyFromCards(cardNames.map(n=>({name:n}))) : null;
+    await lookupPasscodeNames(passcodes); // populate _cardDataCache
+    const cardObjects = buildCardObjectsFromPasscodes(passcodes);
+    const deckClass = cardObjects.length ? classifyFromCards(cardObjects) : null;
     const deckType = deckClass ? deckClass.dc : null;
     let ydkData;
     try { ydkData = btoa(unescape(encodeURIComponent(text))); } catch(e) { ydkData = btoa(text); }
@@ -5210,14 +5276,17 @@ async function handleYDKImport(input) {
 
 
 function parseYDK(text) {
+  // Returns main+extra passcodes (for lookup). Side excluded from classification.
   const passcodes = [];
-  let inMain = false, inExtra = false;
+  let sec = null;
   for (const line of text.split(/\r?\n/)) {
     const t = line.trim();
-    if (t === '#main') { inMain = true; inExtra = false; continue; }
-    if (t === '#extra') { inExtra = true; inMain = false; continue; }
-    if (t.startsWith('!') || t.startsWith('#')) { inMain = false; inExtra = false; continue; }
-    if ((inMain || inExtra) && /^\d+$/.test(t)) passcodes.push(parseInt(t));
+    if (t === '#main') { sec='main'; continue; }
+    if (t === '#extra') { sec='extra'; continue; }
+    if (t === '!side') { sec='side'; continue; }
+    if (t.startsWith('#') || t.startsWith('!')) { sec=null; continue; }
+    // Only classify from main deck — side cards can mislead classifier
+    if (sec === 'main' && /^\d+$/.test(t)) passcodes.push(parseInt(t));
   }
   return passcodes;
 }
@@ -5283,59 +5352,89 @@ async function showDeckViewPopup(deck) {
   }
 
   // Fetch card names and render
+  // Look up all names (passcodes from full YDK for display)
   const cardNames = await lookupPasscodeNames(passcodes);
-  // Build {name: count} map preserving order
-  const cardMap = {}, cardOrder = [];
-  passcodes.forEach((p, i) => {
-    const name = window._passcodeCache[p] || ('Card '+p);
-    if (!cardMap[name]) { cardMap[name] = { count:0, passcode:p }; cardOrder.push(name); }
-    cardMap[name].count++;
-  });
+
+  // Re-classify deck type from main deck cards using full card data
+  let displayDeckType = deck.deckTypeOverride || '';
+  if (!displayDeckType && cardNames.length) {
+    const cardObjects = buildCardObjectsFromPasscodes(passcodes);
+    const deckClass = classifyFromCards(cardObjects.length ? cardObjects : cardNames.map(n=>({name:n})));
+    if (deckClass) {
+      displayDeckType = deckClass.dc;
+      // Save back if classification succeeded and no override exists
+      if (!deck.deckTypeOverride) {
+        deck.deckTypeOverride = displayDeckType;
+        const player = _activeProfile && _activeProfile.player;
+        if (player) {
+          const evDecks = getEventDecks(player);
+          const d = evDecks.find(x => x.code === deck.code);
+          if (d) { d.deckTypeOverride = displayDeckType; saveEventDecks(player, evDecks); }
+        }
+      }
+    }
+  }
+  title.textContent = '🏆 ' + deck.code + (displayDeckType ? ' — '+displayDeckType : '');
 
   loading.remove();
 
-  // Section headers
-  const mainPasscodes = [], extraPasscodes = [];
-  let inMain = false, inExtra = false;
+  // Parse YDK sections: main, extra (ignored), side
+  const mainPasscodes = [], sidePasscodes = [];
+  let _sec = null;
   const ydkText = deck.ydkData ? (() => { try { return decodeURIComponent(escape(atob(deck.ydkData))); } catch(e) { return atob(deck.ydkData); } })() : '';
   if (ydkText) {
     for (const line of ydkText.split(/\r?\n/)) {
       const t = line.trim();
-      if (t === '#main') { inMain=true; inExtra=false; continue; }
-      if (t === '#extra') { inExtra=true; inMain=false; continue; }
-      if (t.startsWith('!') || t.startsWith('#')) { inMain=false; inExtra=false; continue; }
-      if (/^\d+$/.test(t)) { const p = parseInt(t); if (inMain) mainPasscodes.push(p); else if (inExtra) extraPasscodes.push(p); }
+      if (t === '#main') { _sec='main'; continue; }
+      if (t === '#extra') { _sec='extra'; continue; }
+      if (t === '!side') { _sec='side'; continue; }
+      if (t.startsWith('#') || t.startsWith('!')) { _sec=null; continue; }
+      if (/^\d+$/.test(t)) {
+        const p = parseInt(t);
+        if (_sec==='main') mainPasscodes.push(p);
+        else if (_sec==='side') sidePasscodes.push(p);
+        // extra deck intentionally ignored
+      }
     }
   } else { passcodes.forEach(p => mainPasscodes.push(p)); }
 
-  async function renderSection(title, pList) {
-    if (!pList.length) return;
-    const secTitle = document.createElement('div');
-    secTitle.style.cssText = 'font-size:10px;color:var(--muted);letter-spacing:.12em;margin-bottom:8px;margin-top:12px';
-    secTitle.textContent = title + ' (' + pList.length + ')';
-    popup.appendChild(secTitle);
+  // Fixed 10-per-row grid
+  function renderCardGrid(pList, cols) {
     const grid = document.createElement('div');
-    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(68px,1fr));gap:6px;margin-bottom:8px';
-    popup.appendChild(grid);
+    grid.style.cssText = `display:grid;grid-template-columns:repeat(${cols},1fr);gap:4px;margin-bottom:8px`;
     for (const p of pList) {
       const name = window._passcodeCache[p] || '';
       const wrap = document.createElement('div');
-      wrap.style.cssText = 'position:relative;text-align:center';
+      wrap.style.cssText = 'position:relative';
       const img = document.createElement('img');
-      img.style.cssText = 'width:100%;border-radius:4px;display:block;min-height:96px;background:var(--card2)';
-      img.title = name;
-      img.alt = name;
-      img.loading = 'lazy';
-      const src = p ? `https://images.ygoprodeck.com/images/cards/${p}.jpg` : null;
-      if (src) img.src = src;
-      img.onerror = () => { img.style.display='none'; wrap.style.background='var(--card2)'; wrap.style.borderRadius='4px'; wrap.style.padding='4px'; const n=document.createElement('div'); n.style.cssText='font-size:8px;color:var(--muted);font-family:monospace;word-break:break-word'; n.textContent=name; wrap.appendChild(n); };
+      img.style.cssText = 'width:100%;border-radius:3px;display:block;background:var(--card2)';
+      img.title = name; img.alt = name; img.loading = 'lazy';
+      if (p) img.src = `https://images.ygoprodeck.com/images/cards/${p}.jpg`;
+      img.onerror = () => {
+        img.style.display='none';
+        const n = document.createElement('div');
+        n.style.cssText='font-size:7px;color:var(--muted);font-family:monospace;word-break:break-word;padding:2px;background:var(--card2);border-radius:3px;min-height:60px;display:flex;align-items:center;justify-content:center;text-align:center';
+        n.textContent = name; wrap.appendChild(n);
+      };
       wrap.appendChild(img);
       grid.appendChild(wrap);
     }
+    return grid;
   }
 
-  await renderSection('MAIN DECK', mainPasscodes);
-  if (extraPasscodes.length) await renderSection('EXTRA DECK', extraPasscodes);
+  function renderSection(title, pList, cols) {
+    if (!pList.length) return;
+    const secTitle = document.createElement('div');
+    secTitle.style.cssText = 'font-size:10px;color:var(--muted);letter-spacing:.12em;margin-bottom:6px;margin-top:14px;font-weight:bold';
+    secTitle.textContent = title + ' (' + pList.length + ')';
+    popup.appendChild(secTitle);
+    popup.appendChild(renderCardGrid(pList, cols));
+  }
+
+  // Main deck: always 10 per row
+  renderSection('MAIN DECK', mainPasscodes, 10);
+  // Side deck: up to 15 cards, 10 per row (2 rows max)
+  renderSection('SIDE DECK', sidePasscodes, 10);
 }
 
 async function screenshotDeckView(code) {
