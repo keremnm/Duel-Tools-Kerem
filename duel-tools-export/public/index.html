@@ -5133,74 +5133,80 @@ function triggerYDKImport() {
   if (inp) inp.click();
 }
 
+// Global passcode→name cache
+window._passcodeCache = window._passcodeCache || {};
+
+async function lookupPasscodeNames(passcodes) {
+  const unknown = passcodes.filter(p => !window._passcodeCache[p]);
+  if (unknown.length) {
+    const chunks = [];
+    for (let i = 0; i < unknown.length; i += 30) chunks.push(unknown.slice(i, i+30));
+    for (const chunk of chunks) {
+      try {
+        const res = await fetch(`https://db.ygoprodeck.com/api/v7/cardinfo.php?id=${chunk.join('%7C')}`);
+        const data = await res.json();
+        if (data && data.data) data.data.forEach(c => { window._passcodeCache[c.id] = c.name; });
+      } catch(e) {}
+    }
+  }
+  return passcodes.map(p => window._passcodeCache[p]).filter(Boolean);
+}
+
 async function handleYDKImport(input) {
   const player = _activeProfile && _activeProfile.player;
   if (!player) { st('Open a player profile first', 'var(--red)'); return; }
   const files = Array.from(input.files);
   if (!files.length) return;
-  let added = 0;
+  let added = 0, skipped = 0;
   const decks = getEventDecks(player);
+  st('Processing '+files.length+' file'+(files.length!==1?'s':'')+'...', 'var(--amber)');
 
-  for (const file of files) {
-    const name = file.name.replace(/\.ydk$/i, '');
-    // Parse PlayerName-EventID pattern
+  for (let fi = 0; fi < files.length; fi++) {
+    const file = files[fi];
+    st(`Processing ${fi+1}/${files.length}: ${file.name}`, 'var(--muted)');
+    const baseName = file.name.replace(/\.ydk$/i, '');
     let eventId = null;
-    let filePlayer = player;
-    const dashIdx = name.lastIndexOf('-');
+    const dashIdx = baseName.lastIndexOf('-');
     if (dashIdx > 0) {
-      const possibleEvent = name.slice(dashIdx + 1).trim().toUpperCase();
-      const possiblePlayer = name.slice(0, dashIdx).trim();
-      // Validate: event ID should be alphanumeric
+      const possibleEvent = baseName.slice(dashIdx+1).trim().toUpperCase();
+      const possiblePlayer = baseName.slice(0, dashIdx).trim();
       if (/^[A-Z0-9]+$/.test(possibleEvent)) {
         eventId = possibleEvent;
-        // Check if player part matches current profile (case-insensitive)
         if (possiblePlayer.toLowerCase() !== player.toLowerCase()) {
-          const confirm = window.confirm(`File "${file.name}" seems to be for player "${possiblePlayer}", not "${player}". Add to ${player}'s profile anyway?`);
-          if (!confirm) continue;
+          const ok = window.confirm(`"${file.name}" appears to be for "${possiblePlayer}", not "${player}".\nAdd to ${player}'s profile anyway?`);
+          if (!ok) { skipped++; continue; }
         }
       }
     }
     if (!eventId) {
-      eventId = window.prompt(`Could not detect event ID from filename "${file.name}".
-Enter event ID (e.g. FLC40):`, '');
-      if (!eventId) continue;
+      eventId = window.prompt(`Could not detect event ID from:\n"${file.name}"\n\nEnter event ID (e.g. FLC40):`, '');
+      if (!eventId) { skipped++; continue; }
       eventId = eventId.trim().toUpperCase();
     }
-
-    // Read YDK file
     const text = await file.text();
     const passcodes = parseYDK(text);
-    if (!passcodes.length) { st('No cards found in '+file.name, 'var(--red)'); continue; }
-
-    // Classify deck type from passcodes
-    const cardNames = passcodes.map(p => cardIdMap[String(p)]?.name).filter(Boolean);
-    const deckClass = classifyFromCards(cardNames.map(n => ({ name: n })));
+    if (!passcodes.length) { st('No cards in '+file.name, 'var(--red)'); skipped++; continue; }
+    const cardNames = await lookupPasscodeNames(passcodes);
+    const deckClass = cardNames.length ? classifyFromCards(cardNames.map(n=>({name:n}))) : null;
     const deckType = deckClass ? deckClass.dc : null;
-
-    // Store YDK data
-    const ydkData = btoa(text); // base64 encode for storage
+    let ydkData;
+    try { ydkData = btoa(unescape(encodeURIComponent(text))); } catch(e) { ydkData = btoa(text); }
+    const entry = { code:eventId, deckId:null, deckUrl:null, ydkData, ydkFileName:file.name, deckTypeOverride:deckType||null, addedAt:Date.now() };
     const existing = decks.findIndex(d => d.code === eventId);
-    const entry = {
-      code: eventId,
-      deckId: null, // no duelingbook ID
-      deckUrl: null,
-      ydkData, // stored YDK content
-      ydkFileName: file.name,
-      deckTypeOverride: deckType || null,
-      addedAt: Date.now()
-    };
     if (existing >= 0) decks.splice(existing, 1, entry);
     else decks.push(entry);
     added++;
   }
-
-  input.value = ''; // reset for next import
+  input.value = '';
   if (added > 0) {
     saveEventDecks(player, decks);
     renderEventDecks(player, _activeProfile.batches||[], _activeProfile.records||[]);
-    st('Imported '+added+' YDK file'+(added!==1?'s':''), 'var(--green)');
+    st(`Imported ${added} YDK file${added!==1?'s':''}${skipped?' ('+skipped+' skipped)':''}`, 'var(--green)');
+  } else {
+    st('No files imported'+(skipped?' ('+skipped+' skipped)':''), 'var(--amber)');
   }
 }
+
 
 function parseYDK(text) {
   const passcodes = [];
@@ -5217,11 +5223,12 @@ function parseYDK(text) {
 
 function downloadYDK(deck) {
   if (deck.ydkData) {
-    // Stored YDK
-    const text = atob(deck.ydkData);
+    // Stored YDK — decode UTF-8 safe base64
+    let text;
+    try { text = decodeURIComponent(escape(atob(deck.ydkData))); } catch(e) { text = atob(deck.ydkData); }
     const blob = new Blob([text], { type: 'text/plain' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-    a.download = deck.ydkFileName || deck.code + '.ydk'; a.click();
+    a.download = deck.ydkFileName || deck.code + '.ydk'; a.click(); // keeps original PlayerName-EventID.ydk
   } else if (deck.deckId) {
     // Fetch from Duelingbook
     fetch(`${API}/proxy/deck-ydk?id=${deck.deckId}`)
