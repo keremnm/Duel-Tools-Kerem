@@ -5203,19 +5203,26 @@ async function lookupPasscodeNames(passcodes) {
   return passcodes.map(p => window._cardDataCache[p]?.name || window._passcodeCache[p]).filter(Boolean);
 }
 
-// Build card objects with name + card_type for classifyFromCards
+// Build card objects with name + card_type + displayCount for classifyFromCards
 function buildCardObjectsFromPasscodes(passcodes) {
-  return passcodes.map(p => {
+  // Count duplicates first
+  const counts = {};
+  passcodes.forEach(p => { counts[p] = (counts[p]||0) + 1; });
+  const seen = new Set();
+  const result = [];
+  for (const p of passcodes) {
+    if (seen.has(p)) continue;
+    seen.add(p);
     const d = window._cardDataCache[p];
-    if (!d) return null;
-    // Map ygoprodeck type to our card_type format
+    if (!d) continue;
     let card_type = 'Unknown';
     const t = (d.card_type || '').toLowerCase();
     if (t.includes('spell')) card_type = 'Spell Card';
     else if (t.includes('trap')) card_type = 'Trap Card';
     else if (t.includes('monster') || t.includes('fusion') || t.includes('synchro') || t.includes('xyz') || t.includes('link')) card_type = 'Monster';
-    return { name: d.name, card_type };
-  }).filter(Boolean);
+    result.push({ name: d.name, card_type, displayCount: counts[p] });
+  }
+  return result;
 }
 
 async function handleYDKImport(input) {
