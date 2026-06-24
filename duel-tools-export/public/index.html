@@ -2726,10 +2726,7 @@ async function gfwlEditRosterPlayer(season, teamName, playerName) {
   if (!team) return;
   const p = (team.roster||[]).find(r=>r.player===playerName);
   if (!p) return;
-  const action = window.prompt('Status for '+playerName+':
-1 = Active
-2 = Drop (enter week)
-3 = Remove from roster','1');
+  const action = window.prompt('Status for '+playerName+': (1=Active, 2=Drop, 3=Remove)','1');
   if (!action) return;
   if (action==='1') { p.status='Active'; p.droppedWeek=null; }
   else if (action==='2') { const wk=window.prompt('Dropped in week:',''); p.status='Dropped'; p.droppedWeek=wk?parseInt(wk):null; }
