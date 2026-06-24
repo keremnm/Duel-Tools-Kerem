@@ -1907,7 +1907,7 @@ async function gfwlInit() {
 
   // Show admin buttons if admin
   const adminBtns = document.getElementById('gfwl-admin-btns');
-  if (adminBtns) adminBtns.style.display = _isAdmin ? 'flex' : 'none';
+  if (adminBtns) adminBtns.style.display = _userRole === 'admin' ? 'flex' : 'none';
 
   // Auto-select most recent season
   if (seasons.length) {
@@ -1917,7 +1917,7 @@ async function gfwlInit() {
     const main = document.getElementById('gfwl-main');
     if (main) main.innerHTML =
       '<div style="color:var(--muted);font-size:13px;text-align:center;padding:40px">No seasons yet.' +
-      (_isAdmin ? ' Click <b>+ Season</b> to create one.' : '') + '</div>';
+      (_userRole === 'admin' ? ' Click <b>+ Season</b> to create one.' : '') + '</div>';
   }
 }
 
@@ -1963,7 +1963,7 @@ function gfwlRenderSeasonGrid(season, data) {
   const teams = Object.entries(data.teams || {});
   if (!teams.length) {
     main.innerHTML = '<div style="color:var(--muted);font-size:13px;text-align:center;padding:40px">No teams in this season yet.' +
-      (_isAdmin ? ' Click <b>+ Team</b> to add one.' : '') + '</div>';
+      (_userRole === 'admin' ? ' Click <b>+ Team</b> to add one.' : '') + '</div>';
     return;
   }
 
@@ -2043,7 +2043,7 @@ function gfwlRenderSeasonGrid(season, data) {
       if (record.total) { const pct = document.createElement('span'); pct.style.cssText='color:var(--muted);font-size:10px;margin-left:auto'; pct.textContent=Math.round(record.w/record.total*100)+'% win'; recEl.appendChild(pct); }
       card.appendChild(recEl);
 
-      if (_isAdmin) {
+      if (_userRole === 'admin') {
         const editBtn = document.createElement('button');
         editBtn.textContent = '✎ Edit';
         editBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--dim);font-family:monospace;font-size:9px;padding:2px 8px;border-radius:3px;cursor:pointer';
