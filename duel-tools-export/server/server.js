@@ -19,7 +19,7 @@ const BOOTSTRAP_PASSWORD = process.env.ADMIN_PASSWORD || 'ilovesui';
 
 // ── DB ────────────────────────────────────────────────────────────────────────
 let pgClient = null;
-let db = { batches: {}, players: {}, users: {} };
+let db = { batches: {}, players: {}, users: {}, gfwl: {} };
 
 async function connectPostgres() {
   const { Client } = require('pg');
@@ -32,11 +32,12 @@ async function connectPostgres() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
-  const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('batches','players','users')");
+  const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('batches','players','users','gfwl')");
   for (const row of res.rows) { db[row.key] = row.value; }
   if (!db.batches) db.batches = {};
   if (!db.players) db.players = {};
   if (!db.users)   db.users   = {};
+  if (!db.gfwl)    db.gfwl    = {};
   pgClient = client;
   console.log('Connected to PostgreSQL, batches:', Object.keys(db.batches).length);
 }
@@ -86,6 +87,7 @@ function loadFileDB() {
       if (!db.batches) db.batches = {};
       if (!db.players) db.players = {};
       if (!db.users)   db.users   = {};
+      if (!db.gfwl)    db.gfwl    = {};
     }
   } catch(e) { console.error('File DB load error:', e.message); }
 }
@@ -564,6 +566,65 @@ const server = http.createServer(async (req, res) => {
     if (removed > 0) await saveDB();
     console.log(`[cleanup] Batch ${bId} (${b.name}): removed ${removed} invalid replays`);
     return json(res, 200, { ok:true, removed, kept:b.replays.length });
+  }
+
+  // ── GET /api/gfwl — get all GFWL season data ─────────────────────────────────
+  if (parts[0]==='gfwl' && !parts[1] && method==='GET') {
+    return json(res, 200, db.gfwl);
+  }
+
+  // ── GET /api/gfwl/:season — get one season ────────────────────────────────
+  if (parts[0]==='gfwl' && parts[1] && !parts[2] && method==='GET') {
+    return json(res, 200, db.gfwl[parts[1]] || {});
+  }
+
+  // ── PATCH /api/gfwl/:season — update season data (admin only) ────────────
+  if (parts[0]==='gfwl' && parts[1] && !parts[2] && method==='PATCH') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    return readBody(req, async data => {
+      if (!db.gfwl[parts[1]]) db.gfwl[parts[1]] = { teams: {} };
+      // Deep merge
+      if (data.teams) {
+        for (const [teamName, teamData] of Object.entries(data.teams)) {
+          if (!db.gfwl[parts[1]].teams[teamName]) {
+            db.gfwl[parts[1]].teams[teamName] = { conference:'', roster:[], addDrops:[], schedule:[], notes:'' };
+          }
+          Object.assign(db.gfwl[parts[1]].teams[teamName], teamData);
+        }
+      }
+      if (data.numWeeks !== undefined) db.gfwl[parts[1]].numWeeks = data.numWeeks;
+      if (data.season   !== undefined) db.gfwl[parts[1]].season   = data.season;
+      await saveDB();
+      return json(res, 200, { ok:true, season: db.gfwl[parts[1]] });
+    });
+  }
+
+  // ── PATCH /api/gfwl/:season/team/:teamName — update one team ─────────────
+  if (parts[0]==='gfwl' && parts[1] && parts[2]==='team' && parts[3] && method==='PATCH') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    const season   = parts[1];
+    const teamName = decodeURIComponent(parts[3]);
+    return readBody(req, async data => {
+      if (!db.gfwl[season]) db.gfwl[season] = { teams: {} };
+      if (!db.gfwl[season].teams[teamName]) {
+        db.gfwl[season].teams[teamName] = { conference:'', roster:[], addDrops:[], schedule:[], notes:'' };
+      }
+      Object.assign(db.gfwl[season].teams[teamName], data);
+      await saveDB();
+      return json(res, 200, { ok:true, team: db.gfwl[season].teams[teamName] });
+    });
+  }
+
+  // ── DELETE /api/gfwl/:season/team/:teamName — remove a team ──────────────
+  if (parts[0]==='gfwl' && parts[1] && parts[2]==='team' && parts[3] && method==='DELETE') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    const season   = parts[1];
+    const teamName = decodeURIComponent(parts[3]);
+    if (db.gfwl[season] && db.gfwl[season].teams) {
+      delete db.gfwl[season].teams[teamName];
+      await saveDB();
+    }
+    return json(res, 200, { ok:true });
   }
 
   // ── GET /api/proxy/deck-ydk?id=:deckId ──────────────────────────────────────
