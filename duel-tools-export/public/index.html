@@ -1991,30 +1991,60 @@ function gfwlRenderSeasonGrid(season, data) {
 
     conferences[conf].forEach(([teamName, team]) => {
       const card = document.createElement('div');
-      card.style.cssText = `background:var(--card);border:1px solid ${colors.border};border-radius:10px;padding:14px;cursor:pointer;transition:all .15s;position:relative`;
-      card.onmouseover = () => { card.style.transform='translateY(-2px)'; card.style.boxShadow=`0 4px 16px ${colors.bg}`; };
+      card.style.cssText = 'background:var(--card);border:1px solid '+colors.border+';border-radius:10px;padding:14px;cursor:pointer;transition:all .15s;position:relative';
+      card.onmouseover = () => { card.style.transform='translateY(-2px)'; card.style.boxShadow='0 4px 16px '+colors.bg; };
       card.onmouseout  = () => { card.style.transform=''; card.style.boxShadow=''; };
       card.onclick = () => gfwlOpenTeam(season, teamName, team);
 
-      // Compute roster size and active count
+      // Conference badge
+      const badge = document.createElement('div');
+      badge.style.cssText = 'position:absolute;top:10px;right:10px;font-size:9px;color:'+colors.text+';font-family:monospace;border:1px solid '+colors.border+';padding:1px 6px;border-radius:3px';
+      badge.textContent = conf;
+      card.appendChild(badge);
+
+      // Team name
+      const nameEl = document.createElement('div');
+      nameEl.style.cssText = 'font-size:14px;font-weight:bold;color:var(--text);margin-bottom:4px;margin-right:50px';
+      nameEl.textContent = teamName;
+      card.appendChild(nameEl);
+
+      // Aliases
+      const aliases = team.aliases || [];
+      if (aliases.length) {
+        const aliasEl = document.createElement('div');
+        aliasEl.style.cssText = 'font-size:10px;color:var(--dim);margin-bottom:4px';
+        aliasEl.textContent = 'aka: ' + aliases.join(', ');
+        card.appendChild(aliasEl);
+      }
+
+      // Roster + record
       const roster = team.roster || [];
       const active = roster.filter(p => p.status === 'Active').length;
-      const record = computeTeamRecord(season, teamName, team);
+      const metaEl = document.createElement('div');
+      metaEl.style.cssText = 'font-size:11px;color:var(--muted);margin-bottom:8px';
+      metaEl.textContent = active + ' active · ' + roster.length + ' total roster';
+      card.appendChild(metaEl);
 
-      card.innerHTML = `
-        <div style="position:absolute;top:10px;right:10px;font-size:9px;color:${colors.text};font-family:monospace;border:1px solid ${colors.border};padding:1px 6px;border-radius:3px">${conf}</div>
-        <div style="font-size:14px;font-weight:bold;color:var(--text);margin-bottom:6px;margin-right:50px">${teamName}</div>
-        <div style="font-size:11px;color:var(--muted);margin-bottom:8px">${active} active · ${roster.length} total roster</div>
-        <div style="display:flex;gap:12px;font-size:12px;font-family:monospace">
-          <span style="color:var(--green)">${record.w}W</span>
-          <span style="color:var(--dim)">—</span>
-          <span style="color:var(--red)">${record.l}L</span>
-          ${record.total ? `<span style="color:var(--muted);font-size:10px;margin-left:auto">${Math.round(record.w/record.total*100)}% match win</span>` : ''}
-        </div>
-        ${_isAdmin ? `<button onclick="event.stopPropagation();gfwlEditTeamMeta('${season}','${teamName.replace(/'/g,"\\'")}',this)" style="margin-top:8px;background:none;border:1px solid var(--border);color:var(--dim);font-family:monospace;font-size:9px;padding:2px 8px;border-radius:3px;cursor:pointer">✎ Edit</button>` : ''}
-      `;
+      const record = computeTeamRecord(season, teamName, team);
+      const recEl = document.createElement('div');
+      recEl.style.cssText = 'display:flex;gap:12px;font-size:12px;font-family:monospace;margin-bottom:6px';
+      const wSpan = document.createElement('span'); wSpan.style.color='var(--green)'; wSpan.textContent = record.w+'W'; recEl.appendChild(wSpan);
+      const dSpan = document.createElement('span'); dSpan.style.color='var(--dim)'; dSpan.textContent = '—'; recEl.appendChild(dSpan);
+      const lSpan = document.createElement('span'); lSpan.style.color='var(--red)'; lSpan.textContent = record.l+'L'; recEl.appendChild(lSpan);
+      if (record.total) { const pct = document.createElement('span'); pct.style.cssText='color:var(--muted);font-size:10px;margin-left:auto'; pct.textContent=Math.round(record.w/record.total*100)+'% win'; recEl.appendChild(pct); }
+      card.appendChild(recEl);
+
+      if (_isAdmin) {
+        const editBtn = document.createElement('button');
+        editBtn.textContent = '✎ Edit';
+        editBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--dim);font-family:monospace;font-size:9px;padding:2px 8px;border-radius:3px;cursor:pointer';
+        editBtn.onclick = e => { e.stopPropagation(); gfwlEditTeamMeta(season, teamName, editBtn); };
+        card.appendChild(editBtn);
+      }
+
       grid.appendChild(card);
     });
+
   });
 }
 
