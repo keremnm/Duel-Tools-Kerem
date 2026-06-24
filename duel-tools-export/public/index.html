@@ -877,9 +877,10 @@ select{cursor:pointer}
       <div id="gfwl-season-stats" style="font-size:11px;color:var(--muted)"></div>
       <div style="margin-left:auto;display:flex;gap:6px" id="gfwl-admin-btns" style="display:none">
         <button onclick="gfwlAddTeam()" style="background:none;border:1px solid var(--green);color:var(--green);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">+ Team</button>
+        <button onclick="gfwlBulkImportTeams()" style="background:none;border:1px solid var(--green);color:var(--green);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">⬆ Teams</button>
         <button onclick="gfwlImportSchedule()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">⬆ Schedule</button>
         <button onclick="gfwlNewSeason()" style="background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">+ Season</button>
-        <input type="file" id="gfwl-schedule-inp" accept=".xlsx,.xls,.csv" style="display:none" onchange="gfwlHandleScheduleImport(this)"/>
+        <input type="file" id="gfwl-schedule-inp" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="gfwlHandleScheduleImport(this)"/>
       </div>
     </div>
 
@@ -2073,16 +2074,20 @@ async function gfwlAddTeam() {
   if (!name) return;
   const conf = window.prompt('Conference (Red/Blue/Yellow):','Blue');
   if (!conf) return;
-  const teamData = { conference: conf, roster:[], addDrops:[], schedule:[], notes:'' };
+  const teamData = { conference: conf.trim(), roster:[], addDrops:[], schedule:[], notes:'', aliases:[] };
   if (!_gfwlData[_gfwlCurrentSeason]) _gfwlData[_gfwlCurrentSeason] = { teams:{} };
-  _gfwlData[_gfwlCurrentSeason].teams[name] = teamData;
+  if (!_gfwlData[_gfwlCurrentSeason].teams) _gfwlData[_gfwlCurrentSeason].teams = {};
+  _gfwlData[_gfwlCurrentSeason].teams[name.trim()] = teamData;
   try {
-    const r2 = await fetch(`${API}/gfwl/${_gfwlCurrentSeason}/team/${encodeURIComponent(name)}`, {
+    const r2 = await fetch(`${API}/gfwl/${_gfwlCurrentSeason}/team/${encodeURIComponent(name.trim())}`, {
       method:'PATCH', headers: authHeaders(),
       body: JSON.stringify(teamData)
     });
     if (!r2.ok) { const e = await r2.json().catch(()=>{}); st('Save failed: '+(e?.error||r2.status), 'var(--red)'); return; }
     st('Team "'+name+'" added to '+_gfwlCurrentSeason, 'var(--green)');
+    // Re-fetch from server to ensure local state matches
+    const fresh = await fetch(API+'/gfwl/'+_gfwlCurrentSeason).then(r=>r.json()).catch(()=>null);
+    if (fresh && !fresh.error) _gfwlData[_gfwlCurrentSeason] = fresh;
     gfwlLoadSeason(_gfwlCurrentSeason);
   } catch(e) { st('Failed to add team', 'var(--red)'); }
 }
@@ -2105,6 +2110,132 @@ async function gfwlEditTeamMeta(season, teamName, btn) {
 
 function gfwlImportSchedule() {
   document.getElementById('gfwl-schedule-inp').click();
+}
+
+async function gfwlBulkImportTeams() {
+  if (!_gfwlCurrentSeason) { alert('Select a season first.'); return; }
+
+  // Show a modal for bulk team paste
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:9999;display:flex;align-items:center;justify-content:center';
+
+  const modal = document.createElement('div');
+  modal.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px;width:520px;max-width:95vw';
+  modal.innerHTML = `
+    <div style="font-size:14px;font-weight:bold;color:var(--text);margin-bottom:8px">Import Teams — ${_gfwlCurrentSeason}</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:12px">
+      Paste a list of teams with their conference. Accepted formats:<br>
+      • <b>Tab-separated</b> (from Excel): <code>Conference TAB TeamName</code><br>
+      • <b>Typed list</b>: <code>Red: Team Name</code> or <code>Blue - Team Name</code><br>
+      • Aliases go on the same line after a pipe: <code>Red: M.M.G. | Mixed Martial Goats</code>
+    </div>
+    <textarea id="gfwl-team-import-txt" style="width:100%;box-sizing:border-box;min-height:200px;background:var(--card2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:12px;padding:10px;resize:vertical;outline:none" placeholder="Red	The Worst Generation
+Blue	Big Koala
+Blue	M.M.G. | Mixed Martial Goats
+Red: Warrior Solution
+Yellow - D-Generation X"></textarea>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button id="gfwl-team-import-btn" class="btn-go" style="flex:1;font-size:12px;padding:8px">Import Teams</button>
+      <button onclick="this.closest('div[style*=fixed]').remove()" class="btn-sec" style="font-size:12px;padding:8px 14px">Cancel</button>
+    </div>
+    <div id="gfwl-team-import-preview" style="margin-top:12px;font-size:11px;font-family:monospace;color:var(--muted)"></div>
+  `;
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  const txt = document.getElementById('gfwl-team-import-txt');
+  const preview = document.getElementById('gfwl-team-import-preview');
+
+  function parseTeamLines(raw) {
+    const entries = [];
+    for (const line of raw.split(/\r?\n/)) {
+      const t = line.trim();
+      if (!t) continue;
+      let conf = '', name = '', aliases = [];
+
+      // Tab-separated: Conference TAB TeamName [TAB Alias]
+      if (t.includes('\t')) {
+        const parts = t.split('\t').map(p=>p.trim());
+        conf = parts[0]; name = parts[1] || '';
+        if (parts[2]) aliases.push(parts[2]);
+      }
+      // "Red: Team Name" or "Red - Team Name"
+      else if (/^(red|blue|yellow)\s*[:–-]\s*/i.test(t)) {
+        const m = t.match(/^(red|blue|yellow)\s*[:–-]\s*(.+)/i);
+        conf = m[1]; name = m[2] || '';
+      }
+      // "Team Name" alone — prompt for conf later or default to Unassigned
+      else { name = t; conf = 'Unassigned'; }
+
+      // Split aliases by pipe
+      if (name.includes('|')) {
+        const parts2 = name.split('|').map(p=>p.trim());
+        name = parts2[0];
+        aliases.push(...parts2.slice(1));
+      }
+
+      // Normalize conference
+      const confNorm = conf.trim();
+      const confMap = { red:'Red', blue:'Blue', yellow:'Yellow' };
+      const confFinal = confMap[confNorm.toLowerCase()] || confNorm;
+
+      if (name) entries.push({ name: name.trim(), conference: confFinal, aliases });
+    }
+    return entries;
+  }
+
+  txt.oninput = () => {
+    const entries = parseTeamLines(txt.value);
+    preview.innerHTML = entries.length
+      ? entries.map(e => `<span style="color:${CONF_COLORS[e.conference]?.text||'var(--muted)'}">● ${e.conference}</span> — <b>${e.name}</b>${e.aliases.length?' <span style="color:var(--dim)">(aka: '+e.aliases.join(', ')+')</span>':''}`).join('<br>')
+      : '';
+  };
+
+  document.getElementById('gfwl-team-import-btn').onclick = async () => {
+    const entries = parseTeamLines(txt.value);
+    if (!entries.length) { alert('No valid entries found.'); return; }
+    if (!_gfwlData[_gfwlCurrentSeason]) _gfwlData[_gfwlCurrentSeason] = { teams:{} };
+    if (!_gfwlData[_gfwlCurrentSeason].teams) _gfwlData[_gfwlCurrentSeason].teams = {};
+
+    let added = 0;
+    for (const entry of entries) {
+      const teamData = {
+        conference: entry.conference,
+        aliases: entry.aliases,
+        roster:[], addDrops:[], schedule:[], notes:''
+      };
+      _gfwlData[_gfwlCurrentSeason].teams[entry.name] = teamData;
+      try {
+        await fetch(`${API}/gfwl/${_gfwlCurrentSeason}/team/${encodeURIComponent(entry.name)}`, {
+          method:'PATCH', headers: authHeaders(),
+          body: JSON.stringify(teamData)
+        });
+        added++;
+      } catch(e) { console.warn('Failed to save team', entry.name, e); }
+    }
+    overlay.remove();
+    st(`Imported ${added} team${added!==1?'s':''}`, 'var(--green)');
+    // Re-fetch to sync
+    const fresh = await fetch(API+'/gfwl/'+_gfwlCurrentSeason).then(r=>r.json()).catch(()=>null);
+    if (fresh && !fresh.error) _gfwlData[_gfwlCurrentSeason] = fresh;
+    gfwlLoadSeason(_gfwlCurrentSeason);
+  };
+}
+
+// Resolve a team name considering aliases
+function gfwlResolveTeam(season, nameOrAlias) {
+  if (!nameOrAlias || !_gfwlData[season]) return null;
+  const teams = _gfwlData[season].teams || {};
+  const q = nameOrAlias.toLowerCase().trim();
+  // Exact match first
+  for (const [tName, tData] of Object.entries(teams)) {
+    if (tName.toLowerCase() === q) return tName;
+    // Check aliases
+    if ((tData.aliases||[]).some(a => a.toLowerCase() === q)) return tName;
+    // Partial match
+    if (tName.toLowerCase().includes(q) || q.includes(tName.toLowerCase())) return tName;
+  }
+  return null;
 }
 
 async function gfwlHandleScheduleImport(input) {
