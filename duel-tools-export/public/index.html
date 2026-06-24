@@ -401,6 +401,7 @@ select{cursor:pointer}
       <button class="ntab" onclick="switchTab('deckdata',this)">Deck Data</button>
       <button class="ntab" onclick="switchTab('stats',this)">Stats</button>
       <button class="ntab" onclick="switchTab('ingame',this)">In-Game Tools</button>
+      <button class="ntab" id="gfwl-prep-tab" onclick="switchTab('gfwl',this)">GFWL Prep</button>
     </div>
     <div class="topbar-right">
       <button id="admin-panel-btn" onclick="openAdminPanel()" style="display:none;background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-size:10px;padding:2px 10px;border-radius:4px;cursor:pointer">⚙ Users</button>
@@ -864,6 +865,29 @@ select{cursor:pointer}
         </div>
       </div>
     </div>
+
+  <!-- ── GFWL Prep ──────────────────────────────────────────────────────── -->
+  <div class="page" id="pg-gfwl" style="display:flex;flex-direction:column;flex:1;overflow:hidden">
+    <!-- Top bar -->
+    <div style="display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap">
+      <div style="font-size:13px;font-weight:bold;color:var(--green);font-family:monospace;letter-spacing:.08em">GFWL PREP</div>
+      <select id="gfwl-season-sel" onchange="gfwlLoadSeason(this.value)" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:4px 10px;border-radius:5px;outline:none">
+        <option value="">— Select Season —</option>
+      </select>
+      <div id="gfwl-season-stats" style="font-size:11px;color:var(--muted)"></div>
+      <div style="margin-left:auto;display:flex;gap:6px" id="gfwl-admin-btns" style="display:none">
+        <button onclick="gfwlAddTeam()" style="background:none;border:1px solid var(--green);color:var(--green);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">+ Team</button>
+        <button onclick="gfwlImportSchedule()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">⬆ Schedule</button>
+        <button onclick="gfwlNewSeason()" style="background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">+ Season</button>
+        <input type="file" id="gfwl-schedule-inp" accept=".xlsx,.xls,.csv" style="display:none" onchange="gfwlHandleScheduleImport(this)"/>
+      </div>
+    </div>
+
+    <!-- Main content area -->
+    <div style="flex:1;overflow:auto;padding:16px 20px" id="gfwl-main">
+      <div style="color:var(--muted);font-size:13px;text-align:center;padding:40px">Select a season to begin.</div>
+    </div>
+  </div>
 
   <!-- ── In-Game Tools ──────────────────────────────────────────────────── -->
   <!-- ── In-Game Tools ──────────────────────────────────────────────────── -->
@@ -1482,6 +1506,7 @@ function switchTab(name, btn) {
   const pg = document.getElementById('pg-'+name);
   if (pg) pg.classList.add('on');
   if (name === 'ingame') igtTimerUpdate();
+  if (name === 'gfwl') gfwlInit();
   if (name === 'stats')    loadStats();
   if (name === 'profiles') loadProfiles();
   // Deck Data tab always shows ALL saved batches — never filtered by active batch
@@ -1834,6 +1859,248 @@ async function gotoActiveProfile() {
   } else {
     st('Profile not found for '+player, 'var(--amber)');
   }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// GFWL PREP
+// ══════════════════════════════════════════════════════════════════════
+let _gfwlData = {}; // cache: season → season data
+let _gfwlCurrentSeason = null;
+let _gfwlCurrentTeam = null;
+
+const CONF_COLORS = {
+  'Red':    { bg:'rgba(220,50,50,.15)',  border:'rgba(220,50,50,.5)',  text:'#e05555' },
+  'Blue':   { bg:'rgba(50,100,220,.15)', border:'rgba(50,100,220,.5)', text:'#5599ee' },
+  'Yellow': { bg:'rgba(220,180,30,.15)', border:'rgba(220,180,30,.5)', text:'#ddbb30' },
+};
+
+async function gfwlInit() {
+  // Load all season data
+  try {
+    const res = await fetch(API+'/gfwl');
+    _gfwlData = await res.json();
+  } catch(e) { console.warn('GFWL load failed', e); _gfwlData = {}; }
+
+  // Populate season dropdown
+  const sel = document.getElementById('gfwl-season-sel');
+  const seasons = Object.keys(_gfwlData).sort((a,b) => {
+    const na = parseInt(a.replace(/\D/g,'')), nb = parseInt(b.replace(/\D/g,''));
+    return nb - na; // S9 first
+  });
+  sel.innerHTML = '<option value="">— Select Season —</option>' +
+    seasons.map(s => `<option value="${s}">${s}</option>`).join('');
+
+  // Show admin buttons if admin
+  const adminBtns = document.getElementById('gfwl-admin-btns');
+  if (adminBtns) adminBtns.style.display = _isAdmin ? 'flex' : 'none';
+
+  // Auto-select most recent season
+  if (seasons.length) {
+    sel.value = seasons[0];
+    gfwlLoadSeason(seasons[0]);
+  } else {
+    document.getElementById('gfwl-main').innerHTML =
+      '<div style="color:var(--muted);font-size:13px;text-align:center;padding:40px">No seasons yet.' +
+      (_isAdmin ? ' Click <b>+ Season</b> to create one.' : '') + '</div>';
+  }
+}
+
+async function gfwlLoadSeason(season) {
+  if (!season) return;
+  _gfwlCurrentSeason = season;
+  _gfwlCurrentTeam = null;
+  const data = _gfwlData[season] || { teams:{} };
+  const teams = Object.entries(data.teams || {});
+  const statsEl = document.getElementById('gfwl-season-stats');
+  if (statsEl) statsEl.textContent = `${teams.length} teams · ${data.numWeeks||13} weeks`;
+  gfwlRenderSeasonGrid(season, data);
+}
+
+function gfwlRenderSeasonGrid(season, data) {
+  const main = document.getElementById('gfwl-main');
+  main.innerHTML = '';
+
+  const teams = Object.entries(data.teams || {});
+  if (!teams.length) {
+    main.innerHTML = '<div style="color:var(--muted);font-size:13px;text-align:center;padding:40px">No teams in this season yet.' +
+      (_isAdmin ? ' Click <b>+ Team</b> to add one.' : '') + '</div>';
+    return;
+  }
+
+  // Group by conference
+  const conferences = {};
+  teams.forEach(([name, team]) => {
+    const conf = team.conference || 'Unassigned';
+    if (!conferences[conf]) conferences[conf] = [];
+    conferences[conf].push([name, team]);
+  });
+
+  // Sort conferences: Red, Blue, Yellow, then others
+  const confOrder = ['Red','Blue','Yellow'];
+  const sortedConfs = Object.keys(conferences).sort((a,b) => {
+    const ai = confOrder.indexOf(a), bi = confOrder.indexOf(b);
+    if (ai>=0 && bi>=0) return ai-bi;
+    if (ai>=0) return -1; if (bi>=0) return 1;
+    return a.localeCompare(b);
+  });
+
+  sortedConfs.forEach(conf => {
+    const colors = CONF_COLORS[conf] || { bg:'rgba(100,100,100,.1)', border:'rgba(100,100,100,.3)', text:'var(--muted)' };
+
+    // Conference header
+    const confHdr = document.createElement('div');
+    confHdr.style.cssText = `font-size:12px;font-weight:bold;font-family:monospace;letter-spacing:.12em;color:${colors.text};margin-bottom:10px;margin-top:20px;padding:6px 12px;background:${colors.bg};border-left:3px solid ${colors.border};border-radius:4px`;
+    confHdr.textContent = conf.toUpperCase() + ' CONFERENCE — ' + conferences[conf].length + ' TEAMS';
+    main.appendChild(confHdr);
+
+    // Team cards grid
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;margin-bottom:16px';
+    main.appendChild(grid);
+
+    conferences[conf].forEach(([teamName, team]) => {
+      const card = document.createElement('div');
+      card.style.cssText = `background:var(--card);border:1px solid ${colors.border};border-radius:10px;padding:14px;cursor:pointer;transition:all .15s;position:relative`;
+      card.onmouseover = () => { card.style.transform='translateY(-2px)'; card.style.boxShadow=`0 4px 16px ${colors.bg}`; };
+      card.onmouseout  = () => { card.style.transform=''; card.style.boxShadow=''; };
+      card.onclick = () => gfwlOpenTeam(season, teamName, team);
+
+      // Compute roster size and active count
+      const roster = team.roster || [];
+      const active = roster.filter(p => p.status === 'Active').length;
+      const record = computeTeamRecord(season, teamName, team);
+
+      card.innerHTML = `
+        <div style="position:absolute;top:10px;right:10px;font-size:9px;color:${colors.text};font-family:monospace;border:1px solid ${colors.border};padding:1px 6px;border-radius:3px">${conf}</div>
+        <div style="font-size:14px;font-weight:bold;color:var(--text);margin-bottom:6px;margin-right:50px">${teamName}</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px">${active} active · ${roster.length} total roster</div>
+        <div style="display:flex;gap:12px;font-size:12px;font-family:monospace">
+          <span style="color:var(--green)">${record.w}W</span>
+          <span style="color:var(--dim)">—</span>
+          <span style="color:var(--red)">${record.l}L</span>
+          ${record.total ? `<span style="color:var(--muted);font-size:10px;margin-left:auto">${Math.round(record.w/record.total*100)}% match win</span>` : ''}
+        </div>
+        ${_isAdmin ? `<button onclick="event.stopPropagation();gfwlEditTeamMeta('${season}','${teamName.replace(/'/g,"\\'")}',this)" style="margin-top:8px;background:none;border:1px solid var(--border);color:var(--dim);font-family:monospace;font-size:9px;padding:2px 8px;border-radius:3px;cursor:pointer">✎ Edit</button>` : ''}
+      `;
+      grid.appendChild(card);
+    });
+  });
+}
+
+function computeTeamRecord(season, teamName, team) {
+  // Compute from replays tagged S#: WK# where players are on this team
+  let w = 0, l = 0;
+  const roster = (team.roster||[]).map(p => (p.player||'').toLowerCase());
+  if (!roster.length) return { w:0, l:0, total:0 };
+
+  // Scan _allProfileBatches for relevant replays
+  const allBatches = _allProfileBatches || [];
+  for (const batch of allBatches) {
+    if (!roster.includes((batch.player||'').toLowerCase())) continue;
+    for (const r of (batch.replays||[])) {
+      const lbl = (r.eventLabel||'').toUpperCase();
+      const seasonKey = season.toUpperCase();
+      // Match S9: WK* pattern
+      if (!lbl.startsWith(seasonKey+':') && !lbl.startsWith(seasonKey+' ')) continue;
+      if (r.parsed) {
+        if (r.parsed.result === 'w') w++;
+        else if (r.parsed.result === 'l') l++;
+      }
+    }
+  }
+  return { w, l, total: w+l };
+}
+
+async function gfwlNewSeason() {
+  const s = window.prompt('Enter season code (e.g. S10, S9):','');
+  if (!s) return;
+  const season = s.trim().toUpperCase();
+  if (_gfwlData[season]) { alert('Season '+season+' already exists.'); return; }
+  const numWeeks = parseInt(window.prompt('Number of weeks?','13')||'13');
+  _gfwlData[season] = { season, numWeeks, teams:{} };
+  try {
+    await fetch(API+'/gfwl/'+season, {
+      method:'PATCH', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ season, numWeeks, teams:{} })
+    });
+    st('Season '+season+' created', 'var(--green)');
+    gfwlInit();
+  } catch(e) { st('Failed to create season', 'var(--red)'); }
+}
+
+async function gfwlAddTeam() {
+  if (!_gfwlCurrentSeason) { alert('Select a season first.'); return; }
+  const name = window.prompt('Team name:','');
+  if (!name) return;
+  const conf = window.prompt('Conference (Red/Blue/Yellow):','Blue');
+  if (!conf) return;
+  const teamData = { conference: conf, roster:[], addDrops:[], schedule:[], notes:'' };
+  if (!_gfwlData[_gfwlCurrentSeason]) _gfwlData[_gfwlCurrentSeason] = { teams:{} };
+  _gfwlData[_gfwlCurrentSeason].teams[name] = teamData;
+  try {
+    await fetch(`${API}/gfwl/${_gfwlCurrentSeason}/team/${encodeURIComponent(name)}`, {
+      method:'PATCH', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(teamData)
+    });
+    st('Team "'+name+'" added to '+_gfwlCurrentSeason, 'var(--green)');
+    gfwlLoadSeason(_gfwlCurrentSeason);
+  } catch(e) { st('Failed to add team', 'var(--red)'); }
+}
+
+async function gfwlEditTeamMeta(season, teamName, btn) {
+  const team = _gfwlData[season]?.teams[teamName];
+  if (!team) return;
+  const conf = window.prompt('Conference (Red/Blue/Yellow):', team.conference||'');
+  if (conf === null) return;
+  team.conference = conf.trim();
+  try {
+    await fetch(`${API}/gfwl/${season}/team/${encodeURIComponent(teamName)}`, {
+      method:'PATCH', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ conference: team.conference })
+    });
+    st('Updated '+teamName, 'var(--green)');
+    gfwlLoadSeason(season);
+  } catch(e) { st('Save failed', 'var(--red)'); }
+}
+
+function gfwlImportSchedule() {
+  document.getElementById('gfwl-schedule-inp').click();
+}
+
+async function gfwlHandleScheduleImport(input) {
+  // Will be implemented in Step 3
+  st('Schedule import coming in next step', 'var(--amber)');
+  input.value = '';
+}
+
+function gfwlOpenTeam(season, teamName, team) {
+  _gfwlCurrentTeam = teamName;
+  // Will be fully implemented in Step 3 (Team Sheet view)
+  const main = document.getElementById('gfwl-main');
+  main.innerHTML = '';
+
+  // Back button
+  const back = document.createElement('button');
+  back.textContent = '← Back to '+season;
+  back.style.cssText = 'background:none;border:none;color:var(--muted);font-family:monospace;font-size:12px;cursor:pointer;padding:0;margin-bottom:16px';
+  back.onclick = () => gfwlLoadSeason(season);
+  main.appendChild(back);
+
+  const colors = CONF_COLORS[team.conference||''] || { text:'var(--muted)', border:'var(--border)', bg:'transparent' };
+  const hdr = document.createElement('div');
+  hdr.style.cssText = `font-size:20px;font-weight:bold;color:${colors.text};font-family:monospace;margin-bottom:4px`;
+  hdr.textContent = teamName;
+  main.appendChild(hdr);
+
+  const meta = document.createElement('div');
+  meta.style.cssText = 'font-size:12px;color:var(--muted);margin-bottom:20px';
+  meta.textContent = `${team.conference||'Unassigned'} Conference · ${season} · ${(team.roster||[]).length} players`;
+  main.appendChild(meta);
+
+  const ph = document.createElement('div');
+  ph.style.cssText = 'color:var(--muted);font-size:12px;font-family:monospace;padding:20px;background:var(--card);border:1px solid var(--border);border-radius:8px';
+  ph.textContent = '📋 Team sheet coming in Step 3 — roster, schedule, deck pies, weekly lineups.';
+  main.appendChild(ph);
 }
 
 async function selectPlayerBatches(ids) {
