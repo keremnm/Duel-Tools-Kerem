@@ -867,7 +867,7 @@ select{cursor:pointer}
     </div>
 
   <!-- ── GFWL Prep ──────────────────────────────────────────────────────── -->
-  <div class="page" id="pg-gfwl" style="flex-direction:column;flex:1;overflow:hidden">
+  <div class="page" id="pg-gfwl" style="flex-direction:column;flex:1;overflow:hidden;min-height:0">
     <!-- Top bar -->
     <div style="display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap">
       <div style="font-size:13px;font-weight:bold;color:var(--green);font-family:monospace;letter-spacing:.08em">GFWL PREP</div>
@@ -885,7 +885,7 @@ select{cursor:pointer}
     </div>
 
     <!-- Main content area -->
-    <div style="flex:1;overflow:auto;padding:16px 20px" id="gfwl-main">
+    <div style="flex:1;overflow-y:auto;overflow-x:hidden;padding:16px 20px;min-height:0" id="gfwl-main">
       <div style="color:var(--muted);font-size:13px;text-align:center;padding:40px">Select a season to begin.</div>
     </div>
   </div>
@@ -2173,11 +2173,17 @@ Blue	Big Koala
 Blue	M.M.G. | Mixed Martial Goats
 Red: Warrior Solution
 Yellow - D-Generation X"></textarea>
-    <div style="display:flex;gap:8px;margin-top:12px">
+    <div style="display:flex;gap:8px;margin-top:12px;align-items:center">
       <button id="gfwl-team-import-btn" class="btn-go" style="flex:1;font-size:12px;padding:8px">Import Teams</button>
-      <button onclick="this.closest('div[style*=fixed]').remove()" class="btn-sec" style="font-size:12px;padding:8px 14px">Cancel</button>
+      <button onclick="this.closest('div[style*=fixed]').remove()" style="background:none;border:1px solid var(--border);color:var(--dim);font-family:monospace;font-size:14px;padding:6px 10px;border-radius:4px;cursor:pointer" title="Close">✕</button>
     </div>
-    <div id="gfwl-team-import-preview" style="margin-top:12px;font-size:11px;font-family:monospace;color:var(--muted)"></div>
+    <div id="gfwl-import-progress" style="display:none;margin-top:8px">
+      <div style="background:var(--card2);border-radius:4px;height:6px;overflow:hidden">
+        <div id="gfwl-import-bar" style="height:100%;background:var(--green);width:0%;transition:width .2s"></div>
+      </div>
+      <div id="gfwl-import-label" style="font-size:10px;color:var(--muted);margin-top:4px;font-family:monospace"></div>
+    </div>
+    <div id="gfwl-team-import-preview" style="margin-top:12px;font-size:11px;font-family:monospace;color:var(--muted);max-height:120px;overflow-y:auto"></div>
   `;
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
@@ -2236,13 +2242,19 @@ Yellow - D-Generation X"></textarea>
     if (!_gfwlData[_gfwlCurrentSeason]) _gfwlData[_gfwlCurrentSeason] = { teams:{} };
     if (!_gfwlData[_gfwlCurrentSeason].teams) _gfwlData[_gfwlCurrentSeason].teams = {};
 
+    // Show progress
+    const progWrap = document.getElementById('gfwl-import-progress');
+    const progBar  = document.getElementById('gfwl-import-bar');
+    const progLbl  = document.getElementById('gfwl-import-label');
+    if (progWrap) progWrap.style.display = 'block';
+    document.getElementById('gfwl-team-import-btn').disabled = true;
+
     let added = 0;
-    for (const entry of entries) {
-      const teamData = {
-        conference: entry.conference,
-        aliases: entry.aliases,
-        roster:[], addDrops:[], schedule:[], notes:''
-      };
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      if (progBar) progBar.style.width = Math.round((i/entries.length)*100)+'%';
+      if (progLbl) progLbl.textContent = (i+1)+'/'+entries.length+' — '+entry.name;
+      const teamData = { conference: entry.conference, aliases: entry.aliases, roster:[], addDrops:[], schedule:[], notes:'' };
       _gfwlData[_gfwlCurrentSeason].teams[entry.name] = teamData;
       try {
         await fetch(`${API}/gfwl/${_gfwlCurrentSeason}/team/${encodeURIComponent(entry.name)}`, {
@@ -2252,9 +2264,11 @@ Yellow - D-Generation X"></textarea>
         added++;
       } catch(e) { console.warn('Failed to save team', entry.name, e); }
     }
+    if (progBar) progBar.style.width = '100%';
+    if (progLbl) progLbl.textContent = 'Done! '+added+' teams imported.';
+    await new Promise(r => setTimeout(r, 600));
     overlay.remove();
     st(`Imported ${added} team${added!==1?'s':''}`, 'var(--green)');
-    // Re-fetch to sync
     const fresh = await fetch(API+'/gfwl/'+_gfwlCurrentSeason).then(r=>r.json()).catch(()=>null);
     if (fresh && !fresh.error) _gfwlData[_gfwlCurrentSeason] = fresh;
     gfwlLoadSeason(_gfwlCurrentSeason);
