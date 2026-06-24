@@ -97,9 +97,9 @@ async function saveDB() {
     try {
       await pgClient.query(`
         INSERT INTO duel_tools_data (key, value, updated_at)
-        VALUES ('batches',$1,NOW()),('players',$2,NOW()),('users',$3,NOW())
+        VALUES ('batches',$1,NOW()),('players',$2,NOW()),('users',$3,NOW()),('gfwl',$4,NOW())
         ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()
-      `, [JSON.stringify(db.batches), JSON.stringify(db.players), JSON.stringify(db.users)]);
+      `, [JSON.stringify(db.batches), JSON.stringify(db.players), JSON.stringify(db.users), JSON.stringify(db.gfwl)]);
     } catch(e) { console.error('PG save error:', e.message); }
   } else {
     try { fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2)); }
