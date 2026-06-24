@@ -867,7 +867,7 @@ select{cursor:pointer}
     </div>
 
   <!-- ── GFWL Prep ──────────────────────────────────────────────────────── -->
-  <div class="page" id="pg-gfwl" style="display:flex;flex-direction:column;flex:1;overflow:hidden">
+  <div class="page" id="pg-gfwl" style="flex-direction:column;flex:1;overflow:hidden">
     <!-- Top bar -->
     <div style="display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap">
       <div style="font-size:13px;font-weight:bold;color:var(--green);font-family:monospace;letter-spacing:.08em">GFWL PREP</div>
@@ -1878,17 +1878,31 @@ async function gfwlInit() {
   // Load all season data
   try {
     const res = await fetch(API+'/gfwl');
-    _gfwlData = await res.json();
+    const data = await res.json();
+    // Validate it's actual GFWL data not an error response
+    if (data && !data.status && !data.error && !data.message) {
+      _gfwlData = data;
+    } else {
+      console.warn('GFWL API returned unexpected:', data);
+      _gfwlData = {};
+    }
   } catch(e) { console.warn('GFWL load failed', e); _gfwlData = {}; }
 
-  // Populate season dropdown
+  // Populate season dropdown — normalize keys to S# format
+  const normalized = {};
+  Object.entries(_gfwlData).forEach(([k, v]) => {
+    normalized[gfwlNormalizeSeason(k)] = v;
+  });
+  _gfwlData = normalized;
+
   const sel = document.getElementById('gfwl-season-sel');
+  if (!sel) return;
   const seasons = Object.keys(_gfwlData).sort((a,b) => {
     const na = parseInt(a.replace(/\D/g,'')), nb = parseInt(b.replace(/\D/g,''));
     return nb - na; // S9 first
   });
   sel.innerHTML = '<option value="">— Select Season —</option>' +
-    seasons.map(s => `<option value="${s}">${s}</option>`).join('');
+    seasons.map(s => `<option value="${s}">Season ${s.replace(/^S/i,'')}</option>`).join('');
 
   // Show admin buttons if admin
   const adminBtns = document.getElementById('gfwl-admin-btns');
@@ -1899,14 +1913,30 @@ async function gfwlInit() {
     sel.value = seasons[0];
     gfwlLoadSeason(seasons[0]);
   } else {
-    document.getElementById('gfwl-main').innerHTML =
+    const main = document.getElementById('gfwl-main');
+    if (main) main.innerHTML =
       '<div style="color:var(--muted);font-size:13px;text-align:center;padding:40px">No seasons yet.' +
       (_isAdmin ? ' Click <b>+ Season</b> to create one.' : '') + '</div>';
   }
 }
 
+// Normalize season input: "Season 9", "season9", "S9", "s9" → "S9"
+function gfwlNormalizeSeason(input) {
+  if (!input) return '';
+  const s = String(input).trim();
+  // "Season 9" or "Season9" → "S9"
+  const mSeason = s.match(/^season\s*(\d+)$/i);
+  if (mSeason) return 'S'+mSeason[1];
+  // "S9" or "s9" → "S9"
+  const mS = s.match(/^[Ss](\d+)$/);
+  if (mS) return 'S'+mS[1];
+  // Fallback: uppercase as-is
+  return s.toUpperCase();
+}
+
 async function gfwlLoadSeason(season) {
   if (!season) return;
+  season = gfwlNormalizeSeason(season);
   _gfwlCurrentSeason = season;
   _gfwlCurrentTeam = null;
   const data = _gfwlData[season] || { teams:{} };
@@ -2012,9 +2042,10 @@ function computeTeamRecord(season, teamName, team) {
 }
 
 async function gfwlNewSeason() {
-  const s = window.prompt('Enter season code (e.g. S10, S9):','');
+  const s = window.prompt('Enter season (e.g. S9, S10, Season 9):','');
   if (!s) return;
-  const season = s.trim().toUpperCase();
+  const season = gfwlNormalizeSeason(s);
+  if (!season) { alert('Invalid season format.'); return; }
   if (_gfwlData[season]) { alert('Season '+season+' already exists.'); return; }
   const numWeeks = parseInt(window.prompt('Number of weeks?','13')||'13');
   _gfwlData[season] = { season, numWeeks, teams:{} };
@@ -2030,6 +2061,8 @@ async function gfwlNewSeason() {
 
 async function gfwlAddTeam() {
   if (!_gfwlCurrentSeason) { alert('Select a season first.'); return; }
+  // Re-normalize just in case
+  _gfwlCurrentSeason = gfwlNormalizeSeason(_gfwlCurrentSeason);
   const name = window.prompt('Team name:','');
   if (!name) return;
   const conf = window.prompt('Conference (Red/Blue/Yellow):','Blue');

@@ -575,13 +575,17 @@ const server = http.createServer(async (req, res) => {
 
   // ── GET /api/gfwl/:season — get one season ────────────────────────────────
   if (parts[0]==='gfwl' && parts[1] && !parts[2] && method==='GET') {
-    return json(res, 200, db.gfwl[parts[1]] || {});
+    return json(res, 200, db.gfwl[normalizeSeason(parts[1])] || {});
   }
 
   // ── PATCH /api/gfwl/:season — update season data (admin only) ────────────
   if (parts[0]==='gfwl' && parts[1] && !parts[2] && method==='PATCH') {
     if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
     return readBody(req, async data => {
+      const sKey = normalizeSeason(parts[1]);
+      if (!db.gfwl[sKey]) db.gfwl[sKey] = { teams: {} };
+      // reassign parts[1] to normalized key
+      parts[1] = sKey;
       if (!db.gfwl[parts[1]]) db.gfwl[parts[1]] = { teams: {} };
       // Deep merge
       if (data.teams) {
@@ -602,7 +606,7 @@ const server = http.createServer(async (req, res) => {
   // ── PATCH /api/gfwl/:season/team/:teamName — update one team ─────────────
   if (parts[0]==='gfwl' && parts[1] && parts[2]==='team' && parts[3] && method==='PATCH') {
     if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
-    const season   = parts[1];
+    const season   = normalizeSeason(parts[1]);
     const teamName = decodeURIComponent(parts[3]);
     return readBody(req, async data => {
       if (!db.gfwl[season]) db.gfwl[season] = { teams: {} };
@@ -618,7 +622,7 @@ const server = http.createServer(async (req, res) => {
   // ── DELETE /api/gfwl/:season/team/:teamName — remove a team ──────────────
   if (parts[0]==='gfwl' && parts[1] && parts[2]==='team' && parts[3] && method==='DELETE') {
     if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
-    const season   = parts[1];
+    const season   = normalizeSeason(parts[1]);
     const teamName = decodeURIComponent(parts[3]);
     if (db.gfwl[season] && db.gfwl[season].teams) {
       delete db.gfwl[season].teams[teamName];
@@ -784,6 +788,17 @@ server.listen(PORT, '0.0.0.0', () => {
 process.on('SIGINT',  () => { saveDB().then(() => process.exit(0)); });
 process.on('SIGTERM', () => { saveDB().then(() => process.exit(0)); });
 
+
+// ── GFWL season key normalizer: "Season 9", "s9" → "S9" ─────────────────────
+function normalizeSeason(s) {
+  if (!s) return '';
+  const str = String(s).trim();
+  const mSeason = str.match(/^season\s*(\d+)$/i);
+  if (mSeason) return 'S'+mSeason[1];
+  const mS = str.match(/^[Ss](\d+)$/);
+  if (mS) return 'S'+mS[1];
+  return str.toUpperCase();
+}
 
 // ── Keep-alive ping — prevents Railway cold starts ───────────────────────────
 const APP_URL = process.env.RAILWAY_PUBLIC_DOMAIN
