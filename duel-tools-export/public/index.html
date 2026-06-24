@@ -1940,10 +1940,19 @@ async function gfwlLoadSeason(season) {
   season = gfwlNormalizeSeason(season);
   _gfwlCurrentSeason = season;
   _gfwlCurrentTeam = null;
+  // Always re-fetch from server to get latest data
+  try {
+    const res = await fetch(API+'/gfwl/'+season);
+    const fresh = await res.json();
+    if (fresh && !fresh.error && !fresh.status) {
+      _gfwlData[season] = fresh;
+    }
+  } catch(e) { console.warn('Failed to fetch season', season, e); }
   const data = _gfwlData[season] || { teams:{} };
   const teams = Object.entries(data.teams || {});
+  console.log('[GFWL] Season', season, '— teams:', teams.map(([n,t])=>n+'('+t.conference+')'));
   const statsEl = document.getElementById('gfwl-season-stats');
-  if (statsEl) statsEl.textContent = `${teams.length} teams · ${data.numWeeks||13} weeks`;
+  if (statsEl) statsEl.textContent = teams.length + ' teams · ' + (data.numWeeks||13) + ' weeks';
   gfwlRenderSeasonGrid(season, data);
 }
 
