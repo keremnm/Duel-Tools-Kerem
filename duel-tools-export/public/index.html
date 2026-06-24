@@ -878,6 +878,7 @@ select{cursor:pointer}
       <div style="margin-left:auto;display:flex;gap:6px" id="gfwl-admin-btns" style="display:none">
         <button onclick="gfwlAddTeam()" style="background:none;border:1px solid var(--green);color:var(--green);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">+ Team</button>
         <button onclick="gfwlBulkImportTeams()" style="background:none;border:1px solid var(--green);color:var(--green);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">⬆ Teams</button>
+        <button onclick="gfwlSyncRosters()" style="background:none;border:1px solid var(--blue);color:var(--blue);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer" title="Auto-fill rosters from player profiles">↺ Rosters</button>
         <button onclick="gfwlImportSchedule()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">⬆ Schedule</button>
         <button onclick="gfwlNewSeason()" style="background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">+ Season</button>
         <input type="file" id="gfwl-schedule-inp" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="gfwlHandleScheduleImport(this)"/>
@@ -1954,6 +1955,8 @@ async function gfwlLoadSeason(season) {
   const statsEl = document.getElementById('gfwl-season-stats');
   if (statsEl) statsEl.textContent = teams.length + ' teams · ' + (data.numWeeks||13) + ' weeks';
   gfwlRenderSeasonGrid(season, data);
+  // Auto-sync rosters silently in background
+  if (_userRole === 'admin') gfwlSyncRosters(season);
 }
 
 function gfwlRenderSeasonGrid(season, data) {
@@ -2134,17 +2137,130 @@ async function gfwlAddTeam() {
 async function gfwlEditTeamMeta(season, teamName, btn) {
   const team = _gfwlData[season]?.teams[teamName];
   if (!team) return;
-  const conf = window.prompt('Conference (Red/Blue/Yellow):', team.conference||'');
-  if (conf === null) return;
-  team.conference = conf.trim();
-  try {
-    await fetch(`${API}/gfwl/${season}/team/${encodeURIComponent(teamName)}`, {
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:9999;display:flex;align-items:center;justify-content:center';
+
+  const modal = document.createElement('div');
+  modal.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px;width:400px;max-width:95vw;display:flex;flex-direction:column;gap:12px';
+  modal.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <div style="font-size:14px;font-weight:bold;color:var(--text)">Edit Team</div>
+      <button onclick="this.closest('div[style*=fixed]').remove()" style="background:none;border:none;color:var(--dim);font-size:18px;cursor:pointer">✕</button>
+    </div>
+    <div>
+      <div style="font-size:10px;color:var(--muted);letter-spacing:.1em;margin-bottom:4px">TEAM NAME</div>
+      <input id="edit-team-name" type="text" value="${teamName.replace(/"/g,'&quot;')}" style="width:100%;box-sizing:border-box;font-size:13px;padding:7px 10px;background:var(--card2);border:1px solid var(--border);border-radius:5px;color:var(--text);outline:none"/>
+    </div>
+    <div>
+      <div style="font-size:10px;color:var(--muted);letter-spacing:.1em;margin-bottom:4px">CONFERENCE</div>
+      <select id="edit-team-conf" style="width:100%;box-sizing:border-box;font-size:13px;padding:7px 10px;background:var(--card2);border:1px solid var(--border);border-radius:5px;color:var(--text);outline:none">
+        <option value="Red" ${team.conference==='Red'?'selected':''}>Red</option>
+        <option value="Blue" ${team.conference==='Blue'?'selected':''}>Blue</option>
+        <option value="Yellow" ${team.conference==='Yellow'?'selected':''}>Yellow</option>
+      </select>
+    </div>
+    <div>
+      <div style="font-size:10px;color:var(--muted);letter-spacing:.1em;margin-bottom:4px">ALIASES (comma-separated)</div>
+      <input id="edit-team-aliases" type="text" value="${(team.aliases||[]).join(', ')}" placeholder="e.g. Mixed Martial Goats, MMG" style="width:100%;box-sizing:border-box;font-size:13px;padding:7px 10px;background:var(--card2);border:1px solid var(--border);border-radius:5px;color:var(--text);outline:none"/>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button id="edit-team-save" class="btn-go" style="flex:1;font-size:12px;padding:8px">Save Changes</button>
+      <button id="edit-team-delete" style="background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:12px;padding:8px 14px;border-radius:5px;cursor:pointer">Delete Team</button>
+    </div>
+  `;
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  document.getElementById('edit-team-save').onclick = async () => {
+    const newName = document.getElementById('edit-team-name').value.trim();
+    const newConf = document.getElementById('edit-team-conf').value;
+    const newAliases = document.getElementById('edit-team-aliases').value.split(',').map(a=>a.trim()).filter(Boolean);
+    if (!newName) { alert('Team name cannot be empty.'); return; }
+
+    // If name changed: delete old, create new
+    if (newName !== teamName) {
+      await fetch(`${API}/gfwl/${season}/team/${encodeURIComponent(teamName)}`, { method:'DELETE', headers:authHeaders() });
+      delete _gfwlData[season].teams[teamName];
+    }
+    const updated = { ...team, conference: newConf, aliases: newAliases };
+    _gfwlData[season].teams[newName] = updated;
+    await fetch(`${API}/gfwl/${season}/team/${encodeURIComponent(newName)}`, {
       method:'PATCH', headers: authHeaders(),
-      body: JSON.stringify({ conference: team.conference })
+      body: JSON.stringify(updated)
     });
-    st('Updated '+teamName, 'var(--green)');
+    overlay.remove();
+    st('Team updated', 'var(--green)');
     gfwlLoadSeason(season);
-  } catch(e) { st('Save failed', 'var(--red)'); }
+  };
+
+  document.getElementById('edit-team-delete').onclick = async () => {
+    if (!confirm('Delete team "'+teamName+'" from '+season+'? This cannot be undone.')) return;
+    await fetch(`${API}/gfwl/${season}/team/${encodeURIComponent(teamName)}`, { method:'DELETE', headers:authHeaders() });
+    delete _gfwlData[season].teams[teamName];
+    overlay.remove();
+    st('Team deleted', 'var(--green)');
+    gfwlLoadSeason(season);
+  };
+}
+
+// Auto-populate team rosters from player profiles' gfwlTeams entries
+async function gfwlSyncRosters(season) {
+  if (!season) season = _gfwlCurrentSeason;
+  if (!season || !_gfwlData[season]) return;
+  const teams = _gfwlData[season].teams || {};
+  const seasonKey = season.toUpperCase(); // S9
+
+  let synced = 0;
+  // Scan all players in registry
+  const players = Object.values(window._playerRegistry || {});
+  for (const player of players) {
+    const gfwlTeams = player.gfwlTeams || player.teams || [];
+    for (const entry of gfwlTeams) {
+      const entrySeasonNorm = gfwlNormalizeSeason(entry.season || '');
+      if (entrySeasonNorm !== seasonKey) continue;
+      const teamName = entry.team || '';
+      if (!teamName) continue;
+
+      // Resolve team by name or alias
+      const resolvedName = gfwlResolveTeam(season, teamName);
+      if (!resolvedName) continue;
+      const team = teams[resolvedName];
+      if (!team) continue;
+
+      // Add player to roster if not already there
+      if (!team.roster) team.roster = [];
+      const existing = team.roster.find(r => r.player.toLowerCase() === player.name.toLowerCase());
+      if (!existing) {
+        team.roster.push({
+          player: player.name,
+          status: 'Active',
+          addedWeek: null,
+          droppedWeek: null,
+          mainDeck: null,
+          secondaryDeck: null
+        });
+        synced++;
+      }
+    }
+  }
+
+  if (synced > 0) {
+    // Save all updated teams
+    for (const [tName, tData] of Object.entries(teams)) {
+      if ((tData.roster||[]).length > 0) {
+        await fetch(`${API}/gfwl/${season}/team/${encodeURIComponent(tName)}`, {
+          method:'PATCH', headers: authHeaders(),
+          body: JSON.stringify({ roster: tData.roster })
+        });
+      }
+    }
+    st('Synced '+synced+' player'+( synced!==1?'s':'')+' to '+season+' rosters', 'var(--green)');
+    gfwlLoadSeason(season);
+  } else {
+    st('No new players found to sync for '+season, 'var(--muted)');
+  }
+  return synced;
 }
 
 function gfwlImportSchedule() {
@@ -2297,34 +2413,346 @@ async function gfwlHandleScheduleImport(input) {
   input.value = '';
 }
 
-function gfwlOpenTeam(season, teamName, team) {
+async function gfwlOpenTeam(season, teamName, team) {
   _gfwlCurrentTeam = teamName;
-  // Will be fully implemented in Step 3 (Team Sheet view)
+  // Refresh team data from server
+  try {
+    const fresh = await fetch(API+'/gfwl/'+season).then(r=>r.json());
+    if (fresh && !fresh.error && fresh.teams && fresh.teams[teamName]) {
+      team = fresh.teams[teamName];
+      _gfwlData[season] = fresh;
+    }
+  } catch(e) {}
+
   const main = document.getElementById('gfwl-main');
   main.innerHTML = '';
+  const colors = CONF_COLORS[team.conference||''] || { text:'var(--muted)', border:'rgba(100,100,100,.4)', bg:'rgba(100,100,100,.08)' };
+  const roster = team.roster || [];
+  const addDrops = team.addDrops || [];
+  const schedule = team.schedule || [];
+  const numWeeks = (_gfwlData[season]||{}).numWeeks || 13;
 
-  // Back button
-  const back = document.createElement('button');
-  back.textContent = '← Back to '+season;
-  back.style.cssText = 'background:none;border:none;color:var(--muted);font-family:monospace;font-size:12px;cursor:pointer;padding:0;margin-bottom:16px';
-  back.onclick = () => gfwlLoadSeason(season);
-  main.appendChild(back);
+  // ── Header ───────────────────────────────────────────────────────────────
+  const hdrBar = document.createElement('div');
+  hdrBar.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap';
 
-  const colors = CONF_COLORS[team.conference||''] || { text:'var(--muted)', border:'var(--border)', bg:'transparent' };
-  const hdr = document.createElement('div');
-  hdr.style.cssText = `font-size:20px;font-weight:bold;color:${colors.text};font-family:monospace;margin-bottom:4px`;
-  hdr.textContent = teamName;
-  main.appendChild(hdr);
+  const backBtn = document.createElement('button');
+  backBtn.textContent = '← '+season;
+  backBtn.style.cssText = 'background:none;border:none;color:var(--muted);font-family:monospace;font-size:12px;cursor:pointer;padding:0';
+  backBtn.onclick = () => gfwlLoadSeason(season);
+  hdrBar.appendChild(backBtn);
 
-  const meta = document.createElement('div');
-  meta.style.cssText = 'font-size:12px;color:var(--muted);margin-bottom:20px';
-  meta.textContent = `${team.conference||'Unassigned'} Conference · ${season} · ${(team.roster||[]).length} players`;
-  main.appendChild(meta);
+  const titleEl = document.createElement('div');
+  titleEl.style.cssText = 'font-size:20px;font-weight:bold;color:'+colors.text+';font-family:monospace;flex:1';
+  titleEl.textContent = teamName;
+  hdrBar.appendChild(titleEl);
 
-  const ph = document.createElement('div');
-  ph.style.cssText = 'color:var(--muted);font-size:12px;font-family:monospace;padding:20px;background:var(--card);border:1px solid var(--border);border-radius:8px';
-  ph.textContent = '📋 Team sheet coming in Step 3 — roster, schedule, deck pies, weekly lineups.';
-  main.appendChild(ph);
+  const confBadge = document.createElement('span');
+  confBadge.style.cssText = 'font-size:11px;color:'+colors.text+';border:1px solid '+colors.border+';padding:2px 10px;border-radius:4px;font-family:monospace';
+  confBadge.textContent = (team.conference||'?')+' Conference';
+  hdrBar.appendChild(confBadge);
+
+  if (_userRole === 'admin') {
+    const editBtn = document.createElement('button');
+    editBtn.textContent = '✎ Edit Team';
+    editBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--dim);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer';
+    editBtn.onclick = () => gfwlEditTeamMeta(season, teamName, editBtn);
+    hdrBar.appendChild(editBtn);
+    const syncBtn = document.createElement('button');
+    syncBtn.textContent = '↺ Sync Players';
+    syncBtn.style.cssText = 'background:none;border:1px solid var(--blue);color:var(--blue);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer';
+    syncBtn.onclick = async () => { await gfwlSyncRosters(season); gfwlOpenTeam(season, teamName, _gfwlData[season]?.teams[teamName]||team); };
+    hdrBar.appendChild(syncBtn);
+  }
+  main.appendChild(hdrBar);
+
+  // ── Two column layout ─────────────────────────────────────────────────────
+  const body = document.createElement('div');
+  body.style.cssText = 'display:grid;grid-template-columns:1fr 340px;gap:20px;align-items:start';
+  main.appendChild(body);
+
+  const left  = document.createElement('div');
+  left.style.cssText = 'display:flex;flex-direction:column;gap:20px';
+  const right = document.createElement('div');
+  right.style.cssText = 'display:flex;flex-direction:column;gap:20px';
+  body.appendChild(left);
+  body.appendChild(right);
+
+  // ── Compute season stats from replays ─────────────────────────────────────
+  const seasonKey = season.toUpperCase();
+  const rosterNames = roster.map(r => r.player.toLowerCase());
+  const seasonReplays = []; // {player, replay, weekLabel}
+  for (const b of (_allProfileBatches||[])) {
+    if (!rosterNames.includes((b.player||'').toLowerCase())) continue;
+    for (const r of (b.replays||[])) {
+      const lbl = (r.eventLabel||'').toUpperCase();
+      if (!lbl.startsWith(seasonKey+':') && !lbl.startsWith(seasonKey+' ')) continue;
+      seasonReplays.push({ player:b.player, replay:r, label:lbl });
+    }
+  }
+
+  // ── Roster table ──────────────────────────────────────────────────────────
+  const rosterSec = gfwlMakeSection('ROSTER');
+  left.appendChild(rosterSec);
+
+  const activeRoster = roster.filter(p => p.status !== 'Dropped');
+  const droppedRoster = roster.filter(p => p.status === 'Dropped');
+
+  const rTable = document.createElement('table');
+  rTable.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
+  rTable.innerHTML = `<thead><tr style="border-bottom:1px solid var(--border)">
+    <th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">PLAYER</th>
+    <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">RECORD</th>
+    <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">WIN%</th>
+    <th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">MAIN DECK</th>
+    <th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">STATUS</th>
+    ${_userRole==='admin'?'<th style="width:30px"></th>':''}
+  </tr></thead><tbody id="gfwl-roster-tbody"></tbody>`;
+  rosterSec.appendChild(rTable);
+
+  const tbody = rTable.querySelector('#gfwl-roster-tbody');
+
+  function addRosterRow(p, isDropped) {
+    const playerReplays = seasonReplays.filter(x => x.player.toLowerCase() === p.player.toLowerCase());
+    const w = playerReplays.filter(x => x.replay.parsed?.result==='w').length;
+    const l = playerReplays.filter(x => x.replay.parsed?.result==='l').length;
+    const total = w+l;
+    const winPct = total ? Math.round(w/total*100) : null;
+
+    // Get main deck from event decklists or replay classification
+    const playerReg = window._playerRegistry && window._playerRegistry[p.player.toLowerCase()];
+    const evDecks = playerReg ? (playerReg.eventDecklists||[]) : [];
+    const seasonDecks = evDecks.filter(d => /^S\d+$/i.test(d.code) && gfwlNormalizeSeason(d.code)===seasonKey);
+    const mainDeck = p.mainDeck || seasonDecks[0]?.deckTypeOverride ||
+      (() => { const decks={}; playerReplays.forEach(x=>{const d=x.replay.parsed?.myDeck||x.replay.myDeckOverride; if(d)decks[d]=(decks[d]||0)+1;}); return Object.entries(decks).sort((a,b)=>b[1]-a[1])[0]?.[0]||'—'; })();
+
+    const tr = document.createElement('tr');
+    tr.style.cssText = 'border-bottom:1px solid var(--border2);'+(isDropped?'opacity:.5':'');
+    tr.innerHTML = `
+      <td style="padding:7px 8px;font-weight:bold;color:${isDropped?'var(--red)':'var(--text)'}">${p.player}</td>
+      <td style="padding:7px 8px;text-align:center;font-family:monospace">
+        <span style="color:var(--green)">${w}W</span> <span style="color:var(--dim)">-</span> <span style="color:var(--red)">${l}L</span>
+      </td>
+      <td style="padding:7px 8px;text-align:center;font-family:monospace;color:${winPct===null?'var(--dim)':winPct>=50?'var(--green)':'var(--red)'}">
+        ${winPct===null?'—':winPct+'%'}
+      </td>
+      <td style="padding:7px 8px;color:var(--muted)">${mainDeck}</td>
+      <td style="padding:7px 8px;font-size:10px;color:${isDropped?'var(--red)':'var(--green)'}">
+        ${isDropped?'Dropped'+(p.droppedWeek?' Wk'+p.droppedWeek:''):'Active'+(p.addedWeek?' (Added Wk'+p.addedWeek+')':'')}
+      </td>
+      ${_userRole==='admin'?`<td style="padding:4px"><button onclick="gfwlEditRosterPlayer('${season}','${teamName}','${p.player}')" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:11px">✎</button></td>`:''}
+    `;
+    // Click to go to profile
+    tr.querySelector('td').style.cursor = 'pointer';
+    tr.querySelector('td').onclick = () => gotoPlayerProfile(p.player);
+    tbody.appendChild(tr);
+  }
+
+  activeRoster.forEach(p => addRosterRow(p, false));
+  if (droppedRoster.length) {
+    const sep = document.createElement('tr');
+    sep.innerHTML = '<td colspan="6" style="padding:6px 8px;font-size:10px;color:var(--dim);letter-spacing:.1em">DROPPED</td>';
+    tbody.appendChild(sep);
+    droppedRoster.forEach(p => addRosterRow(p, true));
+  }
+
+  if (_userRole === 'admin') {
+    const addPlayerBtn = document.createElement('button');
+    addPlayerBtn.textContent = '+ Add Player';
+    addPlayerBtn.style.cssText = 'margin-top:8px;background:none;border:1px dashed var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:5px 12px;border-radius:4px;cursor:pointer;width:100%';
+    addPlayerBtn.onclick = () => gfwlAddRosterPlayer(season, teamName, team);
+    rosterSec.appendChild(addPlayerBtn);
+  }
+
+  // ── Schedule table ────────────────────────────────────────────────────────
+  const schSec = gfwlMakeSection('SCHEDULE');
+  left.appendChild(schSec);
+
+  const schTable = document.createElement('table');
+  schTable.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
+  schTable.innerHTML = `<thead><tr style="border-bottom:1px solid var(--border)">
+    <th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em;width:60px">WEEK</th>
+    <th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">OPPONENT</th>
+    <th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">RESULT</th>
+    <th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">MATCH W%</th>
+  </tr></thead><tbody></tbody>`;
+  schSec.appendChild(schTable);
+  const schBody = schTable.querySelector('tbody');
+
+  for (let wk = 1; wk <= numWeeks; wk++) {
+    const schEntry = schedule.find(s => s.week === wk);
+    const opp = schEntry?.opponent || '—';
+    // Compute week result from replays tagged S9: WK1 etc
+    const wkReplays = seasonReplays.filter(x => {
+      const lbl = x.label;
+      return lbl.includes(':') && parseInt((lbl.split(':')[1]||'').replace(/\D/g,'')) === wk;
+    });
+    const wkW = wkReplays.filter(x=>x.replay.parsed?.result==='w').length;
+    const wkL = wkReplays.filter(x=>x.replay.parsed?.result==='l').length;
+    const wkTotal = wkW+wkL;
+    const wkPct = wkTotal ? Math.round(wkW/wkTotal*100) : null;
+
+    const tr = document.createElement('tr');
+    tr.style.cssText = 'border-bottom:1px solid var(--border2)';
+    tr.innerHTML = `
+      <td style="padding:5px 8px;font-family:monospace;color:var(--amber)">WK${wk}</td>
+      <td style="padding:5px 8px;color:var(--text)">${opp}</td>
+      <td style="padding:5px 8px;text-align:center;font-family:monospace;font-size:11px">
+        ${wkTotal?'<span style="color:var(--green)">'+wkW+'W</span> <span style="color:var(--dim)">-</span> <span style="color:var(--red)">'+wkL+'L</span>':'<span style="color:var(--dim)">—</span>'}
+      </td>
+      <td style="padding:5px 8px;text-align:center;font-family:monospace;color:${wkPct===null?'var(--dim)':wkPct>=50?'var(--green)':'var(--red)'}">
+        ${wkPct===null?'—':wkPct+'%'}
+      </td>
+    `;
+    schBody.appendChild(tr);
+  }
+
+  // ── Add/Drop log ──────────────────────────────────────────────────────────
+  if (addDrops.length || _userRole === 'admin') {
+    const adSec = gfwlMakeSection('ADD / DROP LOG');
+    left.appendChild(adSec);
+    if (addDrops.length) {
+      const adTable = document.createElement('table');
+      adTable.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
+      adTable.innerHTML = `<thead><tr style="border-bottom:1px solid var(--border)">
+        <th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">WEEK</th>
+        <th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">IN</th>
+        <th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">OUT</th>
+        <th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">NOTE</th>
+      </tr></thead><tbody></tbody>`;
+      adSec.appendChild(adTable);
+      const adBody = adTable.querySelector('tbody');
+      addDrops.forEach(ad => {
+        const tr = document.createElement('tr');
+        tr.style.cssText = 'border-bottom:1px solid var(--border2)';
+        tr.innerHTML = `
+          <td style="padding:5px 8px;color:var(--amber);font-family:monospace">WK${ad.week||'?'}</td>
+          <td style="padding:5px 8px;color:var(--green)">${ad.playerIn||'—'}</td>
+          <td style="padding:5px 8px;color:var(--red)">${ad.playerOut||'—'}</td>
+          <td style="padding:5px 8px;color:var(--muted);font-size:11px">${ad.note||''}</td>
+        `;
+        adBody.appendChild(tr);
+      });
+    } else {
+      adSec.appendChild(Object.assign(document.createElement('div'), {
+        style:'color:var(--dim);font-size:11px', textContent:'No transactions recorded.'
+      }));
+    }
+    if (_userRole === 'admin') {
+      const adBtn = document.createElement('button');
+      adBtn.textContent = '+ Log Transaction';
+      adBtn.style.cssText = 'margin-top:8px;background:none;border:1px dashed var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:5px 12px;border-radius:4px;cursor:pointer;width:100%';
+      adBtn.onclick = () => gfwlLogTransaction(season, teamName, team);
+      adSec.appendChild(adBtn);
+    }
+  }
+
+  // ── RIGHT: Deck pies ──────────────────────────────────────────────────────
+  const pieSec = gfwlMakeSection('TEAM DECK USAGE');
+  right.appendChild(pieSec);
+  const pieCanvas = document.createElement('canvas');
+  pieCanvas.id = 'gfwl-team-deck-pie';
+  pieCanvas.style.cssText = 'max-height:180px';
+  pieSec.appendChild(pieCanvas);
+  const pieLegend = document.createElement('div');
+  pieLegend.id = 'gfwl-team-deck-legend';
+  pieLegend.style.cssText = 'margin-top:8px;display:flex;flex-direction:column;gap:3px';
+  pieSec.appendChild(pieLegend);
+
+  const matchupSec = gfwlMakeSection('MATCHUPS VS OPP DECKS');
+  right.appendChild(matchupSec);
+  const matchupCanvas = document.createElement('canvas');
+  matchupCanvas.id = 'gfwl-team-matchup-pie';
+  matchupCanvas.style.cssText = 'max-height:180px';
+  matchupSec.appendChild(matchupCanvas);
+  const matchupLegend = document.createElement('div');
+  matchupLegend.id = 'gfwl-team-matchup-legend';
+  matchupLegend.style.cssText = 'margin-top:8px;display:flex;flex-direction:column;gap:3px';
+  matchupSec.appendChild(matchupLegend);
+
+  // Build pie data
+  const myDeckUsage = {}, oppDeckUsage = {};
+  seasonReplays.forEach(({replay:r}) => {
+    const my = r.myDeckOverride || r.parsed?.myDeck;
+    const opp = r.oppDeckOverride || r.parsed?.oppDeck;
+    if (my)  myDeckUsage[my]  = (myDeckUsage[my]||0)+1;
+    if (opp) oppDeckUsage[opp] = (oppDeckUsage[opp]||0)+1;
+  });
+  const myEntries  = Object.entries(myDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  const oppEntries = Object.entries(oppDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  if (myEntries.length)  buildDonutChart('gfwl-team-deck-pie','gfwl-team-deck-legend', myEntries, teamName+' — Deck Usage');
+  else pieCanvas.parentElement.innerHTML += '<div style="color:var(--dim);font-size:11px">No replay data yet.</div>';
+  if (oppEntries.length) buildDonutChart('gfwl-team-matchup-pie','gfwl-team-matchup-legend', oppEntries, 'Opponent Deck Types');
+
+  // ── View Player Profile helper ─────────────────────────────────────────────
+  function gotoPlayerProfile(playerName) {
+    const profilesTab = document.querySelector('.ntab[onclick*="profiles"]');
+    switchTab('profiles', profilesTab);
+    setTimeout(async () => {
+      await loadProfiles();
+      const playerBatches = (_allProfileBatches||[]).filter(b=>(b.player||'').toLowerCase()===playerName.toLowerCase());
+      if (playerBatches.length) openProfile(playerName, playerBatches, []);
+    }, 300);
+  }
+}
+
+// ── Helper: create labeled section ────────────────────────────────────────────
+function gfwlMakeSection(title) {
+  const sec = document.createElement('div');
+  sec.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px';
+  const lbl = document.createElement('div');
+  lbl.style.cssText = 'font-size:10px;color:var(--muted);letter-spacing:.12em;margin-bottom:10px;font-weight:bold';
+  lbl.textContent = title;
+  sec.appendChild(lbl);
+  return sec;
+}
+
+// ── Admin: add player to roster ───────────────────────────────────────────────
+async function gfwlAddRosterPlayer(season, teamName, team) {
+  const name = window.prompt('Player username:','');
+  if (!name) return;
+  const addedWk = window.prompt('Added in week (leave blank if original roster):','');
+  if (!team.roster) team.roster = [];
+  team.roster.push({ player:name.trim(), status:'Active', addedWeek:addedWk?parseInt(addedWk):null, droppedWeek:null, mainDeck:null });
+  await fetch(`${API}/gfwl/${season}/team/${encodeURIComponent(teamName)}`, {
+    method:'PATCH', headers:authHeaders(), body:JSON.stringify({ roster: team.roster })
+  });
+  gfwlOpenTeam(season, teamName, team);
+}
+
+// ── Admin: edit roster player status ─────────────────────────────────────────
+async function gfwlEditRosterPlayer(season, teamName, playerName) {
+  const team = _gfwlData[season]?.teams[teamName];
+  if (!team) return;
+  const p = (team.roster||[]).find(r=>r.player===playerName);
+  if (!p) return;
+  const action = window.prompt('Status for '+playerName+':
+1 = Active
+2 = Drop (enter week)
+3 = Remove from roster','1');
+  if (!action) return;
+  if (action==='1') { p.status='Active'; p.droppedWeek=null; }
+  else if (action==='2') { const wk=window.prompt('Dropped in week:',''); p.status='Dropped'; p.droppedWeek=wk?parseInt(wk):null; }
+  else if (action==='3') { team.roster=team.roster.filter(r=>r.player!==playerName); }
+  await fetch(`${API}/gfwl/${season}/team/${encodeURIComponent(teamName)}`, {
+    method:'PATCH', headers:authHeaders(), body:JSON.stringify({ roster:team.roster })
+  });
+  gfwlOpenTeam(season, teamName, team);
+}
+
+// ── Admin: log add/drop transaction ──────────────────────────────────────────
+async function gfwlLogTransaction(season, teamName, team) {
+  const week = window.prompt('Week number:','');
+  if (!week) return;
+  const playerIn  = window.prompt('Player added (leave blank if drop only):','');
+  const playerOut = window.prompt('Player dropped (leave blank if add only):','');
+  const note = window.prompt('Note (e.g. Free Agent, Traded):','');
+  if (!team.addDrops) team.addDrops = [];
+  team.addDrops.push({ week:parseInt(week)||0, playerIn:playerIn||'', playerOut:playerOut||'', note:note||'' });
+  await fetch(`${API}/gfwl/${season}/team/${encodeURIComponent(teamName)}`, {
+    method:'PATCH', headers:authHeaders(), body:JSON.stringify({ addDrops:team.addDrops })
+  });
+  gfwlOpenTeam(season, teamName, team);
 }
 
 async function selectPlayerBatches(ids) {
