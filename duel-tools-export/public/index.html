@@ -2050,12 +2050,18 @@ async function gfwlNewSeason() {
   const numWeeks = parseInt(window.prompt('Number of weeks?','13')||'13');
   _gfwlData[season] = { season, numWeeks, teams:{} };
   try {
-    await fetch(API+'/gfwl/'+season, {
-      method:'PATCH', headers:{'Content-Type':'application/json'},
+    const r = await fetch(API+'/gfwl/'+season, {
+      method:'PATCH', headers: authHeaders(),
       body: JSON.stringify({ season, numWeeks, teams:{} })
     });
+    if (!r.ok) { const e = await r.json().catch(()=>{}); st('Save failed: '+(e?.error||r.status), 'var(--red)'); return; }
+    // Update local state immediately, then refresh dropdown
+    _gfwlData[season] = { season, numWeeks, teams:{} };
     st('Season '+season+' created', 'var(--green)');
-    gfwlInit();
+    await gfwlInit();
+    // Auto-select the new season
+    const sel = document.getElementById('gfwl-season-sel');
+    if (sel) { sel.value = season; gfwlLoadSeason(season); }
   } catch(e) { st('Failed to create season', 'var(--red)'); }
 }
 
@@ -2071,10 +2077,11 @@ async function gfwlAddTeam() {
   if (!_gfwlData[_gfwlCurrentSeason]) _gfwlData[_gfwlCurrentSeason] = { teams:{} };
   _gfwlData[_gfwlCurrentSeason].teams[name] = teamData;
   try {
-    await fetch(`${API}/gfwl/${_gfwlCurrentSeason}/team/${encodeURIComponent(name)}`, {
-      method:'PATCH', headers:{'Content-Type':'application/json'},
+    const r2 = await fetch(`${API}/gfwl/${_gfwlCurrentSeason}/team/${encodeURIComponent(name)}`, {
+      method:'PATCH', headers: authHeaders(),
       body: JSON.stringify(teamData)
     });
+    if (!r2.ok) { const e = await r2.json().catch(()=>{}); st('Save failed: '+(e?.error||r2.status), 'var(--red)'); return; }
     st('Team "'+name+'" added to '+_gfwlCurrentSeason, 'var(--green)');
     gfwlLoadSeason(_gfwlCurrentSeason);
   } catch(e) { st('Failed to add team', 'var(--red)'); }
@@ -2088,7 +2095,7 @@ async function gfwlEditTeamMeta(season, teamName, btn) {
   team.conference = conf.trim();
   try {
     await fetch(`${API}/gfwl/${season}/team/${encodeURIComponent(teamName)}`, {
-      method:'PATCH', headers:{'Content-Type':'application/json'},
+      method:'PATCH', headers: authHeaders(),
       body: JSON.stringify({ conference: team.conference })
     });
     st('Updated '+teamName, 'var(--green)');

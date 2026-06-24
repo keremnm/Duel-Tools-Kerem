@@ -160,6 +160,11 @@ function verifyToken(token) {
   } catch(e) { return null; }
 }
 
+function isAdmin(req) {
+  const user = getUser(req);
+  return user && user.role === 'admin' && user.approved;
+}
+
 function getUser(req) {
   const auth = req.headers['authorization'] || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
