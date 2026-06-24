@@ -2585,6 +2585,32 @@ async function gfwlOpenTeam(season, teamName, team) {
   // ── Compute season stats from replays ─────────────────────────────────────
   const seasonKey = season.toUpperCase();
   const rosterNames = roster.map(r => r.player.toLowerCase());
+
+  // Load all batches if not already loaded
+  if (!_allProfileBatches || !_allProfileBatches.length) {
+    try {
+      const bList = await fetch(API+'/batches').then(r=>r.json());
+      _allProfileBatches = bList;
+    } catch(e) {}
+  }
+  // Fetch full replay data for roster players that aren't loaded yet
+  const loadedPlayers = new Set((_allProfileBatches||[]).filter(b=>b.replays&&b.replays.length).map(b=>(b.player||'').toLowerCase()));
+  for (const pName of rosterNames) {
+    if (loadedPlayers.has(pName)) continue;
+    try {
+      const playerBatches = (_allProfileBatches||[]).filter(b=>(b.player||'').toLowerCase()===pName);
+      for (const pb of playerBatches) {
+        if (!pb.replays || !pb.replays.length) {
+          const full = await fetch(API+'/batches/'+pb.id).then(r=>r.json()).catch(()=>null);
+          if (full && full.replays) {
+            const idx = _allProfileBatches.findIndex(b=>b.id===pb.id);
+            if (idx>=0) _allProfileBatches[idx] = full;
+          }
+        }
+      }
+    } catch(e) {}
+  }
+
   const seasonReplays = []; // {player, replay, weekLabel}
   for (const b of (_allProfileBatches||[])) {
     if (!rosterNames.includes((b.player||'').toLowerCase())) continue;
@@ -2646,9 +2672,11 @@ async function gfwlOpenTeam(season, teamName, team) {
       </td>
       ${_userRole==='admin'?`<td style="padding:4px"><button onclick="gfwlEditRosterPlayer('${season}','${teamName}','${p.player}')" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:11px">✎</button></td>`:''}
     `;
-    // Click to go to profile
-    tr.querySelector('td').style.cursor = 'pointer';
-    tr.querySelector('td').onclick = () => gotoPlayerProfile(p.player);
+    // Click player name → open GFWL player profile
+    const nameTd = tr.querySelector('td');
+    nameTd.style.cursor = 'pointer';
+    nameTd.title = 'View GFWL profile for '+p.player;
+    nameTd.onclick = () => gfwlOpenPlayerProfile(season, teamName, p.player, seasonReplays);
     tbody.appendChild(tr);
   }
 
@@ -2672,40 +2700,87 @@ async function gfwlOpenTeam(season, teamName, team) {
   const schSec = gfwlMakeSection('SCHEDULE');
   left.appendChild(schSec);
 
-  const schTable = document.createElement('table');
-  schTable.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
-  schTable.innerHTML = `<thead><tr style="border-bottom:1px solid var(--border)">
-    <th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em;width:60px">WEEK</th>
-    <th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">OPPONENT</th>
-    <th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">RESULT</th>
-    <th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">MATCH W%</th>
-  </tr></thead><tbody></tbody>`;
-  schSec.appendChild(schTable);
-  const schBody = schTable.querySelector('tbody');
-
-  for (let wk = 1; wk <= numWeeks; wk++) {
-    const schEntry = schedule.find(s => s.week === wk);
-    const opp = schEntry?.opponent || '—';
-    // Compute week result from replays tagged S9: WK1 etc
+  // Compute week scores (team score = how many players won their match that week)
+  // Each player who wins their match = 1 point for the team (best of 5 format)
+  function getWeekScore(wk) {
     const wkReplays = seasonReplays.filter(x => {
       const lbl = x.label;
       return lbl.includes(':') && parseInt((lbl.split(':')[1]||'').replace(/\D/g,'')) === wk;
     });
-    const wkW = wkReplays.filter(x=>x.replay.parsed?.result==='w').length;
-    const wkL = wkReplays.filter(x=>x.replay.parsed?.result==='l').length;
-    const wkTotal = wkW+wkL;
-    const wkPct = wkTotal ? Math.round(wkW/wkTotal*100) : null;
+    // Count unique players who won vs lost their match that week
+    const playerResults = {};
+    wkReplays.forEach(x => {
+      const p = x.player.toLowerCase();
+      if (!playerResults[p]) playerResults[p] = { w:0, l:0 };
+      if (x.replay.parsed?.result==='w') playerResults[p].w++;
+      else if (x.replay.parsed?.result==='l') playerResults[p].l++;
+    });
+    let teamW=0, teamL=0;
+    Object.values(playerResults).forEach(r => {
+      if (r.w > r.l) teamW++;
+      else if (r.l > r.w) teamL++;
+    });
+    const matchW = wkReplays.filter(x=>x.replay.parsed?.result==='w').length;
+    const matchL = wkReplays.filter(x=>x.replay.parsed?.result==='l').length;
+    return { teamW, teamL, matchW, matchL, hasData: wkReplays.length > 0 };
+  }
+
+  // Compute season week record
+  let seasonWkW=0, seasonWkL=0;
+  for (let wk=1; wk<=numWeeks; wk++) {
+    const sc = getWeekScore(wk);
+    if (sc.hasData) { if(sc.teamW>sc.teamL) seasonWkW++; else if(sc.teamL>sc.teamW) seasonWkL++; }
+  }
+
+  const schTable = document.createElement('table');
+  schTable.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
+  const schHdrRow = document.createElement('tr');
+  schHdrRow.style.cssText = 'border-bottom:1px solid var(--border)';
+  schHdrRow.innerHTML = `
+    <th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em;width:60px">WEEK</th>
+    <th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">OPPONENT</th>
+    <th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">WEEK SCORE</th>
+    <th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">MATCH W/L</th>
+    <th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">MATCH W%</th>
+  `;
+  const schHead = document.createElement('thead');
+  schHead.appendChild(schHdrRow);
+  schTable.appendChild(schHead);
+  schSec.appendChild(schTable);
+
+  // Season record summary above schedule
+  if (seasonWkW+seasonWkL > 0) {
+    const recRow = document.createElement('div');
+    recRow.style.cssText = 'font-size:12px;font-family:monospace;margin-bottom:8px;display:flex;gap:16px';
+    recRow.innerHTML = `<span style="color:var(--muted)">Season Week Record:</span> <span style="color:var(--green)">${seasonWkW}W</span> <span style="color:var(--dim)">—</span> <span style="color:var(--red)">${seasonWkL}L</span> <span style="color:var(--muted);font-size:10px">${Math.round(seasonWkW/(seasonWkW+seasonWkL)*100)}% week win</span>`;
+    schSec.insertBefore(recRow, schTable);
+  }
+
+  const schBody = document.createElement('tbody');
+  schTable.appendChild(schBody);
+
+  for (let wk = 1; wk <= numWeeks; wk++) {
+    const schEntry = schedule.find(s => s.week === wk);
+    const opp = schEntry?.opponent || '—';
+    const sc = getWeekScore(wk);
+    const matchPct = (sc.matchW+sc.matchL) ? Math.round(sc.matchW/(sc.matchW+sc.matchL)*100) : null;
+    // Week score color: green if team won week, red if lost
+    const wkWon = sc.hasData && sc.teamW > sc.teamL;
+    const wkLost = sc.hasData && sc.teamL > sc.teamW;
 
     const tr = document.createElement('tr');
     tr.style.cssText = 'border-bottom:1px solid var(--border2)';
     tr.innerHTML = `
       <td style="padding:5px 8px;font-family:monospace;color:var(--amber)">WK${wk}</td>
       <td style="padding:5px 8px;color:var(--text)">${opp}</td>
-      <td style="padding:5px 8px;text-align:center;font-family:monospace;font-size:11px">
-        ${wkTotal?'<span style="color:var(--green)">'+wkW+'W</span> <span style="color:var(--dim)">-</span> <span style="color:var(--red)">'+wkL+'L</span>':'<span style="color:var(--dim)">—</span>'}
+      <td style="padding:5px 8px;text-align:center;font-family:monospace;font-weight:bold;color:${!sc.hasData?'var(--dim)':wkWon?'var(--green)':'var(--red)'}">
+        ${sc.hasData ? sc.teamW+'-'+sc.teamL : '—'}
       </td>
-      <td style="padding:5px 8px;text-align:center;font-family:monospace;color:${wkPct===null?'var(--dim)':wkPct>=50?'var(--green)':'var(--red)'}">
-        ${wkPct===null?'—':wkPct+'%'}
+      <td style="padding:5px 8px;text-align:center;font-family:monospace;font-size:11px">
+        ${sc.hasData?'<span style="color:var(--green)">'+sc.matchW+'W</span> <span style="color:var(--dim)">-</span> <span style="color:var(--red)">'+sc.matchL+'L</span>':'<span style="color:var(--dim)">—</span>'}
+      </td>
+      <td style="padding:5px 8px;text-align:center;font-family:monospace;color:${matchPct===null?'var(--dim)':matchPct>=50?'var(--green)':'var(--red)'}">
+        ${matchPct===null?'—':matchPct+'%'}
       </td>
     `;
     schBody.appendChild(tr);
@@ -2785,24 +2860,27 @@ async function gfwlOpenTeam(season, teamName, team) {
   const myEntries  = Object.entries(myDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,8);
   const oppEntries = Object.entries(oppDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,8);
   // Use setTimeout to ensure canvases are in DOM before Chart.js renders
+  // Render pies using direct element refs (no getElementById needed)
   setTimeout(() => {
     if (myEntries.length) {
-      buildDonutChartEl(document.getElementById('gfwl-team-deck-pie'), document.getElementById('gfwl-team-deck-legend'), myEntries, teamName+' — Deck Usage');
+      buildDonutChartEl(pieCanvas, pieLegend, myEntries, teamName+' — Deck Usage');
     } else {
       const noData = document.createElement('div');
       noData.style.cssText = 'color:var(--dim);font-size:11px;margin-top:8px';
       noData.textContent = 'No replay data yet — tag replays with S9: WK# to populate.';
       pieSec.appendChild(noData);
+      pieCanvas.style.display = 'none';
     }
     if (oppEntries.length) {
-      buildDonutChartEl(document.getElementById('gfwl-team-matchup-pie'), document.getElementById('gfwl-team-matchup-legend'), oppEntries, 'Opponent Deck Types');
+      buildDonutChartEl(matchupCanvas, matchupLegend, oppEntries, 'Opponent Deck Types');
     } else {
       const noData2 = document.createElement('div');
       noData2.style.cssText = 'color:var(--dim);font-size:11px;margin-top:8px';
       noData2.textContent = 'No matchup data yet.';
       matchupSec.appendChild(noData2);
+      matchupCanvas.style.display = 'none';
     }
-  }, 50);
+  }, 100);
 
   // ── View Player Profile helper ─────────────────────────────────────────────
   function gotoPlayerProfile(playerName) {
@@ -2814,6 +2892,180 @@ async function gfwlOpenTeam(season, teamName, team) {
       if (playerBatches.length) openProfile(playerName, playerBatches, []);
     }, 300);
   }
+}
+
+// ── GFWL Individual Player Profile ──────────────────────────────────────────
+async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays) {
+  const main = document.getElementById('gfwl-main');
+  main.innerHTML = '';
+
+  const team = _gfwlData[season]?.teams[teamName];
+  const colors = CONF_COLORS[(team?.conference)||''] || { text:'var(--muted)', border:'var(--border)', bg:'transparent' };
+
+  // Header
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap';
+
+  const back = document.createElement('button');
+  back.textContent = '← '+teamName;
+  back.style.cssText = 'background:none;border:none;color:var(--muted);font-family:monospace;font-size:12px;cursor:pointer;padding:0';
+  back.onclick = () => gfwlOpenTeam(season, teamName, team);
+  hdr.appendChild(back);
+
+  const title = document.createElement('div');
+  title.style.cssText = 'font-size:20px;font-weight:bold;color:var(--text);font-family:monospace;flex:1';
+  title.textContent = playerName;
+  hdr.appendChild(title);
+
+  const seasonBadge = document.createElement('span');
+  seasonBadge.style.cssText = 'font-size:11px;color:'+colors.text+';border:1px solid '+colors.border+';padding:2px 10px;border-radius:4px;font-family:monospace';
+  seasonBadge.textContent = season+' · '+teamName;
+  hdr.appendChild(seasonBadge);
+
+  const viewProfileBtn = document.createElement('button');
+  viewProfileBtn.textContent = '→ Full Profile';
+  viewProfileBtn.style.cssText = 'background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:11px;padding:4px 12px;border-radius:4px;cursor:pointer';
+  viewProfileBtn.onclick = () => gotoPlayerProfile(playerName);
+  hdr.appendChild(viewProfileBtn);
+
+  main.appendChild(hdr);
+
+  // Get player's season replays
+  const playerReplays = (seasonReplays||[]).filter(x => x.player.toLowerCase() === playerName.toLowerCase());
+  const w = playerReplays.filter(x=>x.replay.parsed?.result==='w').length;
+  const l = playerReplays.filter(x=>x.replay.parsed?.result==='l').length;
+  const total = w+l;
+
+  // Stats row
+  const statsRow = document.createElement('div');
+  statsRow.style.cssText = 'display:flex;gap:16px;margin-bottom:20px;flex-wrap:wrap';
+  [
+    { label:'Matches', val: total, color:'var(--text)' },
+    { label:'W — L', val: w+'W — '+l+'L', color: w>l?'var(--green)':w<l?'var(--red)':'var(--amber)' },
+    { label:'Win %', val: total?Math.round(w/total*100)+'%':'—', color: total?(w/total>=.5?'var(--green)':'var(--red)'):'var(--dim)' },
+  ].forEach(s => {
+    const chip = document.createElement('div');
+    chip.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;text-align:center;min-width:90px';
+    chip.innerHTML = '<div style="font-size:18px;font-weight:bold;color:'+s.color+';font-family:monospace">'+s.val+'</div><div style="font-size:10px;color:var(--muted);margin-top:2px">'+s.label+'</div>';
+    statsRow.appendChild(chip);
+  });
+  main.appendChild(statsRow);
+
+  // Two column layout
+  const body = document.createElement('div');
+  body.style.cssText = 'display:grid;grid-template-columns:1fr 300px;gap:20px;align-items:start';
+  main.appendChild(body);
+  const left = document.createElement('div'); left.style.cssText = 'display:flex;flex-direction:column;gap:16px';
+  const right = document.createElement('div'); right.style.cssText = 'display:flex;flex-direction:column;gap:16px';
+  body.appendChild(left); body.appendChild(right);
+
+  // ── Weekly breakdown ────────────────────────────────────────────────────────
+  const wkSec = gfwlMakeSection('WEEKLY PERFORMANCE');
+  left.appendChild(wkSec);
+  const numWeeks = (_gfwlData[season]||{}).numWeeks || 13;
+  const wkTable = document.createElement('table');
+  wkTable.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
+  wkTable.innerHTML = '<thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;width:60px">WEEK</th><th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">OPPONENT</th><th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">RESULT</th><th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">MY DECK</th><th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">OPP DECK</th><th style="padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">REPLAY</th></tr></thead>';
+  const wkBody = document.createElement('tbody');
+  wkTable.appendChild(wkBody);
+  wkSec.appendChild(wkTable);
+
+  let played = 0;
+  for (let wk=1; wk<=numWeeks; wk++) {
+    const wkReplays = playerReplays.filter(x => {
+      const lbl = x.label;
+      return lbl.includes(':') && parseInt((lbl.split(':')[1]||'').replace(/\D/g,'')) === wk;
+    });
+    if (!wkReplays.length) continue;
+    played++;
+    wkReplays.forEach(x => {
+      const r = x.replay;
+      const result = r.parsed?.result;
+      const myDeck = r.myDeckOverride || r.parsed?.myDeck || '—';
+      const oppDeck = r.oppDeckOverride || r.parsed?.oppDeck || '—';
+      const oppName = r.parsed?.oppName || r.oppName || '—';
+      const tr = document.createElement('tr');
+      tr.style.cssText = 'border-bottom:1px solid var(--border2)';
+      tr.innerHTML = `
+        <td style="padding:5px 8px;color:var(--amber);font-family:monospace">WK${wk}</td>
+        <td style="padding:5px 8px;color:var(--text)">${oppName}</td>
+        <td style="padding:5px 8px;text-align:center;font-family:monospace;font-weight:bold;color:${result==='w'?'var(--green)':'var(--red)'}">${result==='w'?'W':'L'} ${r.parsed?.score||''}</td>
+        <td style="padding:5px 8px;font-size:11px;color:var(--muted)">${myDeck}</td>
+        <td style="padding:5px 8px;font-size:11px;color:var(--muted)">${oppDeck}</td>
+        <td style="padding:5px 8px"><a href="https://www.duelingbook.com/replay?id=${r.replayId}" target="_blank" style="color:var(--blue);font-size:10px;font-family:monospace">▶</a></td>
+      `;
+      wkBody.appendChild(tr);
+    });
+  }
+  if (!played) {
+    const empty = document.createElement('tr');
+    empty.innerHTML = '<td colspan="6" style="padding:10px 8px;color:var(--dim);font-size:12px">No replays tagged '+season+': WK# found for this player.</td>';
+    wkBody.appendChild(empty);
+  }
+
+  // ── Event Decklists (season decklists) ──────────────────────────────────────
+  const playerReg = window._playerRegistry && window._playerRegistry[playerName.toLowerCase()];
+  const evDecks = playerReg ? (playerReg.eventDecklists||[]) : [];
+  const seasonDecks = evDecks.filter(d => gfwlNormalizeSeason(d.code) === season.toUpperCase());
+
+  const deckSec = gfwlMakeSection('EVENT DECKLISTS — '+season);
+  left.appendChild(deckSec);
+  if (seasonDecks.length) {
+    seasonDecks.forEach(deck => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border2)';
+      const codeEl = document.createElement('span');
+      codeEl.style.cssText = 'color:var(--amber);font-family:monospace;font-size:12px;font-weight:bold;min-width:60px';
+      codeEl.textContent = deck.code;
+      const typeEl = document.createElement('span');
+      typeEl.style.cssText = 'font-size:10px;border:1px solid var(--green);color:var(--green);border-radius:3px;padding:0 6px';
+      typeEl.textContent = deck.deckTypeOverride || '?';
+      row.appendChild(codeEl); row.appendChild(typeEl);
+      if (deck.ydkData || deck.deckUrl) {
+        const viewBtn = document.createElement('button');
+        viewBtn.textContent = 'View';
+        viewBtn.style.cssText = 'background:var(--blue);color:#fff;border:none;font-family:monospace;font-size:10px;padding:2px 8px;border-radius:3px;cursor:pointer;margin-left:auto';
+        viewBtn.onclick = () => showDeckViewPopup(deck);
+        row.appendChild(viewBtn);
+      }
+      deckSec.appendChild(row);
+    });
+  } else {
+    deckSec.appendChild(Object.assign(document.createElement('div'), { style:'color:var(--dim);font-size:11px', textContent:'No '+season+' decklists found for this player.' }));
+  }
+
+  // ── Matchup pie ─────────────────────────────────────────────────────────────
+  const pieSec = gfwlMakeSection('DECK USAGE — '+season);
+  right.appendChild(pieSec);
+  const pieCanvas2 = document.createElement('canvas');
+  pieCanvas2.style.cssText = 'max-height:160px';
+  pieSec.appendChild(pieCanvas2);
+  const pieLeg2 = document.createElement('div');
+  pieLeg2.style.cssText = 'margin-top:6px;display:flex;flex-direction:column;gap:3px';
+  pieSec.appendChild(pieLeg2);
+
+  const oppSec = gfwlMakeSection('VS OPP DECKS');
+  right.appendChild(oppSec);
+  const oppCanvas = document.createElement('canvas');
+  oppCanvas.style.cssText = 'max-height:160px';
+  oppSec.appendChild(oppCanvas);
+  const oppLeg = document.createElement('div');
+  oppLeg.style.cssText = 'margin-top:6px;display:flex;flex-direction:column;gap:3px';
+  oppSec.appendChild(oppLeg);
+
+  const myDU={}, oppDU={};
+  playerReplays.forEach(({replay:r}) => {
+    const my=r.myDeckOverride||r.parsed?.myDeck; if(my) myDU[my]=(myDU[my]||0)+1;
+    const opp=r.oppDeckOverride||r.parsed?.oppDeck; if(opp) oppDU[opp]=(oppDU[opp]||0)+1;
+  });
+  setTimeout(() => {
+    const myE=Object.entries(myDU).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    const oppE=Object.entries(oppDU).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    if (myE.length) buildDonutChartEl(pieCanvas2, pieLeg2, myE, playerName+' decks');
+    else { pieCanvas2.style.display='none'; pieSec.appendChild(Object.assign(document.createElement('div'),{style:'color:var(--dim);font-size:11px',textContent:'No data.'})); }
+    if (oppE.length) buildDonutChartEl(oppCanvas, oppLeg, oppE, 'vs opp decks');
+    else { oppCanvas.style.display='none'; oppSec.appendChild(Object.assign(document.createElement('div'),{style:'color:var(--dim);font-size:11px',textContent:'No data.'})); }
+  }, 100);
 }
 
 // ── Helper: create labeled section ────────────────────────────────────────────
