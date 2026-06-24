@@ -2408,9 +2408,113 @@ function gfwlResolveTeam(season, nameOrAlias) {
 }
 
 async function gfwlHandleScheduleImport(input) {
-  // Will be implemented in Step 3
-  st('Schedule import coming in next step', 'var(--amber)');
+  if (!_gfwlCurrentSeason) { alert('Select a season first.'); input.value=''; return; }
+  const file = input.files[0];
+  if (!file) return;
   input.value = '';
+
+  // Read as text (works for .csv and tab-separated .xlsx exports)
+  const text = await file.text();
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (!lines.length) { st('No data found in file', 'var(--red)'); return; }
+
+  // Auto-detect format:
+  // Format A (grid): first row is "Team | Week 1 | Week 2 ..." → each row is team + opponents per week
+  // Format B (matchup pairs): rows like "TeamA | score | TeamB | score"
+  const tabs = lines[0].split('\t');
+  const commas = lines[0].split(',');
+  const sep = tabs.length > commas.length ? '\t' : ',';
+  const rows = lines.map(l => l.split(sep).map(c => c.trim()));
+
+  const season = _gfwlCurrentSeason;
+  const teams = _gfwlData[season]?.teams || {};
+  let updated = 0;
+
+  // Detect Format A: header row starts with "Team" and has "Week" columns
+  const headerRow = rows[0];
+  const isGridFormat = headerRow.some(h => /week\s*\d/i.test(h) || /wk\s*\d/i.test(h));
+
+  if (isGridFormat) {
+    // Grid format: rows[0] = ["Team","Week 1","Week 2",...]
+    // rows[1+] = ["TeamName","Opponent1","Opponent2",...]
+    const weekCols = [];
+    headerRow.forEach((h, i) => {
+      const m = h.match(/(?:week|wk)\s*(\d+)/i);
+      if (m) weekCols.push({ week: parseInt(m[1]), col: i });
+    });
+
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row[0]) continue;
+      const teamName = gfwlResolveTeam(season, row[0]) || row[0];
+      if (!teams[teamName]) continue;
+      if (!teams[teamName].schedule) teams[teamName].schedule = [];
+      for (const { week, col } of weekCols) {
+        const opp = row[col] || '';
+        if (!opp) continue;
+        const existing = teams[teamName].schedule.findIndex(s => s.week === week);
+        const resolvedOpp = gfwlResolveTeam(season, opp) || opp;
+        if (existing >= 0) teams[teamName].schedule[existing].opponent = resolvedOpp;
+        else teams[teamName].schedule.push({ week, opponent: resolvedOpp });
+      }
+      updated++;
+    }
+  } else {
+    // Matchup pairs format: TeamA | score | TeamB | score (per week block)
+    // Look for week headers like "Week 1" then pairs of teams
+    let currentWeek = null;
+    for (const row of rows) {
+      // Check for week header
+      const wkMatch = row.join(' ').match(/^week\s*(\d+)/i) || row[0]?.match(/^week\s*(\d+)/i);
+      if (wkMatch) { currentWeek = parseInt(wkMatch[1]); continue; }
+      if (!currentWeek) continue;
+      // Try to parse team pair: col0=TeamA, col2=TeamB (cols 1,3 might be scores)
+      const teamA = row[0]?.trim();
+      const teamB = row[2]?.trim() || row[1]?.trim();
+      if (!teamA || !teamB) continue;
+      const resolvedA = gfwlResolveTeam(season, teamA);
+      const resolvedB = gfwlResolveTeam(season, teamB);
+      if (resolvedA && teams[resolvedA]) {
+        if (!teams[resolvedA].schedule) teams[resolvedA].schedule = [];
+        const ex = teams[resolvedA].schedule.findIndex(s => s.week === currentWeek);
+        const opp = resolvedB || teamB;
+        if (ex >= 0) teams[resolvedA].schedule[ex].opponent = opp;
+        else teams[resolvedA].schedule.push({ week: currentWeek, opponent: opp });
+        updated++;
+      }
+      if (resolvedB && teams[resolvedB]) {
+        if (!teams[resolvedB].schedule) teams[resolvedB].schedule = [];
+        const ex = teams[resolvedB].schedule.findIndex(s => s.week === currentWeek);
+        const opp = resolvedA || teamA;
+        if (ex >= 0) teams[resolvedB].schedule[ex].opponent = opp;
+        else teams[resolvedB].schedule.push({ week: currentWeek, opponent: opp });
+        updated++;
+      }
+    }
+  }
+
+  if (!updated) {
+    st('No schedule data matched known teams. Check format or team names.', 'var(--amber)');
+    return;
+  }
+
+  // Save all updated teams to server
+  st('Saving schedules...', 'var(--amber)');
+  for (const [tName, tData] of Object.entries(teams)) {
+    if (tData.schedule && tData.schedule.length) {
+      await fetch(`${API}/gfwl/${season}/team/${encodeURIComponent(tName)}`, {
+        method:'PATCH', headers: authHeaders(),
+        body: JSON.stringify({ schedule: tData.schedule })
+      });
+    }
+  }
+  st('Schedule imported — '+updated+' team(s) updated', 'var(--green)');
+  // Refresh if viewing a team
+  if (_gfwlCurrentTeam && teams[_gfwlCurrentTeam]) {
+    gfwlOpenTeam(season, _gfwlCurrentTeam, teams[_gfwlCurrentTeam]);
+  } else {
+    gfwlLoadSeason(season);
+  }
 }
 
 async function gfwlOpenTeam(season, teamName, team) {
@@ -2680,9 +2784,25 @@ async function gfwlOpenTeam(season, teamName, team) {
   });
   const myEntries  = Object.entries(myDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,8);
   const oppEntries = Object.entries(oppDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,8);
-  if (myEntries.length)  buildDonutChart('gfwl-team-deck-pie','gfwl-team-deck-legend', myEntries, teamName+' — Deck Usage');
-  else pieCanvas.parentElement.innerHTML += '<div style="color:var(--dim);font-size:11px">No replay data yet.</div>';
-  if (oppEntries.length) buildDonutChart('gfwl-team-matchup-pie','gfwl-team-matchup-legend', oppEntries, 'Opponent Deck Types');
+  // Use setTimeout to ensure canvases are in DOM before Chart.js renders
+  setTimeout(() => {
+    if (myEntries.length) {
+      buildDonutChartEl(document.getElementById('gfwl-team-deck-pie'), document.getElementById('gfwl-team-deck-legend'), myEntries, teamName+' — Deck Usage');
+    } else {
+      const noData = document.createElement('div');
+      noData.style.cssText = 'color:var(--dim);font-size:11px;margin-top:8px';
+      noData.textContent = 'No replay data yet — tag replays with S9: WK# to populate.';
+      pieSec.appendChild(noData);
+    }
+    if (oppEntries.length) {
+      buildDonutChartEl(document.getElementById('gfwl-team-matchup-pie'), document.getElementById('gfwl-team-matchup-legend'), oppEntries, 'Opponent Deck Types');
+    } else {
+      const noData2 = document.createElement('div');
+      noData2.style.cssText = 'color:var(--dim);font-size:11px;margin-top:8px';
+      noData2.textContent = 'No matchup data yet.';
+      matchupSec.appendChild(noData2);
+    }
+  }, 50);
 
   // ── View Player Profile helper ─────────────────────────────────────────────
   function gotoPlayerProfile(playerName) {
@@ -6658,6 +6778,36 @@ async function loadPlayerStats(player, batches) {
   buildDonutChart('chart-player-usage','chart-player-usage-legend',sortedMy);
   buildDeckWinRateList('stats-player-deckwr', records, player);
   buildTopCardsList('stats-player-cards', records);
+}
+
+// Build donut from element references directly (for dynamically created elements)
+function buildDonutChartEl(canvasEl, legendEl, entries, title) {
+  if (!canvasEl || typeof Chart === 'undefined') return;
+  if (!entries || !entries.length) return;
+  if (canvasEl._chartInstance) canvasEl._chartInstance.destroy();
+  const labels=entries.map(([k])=>k);
+  const data=entries.map(([,v])=>v);
+  const colors=labels.map((l,i)=>getDeckColor(l,i));
+  const total=data.reduce((a,b)=>a+b,0);
+  canvasEl._chartInstance=new Chart(canvasEl,{
+    type:'doughnut',
+    data:{labels,datasets:[{data,backgroundColor:colors,borderColor:'var(--bg)',borderWidth:2}]},
+    options:{responsive:true,maintainAspectRatio:true,plugins:{
+      legend:{display:false},
+      tooltip:{callbacks:{label:ctx=>` ${ctx.label}: ${ctx.raw} (${Math.round(ctx.raw/total*100)}%)`}}
+    }}
+  });
+  if (legendEl) {
+    legendEl.innerHTML='';
+    entries.forEach(([deck,count],i)=>{
+      const item=document.createElement('div');
+      item.style.cssText='display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text);font-family:monospace;margin-bottom:3px';
+      const dot=document.createElement('span'); dot.style.cssText='width:10px;height:10px;border-radius:2px;background:'+colors[i]+';flex-shrink:0';
+      item.appendChild(dot);
+      item.appendChild(document.createTextNode(deck+' ('+count+')'));
+      legendEl.appendChild(item);
+    });
+  }
 }
 
 function buildDonutChart(canvasId, legendId, entries, title) {
