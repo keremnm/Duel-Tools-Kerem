@@ -2784,7 +2784,8 @@ async function gfwlOpenTeam(season, teamName, team) {
   const rosterNames = roster.map(r => r.player.toLowerCase());
 
   // Always fetch full batch data for ALL roster players (GFWL needs actual replays)
-  const gfwlBatchCache = {}; // local cache for this team sheet session
+  window._gfwlBatchCache = {}; // store on window for player profile access
+  const gfwlBatchCache = window._gfwlBatchCache;
   st('Loading replay data for '+roster.length+' players...', 'var(--muted)');
   try {
     const bList = await fetch(API+'/batches').then(r=>r.json()).catch(()=>[]);
@@ -2870,10 +2871,20 @@ async function gfwlOpenTeam(season, teamName, team) {
       </td>
       ${_userRole==='admin'?`<td style="padding:4px"><button onclick="gfwlEditRosterPlayer('${season}','${teamName}','${p.player}')" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:11px">✎</button></td>`:''}
     `;
-    // Click player name → open GFWL player profile
+    // View button → open GFWL player profile
+    if (_userRole === 'admin' || true) {
+      const viewTd = document.createElement('td');
+      viewTd.style.cssText = 'padding:5px 8px';
+      const viewBtn = document.createElement('button');
+      viewBtn.textContent = 'View';
+      viewBtn.style.cssText = 'background:var(--blue);color:#fff;border:none;font-family:monospace;font-size:10px;padding:2px 8px;border-radius:3px;cursor:pointer';
+      viewBtn.onclick = () => gfwlOpenPlayerProfile(season, teamName, p.player, seasonReplays);
+      viewTd.appendChild(viewBtn);
+      tr.appendChild(viewTd);
+    }
+    // Click name also opens profile
     const nameTd = tr.querySelector('td');
     nameTd.style.cursor = 'pointer';
-    nameTd.title = 'View GFWL profile for '+p.player;
     nameTd.onclick = () => gfwlOpenPlayerProfile(season, teamName, p.player, seasonReplays);
     tbody.appendChild(tr);
   }
@@ -2940,6 +2951,7 @@ async function gfwlOpenTeam(season, teamName, team) {
     <th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">WEEK SCORE</th>
     <th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">MATCH W/L</th>
     <th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">MATCH W%</th>
+    <th style="padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em"></th>
   `;
   const schHead = document.createElement('thead');
   schHead.appendChild(schHdrRow);
@@ -2968,19 +2980,32 @@ async function gfwlOpenTeam(season, teamName, team) {
 
     const tr = document.createElement('tr');
     tr.style.cssText = 'border-bottom:1px solid var(--border2)';
-    tr.innerHTML = `
-      <td style="padding:5px 8px;font-family:monospace;color:var(--amber)">WK${wk}</td>
-      <td style="padding:5px 8px;color:var(--text)">${opp}</td>
-      <td style="padding:5px 8px;text-align:center;font-family:monospace;font-weight:bold;color:${!sc.hasData?'var(--dim)':wkWon?'var(--green)':'var(--red)'}">
-        ${sc.hasData ? sc.teamW+'-'+sc.teamL : '—'}
-      </td>
-      <td style="padding:5px 8px;text-align:center;font-family:monospace;font-size:11px">
-        ${sc.hasData?'<span style="color:var(--green)">'+sc.matchW+'W</span> <span style="color:var(--dim)">-</span> <span style="color:var(--red)">'+sc.matchL+'L</span>':'<span style="color:var(--dim)">—</span>'}
-      </td>
-      <td style="padding:5px 8px;text-align:center;font-family:monospace;color:${matchPct===null?'var(--dim)':matchPct>=50?'var(--green)':'var(--red)'}">
-        ${matchPct===null?'—':matchPct+'%'}
-      </td>
-    `;
+
+    const wkTd = document.createElement('td');
+    wkTd.style.cssText='padding:5px 8px;font-family:monospace;color:var(--amber)';
+    wkTd.textContent='WK'+wk;
+    const oppTd = document.createElement('td');
+    oppTd.style.cssText='padding:5px 8px;color:var(--text)';
+    oppTd.textContent = opp;
+    const scoreTd = document.createElement('td');
+    scoreTd.style.cssText='padding:5px 8px;text-align:center;font-family:monospace;font-weight:bold;color:'+(sc.hasData?(wkWon?'var(--green)':'var(--red)'):'var(--dim)');
+    scoreTd.textContent = sc.hasData?sc.teamW+'-'+sc.teamL:'—';
+    const matchTd = document.createElement('td');
+    matchTd.style.cssText='padding:5px 8px;text-align:center;font-family:monospace;font-size:11px';
+    matchTd.innerHTML = sc.hasData?'<span style="color:var(--green)">'+sc.matchW+'W</span> <span style="color:var(--dim)">-</span> <span style="color:var(--red)">'+sc.matchL+'L</span>':'<span style="color:var(--dim)">—</span>';
+    const pctTd = document.createElement('td');
+    pctTd.style.cssText='padding:5px 8px;text-align:center;font-family:monospace;color:'+(matchPct===null?'var(--dim)':matchPct>=50?'var(--green)':'var(--red)');
+    pctTd.textContent=matchPct===null?'—':matchPct+'%';
+    // Week Report button
+    const rptTd = document.createElement('td');
+    rptTd.style.cssText='padding:5px 8px';
+    const rptBtn = document.createElement('button');
+    rptBtn.textContent='Week Report';
+    rptBtn.style.cssText='background:var(--amber);color:#050508;border:none;font-family:monospace;font-size:10px;font-weight:bold;padding:2px 8px;border-radius:3px;cursor:pointer;white-space:nowrap';
+    rptBtn.onclick = () => gfwlOpenWeekReport(season, teamName, wk, opp, seasonReplays);
+    rptTd.appendChild(rptBtn);
+    tr.appendChild(wkTd); tr.appendChild(oppTd); tr.appendChild(scoreTd);
+    tr.appendChild(matchTd); tr.appendChild(pctTd); tr.appendChild(rptTd);
     schBody.appendChild(tr);
   }
 
@@ -3148,7 +3173,7 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
   const numWeeks = (_gfwlData[season]||{}).numWeeks || 13;
   const wkTable = document.createElement('table');
   wkTable.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
-  wkTable.innerHTML = '<thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;width:60px">WEEK</th><th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">OPPONENT</th><th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">RESULT</th><th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">MY DECK</th><th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">OPP DECK</th><th style="padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">REPLAY</th></tr></thead>';
+  wkTable.innerHTML = '<thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;width:55px">WEEK</th><th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">VS TEAM</th><th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">OPPONENT</th><th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">RESULT</th><th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">MY DECK</th><th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">OPP DECK</th><th style="padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">REPLAY</th></tr></thead>';
   const wkBody = document.createElement('tbody');
   wkTable.appendChild(wkBody);
   wkSec.appendChild(wkTable);
@@ -3166,13 +3191,19 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
       const result = r.parsed?.result;
       const myDeck = r.myDeckOverride || r.parsed?.myDeck || '—';
       const oppDeck = r.oppDeckOverride || r.parsed?.oppDeck || '—';
-      const oppName = r.parsed?.oppName || r.oppName || '—';
+      const oppName = (r.parsed&&r.parsed.oppName) || r.oppName || '—';
+      // Get opponent team from schedule
+      const teamSch = (_gfwlData[season]&&_gfwlData[season].teams&&_gfwlData[season].teams[teamName]&&_gfwlData[season].teams[teamName].schedule)||[];
+      const wkSchEntry = teamSch.find(s=>s.week===wk);
+      const vsTeam = wkSchEntry ? wkSchEntry.opponent : '<i style="color:var(--dim)">Missing — Check Schedule</i>';
       const tr = document.createElement('tr');
       tr.style.cssText = 'border-bottom:1px solid var(--border2)';
+      const scoreStr = (r.parsed&&r.parsed.score)||'';
       tr.innerHTML = `
         <td style="padding:5px 8px;color:var(--amber);font-family:monospace">WK${wk}</td>
+        <td style="padding:5px 8px;color:var(--dim);font-size:10px">${vsTeam}</td>
         <td style="padding:5px 8px;color:var(--text)">${oppName}</td>
-        <td style="padding:5px 8px;text-align:center;font-family:monospace;font-weight:bold;color:${result==='w'?'var(--green)':'var(--red)'}">${result==='w'?'W':'L'} ${r.parsed?.score||''}</td>
+        <td style="padding:5px 8px;text-align:center;font-family:monospace;font-weight:bold;color:${result==='w'?'var(--green)':'var(--red)'}">${result==='w'?'W':'L'}${scoreStr?' '+scoreStr:''}</td>
         <td style="padding:5px 8px;font-size:11px;color:var(--muted)">${myDeck}</td>
         <td style="padding:5px 8px;font-size:11px;color:var(--muted)">${oppDeck}</td>
         <td style="padding:5px 8px"><a href="https://www.duelingbook.com/replay?id=${r.replayId}" target="_blank" style="color:var(--blue);font-size:10px;font-family:monospace">▶</a></td>
@@ -3226,17 +3257,168 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
   right.appendChild(oppSec);
   oppSec.innerHTML += '<canvas id="gfwl-player-pie-opp" style="width:100%;max-height:180px"></canvas><div id="gfwl-player-pie-opp-legend" style="margin-top:6px;display:flex;flex-direction:column;gap:3px"></div>';
 
+  // Rebuild pie data fresh from allGFWLBatches (avoid stale closure issue)
   const myDU={}, oppDU={};
-  playerReplays.forEach(({replay:r}) => {
-    const my=r.myDeckOverride||r.parsed?.myDeck; if(my) myDU[my]=(myDU[my]||0)+1;
-    const opp=r.oppDeckOverride||r.parsed?.oppDeck; if(opp) oppDU[opp]=(oppDU[opp]||0)+1;
+  const freshReplays = [];
+  if (window._gfwlBatchCache) {
+    for (const b of Object.values(window._gfwlBatchCache)) {
+      if ((b.player||'').toLowerCase() !== playerName.toLowerCase()) continue;
+      for (const r of (b.replays||[])) {
+        const lbl=(r.eventLabel||'').toUpperCase().trim();
+        const sk=season.toUpperCase();
+        if (!lbl.startsWith(sk+':')&&!lbl.startsWith(sk+' ')) continue;
+        freshReplays.push(r);
+      }
+    }
+  } else {
+    playerReplays.forEach(x => freshReplays.push(x.replay||x));
+  }
+  console.log('[PlayerPie] freshReplays:', freshReplays.length, 'sample parsed:', freshReplays[0]?.parsed);
+  freshReplays.forEach(r => {
+    const my = r.myDeckOverride || (r.parsed && r.parsed.myDeck);
+    const opp = r.oppDeckOverride || (r.parsed && r.parsed.oppDeck);
+    console.log('[PlayerPie] my:', my, 'opp:', opp);
+    if (my && my!=='Unknown') myDU[my]=(myDU[my]||0)+1;
+    if (opp && opp!=='Unknown') oppDU[opp]=(oppDU[opp]||0)+1;
   });
   const myE=Object.entries(myDU).sort((a,b)=>b[1]-a[1]).slice(0,8);
   const oppE=Object.entries(oppDU).sort((a,b)=>b[1]-a[1]).slice(0,8);
   if (myE.length) buildDonutChart('gfwl-player-pie-deck','gfwl-player-pie-deck-legend', myE, playerName+' — '+season);
-  else { const l=document.getElementById('gfwl-player-pie-deck-legend'); if(l) l.textContent='No deck data.'; }
+  else { const l=document.getElementById('gfwl-player-pie-deck-legend'); if(l) l.textContent='No deck data ('+freshReplays.length+' replays, no deck classification).'; }
   if (oppE.length) buildDonutChart('gfwl-player-pie-opp','gfwl-player-pie-opp-legend', oppE, 'vs Opp Decks');
   else { const l=document.getElementById('gfwl-player-pie-opp-legend'); if(l) l.textContent='No matchup data.'; }
+}
+
+// ── Week Report ──────────────────────────────────────────────────────────────
+async function gfwlOpenWeekReport(season, teamName, wk, oppTeamName, seasonReplays) {
+  const main = document.getElementById('gfwl-main');
+  main.innerHTML = '';
+  const team = _gfwlData[season]?.teams[teamName];
+  const colors = CONF_COLORS[(team?.conference)||''] || { text:'var(--muted)', border:'var(--border)', bg:'transparent' };
+
+  // Header
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap';
+  const back = document.createElement('button');
+  back.textContent = '← '+teamName;
+  back.style.cssText = 'background:none;border:none;color:var(--muted);font-family:monospace;font-size:12px;cursor:pointer;padding:0';
+  back.onclick = () => gfwlOpenTeam(season, teamName, team);
+  hdr.appendChild(back);
+  const title = document.createElement('div');
+  title.style.cssText = 'font-size:18px;font-weight:bold;color:'+colors.text+';font-family:monospace;flex:1';
+  title.textContent = season+' — Week '+wk+' Report';
+  hdr.appendChild(title);
+  const subTitle = document.createElement('div');
+  subTitle.style.cssText = 'font-size:12px;color:var(--muted);font-family:monospace';
+  subTitle.textContent = teamName + ' vs ' + (oppTeamName||'TBD');
+  hdr.appendChild(subTitle);
+  main.appendChild(hdr);
+
+  // Get this team's WK replays
+  const wkReplays = (seasonReplays||[]).filter(x => {
+    const lbl = x.label;
+    return lbl.includes(':') && parseInt((lbl.split(':')[1]||'').replace(/\D/g,'')) === wk;
+  });
+
+  // Get opponent team's replays for this week
+  const oppTeam = oppTeamName ? (_gfwlData[season]?.teams[gfwlResolveTeam(season, oppTeamName)||oppTeamName]) : null;
+  const oppRoster = oppTeam ? (oppTeam.roster||[]).map(r=>r.player.toLowerCase()) : [];
+  const oppWkReplays = [];
+  if (oppRoster.length && window._gfwlBatchCache) {
+    for (const b of Object.values(window._gfwlBatchCache)) {
+      if (!oppRoster.includes((b.player||'').toLowerCase())) continue;
+      for (const r of (b.replays||[])) {
+        const lbl=(r.eventLabel||'').toUpperCase().trim();
+        const sk=season.toUpperCase();
+        if (!lbl.startsWith(sk+':')&&!lbl.startsWith(sk+' ')) continue;
+        const wkNum=parseInt((lbl.split(':')[1]||'').replace(/\D/g,''));
+        if (wkNum===wk) oppWkReplays.push({player:b.player,replay:r,label:lbl});
+      }
+    }
+  }
+
+  // Two column layout
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px';
+  main.appendChild(grid);
+
+  function makeTeamLineup(container, tName, tColor, replays) {
+    const sec = gfwlMakeSection(tName.toUpperCase()+' — STARTING 5');
+    container.appendChild(sec);
+    if (!replays.length) {
+      sec.appendChild(Object.assign(document.createElement('div'),{style:'color:var(--dim);font-size:12px',textContent:'No replays tagged for this week.'}));
+      return;
+    }
+    // Group by player
+    const byPlayer = {};
+    replays.forEach(x => {
+      const p = x.player;
+      if (!byPlayer[p]) byPlayer[p] = [];
+      byPlayer[p].push(x.replay);
+    });
+    const tbl = document.createElement('table');
+    tbl.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
+    tbl.innerHTML = '<thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">PLAYER</th><th style="text-align:center;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">RESULT</th><th style="text-align:left;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">DECK</th><th style="text-align:left;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">VS</th></tr></thead>';
+    const tbody = document.createElement('tbody');
+    Object.entries(byPlayer).forEach(([player, reps]) => {
+      const r = reps[0];
+      const result = r.parsed?.result||r.result;
+      const myDeck = r.myDeckOverride||(r.parsed&&r.parsed.myDeck)||'—';
+      const oppDeck = r.oppDeckOverride||(r.parsed&&r.parsed.oppDeck)||'—';
+      const oppName = (r.parsed&&r.parsed.oppName)||r.oppName||'—';
+      const tr = document.createElement('tr');
+      tr.style.cssText='border-bottom:1px solid var(--border2)';
+      const won = result==='w';
+      tr.innerHTML=`<td style="padding:4px 6px;font-weight:bold;color:${tColor}">${player}</td><td style="padding:4px 6px;text-align:center;font-family:monospace;font-weight:bold;color:${won?'var(--green)':'var(--red)'}">${won?'W':'L'}</td><td style="padding:4px 6px;font-size:10px;color:var(--muted)">${myDeck}</td><td style="padding:4px 6px;font-size:10px;color:var(--dim)">${oppName} (${oppDeck})</td>`;
+      tbody.appendChild(tr);
+    });
+    tbl.appendChild(tbody);
+    sec.appendChild(tbl);
+  }
+
+  const leftCol = document.createElement('div');
+  const rightCol = document.createElement('div');
+  grid.appendChild(leftCol); grid.appendChild(rightCol);
+  makeTeamLineup(leftCol, teamName, colors.text, wkReplays);
+  const oppColors = oppTeam ? (CONF_COLORS[oppTeam.conference||'']||{text:'var(--muted)'}) : {text:'var(--muted)'};
+  makeTeamLineup(rightCol, oppTeamName||'Opponent', oppColors.text, oppWkReplays);
+
+  // Week score summary
+  const myW = Object.values(Object.fromEntries(
+    [...new Set(wkReplays.map(x=>x.player))].map(p=>{
+      const reps=wkReplays.filter(x=>x.player===p);
+      const w=reps.filter(x=>x.replay.parsed?.result==='w').length;
+      const l=reps.filter(x=>x.replay.parsed?.result==='l').length;
+      return [p,w>l?'w':l>w?'l':'d'];
+    })
+  )).filter(v=>v==='w').length;
+  const myL = Object.values(Object.fromEntries(
+    [...new Set(wkReplays.map(x=>x.player))].map(p=>{
+      const reps=wkReplays.filter(x=>x.player===p);
+      const w=reps.filter(x=>x.replay.parsed?.result==='w').length;
+      const l=reps.filter(x=>x.replay.parsed?.result==='l').length;
+      return [p,w>l?'w':l>w?'l':'d'];
+    })
+  )).filter(v=>v==='l').length;
+
+  const scoreBanner = document.createElement('div');
+  scoreBanner.style.cssText='text-align:center;padding:16px;background:var(--card);border:1px solid var(--border);border-radius:10px;margin-bottom:16px;font-family:monospace';
+  scoreBanner.innerHTML=`<div style="font-size:24px;font-weight:bold"><span style="color:${myW>myL?'var(--green)':'var(--red)'}">${myW}</span> <span style="color:var(--dim)">—</span> <span style="color:${myL>myW?'var(--red)':'var(--green)'}">${myL}</span></div><div style="font-size:11px;color:var(--muted);margin-top:4px">${teamName} vs ${oppTeamName||'Opponent'} · Week ${wk} Score</div>`;
+  main.insertBefore(scoreBanner, grid);
+
+  // Deck type chart
+  const chartSec = gfwlMakeSection('DECK TYPES USED');
+  main.appendChild(chartSec);
+  chartSec.innerHTML += '<canvas id="gfwl-week-chart" style="width:100%;max-height:200px"></canvas><div id="gfwl-week-legend" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:4px"></div>';
+
+  const deckCounts = {};
+  [...wkReplays, ...oppWkReplays].forEach(x => {
+    const r = x.replay||x;
+    const d = r.myDeckOverride||(r.parsed&&r.parsed.myDeck);
+    if (d&&d!=='Unknown') deckCounts[d]=(deckCounts[d]||0)+1;
+  });
+  const deckEntries = Object.entries(deckCounts).sort((a,b)=>b[1]-a[1]);
+  if (deckEntries.length) buildDonutChart('gfwl-week-chart','gfwl-week-legend', deckEntries, 'Week '+wk+' Decks');
 }
 
 // ── Helper: create labeled section ────────────────────────────────────────────
