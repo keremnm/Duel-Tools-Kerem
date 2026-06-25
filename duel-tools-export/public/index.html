@@ -2587,35 +2587,28 @@ async function gfwlOpenTeam(season, teamName, team) {
   const seasonKey = season.toUpperCase();
   const rosterNames = roster.map(r => r.player.toLowerCase());
 
-  // Load all batches if not already loaded
-  if (!_allProfileBatches || !_allProfileBatches.length) {
-    try {
-      const bList = await fetch(API+'/batches').then(r=>r.json());
-      _allProfileBatches = bList;
-    } catch(e) {}
-  }
-  // Fetch full replay data for roster players that aren't loaded yet
-  const loadedPlayers = new Set((_allProfileBatches||[]).filter(b=>b.replays&&b.replays.length).map(b=>(b.player||'').toLowerCase()));
-  for (const pName of rosterNames) {
-    if (loadedPlayers.has(pName)) continue;
-    try {
-      const playerBatches = (_allProfileBatches||[]).filter(b=>(b.player||'').toLowerCase()===pName);
+  // Always fetch full batch data for ALL roster players (GFWL needs actual replays)
+  const gfwlBatchCache = {}; // local cache for this team sheet session
+  st('Loading replay data for '+roster.length+' players...', 'var(--muted)');
+  try {
+    const bList = await fetch(API+'/batches').then(r=>r.json()).catch(()=>[]);
+    for (const pName of rosterNames) {
+      const playerBatches = bList.filter(b=>(b.player||'').toLowerCase()===pName);
       for (const pb of playerBatches) {
-        if (!pb.replays || !pb.replays.length) {
-          const full = await fetch(API+'/batches/'+pb.id).then(r=>r.json()).catch(()=>null);
-          if (full && full.replays) {
-            const idx = _allProfileBatches.findIndex(b=>b.id===pb.id);
-            if (idx>=0) _allProfileBatches[idx] = full;
-          }
-        }
+        if (gfwlBatchCache[pb.id]) continue;
+        try {
+          const full = await fetch(API+'/batches/'+pb.id).then(r=>r.json());
+          if (full && full.replays) gfwlBatchCache[pb.id] = full;
+        } catch(e) {}
       }
-    } catch(e) {}
-  }
+    }
+  } catch(e) { console.warn('GFWL batch load error:', e); }
 
-  const seasonReplays = []; // {player, replay, weekLabel}
+  const allGFWLBatches = Object.values(gfwlBatchCache);
+  const seasonReplays = [];
   function collectSeasonReplays() {
     seasonReplays.length = 0;
-    for (const b of (_allProfileBatches||[])) {
+    for (const b of allGFWLBatches) {
       if (!rosterNames.includes((b.player||'').toLowerCase())) continue;
       for (const r of (b.replays||[])) {
         const lbl = (r.eventLabel||'').toUpperCase();
@@ -2623,31 +2616,9 @@ async function gfwlOpenTeam(season, teamName, team) {
         seasonReplays.push({ player:b.player, replay:r, label:lbl });
       }
     }
+    console.log('[GFWL] collectSeasonReplays:', seasonReplays.length, 'replays for', seasonKey);
   }
   collectSeasonReplays();
-
-  // After DOM is built, re-fetch any missing replays then re-render pies
-  (async () => {
-    let anyNew = false;
-    for (const pName of rosterNames) {
-      const playerBatches = (_allProfileBatches||[]).filter(b=>(b.player||'').toLowerCase()===pName);
-      for (const pb of playerBatches) {
-        if (!pb.replays || !pb.replays.length) {
-          try {
-            const full = await fetch(API+'/batches/'+pb.id).then(r=>r.json());
-            if (full && full.replays && full.replays.length) {
-              const idx = _allProfileBatches.findIndex(b=>b.id===pb.id);
-              if (idx>=0) { _allProfileBatches[idx]=full; anyNew=true; }
-            }
-          } catch(e) {}
-        }
-      }
-    }
-    if (anyNew) {
-      collectSeasonReplays();
-      if (typeof renderGFWLPies === 'function') renderGFWLPies();
-    }
-  })();
 
   // ── Roster table ──────────────────────────────────────────────────────────
   const rosterSec = gfwlMakeSection('ROSTER');
