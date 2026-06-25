@@ -761,6 +761,7 @@ select{cursor:pointer}
                     </select>
                   </div>
                   <div id="profile-gfwl-list" style="display:flex;flex-direction:column;gap:4px"></div>
+                  <div id="profile-gfwl-team-links" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:4px"></div>
                 </div>
                 <!-- Card Win Rate panel -->
                 <div id="profile-cardwr-panel" style="display:none">
@@ -2612,14 +2613,41 @@ async function gfwlOpenTeam(season, teamName, team) {
   }
 
   const seasonReplays = []; // {player, replay, weekLabel}
-  for (const b of (_allProfileBatches||[])) {
-    if (!rosterNames.includes((b.player||'').toLowerCase())) continue;
-    for (const r of (b.replays||[])) {
-      const lbl = (r.eventLabel||'').toUpperCase();
-      if (!lbl.startsWith(seasonKey+':') && !lbl.startsWith(seasonKey+' ')) continue;
-      seasonReplays.push({ player:b.player, replay:r, label:lbl });
+  function collectSeasonReplays() {
+    seasonReplays.length = 0;
+    for (const b of (_allProfileBatches||[])) {
+      if (!rosterNames.includes((b.player||'').toLowerCase())) continue;
+      for (const r of (b.replays||[])) {
+        const lbl = (r.eventLabel||'').toUpperCase();
+        if (!lbl.startsWith(seasonKey+':') && !lbl.startsWith(seasonKey+' ')) continue;
+        seasonReplays.push({ player:b.player, replay:r, label:lbl });
+      }
     }
   }
+  collectSeasonReplays();
+
+  // After DOM is built, re-fetch any missing replays then re-render pies
+  (async () => {
+    let anyNew = false;
+    for (const pName of rosterNames) {
+      const playerBatches = (_allProfileBatches||[]).filter(b=>(b.player||'').toLowerCase()===pName);
+      for (const pb of playerBatches) {
+        if (!pb.replays || !pb.replays.length) {
+          try {
+            const full = await fetch(API+'/batches/'+pb.id).then(r=>r.json());
+            if (full && full.replays && full.replays.length) {
+              const idx = _allProfileBatches.findIndex(b=>b.id===pb.id);
+              if (idx>=0) { _allProfileBatches[idx]=full; anyNew=true; }
+            }
+          } catch(e) {}
+        }
+      }
+    }
+    if (anyNew) {
+      collectSeasonReplays();
+      if (typeof renderGFWLPies === 'function') renderGFWLPies();
+    }
+  })();
 
   // ── Roster table ──────────────────────────────────────────────────────────
   const rosterSec = gfwlMakeSection('ROSTER');
@@ -2849,38 +2877,48 @@ async function gfwlOpenTeam(season, teamName, team) {
   matchupLegend.style.cssText = 'margin-top:8px;display:flex;flex-direction:column;gap:3px';
   matchupSec.appendChild(matchupLegend);
 
-  // Build pie data
-  const myDeckUsage = {}, oppDeckUsage = {};
-  seasonReplays.forEach(({replay:r}) => {
-    const my = r.myDeckOverride || r.parsed?.myDeck;
-    const opp = r.oppDeckOverride || r.parsed?.oppDeck;
-    if (my)  myDeckUsage[my]  = (myDeckUsage[my]||0)+1;
-    if (opp) oppDeckUsage[opp] = (oppDeckUsage[opp]||0)+1;
-  });
-  const myEntries  = Object.entries(myDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,8);
-  const oppEntries = Object.entries(oppDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,8);
-  // Use setTimeout to ensure canvases are in DOM before Chart.js renders
-  // Render pies using direct element refs (no getElementById needed)
-  setTimeout(() => {
+  // renderGFWLPies: called immediately and again after background fetch completes
+  function renderGFWLPies() {
+    const myDeckUsage = {}, oppDeckUsage = {};
+    seasonReplays.forEach(({replay:r}) => {
+      const my = r.myDeckOverride || r.parsed?.myDeck;
+      const opp = r.oppDeckOverride || r.parsed?.oppDeck;
+      if (my)  myDeckUsage[my]  = (myDeckUsage[my]||0)+1;
+      if (opp) oppDeckUsage[opp] = (oppDeckUsage[opp]||0)+1;
+    });
+    const myEntries  = Object.entries(myDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    const oppEntries = Object.entries(oppDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    // Remove any existing no-data messages
+    pieSec.querySelectorAll('.no-data-msg').forEach(el=>el.remove());
+    matchupSec.querySelectorAll('.no-data-msg').forEach(el=>el.remove());
     if (myEntries.length) {
+      pieCanvas.style.display = '';
       buildDonutChartEl(pieCanvas, pieLegend, myEntries, teamName+' — Deck Usage');
     } else {
-      const noData = document.createElement('div');
-      noData.style.cssText = 'color:var(--dim);font-size:11px;margin-top:8px';
-      noData.textContent = 'No replay data yet — tag replays with S9: WK# to populate.';
-      pieSec.appendChild(noData);
       pieCanvas.style.display = 'none';
+      if (!pieSec.querySelector('.no-data-msg')) {
+        const nd = document.createElement('div');
+        nd.className = 'no-data-msg';
+        nd.style.cssText = 'color:var(--dim);font-size:11px;margin-top:8px';
+        nd.textContent = 'No replay data yet — tag replays with '+season+': WK# to populate.';
+        pieSec.appendChild(nd);
+      }
     }
     if (oppEntries.length) {
+      matchupCanvas.style.display = '';
       buildDonutChartEl(matchupCanvas, matchupLegend, oppEntries, 'Opponent Deck Types');
     } else {
-      const noData2 = document.createElement('div');
-      noData2.style.cssText = 'color:var(--dim);font-size:11px;margin-top:8px';
-      noData2.textContent = 'No matchup data yet.';
-      matchupSec.appendChild(noData2);
       matchupCanvas.style.display = 'none';
+      if (!matchupSec.querySelector('.no-data-msg')) {
+        const nd2 = document.createElement('div');
+        nd2.className = 'no-data-msg';
+        nd2.style.cssText = 'color:var(--dim);font-size:11px;margin-top:8px';
+        nd2.textContent = 'No matchup data yet.';
+        matchupSec.appendChild(nd2);
+      }
     }
-  }, 100);
+  }
+  renderGFWLPies();
 
   // ── View Player Profile helper ─────────────────────────────────────────────
   function gotoPlayerProfile(playerName) {
@@ -5292,6 +5330,7 @@ function profileSubTab(tab, btn) {
   }
   if (tab === 'gfwl') {
     renderGFWLHistory(); // pie switches to GFWL-only when this tab is active
+    if (_activeProfile) renderGFWLTeamLinks(_activeProfile.player);
   } else if (tab === 'matchups') {
     // Restore all-time pie when switching away from GFWL
     if (_activeProfile && typeof buildDonutChart === 'function') {
@@ -5302,6 +5341,40 @@ function profileSubTab(tab, btn) {
       buildDonutChart('profile-deck-chart','profile-deck-legend', sorted, _activeProfile.player+' — All Time');
     }
   }
+}
+
+function renderGFWLTeamLinks(player) {
+  const container = document.getElementById('profile-gfwl-team-links');
+  if (!container) return;
+  container.innerHTML = '';
+  const reg = window._playerRegistry && window._playerRegistry[(player||'').toLowerCase()];
+  const teams = reg ? (reg.gfwlTeams||reg.teams||[]) : [];
+  if (!teams.length) return;
+  teams.forEach(entry => {
+    if (!entry.season || !entry.team) return;
+    const season = typeof gfwlNormalizeSeason === 'function' ? gfwlNormalizeSeason(entry.season) : entry.season.toUpperCase();
+    const btn = document.createElement('button');
+    btn.style.cssText = 'background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-size:10px;padding:2px 10px;border-radius:4px;cursor:pointer';
+    btn.textContent = '→ View '+season+' Team Sheet ('+entry.team+')';
+    btn.onclick = () => {
+      const gfwlTab = document.querySelector('.ntab[onclick*="gfwl"]');
+      switchTab('gfwl', gfwlTab);
+      setTimeout(async () => {
+        await gfwlInit();
+        const sel = document.getElementById('gfwl-season-sel');
+        if (sel) { sel.value = season; }
+        await gfwlLoadSeason(season);
+        const teamData = _gfwlData[season]?.teams[entry.team];
+        if (teamData) gfwlOpenTeam(season, entry.team, teamData);
+        else {
+          // Try to find team by alias
+          const resolved = typeof gfwlResolveTeam === 'function' ? gfwlResolveTeam(season, entry.team) : null;
+          if (resolved) gfwlOpenTeam(season, resolved, _gfwlData[season].teams[resolved]);
+        }
+      }, 400);
+    };
+    container.appendChild(btn);
+  });
 }
 
 function renderGFWLHistory() {
@@ -7622,6 +7695,7 @@ async function openProfile(player, batches, records) {
 
   // Event decklists
   renderEventDecks(player, batches, records);
+  renderGFWLTeamLinks(player);
 
   // All Matches
   const matchesSec = document.getElementById('profile-all-matches');
