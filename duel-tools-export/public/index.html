@@ -513,7 +513,12 @@ select{cursor:pointer}
             <div class="dsb-hl" style="margin-bottom:0">Matches</div>
             <button id="deck-goto-profile-btn" onclick="gotoActiveProfile()" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:9px;padding:2px 7px;border-radius:4px;cursor:pointer;white-space:nowrap" title="Go to this player's profile">→ Profile</button>
           </div>
-          <input class="dsearch" id="dsearch" type="text" placeholder="Search opponent…" oninput="filterMatches(this.value)"/>
+          <div style="display:flex;gap:4px;margin-bottom:4px">
+            <input class="dsearch" id="dsearch" type="text" placeholder="Search opponent…" oninput="filterMatches(this.value)" style="flex:1"/>
+            <select id="deck-year-filter" onchange="buildDeck()" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 6px;border-radius:4px;outline:none;width:68px">
+              <option value="">All</option>
+            </select>
+          </div>
         </div>
         <div class="match-list" id="match-list"><div class="dno">Select a batch first.</div></div>
       </div>
@@ -718,6 +723,7 @@ select{cursor:pointer}
             <div id="profile-view-meta" style="font-size:12px;color:var(--muted)"></div>
             <div id="profile-view-updated" style="font-size:11px;color:var(--dim)"></div>
           </div>
+          <button onclick="exportPlayerXLSX(_activeProfile?.player)" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 12px;border-radius:6px;cursor:pointer" title="Export to Excel">⬇ Export</button>
           <button onclick="loadProfileBatch()" id="profile-load-btn"
             style="margin-left:auto;background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:12px;padding:7px 18px;border-radius:6px;cursor:pointer">
             ▶ Load into Analyzer
@@ -777,7 +783,12 @@ select{cursor:pointer}
 
             <!-- All Matches -->
             <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px">
-              <div class="slbl" style="margin-bottom:10px">ALL MATCHES</div>
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+                <div class="slbl" style="margin:0">ALL MATCHES</div>
+                <select id="profile-year-filter" onchange="if(_activeProfile)renderAllMatchesSection(_activeProfile.player,_profileRecords)" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;outline:none;margin-left:auto">
+                  <option value="">All Years</option>
+                </select>
+              </div>
               <div id="profile-all-matches"></div>
             </div>
 
@@ -1481,6 +1492,53 @@ const CARD_ID_MAP = {
 
 const API = (location.hostname === 'localhost' || location.hostname === '127.0.0.1') ? 'http://localhost:8000/api' : '/api';
 
+// ── Event date cache (loaded from server, used for sorting) ──────────────────
+let _eventDates = {}; // code → {date, name}
+
+async function loadEventDates() {
+  try {
+    const data = await fetch(API+'/event-dates').then(r=>r.json());
+    if (data && !data.error) _eventDates = data;
+  } catch(e) {}
+}
+
+function getEventDate(code) {
+  if (!code) return null;
+  const c = code.toUpperCase().trim();
+  if (_eventDates[c]) return _eventDates[c].date;
+  // Trigger background refresh if unknown non-season code
+  if (!/^(S\d+|LADDER|ACAD|ACADEMY)/i.test(c)) {
+    fetch(API+'/event-dates/refresh', { method:'POST', headers:authHeaders() }).catch(()=>{});
+    // Re-load after 5s
+    setTimeout(() => fetch(API+'/event-dates').then(r=>r.json()).then(d=>{ if(d&&!d.error) _eventDates=d; }).catch(()=>{}), 5000);
+  }
+  return null;
+}
+
+// Sort event group keys: Seasons first (S9→S1), then by FL date desc, then ACAD/LADDER last
+function sortEventKeys(keys) {
+  const isSeasonKey = k => /^S\d+$/i.test(k);
+  const isLast      = k => /^(LADDER|ACAD|ACADEMY)/i.test(k);
+  return [...keys].sort((a,b) => {
+    const aNone = a==='__none__'||a==='Untagged', bNone = b==='__none__'||b==='Untagged';
+    if (aNone) return 1; if (bNone) return -1;
+    const aLast=isLast(a), bLast=isLast(b);
+    if (aLast&&!bLast) return 1; if (!aLast&&bLast) return -1;
+    const aSeas=isSeasonKey(a), bSeas=isSeasonKey(b);
+    if (aSeas&&!bSeas) return -1; if (!aSeas&&bSeas) return 1;
+    if (aSeas&&bSeas) return parseInt(b.replace(/\D/g,''))-parseInt(a.replace(/\D/g,''));
+    // Both regular events — sort by Format Library date
+    const da = getEventDate(a), db2 = getEventDate(b);
+    if (da&&db2) return da>db2?-1:da<db2?1:0;
+    if (da&&!db2) return -1; if (!da&&db2) return 1;
+    // Fallback: trailing number descending
+    const extractN = k => parseInt((k||'').match(/\d+$/)?.[0]||'0');
+    const pa=(a||'').replace(/\d+$/,''), pb=(b||'').replace(/\d+$/,'');
+    if (pa!==pb) return pa.localeCompare(pb);
+    return extractN(b)-extractN(a);
+  });
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // GOAT FORMAT BANLIST
 // ══════════════════════════════════════════════════════════════════════
@@ -1848,6 +1906,119 @@ async function openPlayerByName(name) {
   if (pBatches.length) openProfile(name, pBatches, []);
 }
 
+async function exportPlayerXLSX(player) {
+  if (!player) return;
+  // Gather data
+  const reg = window._playerRegistry && window._playerRegistry[player.toLowerCase()];
+  const aliases = reg ? (reg.aliases||[]) : [];
+  const records = _profileRecords || [];
+  const batches = _allProfileBatches || [];
+  const evDecks = reg ? (reg.eventDecklists||[]) : [];
+  const gfwlTeams = reg ? (reg.gfwlTeams||[]) : [];
+
+  const w = records.filter(r=>r.matchWon).length;
+  const l = records.filter(r=>r.matchLost).length;
+  const total = w+l;
+  const winPct = total ? Math.round(w/total*100)+'%' : '—';
+
+  // Get all replays from batches
+  const allReplays = [];
+  for (const b of batches) {
+    const full = (b.replays && b.replays.length) ? b : await fetch(API+'/batches/'+b.id).then(r=>r.json()).catch(()=>b);
+    for (const r of (full.replays||[])) {
+      allReplays.push({ ...r, batchPlayer: full.player });
+    }
+  }
+
+  // Build rows matching template format
+  // Row 1: Player Name | Aliases | | W/L Record | | Win% | | Replay Total
+  // Row 2: Headers
+  // Row 3+: Data rows — left=GFWL (Season WK replays), middle=Event replays, right=Event Decklists
+
+  // Group replays by event
+  const byEvent = {};
+  allReplays.forEach(r => {
+    const lbl = (r.eventLabel||'Untagged').toUpperCase().trim();
+    if (!byEvent[lbl]) byEvent[lbl] = [];
+    byEvent[lbl].push(r);
+  });
+
+  const sortedEvents = sortEventKeys(Object.keys(byEvent));
+  const gfwlEvents = sortedEvents.filter(k => /^S\d+:/i.test(k));
+  const tourEvents = sortedEvents.filter(k => !/^S\d+/i.test(k) && k!=='UNTAGGED');
+  const sortedEdl = [...evDecks].sort((a,b)=>{
+    const keys=sortEventKeys([a.code||'',b.code||'']);
+    return keys[0]===(a.code||'')?-1:1;
+  });
+
+  // Build sheet rows
+  const rows = [];
+  // Row 1: Player info
+  rows.push([player, aliases.join(', '), '', w+'-'+l, '', winPct, '', allReplays.length]);
+  // Row 2: Teams
+  const teamStr = gfwlTeams.map(t=>(t.season||'')+(t.team?': '+t.team:'')).join(' | ');
+  rows.push([teamStr, 'EventID', 'Event Decklists', 'Event Deck Types', 'Opponent', 'RPS', '', 'EventID', 'Replay Link', 'Deck Type', 'Opponent', 'RPS', '', 'EventID', 'Deck Link', 'Deck Type']);
+
+  // Data rows
+  const maxRows = Math.max(gfwlEvents.reduce((s,k)=>(byEvent[k]||[]).length+s,0), tourEvents.reduce((s,k)=>(byEvent[k]||[]).length+s,0), sortedEdl.length);
+  let gfwlIdx=0, tourIdx=0, edlIdx=0;
+  let gfwlEvt=0, tourEvt=0;
+  let gfwlReps=[], tourReps=[];
+
+  for (let i=0; i<Math.max(maxRows,1); i++) {
+    // Left: GFWL replay
+    let leftCols = ['','','','','',''];
+    if (gfwlEvt < gfwlEvents.length) {
+      if (!gfwlReps.length && gfwlEvt < gfwlEvents.length) {
+        gfwlReps = [...(byEvent[gfwlEvents[gfwlEvt]]||[])];
+      }
+      if (gfwlReps.length) {
+        const r = gfwlReps.shift();
+        const parsed = r.parsed || {};
+        const rpsArr = r.plays||[];
+        const rpsFirst = rpsArr[0];
+        const rpsPick = rpsFirst ? (rpsFirst.pick||rpsFirst.player1_choice||'?') : '';
+        leftCols = [gfwlEvents[gfwlEvt], 'https://www.duelingbook.com/replay?id='+r.replayId, r.myDeckOverride||parsed.myDeck||'—', parsed.oppName||r.oppName||'—', rpsPick, ''];
+        if (!gfwlReps.length) gfwlEvt++;
+      }
+    }
+    // Middle: Tournament replay
+    let midCols = ['','','','',''];
+    if (tourEvt < tourEvents.length) {
+      if (!tourReps.length && tourEvt < tourEvents.length) {
+        tourReps = [...(byEvent[tourEvents[tourEvt]]||[])];
+      }
+      if (tourReps.length) {
+        const r = tourReps.shift();
+        const parsed = r.parsed || {};
+        const rpsArr = r.plays||[];
+        const rpsPick = rpsArr[0]?(rpsArr[0].pick||rpsArr[0].player1_choice||''):'';
+        midCols = [tourEvents[tourEvt], 'https://www.duelingbook.com/replay?id='+r.replayId, r.myDeckOverride||parsed.myDeck||'—', parsed.oppName||r.oppName||'—', rpsPick];
+        if (!tourReps.length) tourEvt++;
+      }
+    }
+    // Right: Event decklist
+    let rightCols = ['','',''];
+    if (edlIdx < sortedEdl.length) {
+      const d = sortedEdl[edlIdx++];
+      rightCols = [d.code||'', d.deckUrl||'', d.deckTypeOverride||'—'];
+    }
+    rows.push([...leftCols, '', ...midCols, '', ...rightCols]);
+  }
+
+  // Use SheetJS to write XLSX
+  if (typeof XLSX === 'undefined') {
+    st('SheetJS not loaded — try again in a moment', 'var(--red)'); return;
+  }
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  // Set column widths
+  ws['!cols'] = [20,20,5,15,5,12,5,12,30,18,20,10,5,12,30,18].map(w=>({wch:w}));
+  XLSX.utils.book_append_sheet(wb, ws, player.slice(0,31));
+  XLSX.writeFile(wb, player+'-DuelTools.xlsx');
+  st('Exported '+player+' to Excel', 'var(--green)');
+}
+
 async function gotoActiveProfile() {
   if (!_activeBatch || !_activeBatch.player || _activeBatch.isTemp) return;
   const player = _activeBatch.player;
@@ -1876,6 +2047,9 @@ const CONF_COLORS = {
   'Blue':   { bg:'rgba(50,100,220,.15)', border:'rgba(50,100,220,.5)', text:'#5599ee' },
   'Yellow': { bg:'rgba(220,180,30,.15)', border:'rgba(220,180,30,.5)', text:'#ddbb30' },
 };
+
+// Load event dates when app starts
+loadEventDates();
 
 async function gfwlInit() {
   // Load all season data
@@ -2828,70 +3002,37 @@ async function gfwlOpenTeam(season, teamName, team) {
     }
   }
 
-  // ── RIGHT: Deck pies ──────────────────────────────────────────────────────
+  // ── RIGHT: Deck pies (use static IDs so buildDonutChart works) ───────────
   const pieSec = gfwlMakeSection('TEAM DECK USAGE');
   right.appendChild(pieSec);
-  const pieCanvas = document.createElement('canvas');
-  pieCanvas.id = 'gfwl-team-deck-pie';
-  pieCanvas.style.cssText = 'max-height:180px';
-  pieSec.appendChild(pieCanvas);
-  const pieLegend = document.createElement('div');
-  pieLegend.id = 'gfwl-team-deck-legend';
-  pieLegend.style.cssText = 'margin-top:8px;display:flex;flex-direction:column;gap:3px';
-  pieSec.appendChild(pieLegend);
+  pieSec.innerHTML += '<canvas id="gfwl-pie-deck" style="width:100%;max-height:200px"></canvas><div id="gfwl-pie-deck-legend" style="margin-top:8px;display:flex;flex-direction:column;gap:3px"></div>';
 
   const matchupSec = gfwlMakeSection('MATCHUPS VS OPP DECKS');
   right.appendChild(matchupSec);
-  const matchupCanvas = document.createElement('canvas');
-  matchupCanvas.id = 'gfwl-team-matchup-pie';
-  matchupCanvas.style.cssText = 'max-height:180px';
-  matchupSec.appendChild(matchupCanvas);
-  const matchupLegend = document.createElement('div');
-  matchupLegend.id = 'gfwl-team-matchup-legend';
-  matchupLegend.style.cssText = 'margin-top:8px;display:flex;flex-direction:column;gap:3px';
-  matchupSec.appendChild(matchupLegend);
+  matchupSec.innerHTML += '<canvas id="gfwl-pie-matchup" style="width:100%;max-height:200px"></canvas><div id="gfwl-pie-matchup-legend" style="margin-top:8px;display:flex;flex-direction:column;gap:3px"></div>';
 
-  // renderGFWLPies: stored on window so background async can call it after fetch
-  window._gfwlRenderPies = null;
+  // renderGFWLPies: uses buildDonutChart with static IDs (same as rest of app)
   function renderGFWLPies() {
-    console.log('[GFWL Pies] seasonReplays:', seasonReplays.length, 'first labels:', seasonReplays.slice(0,3).map(x=>x.label+' myDeck:'+(x.replay.parsed?.myDeck||x.replay.myDeckOverride||'?')));
     const myDeckUsage = {}, oppDeckUsage = {};
     seasonReplays.forEach(({replay:r}) => {
-      const my = r.myDeckOverride || r.parsed?.myDeck || r.replay?.parsed?.myDeck;
-      const opp = r.oppDeckOverride || r.parsed?.oppDeck || r.replay?.parsed?.oppDeck;
+      const my = r.myDeckOverride || r.parsed?.myDeck;
+      const opp = r.oppDeckOverride || r.parsed?.oppDeck;
       if (my)  myDeckUsage[my]  = (myDeckUsage[my]||0)+1;
       if (opp) oppDeckUsage[opp] = (oppDeckUsage[opp]||0)+1;
     });
     const myEntries  = Object.entries(myDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,8);
     const oppEntries = Object.entries(oppDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,8);
-    // Remove any existing no-data messages
-    pieSec.querySelectorAll('.no-data-msg').forEach(el=>el.remove());
-    matchupSec.querySelectorAll('.no-data-msg').forEach(el=>el.remove());
     if (myEntries.length) {
-      pieCanvas.style.display = '';
-      buildDonutChartEl(pieCanvas, pieLegend, myEntries, teamName+' — Deck Usage');
+      buildDonutChart('gfwl-pie-deck','gfwl-pie-deck-legend', myEntries, teamName);
     } else {
-      pieCanvas.style.display = 'none';
-      if (!pieSec.querySelector('.no-data-msg')) {
-        const nd = document.createElement('div');
-        nd.className = 'no-data-msg';
-        nd.style.cssText = 'color:var(--dim);font-size:11px;margin-top:8px';
-        nd.textContent = 'No replay data yet — tag replays with '+season+': WK# to populate.';
-        pieSec.appendChild(nd);
-      }
+      const c = document.getElementById('gfwl-pie-deck'); if(c) c.style.display='none';
+      const l = document.getElementById('gfwl-pie-deck-legend'); if(l) l.textContent='No replay data yet — tag replays with '+season+': WK# to populate.';
     }
     if (oppEntries.length) {
-      matchupCanvas.style.display = '';
-      buildDonutChartEl(matchupCanvas, matchupLegend, oppEntries, 'Opponent Deck Types');
+      buildDonutChart('gfwl-pie-matchup','gfwl-pie-matchup-legend', oppEntries, 'Opp Decks');
     } else {
-      matchupCanvas.style.display = 'none';
-      if (!matchupSec.querySelector('.no-data-msg')) {
-        const nd2 = document.createElement('div');
-        nd2.className = 'no-data-msg';
-        nd2.style.cssText = 'color:var(--dim);font-size:11px;margin-top:8px';
-        nd2.textContent = 'No matchup data yet.';
-        matchupSec.appendChild(nd2);
-      }
+      const c2 = document.getElementById('gfwl-pie-matchup'); if(c2) c2.style.display='none';
+      const l2 = document.getElementById('gfwl-pie-matchup-legend'); if(l2) l2.textContent='No matchup data yet.';
     }
   }
   window._gfwlRenderPies = renderGFWLPies;
@@ -3053,35 +3194,23 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
   // ── Matchup pie ─────────────────────────────────────────────────────────────
   const pieSec = gfwlMakeSection('DECK USAGE — '+season);
   right.appendChild(pieSec);
-  const pieCanvas2 = document.createElement('canvas');
-  pieCanvas2.style.cssText = 'max-height:160px';
-  pieSec.appendChild(pieCanvas2);
-  const pieLeg2 = document.createElement('div');
-  pieLeg2.style.cssText = 'margin-top:6px;display:flex;flex-direction:column;gap:3px';
-  pieSec.appendChild(pieLeg2);
+  pieSec.innerHTML += '<canvas id="gfwl-player-pie-deck" style="width:100%;max-height:180px"></canvas><div id="gfwl-player-pie-deck-legend" style="margin-top:6px;display:flex;flex-direction:column;gap:3px"></div>';
 
   const oppSec = gfwlMakeSection('VS OPP DECKS');
   right.appendChild(oppSec);
-  const oppCanvas = document.createElement('canvas');
-  oppCanvas.style.cssText = 'max-height:160px';
-  oppSec.appendChild(oppCanvas);
-  const oppLeg = document.createElement('div');
-  oppLeg.style.cssText = 'margin-top:6px;display:flex;flex-direction:column;gap:3px';
-  oppSec.appendChild(oppLeg);
+  oppSec.innerHTML += '<canvas id="gfwl-player-pie-opp" style="width:100%;max-height:180px"></canvas><div id="gfwl-player-pie-opp-legend" style="margin-top:6px;display:flex;flex-direction:column;gap:3px"></div>';
 
   const myDU={}, oppDU={};
   playerReplays.forEach(({replay:r}) => {
     const my=r.myDeckOverride||r.parsed?.myDeck; if(my) myDU[my]=(myDU[my]||0)+1;
     const opp=r.oppDeckOverride||r.parsed?.oppDeck; if(opp) oppDU[opp]=(oppDU[opp]||0)+1;
   });
-  setTimeout(() => {
-    const myE=Object.entries(myDU).sort((a,b)=>b[1]-a[1]).slice(0,8);
-    const oppE=Object.entries(oppDU).sort((a,b)=>b[1]-a[1]).slice(0,8);
-    if (myE.length) buildDonutChartEl(pieCanvas2, pieLeg2, myE, playerName+' decks');
-    else { pieCanvas2.style.display='none'; pieSec.appendChild(Object.assign(document.createElement('div'),{style:'color:var(--dim);font-size:11px',textContent:'No data.'})); }
-    if (oppE.length) buildDonutChartEl(oppCanvas, oppLeg, oppE, 'vs opp decks');
-    else { oppCanvas.style.display='none'; oppSec.appendChild(Object.assign(document.createElement('div'),{style:'color:var(--dim);font-size:11px',textContent:'No data.'})); }
-  }, 100);
+  const myE=Object.entries(myDU).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  const oppE=Object.entries(oppDU).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  if (myE.length) buildDonutChart('gfwl-player-pie-deck','gfwl-player-pie-deck-legend', myE, playerName+' — '+season);
+  else { const l=document.getElementById('gfwl-player-pie-deck-legend'); if(l) l.textContent='No deck data.'; }
+  if (oppE.length) buildDonutChart('gfwl-player-pie-opp','gfwl-player-pie-opp-legend', oppE, 'vs Opp Decks');
+  else { const l=document.getElementById('gfwl-player-pie-opp-legend'); if(l) l.textContent='No matchup data.'; }
 }
 
 // ── Helper: create labeled section ────────────────────────────────────────────
@@ -3863,6 +3992,23 @@ function buildDeck() {
       _matches.push(m);
     }
   }
+  // Populate year filter dropdown
+  const yearSel = document.getElementById('deck-year-filter');
+  if (yearSel) {
+    const curYear = yearSel.value;
+    const years = [...new Set(_matches.map(m => {
+      const lbl = m.eventLabel||''; const y = lbl.match(/(20\d{2})/); return y?y[1]:null;
+    }).filter(Boolean))].sort((a,b)=>b-a);
+    yearSel.innerHTML = '<option value="">All</option>' + years.map(y=>`<option value="${y}"${y===curYear?'selected':''}>${y}</option>`).join('');
+    // Filter matches by year
+    const filterYear = yearSel.value;
+    if (filterYear) {
+      _matches = _matches.filter(m => {
+        const date = getEventDate(m.eventLabel?.split(':')[0]?.trim());
+        return date && date.startsWith(filterYear);
+      });
+    }
+  }
   renderMatchSidebar('');
 }
 
@@ -4234,20 +4380,7 @@ function renderMatchSidebar(query) {
   });
 
   // Sort: GFWL seasons (S#) descending numeric, then events alpha, Untagged last
-  const sortedKeys = Object.keys(groups).sort((a,b) => {
-    if (a==='Untagged') return 1;
-    if (b==='Untagged') return -1;
-    const aS = isGFWLSeason(a), bS = isGFWLSeason(b);
-    // Seasons first (S9→S1)
-    if (aS && !bS) return -1;
-    if (!aS && bS) return 1;
-    if (aS && bS) return parseInt(b.slice(1)) - parseInt(a.slice(1));
-    // Events: sort by prefix alpha then trailing number descending (FLC40→FLC39)
-    const extractN = k => parseInt((k||'').match(/\d+$/)?.[0]||'0');
-    const aP = (a||'').replace(/\d+$/, ''), bP = (b||'').replace(/\d+$/, '');
-    if (aP !== bP) return aP.localeCompare(bP);
-    return extractN(b) - extractN(a);
-  });
+  const sortedKeys = sortEventKeys(Object.keys(groups));
 
   // Track which groups are collapsed (persist in window._matchGroupCollapsed)
   if (!window._matchGroupCollapsed) window._matchGroupCollapsed = {};
@@ -7714,12 +7847,21 @@ async function openProfile(player, batches, records) {
     const displayMatches = (filter='') => {
       matchList.innerHTML='';
       const q=filter.toLowerCase();
-      const allFiltered = [...records].filter(r=>!q||
-        (r.oppName||'').toLowerCase().includes(q)||
-        (r.eventLabel||'').toLowerCase().includes(q)||
-        (r.myDeck||'').toLowerCase().includes(q)||
-        (r.oppDeck||'').toLowerCase().includes(q)
-      );
+      // Apply year filter
+      const pyf = document.getElementById('profile-year-filter');
+      const pyYear = pyf ? pyf.value : '';
+      const allFiltered = [...records].filter(r=>{
+        if (pyYear) {
+          const code = eventGroupKey(r.eventLabel||'').split(':')[0].trim();
+          const d = getEventDate(code);
+          if (d && !d.startsWith(pyYear)) return false;
+        }
+        return !q||
+          (r.oppName||'').toLowerCase().includes(q)||
+          (r.eventLabel||'').toLowerCase().includes(q)||
+          (r.myDeck||'').toLowerCase().includes(q)||
+          (r.oppDeck||'').toLowerCase().includes(q);
+      });
       if (!allFiltered.length) {
         matchList.innerHTML='<div style="color:var(--muted);font-size:12px;padding:8px">No matches found.</div>';
         return;
@@ -7734,19 +7876,7 @@ async function openProfile(player, batches, records) {
       });
 
       // Sort: GFWL seasons last (S1-S99), then other events alpha, then unlabeled
-      const sortedKeys = Object.keys(groups).sort((a,b) => {
-        if (a==='__none__') return 1; if (b==='__none__') return -1;
-        const aS = isGFWLSeason(a), bS = isGFWLSeason(b);
-        // Seasons first (S9→S1)
-        if (aS && !bS) return -1;
-        if (!aS && bS) return 1;
-        if (aS && bS) return parseInt(b.slice(1)) - parseInt(a.slice(1));
-        // Events: prefix alpha then trailing number descending
-        const extractN = k => parseInt((k||'').match(/\d+$/)?.[0]||'0');
-        const aP = (a||'').replace(/\d+$/, ''), bP = (b||'').replace(/\d+$/, '');
-        if (aP !== bP) return aP.localeCompare(bP);
-        return extractN(b) - extractN(a);
-      });
+      const sortedKeys = sortEventKeys(Object.keys(groups));
 
       sortedKeys.forEach(key => {
         const recs = groups[key];
@@ -8104,18 +8234,10 @@ function renderEventDecks(player, batches, records) {
 
   const extractNum = code => parseInt((code||'').match(/\d+$/)?.[0]||'0');
 
-  // Sort: Seasons (S#) first descending numeric, then events by trailing number descending
-  const isSeasonCode = code => /^S\d+$/i.test(code);
+  // Sort using global sortEventKeys (Format Library date-aware)
   const sorted = [...decks].sort((a,b) => {
-    const aS = isSeasonCode(a.code), bS = isSeasonCode(b.code);
-    if (aS && !bS) return -1; // seasons first
-    if (!aS && bS) return 1;
-    if (aS && bS) return extractNum(b.code) - extractNum(a.code); // S9 > S8
-    // Both events: sort by prefix alpha then trailing number desc
-    const aPrefix = (a.code||'').replace(/\d+$/, '');
-    const bPrefix = (b.code||'').replace(/\d+$/, '');
-    if (aPrefix !== bPrefix) return aPrefix.localeCompare(bPrefix);
-    return extractNum(b.code) - extractNum(a.code); // FLC40 > FLC39
+    const keys = sortEventKeys([a.code||'', b.code||'']);
+    return keys[0]===(a.code||'') ? -1 : 1;
   });
 
   const visible = searchQ ? sorted.filter(d =>

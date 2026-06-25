@@ -19,7 +19,7 @@ const BOOTSTRAP_PASSWORD = process.env.ADMIN_PASSWORD || 'ilovesui';
 
 // ── DB ────────────────────────────────────────────────────────────────────────
 let pgClient = null;
-let db = { batches: {}, players: {}, users: {}, gfwl: {} };
+let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {} };
 
 async function connectPostgres() {
   const { Client } = require('pg');
@@ -32,12 +32,13 @@ async function connectPostgres() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
-  const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('batches','players','users','gfwl')");
+  const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('batches','players','users','gfwl','eventDates')");
   for (const row of res.rows) { db[row.key] = row.value; }
   if (!db.batches) db.batches = {};
   if (!db.players) db.players = {};
   if (!db.users)   db.users   = {};
   if (!db.gfwl)    db.gfwl    = {};
+  if (!db.eventDates) db.eventDates = {};
   pgClient = client;
   console.log('Connected to PostgreSQL, batches:', Object.keys(db.batches).length);
 }
@@ -88,6 +89,7 @@ function loadFileDB() {
       if (!db.players) db.players = {};
       if (!db.users)   db.users   = {};
       if (!db.gfwl)    db.gfwl    = {};
+      if (!db.eventDates) db.eventDates = {};
     }
   } catch(e) { console.error('File DB load error:', e.message); }
 }
@@ -97,9 +99,9 @@ async function saveDB() {
     try {
       await pgClient.query(`
         INSERT INTO duel_tools_data (key, value, updated_at)
-        VALUES ('batches',$1,NOW()),('players',$2,NOW()),('users',$3,NOW()),('gfwl',$4,NOW())
+        VALUES ('batches',$1,NOW()),('players',$2,NOW()),('users',$3,NOW()),('gfwl',$4,NOW()),('eventDates',$5,NOW())
         ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()
-      `, [JSON.stringify(db.batches), JSON.stringify(db.players), JSON.stringify(db.users), JSON.stringify(db.gfwl)]);
+      `, [JSON.stringify(db.batches), JSON.stringify(db.players), JSON.stringify(db.users), JSON.stringify(db.gfwl), JSON.stringify(db.eventDates)]);
     } catch(e) { console.error('PG save error:', e.message); }
   } else {
     try { fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2)); }
@@ -573,6 +575,20 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok:true, removed, kept:b.replays.length });
   }
 
+  // ── GET /api/event-dates — get cached event dates ───────────────────────────
+  if (parts[0]==='event-dates' && method==='GET') {
+    return json(res, 200, db.eventDates || {});
+  }
+
+  // ── POST /api/event-dates/refresh — scrape formatlibrary.com ─────────────
+  if (parts[0]==='event-dates' && parts[1]==='refresh' && method==='POST') {
+    // Run in background, return immediately
+    res.writeHead(200, {'Content-Type':'application/json','Access-Control-Allow-Origin':'*'});
+    res.end(JSON.stringify({ ok:true, message:'Refresh started in background' }));
+    scrapeFormatLibraryEvents().catch(e => console.error('[EventDates] Scrape error:', e.message));
+    return;
+  }
+
   // ── GET /api/gfwl — get all GFWL season data ─────────────────────────────────
   if (parts[0]==='gfwl' && !parts[1] && method==='GET') {
     return json(res, 200, db.gfwl);
@@ -803,6 +819,143 @@ function normalizeSeason(s) {
   const mS = str.match(/^[Ss](\d+)$/);
   if (mS) return 'S'+mS[1];
   return str.toUpperCase();
+}
+
+// ── Format Library event date scraper ───────────────────────────────────────
+async function scrapeFormatLibraryEvents(specificCode) {
+  const https = require('https');
+  let allEvents = [];
+  let page = 0;
+  const perPage = 100;
+
+  console.log('[EventDates] Starting Format Library scrape...');
+  try {
+    while (true) {
+      const url = `https://formatlibrary.com/api/events?format=goat&limit=${perPage}&offset=${page*perPage}`;
+      const data = await new Promise((resolve, reject) => {
+        const req = https.get(url, { headers:{'User-Agent':'Mozilla/5.0','Accept':'application/json'} }, res2 => {
+          let body='';
+          res2.on('data', c=>body+=c);
+          res2.on('end', ()=>{
+            try { resolve(JSON.parse(body)); }
+            catch(e) { reject(new Error('Parse error: '+body.slice(0,100))); }
+          });
+        });
+        req.on('error', reject);
+        req.setTimeout(15000, ()=>{ req.destroy(); reject(new Error('timeout')); });
+      });
+
+      const events = Array.isArray(data) ? data : (data.events || data.data || data.results || []);
+      if (!events.length) break;
+
+      for (const evt of events) {
+        const name = evt.name || evt.event_name || evt.title || '';
+        const date = evt.date || evt.start_date || evt.startDate || evt.created_at || '';
+        if (!name || !date) continue;
+
+        // Extract event code from name
+        const code = extractEventCode(name);
+        if (code && !db.eventDates[code]) {
+          db.eventDates[code] = { date: date.slice(0,10), name, source:'formatlibrary' };
+        }
+      }
+
+      if (events.length < perPage) break;
+      page++;
+      if (page > 30) break; // safety limit
+    }
+
+    await saveDB();
+    console.log('[EventDates] Scraped '+Object.keys(db.eventDates).length+' event codes');
+  } catch(e) {
+    console.error('[EventDates] Scrape failed:', e.message);
+    // Try HTML scrape as fallback
+    await scrapeFormatLibraryHTML();
+  }
+}
+
+async function scrapeFormatLibraryHTML() {
+  const https = require('https');
+  try {
+    // Scrape the events page for Goat format
+    const pages = [1,2,3,4,5];
+    for (const p of pages) {
+      const url = `https://formatlibrary.com/events?format=goat&page=${p}&sort=date&order=desc&per_page=100`;
+      const html = await new Promise((resolve,reject) => {
+        const req = https.get(url, {headers:{'User-Agent':'Mozilla/5.0'}}, res2 => {
+          let body=''; res2.on('data',c=>body+=c); res2.on('end',()=>resolve(body));
+        });
+        req.on('error',reject);
+        req.setTimeout(15000,()=>{req.destroy();reject(new Error('timeout'));});
+      });
+
+      // Parse event names and dates from HTML
+      // Look for patterns like "FLC40" or "PWCQ87" near dates
+      const datePattern = /(\d{4}-\d{2}-\d{2})/g;
+      const namePattern = /(Format Library Championship|Premium World Championship Qualifier|Goat Format Championship|Goat World War|Format Library Cup|Goat Format League Championship|Goat League Championship|Clash of Champions|Format Library Club|Goat Format Club)\s*(\d+[A-Z]?)/gi;
+
+      let match;
+      const dates = [];
+      while ((match=datePattern.exec(html))!==null) dates.push(match[1]);
+
+      let ni=0;
+      namePattern.lastIndex=0;
+      while ((match=namePattern.exec(html))!==null) {
+        const fullName = match[0];
+        const code = extractEventCode(fullName);
+        if (code && !db.eventDates[code] && dates[ni]) {
+          db.eventDates[code] = { date:dates[ni], name:fullName, source:'html' };
+        }
+        ni++;
+      }
+    }
+    await saveDB();
+    console.log('[EventDates] HTML scrape done, total:', Object.keys(db.eventDates).length);
+  } catch(e) {
+    console.error('[EventDates] HTML scrape failed:', e.message);
+  }
+}
+
+// Extract a short event code from a full event name
+function extractEventCode(name) {
+  const n = name.trim();
+  // Direct abbreviation map
+  const abbrevMap = [
+    [/Format Library Championship[\s#]*(\.?\d+[A-Z]?)/i,     'FLC'],
+    [/Premium World Championship Qualifier[\s#]*(\d+)/i,       'PWCQ'],
+    [/Goat Format Championship[\s#]*(\d+)/i,                   'GFC'],
+    [/Goat World War[\s#]*(\d+)/i,                             'GWW'],
+    [/Format Library Cup[\s#]*(\d+[A-Z]?)/i,                   'FLC'],
+    [/Goat League Championship Qualifier[\s#]*(\d+[A-Z]?)/i,   'GLCQ'],
+    [/Goat Format League Championship[\s#]*(\d+)/i,             'GFLC'],
+    [/Goat Format War Championship[\s#]*(\d+)/i,                'GFWC'],
+    [/Clash of Champions[\s#]*(\d+)/i,                          'CLASH'],
+    [/Format Library Club[\s#]*(\d+)/i,                         'FLC'],
+    [/Goat Format Club[\s#]*(\d+)/i,                            'GFC'],
+    [/Goat World War Champions[\s#]*(\d+)/i,                    'GWW'],
+    [/Goat Format War League[\s#]*(\d+)/i,                      'GFWL'],
+    [/Tisis Cup[\s#]*(\d+)/i,                                   'TISIS'],
+    [/Seven Eras[\s\w]*(\d+)/i,                                'SEERA'],
+  ];
+  for (const [re, prefix] of abbrevMap) {
+    const m = n.match(re);
+    if (m) return prefix + m[1].replace(/\./, '');
+  }
+  return null;
+}
+
+// Silently refresh event dates when an unknown code is seen
+async function silentRefreshEventCode(code) {
+  if (!code || db.eventDates[code]) return; // already known
+  const skip = /^(S\d+|LADDER|ACAD|ACADEMY)/i;
+  if (skip.test(code)) return;
+  // Throttle: don't re-scrape more than once per hour
+  const lastScrape = db.eventDates['_lastScrape'];
+  const now = Date.now();
+  if (lastScrape && (now - lastScrape) < 3600000) return;
+  db.eventDates['_lastScrape'] = now;
+  console.log('[EventDates] Unknown code', code, '— triggering background refresh');
+  scrapeFormatLibraryEvents(code).catch(()=>{});
 }
 
 // ── Keep-alive ping — prevents Railway cold starts ───────────────────────────
