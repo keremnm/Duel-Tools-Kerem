@@ -7,6 +7,7 @@
 <title>Duel Tools</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
 :root{
   --bg:#06060c;--panel:#0e0e1a;--card:#131320;--card2:#1a1a28;
@@ -755,7 +756,12 @@ select{cursor:pointer}
                 </div>
                 <!-- Matchup table -->
                 <div id="profile-matchup-panel">
-                  <div class="slbl" style="margin-bottom:8px;font-size:10px">WIN RATE VS OPPONENT DECK TYPE</div>
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+                    <div class="slbl" style="margin:0;font-size:10px">WIN RATE VS OPPONENT DECK TYPE</div>
+                    <select id="deckdata-year-filter" onchange="ddRenderMatchups()" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;outline:none;margin-left:auto">
+                      <option value="">All Years</option>
+                    </select>
+                  </div>
                   <div id="profile-matchup-table"></div>
                 </div>
                 <!-- GFWL History panel -->
@@ -3014,19 +3020,22 @@ async function gfwlOpenTeam(season, teamName, team) {
   // renderGFWLPies: uses buildDonutChart with static IDs (same as rest of app)
   function renderGFWLPies() {
     const myDeckUsage = {}, oppDeckUsage = {};
-    seasonReplays.forEach(({replay:r}) => {
-      const my = r.myDeckOverride || r.parsed?.myDeck;
-      const opp = r.oppDeckOverride || r.parsed?.oppDeck;
-      if (my)  myDeckUsage[my]  = (myDeckUsage[my]||0)+1;
-      if (opp) oppDeckUsage[opp] = (oppDeckUsage[opp]||0)+1;
+    seasonReplays.forEach(x => {
+      const r = x.replay || x; // handle both {replay:r} and direct replay
+      // Try all possible deck fields
+      const my = r.myDeckOverride || (r.parsed && r.parsed.myDeck) || r.myDeck;
+      const opp = r.oppDeckOverride || (r.parsed && r.parsed.oppDeck) || r.oppDeck;
+      if (my && my !== 'Unknown')  myDeckUsage[my]  = (myDeckUsage[my]||0)+1;
+      if (opp && opp !== 'Unknown') oppDeckUsage[opp] = (oppDeckUsage[opp]||0)+1;
     });
+    console.log('[GFWLPies] myDeckUsage:', myDeckUsage, 'oppDeckUsage:', oppDeckUsage);
     const myEntries  = Object.entries(myDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,8);
     const oppEntries = Object.entries(oppDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,8);
     if (myEntries.length) {
       buildDonutChart('gfwl-pie-deck','gfwl-pie-deck-legend', myEntries, teamName);
     } else {
       const c = document.getElementById('gfwl-pie-deck'); if(c) c.style.display='none';
-      const l = document.getElementById('gfwl-pie-deck-legend'); if(l) l.textContent='No replay data yet — tag replays with '+season+': WK# to populate.';
+      const l = document.getElementById('gfwl-pie-deck-legend'); if(l) l.textContent='No deck data — ensure replays are classified.';
     }
     if (oppEntries.length) {
       buildDonutChart('gfwl-pie-matchup','gfwl-pie-matchup-legend', oppEntries, 'Opp Decks');
@@ -3992,20 +4001,30 @@ function buildDeck() {
       _matches.push(m);
     }
   }
-  // Populate year filter dropdown
+  // Populate year filter dropdown from event dates
   const yearSel = document.getElementById('deck-year-filter');
   if (yearSel) {
     const curYear = yearSel.value;
-    const years = [...new Set(_matches.map(m => {
-      const lbl = m.eventLabel||''; const y = lbl.match(/(20\d{2})/); return y?y[1]:null;
-    }).filter(Boolean))].sort((a,b)=>b-a);
+    // Collect years from event dates cache AND from match event labels
+    const yearsSet = new Set();
+    _matches.forEach(m => {
+      const code = (m.eventLabel||'').split(':')[0].trim().toUpperCase();
+      const d = getEventDate(code);
+      if (d) yearsSet.add(d.slice(0,4));
+      // Also extract from label directly e.g. "ACAD 2/13/2026"
+      const y = (m.eventLabel||'').match(/(20\d{2})/);
+      if (y) yearsSet.add(y[1]);
+    });
+    const years = [...yearsSet].sort((a,b)=>b-a);
     yearSel.innerHTML = '<option value="">All</option>' + years.map(y=>`<option value="${y}"${y===curYear?'selected':''}>${y}</option>`).join('');
-    // Filter matches by year
     const filterYear = yearSel.value;
     if (filterYear) {
       _matches = _matches.filter(m => {
-        const date = getEventDate(m.eventLabel?.split(':')[0]?.trim());
-        return date && date.startsWith(filterYear);
+        const code = (m.eventLabel||'').split(':')[0].trim().toUpperCase();
+        const d = getEventDate(code);
+        if (d) return d.startsWith(filterYear);
+        // Fallback: check label for year
+        return (m.eventLabel||'').includes(filterYear);
       });
     }
   }
@@ -5443,14 +5462,22 @@ function profileSubTab(tab, btn) {
     renderGFWLHistory(); // pie switches to GFWL-only when this tab is active
     if (_activeProfile) renderGFWLTeamLinks(_activeProfile.player);
   } else if (tab === 'matchups') {
-    // Restore all-time pie when switching away from GFWL
+    // Restore pie filtered by selected year
     if (_activeProfile && typeof buildDonutChart === 'function') {
-      const allRecs = _activeProfile.records || [];
+      const pyf = document.getElementById('profile-year-filter');
+      const yr = pyf ? pyf.value : '';
+      let allRecs = _activeProfile.records || [];
+      if (yr) allRecs = allRecs.filter(r=>{
+        const code=(r.eventLabel||'').split(':')[0].trim().toUpperCase();
+        const d=getEventDate(code); return !d||d.startsWith(yr)||isGFWLSeason(code);
+      });
       const du = {};
       allRecs.forEach(r => { du[r.myDeck||'Unknown'] = (du[r.myDeck||'Unknown']||0)+1; });
-      const sorted = Object.entries(du).sort((a,b)=>b[1]-a[1]).slice(0,10);
-      buildDonutChart('profile-deck-chart','profile-deck-legend', sorted, _activeProfile.player+' — All Time');
+      const sortedDu = Object.entries(du).sort((a,b)=>b[1]-a[1]).slice(0,10);
+      const label = _activeProfile.player+' — '+(yr||'All Time');
+      buildDonutChart('profile-deck-chart','profile-deck-legend', sortedDu, label);
     }
+    buildProfileMatchupTable(_profileRecords);
   }
 }
 
@@ -5829,7 +5856,14 @@ function ddMatchupsFromBatch() {
 function renderMatchupResults(records, player) {
   const out = document.getElementById('dd-matchup-out');
   out.innerHTML = '';
-
+  // Apply year filter
+  const ddYrSel = document.getElementById('deckdata-year-filter');
+  if (ddYrSel) {
+    const allYrs = [...new Set(records.map(r=>{const code=(r.eventLabel||'').split(':')[0].trim().toUpperCase();const d=getEventDate(code);return d?d.slice(0,4):null;}).filter(Boolean))].sort((a,b)=>b-a);
+    const cur=ddYrSel.value;
+    ddYrSel.innerHTML='<option value="">All Years</option>'+allYrs.map(y=>`<option value="${y}"${y===cur?'selected':''}>${y}</option>`).join('');
+    if (cur) records=records.filter(r=>{const code=(r.eventLabel||'').split(':')[0].trim().toUpperCase();const d=getEventDate(code);return !d||d.startsWith(cur)||isGFWLSeason(code);});
+  }
   if (!records.length) {
     out.innerHTML = '<div class="dd-empty">No processable replays in this batch.</div>';
     return;
@@ -7942,6 +7976,12 @@ async function openProfile(player, batches, records) {
 function buildProfileMatchupTable(records) {
   const el = document.getElementById('profile-matchup-table');
   el.innerHTML = '';
+  // Apply year filter
+  const pyf3 = document.getElementById('profile-year-filter');
+  if (pyf3 && pyf3.value) {
+    const yr3=pyf3.value;
+    records=(records||[]).filter(r=>{const code=(r.eventLabel||'').split(':')[0].trim().toUpperCase();const d=getEventDate(code);return !d||d.startsWith(yr3)||isGFWLSeason(code);});
+  }
   const byOpp = {};
   records.forEach(r => {
     const k = r.oppDeck||'Unknown';
