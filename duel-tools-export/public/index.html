@@ -2611,12 +2611,15 @@ async function gfwlOpenTeam(season, teamName, team) {
     for (const b of allGFWLBatches) {
       if (!rosterNames.includes((b.player||'').toLowerCase())) continue;
       for (const r of (b.replays||[])) {
-        const lbl = (r.eventLabel||'').toUpperCase();
-        if (!lbl.startsWith(seasonKey+':') && !lbl.startsWith(seasonKey+' ')) continue;
+        const lbl = (r.eventLabel||'').toUpperCase().trim();
+        // Match "S9: WK1", "S9:WK1", "S9 WK1", "S9: WK 1" etc
+        const sKey = seasonKey.toUpperCase();
+        const matches = lbl.startsWith(sKey+':') || lbl.startsWith(sKey+' ') || lbl === sKey;
+        if (!matches) continue;
         seasonReplays.push({ player:b.player, replay:r, label:lbl });
       }
     }
-    console.log('[GFWL] collectSeasonReplays:', seasonReplays.length, 'replays for', seasonKey);
+    console.log('[GFWL] collectSeasonReplays:', seasonReplays.length, 'for', seasonKey, '| sample labels:', seasonReplays.slice(0,3).map(x=>x.label));
   }
   collectSeasonReplays();
 
@@ -2848,12 +2851,14 @@ async function gfwlOpenTeam(season, teamName, team) {
   matchupLegend.style.cssText = 'margin-top:8px;display:flex;flex-direction:column;gap:3px';
   matchupSec.appendChild(matchupLegend);
 
-  // renderGFWLPies: called immediately and again after background fetch completes
+  // renderGFWLPies: stored on window so background async can call it after fetch
+  window._gfwlRenderPies = null;
   function renderGFWLPies() {
+    console.log('[GFWL Pies] seasonReplays:', seasonReplays.length, 'first labels:', seasonReplays.slice(0,3).map(x=>x.label+' myDeck:'+(x.replay.parsed?.myDeck||x.replay.myDeckOverride||'?')));
     const myDeckUsage = {}, oppDeckUsage = {};
     seasonReplays.forEach(({replay:r}) => {
-      const my = r.myDeckOverride || r.parsed?.myDeck;
-      const opp = r.oppDeckOverride || r.parsed?.oppDeck;
+      const my = r.myDeckOverride || r.parsed?.myDeck || r.replay?.parsed?.myDeck;
+      const opp = r.oppDeckOverride || r.parsed?.oppDeck || r.replay?.parsed?.oppDeck;
       if (my)  myDeckUsage[my]  = (myDeckUsage[my]||0)+1;
       if (opp) oppDeckUsage[opp] = (oppDeckUsage[opp]||0)+1;
     });
@@ -2889,6 +2894,8 @@ async function gfwlOpenTeam(season, teamName, team) {
       }
     }
   }
+  window._gfwlRenderPies = renderGFWLPies;
+  window._gfwlCollectReplays = collectSeasonReplays;
   renderGFWLPies();
 
   // ── View Player Profile helper ─────────────────────────────────────────────
