@@ -7085,21 +7085,23 @@ async function loadPlayerStats(player, batches) {
 
 // Build donut from element references directly (for dynamically created elements)
 function buildDonutChartEl(canvasEl, legendEl, entries, title) {
-  if (!canvasEl || typeof Chart === 'undefined') return;
-  if (!entries || !entries.length) return;
-  if (canvasEl._chartInstance) canvasEl._chartInstance.destroy();
+  if (!canvasEl) { console.warn('[DonutEl] no canvas'); return; }
+  if (typeof Chart === 'undefined') { console.warn('[DonutEl] Chart.js not loaded'); return; }
+  if (!entries || !entries.length) { console.warn('[DonutEl] no entries'); return; }
+  console.log('[DonutEl] rendering', title, entries.length, 'entries on canvas', canvasEl.id||'(no id)');
+  try { if (canvasEl._chartInstance) canvasEl._chartInstance.destroy(); } catch(e) {}
   const labels=entries.map(([k])=>k);
   const data=entries.map(([,v])=>v);
   const colors=labels.map((l,i)=>getDeckColor(l,i));
   const total=data.reduce((a,b)=>a+b,0);
-  canvasEl._chartInstance=new Chart(canvasEl,{
+  try { canvasEl._chartInstance=new Chart(canvasEl,{
     type:'doughnut',
     data:{labels,datasets:[{data,backgroundColor:colors,borderColor:'var(--bg)',borderWidth:2}]},
     options:{responsive:true,maintainAspectRatio:true,plugins:{
       legend:{display:false},
       tooltip:{callbacks:{label:ctx=>` ${ctx.label}: ${ctx.raw} (${Math.round(ctx.raw/total*100)}%)`}}
     }}
-  });
+  }); } catch(e) { console.error('[DonutEl] Chart error:', e); }
   if (legendEl) {
     legendEl.innerHTML='';
     entries.forEach(([deck,count],i)=>{
