@@ -791,7 +791,7 @@ select{cursor:pointer}
             <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px">
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
                 <div class="slbl" style="margin:0">ALL MATCHES</div>
-                <select id="profile-year-filter" onchange="if(_activeProfile)renderAllMatchesSection(_activeProfile.player,_profileRecords)" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;outline:none;margin-left:auto">
+                <select id="profile-year-filter" onchange="if(_activeProfile){renderAllMatchesSection(_activeProfile.player,_profileRecords);buildProfileMatchupTable(_profileRecords);}" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;outline:none;margin-left:auto">
                   <option value="">All Years</option>
                 </select>
               </div>
@@ -1508,10 +1508,18 @@ async function loadEventDates() {
   } catch(e) {}
 }
 
+// Known event series base dates for ordering when FL cache is empty
+const _eventSeriesOrder = {
+  'FLC':   '2020-01', 'PWCQ': '2020-02', 'GFC':   '2020-03',
+  'GWW':   '2020-04', 'GLCQ': '2020-05', 'GFLC':  '2020-06',
+  'GFWC':  '2020-07', 'CLASH':'2020-08', 'SEERA': '2020-09',
+  'TISIS': '2020-10', 'FLC':  '2020-01',
+};
+
 function getEventDate(code) {
   if (!code) return null;
   const c = code.toUpperCase().trim();
-  if (_eventDates[c]) return _eventDates[c].date;
+  if (_eventDates[c] && _eventDates[c].date) return _eventDates[c].date;
   // Trigger background refresh if unknown non-season code
   if (!/^(S\d+|LADDER|ACAD|ACADEMY)/i.test(c)) {
     fetch(API+'/event-dates/refresh', { method:'POST', headers:authHeaders() }).catch(()=>{});
@@ -1927,9 +1935,10 @@ async function exportPlayerXLSX(player) {
   const total = w+l;
   const winPct = total ? Math.round(w/total*100)+'%' : '—';
 
-  // Get all replays from batches
+  // Get ONLY this player's replays from their batches
   const allReplays = [];
-  for (const b of batches) {
+  const playerBatchList = batches.filter(b=>(b.player||'').toLowerCase()===player.toLowerCase());
+  for (const b of playerBatchList) {
     const full = (b.replays && b.replays.length) ? b : await fetch(API+'/batches/'+b.id).then(r=>r.json()).catch(()=>b);
     for (const r of (full.replays||[])) {
       allReplays.push({ ...r, batchPlayer: full.player });
@@ -2054,8 +2063,15 @@ const CONF_COLORS = {
   'Yellow': { bg:'rgba(220,180,30,.15)', border:'rgba(220,180,30,.5)', text:'#ddbb30' },
 };
 
-// Load event dates when app starts
-loadEventDates();
+// Load event dates when app starts, then trigger refresh if cache is empty
+loadEventDates().then(() => {
+  if (Object.keys(_eventDates).filter(k=>k!=='_lastScrape').length < 10) {
+    // Cache is empty or minimal - trigger a scrape
+    fetch(API+'/event-dates/refresh', { method:'POST', headers: authHeaders ? authHeaders() : {'Content-Type':'application/json'} }).catch(()=>{});
+    // Re-load after 8 seconds
+    setTimeout(() => loadEventDates(), 8000);
+  }
+});
 
 async function gfwlInit() {
   // Load all season data
@@ -3021,14 +3037,15 @@ async function gfwlOpenTeam(season, teamName, team) {
   function renderGFWLPies() {
     const myDeckUsage = {}, oppDeckUsage = {};
     seasonReplays.forEach(x => {
-      const r = x.replay || x; // handle both {replay:r} and direct replay
-      // Try all possible deck fields
-      const my = r.myDeckOverride || (r.parsed && r.parsed.myDeck) || r.myDeck;
-      const opp = r.oppDeckOverride || (r.parsed && r.parsed.oppDeck) || r.oppDeck;
+      const r = x.replay || x;
+      // Build a match record to get properly classified deck types
+      const rec = buildMatchRecord(r, x.player || (allGFWLBatches.find(b=>b.replays&&b.replays.includes(r))?.player) || '', []);
+      const my = r.myDeckOverride || (rec && rec.myDeck) || (r.parsed && r.parsed.myDeck);
+      const opp = r.oppDeckOverride || (rec && rec.oppDeck) || (r.parsed && r.parsed.oppDeck);
       if (my && my !== 'Unknown')  myDeckUsage[my]  = (myDeckUsage[my]||0)+1;
       if (opp && opp !== 'Unknown') oppDeckUsage[opp] = (oppDeckUsage[opp]||0)+1;
     });
-    console.log('[GFWLPies] myDeckUsage:', myDeckUsage, 'oppDeckUsage:', oppDeckUsage);
+    console.log('[GFWLPies] entries my:', Object.keys(myDeckUsage).length, 'opp:', Object.keys(oppDeckUsage).length);
     const myEntries  = Object.entries(myDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,8);
     const oppEntries = Object.entries(oppDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,8);
     if (myEntries.length) {
