@@ -10036,7 +10036,7 @@ async function viewErrorLog() {
       + '<span style="color:var(--muted)">Uptime: '+Math.round((data.uptime||0)/60)+'min</span>'
       + '<span style="color:var(--muted)">Heap: '+mb(mem.heapUsed)+'/'+mb(mem.heapTotal)+'</span>'
       + '<span style="color:var(--muted)">RSS: '+mb(mem.rss)+'</span>'
-      + '<button onclick="this.closest('div[style*=fixed]').remove()" style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--dim);padding:3px 10px;border-radius:4px;cursor:pointer">✕ Close</button>';
+      + '<button onclick="this.parentElement.remove()" style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--dim);padding:3px 10px;border-radius:4px;cursor:pointer">✕ Close</button>';
     overlay.appendChild(hdr);
     const errors = data.errors || [];
     if (!errors.length) {
