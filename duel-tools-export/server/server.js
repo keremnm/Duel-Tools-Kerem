@@ -195,8 +195,12 @@ function json(res, status, data) {
 }
 function readBody(req, cb) {
   let raw = '';
-  req.on('data', d => raw += d);
-  req.on('end', () => { try { cb(JSON.parse(raw||'{}')); } catch(e) { cb({}); } });
+  req.on('data', d => { raw += d; if (raw.length > 50*1024*1024) { raw = '{}'; } }); // 50MB limit
+  req.on('end', () => {
+    try { cb(JSON.parse(raw||'{}')); }
+    catch(e) { console.warn('[readBody] JSON parse error:', e.message, 'size:', raw.length); cb({}); }
+  });
+  req.on('error', e => { console.error('[readBody] Request error:', e.message); cb({}); });
 }
 
 function playerNames(entry) {
@@ -539,6 +543,7 @@ const server = http.createServer(async (req, res) => {
       if (!dup) {
         // New replay — insert
         if (!b.replays) b.replays = [];
+        try {
         // Store parsed result if provided; strip allPlays either way
         const strippedPlays = (minPlays||[]).map(stripPlay);
         const parsedData = data.parsed || null;
@@ -550,6 +555,7 @@ const server = http.createServer(async (req, res) => {
           if (cl) crossLinks.push(cl);
         }
         await saveDB();
+        } catch(saveErr) { console.error('[replay POST] Save error:', saveErr.message); }
       } else if (dup.timedOut && !data.timedOut) {
         // Existing timed-out entry being updated with real data — overwrite it
         const parsedData2 = data.parsed || null;

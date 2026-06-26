@@ -2827,20 +2827,43 @@ async function gfwlOpenTeam(season, teamName, team) {
   // Always fetch full batch data for ALL roster players (GFWL needs actual replays)
   window._gfwlBatchCache = {}; // store on window for player profile access
   const gfwlBatchCache = window._gfwlBatchCache;
-  st('Loading replay data for '+roster.length+' players...', 'var(--muted)');
-  try {
-    const bList = await fetch(API+'/batches').then(r=>r.json()).catch(()=>[]);
-    for (const pName of rosterNames) {
-      const playerBatches = bList.filter(b=>(b.player||'').toLowerCase()===pName);
-      for (const pb of playerBatches) {
-        if (gfwlBatchCache[pb.id]) continue;
-        try {
-          const full = await fetch(API+'/batches/'+pb.id).then(r=>r.json());
-          if (full && full.replays) gfwlBatchCache[pb.id] = full;
-        } catch(e) {}
+  // Render page immediately with empty data, then load batches in background
+  // This prevents teams with large rosters from hanging on click
+  const loadingBanner = document.createElement('div');
+  loadingBanner.id = 'gfwl-loading-banner';
+  loadingBanner.style.cssText = 'background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:8px 14px;font-size:11px;font-family:monospace;color:var(--amber);margin-bottom:12px';
+  loadingBanner.textContent = '⟳ Loading replay data for '+roster.length+' players...';
+  main.appendChild(loadingBanner);
+
+  // Fetch batch list and all player batches in parallel
+  async function loadAllBatches() {
+    try {
+      const bList = await fetch(API+'/batches').then(r=>r.json()).catch(()=>[]);
+      // Fetch all player batches in parallel (Promise.all)
+      const fetches = [];
+      for (const pName of rosterNames) {
+        const playerBatches = bList.filter(b=>(b.player||'').toLowerCase()===pName);
+        for (const pb of playerBatches) {
+          if (!gfwlBatchCache[pb.id]) {
+            fetches.push(
+              fetch(API+'/batches/'+pb.id)
+                .then(r=>r.json())
+                .then(full => { if (full && full.replays) gfwlBatchCache[pb.id] = full; })
+                .catch(()=>{})
+            );
+          }
+        }
       }
-    }
-  } catch(e) { console.warn('GFWL batch load error:', e); }
+      await Promise.all(fetches);
+    } catch(e) { console.warn('GFWL batch load error:', e); }
+    // Remove loading banner
+    const banner = document.getElementById('gfwl-loading-banner');
+    if (banner) banner.remove();
+    // Re-collect and re-render pies now that data is loaded
+    collectSeasonReplays();
+    if (window._gfwlRenderPies) window._gfwlRenderPies();
+  }
+  loadAllBatches(); // fire and forget - page renders immediately
 
   const allGFWLBatches = Object.values(gfwlBatchCache);
   const seasonReplays = [];
