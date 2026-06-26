@@ -95,17 +95,28 @@ function loadFileDB() {
 }
 
 async function saveDB() {
-  if (pgClient) {
-    try {
-      await pgClient.query(`
-        INSERT INTO duel_tools_data (key, value, updated_at)
-        VALUES ('batches',$1,NOW()),('players',$2,NOW()),('users',$3,NOW()),('gfwl',$4,NOW()),('eventDates',$5,NOW())
-        ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()
-      `, [JSON.stringify(db.batches), JSON.stringify(db.players), JSON.stringify(db.users), JSON.stringify(db.gfwl), JSON.stringify(db.eventDates)]);
-    } catch(e) { console.error('PG save error:', e.message); }
-  } else {
-    try { fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2)); }
-    catch(e) { console.error('File DB save error:', e.message); }
+  try {
+    if (pgClient) {
+      try {
+        await pgClient.query(`
+          INSERT INTO duel_tools_data (key, value, updated_at)
+          VALUES ('batches',$1,NOW()),('players',$2,NOW()),('users',$3,NOW()),('gfwl',$4,NOW()),('eventDates',$5,NOW())
+          ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()
+        `, [JSON.stringify(db.batches), JSON.stringify(db.players), JSON.stringify(db.users), JSON.stringify(db.gfwl), JSON.stringify(db.eventDates)]);
+      } catch(e) {
+        console.error('PG save error:', e.message);
+        // Try reconnecting if connection was lost
+        if (e.message.includes('connect') || e.message.includes('Connection') || e.code === 'ECONNRESET') {
+          console.log('[DB] Attempting reconnect...');
+          try { await connectPostgres(); } catch(e2) { console.error('[DB] Reconnect failed:', e2.message); }
+        }
+      }
+    } else {
+      try { fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2)); }
+      catch(e) { console.error('File DB save error:', e.message); }
+    }
+  } catch(e) {
+    console.error('[saveDB] Unexpected error:', e.message);
   }
 }
 
@@ -589,6 +600,42 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── POST /api/gfwl/:season/bulk-import — import full season teams+schedule ──
+  if (parts[0]==='gfwl' && parts[1] && parts[2]==='bulk-import' && method==='POST') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    const season = normalizeSeason(parts[1]);
+    return readBody(req, async data => {
+      if (!db.gfwl[season]) db.gfwl[season] = { season, numWeeks:9, teams:{} };
+      const incoming = data.teams || {};
+      let added=0, updated=0;
+      for (const [teamName, teamData] of Object.entries(incoming)) {
+        if (!db.gfwl[season].teams[teamName]) {
+          // New team
+          db.gfwl[season].teams[teamName] = {
+            conference: teamData.conference || '',
+            aliases: teamData.aliases || [],
+            roster: teamData.roster || [],
+            addDrops: teamData.addDrops || [],
+            schedule: teamData.schedule || [],
+            notes: teamData.notes || ''
+          };
+          added++;
+        } else {
+          // Existing team — only update conference and schedule, preserve roster/addDrops
+          const t = db.gfwl[season].teams[teamName];
+          if (teamData.conference) t.conference = teamData.conference;
+          if (teamData.schedule && teamData.schedule.length) t.schedule = teamData.schedule;
+          if (teamData.aliases && teamData.aliases.length) t.aliases = teamData.aliases;
+          updated++;
+        }
+      }
+      if (data.numWeeks) db.gfwl[season].numWeeks = data.numWeeks;
+      await saveDB();
+      console.log('[BulkImport] S'+season+': '+added+' added, '+updated+' updated');
+      return json(res, 200, { ok:true, added, updated, total:Object.keys(db.gfwl[season].teams).length });
+    });
+  }
+
   // ── GET /api/gfwl — get all GFWL season data ─────────────────────────────────
   if (parts[0]==='gfwl' && !parts[1] && method==='GET') {
     return json(res, 200, db.gfwl);
@@ -806,8 +853,19 @@ server.listen(PORT, '0.0.0.0', () => {
   initDB().catch(e => console.error('DB init error:', e.message));
 });
 
-process.on('SIGINT',  () => { saveDB().then(() => process.exit(0)); });
-process.on('SIGTERM', () => { saveDB().then(() => process.exit(0)); });
+process.on('SIGINT',  () => { saveDB().then(() => process.exit(0)).catch(() => process.exit(1)); });
+process.on('SIGTERM', () => { saveDB().then(() => process.exit(0)).catch(() => process.exit(1)); });
+
+// ── Global crash prevention ────────────────────────────────────────────────────
+process.on('uncaughtException', (err) => {
+  console.error('[CRASH PREVENTED] uncaughtException:', err.message, err.stack);
+  // Don't exit — keep server running
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[CRASH PREVENTED] unhandledRejection:', reason?.message || reason);
+  // Don't exit — keep server running
+});
 
 
 // ── GFWL season key normalizer: "Season 9", "s9" → "S9" ─────────────────────
@@ -869,8 +927,7 @@ async function scrapeFormatLibraryEvents(specificCode) {
     console.log('[EventDates] Scraped '+Object.keys(db.eventDates).length+' event codes');
   } catch(e) {
     console.error('[EventDates] Scrape failed:', e.message);
-    // Try HTML scrape as fallback
-    await scrapeFormatLibraryHTML();
+    try { await scrapeFormatLibraryHTML(); } catch(e2) { console.error('[EventDates] HTML fallback also failed:', e2.message); }
   }
 }
 
@@ -957,6 +1014,17 @@ async function silentRefreshEventCode(code) {
   console.log('[EventDates] Unknown code', code, '— triggering background refresh');
   scrapeFormatLibraryEvents(code).catch(()=>{});
 }
+
+// ── PostgreSQL connection keep-alive ─────────────────────────────────────────
+setInterval(async () => {
+  if (pgClient) {
+    try { await pgClient.query('SELECT 1'); }
+    catch(e) {
+      console.warn('[PG] Keep-alive failed, reconnecting:', e.message);
+      try { await connectPostgres(); } catch(e2) { console.error('[PG] Reconnect failed:', e2.message); }
+    }
+  }
+}, 60000); // Every 60 seconds
 
 // ── Keep-alive ping — prevents Railway cold starts ───────────────────────────
 const APP_URL = process.env.RAILWAY_PUBLIC_DOMAIN
