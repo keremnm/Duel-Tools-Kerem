@@ -3222,31 +3222,208 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
   const evDecks = playerReg ? (playerReg.eventDecklists||[]) : [];
   const seasonDecks = evDecks.filter(d => gfwlNormalizeSeason(d.code) === season.toUpperCase());
 
-  const deckSec = gfwlMakeSection('EVENT DECKLISTS — '+season);
+  // ── Mini Deck Viewer: season matches grouped by week ──────────────────────
+  const deckSec = gfwlMakeSection('SEASON MATCHES — '+season);
   left.appendChild(deckSec);
+
+  // Group playerReplays by week
+  const wkGroups = {};
+  freshReplays.forEach(r => {
+    const lbl = (r.eventLabel||'').toUpperCase().trim();
+    const wkMatch = lbl.match(/:.*?(\d+)/);
+    const wkNum = wkMatch ? parseInt(wkMatch[1]) : 0;
+    const wkKey = wkNum ? 'WK'+wkNum : lbl||'Untagged';
+    if (!wkGroups[wkKey]) wkGroups[wkKey] = { wk:wkNum, replays:[] };
+    wkGroups[wkKey].replays.push(r);
+  });
+
+  const sortedWks = Object.keys(wkGroups).sort((a,b) => {
+    const na = wkGroups[a].wk, nb = wkGroups[b].wk;
+    if (na&&nb) return na-nb;
+    return a.localeCompare(b);
+  });
+
+  // Mini deck viewer selected state
+  let _miniSelected = null;
+  const miniViewArea = document.createElement('div');
+  miniViewArea.style.cssText = 'margin-top:12px;display:none;background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:12px';
+  deckSec.appendChild(miniViewArea);
+
+  if (!sortedWks.length) {
+    deckSec.insertBefore(Object.assign(document.createElement('div'), {
+      style:'color:var(--dim);font-size:11px;margin-bottom:8px',
+      textContent:'No '+season+' replays found for this player.'
+    }), miniViewArea);
+  }
+
+  // Also show saved event decklists at top
   if (seasonDecks.length) {
+    const edlHdr = document.createElement('div');
+    edlHdr.style.cssText = 'font-size:10px;color:var(--muted);letter-spacing:.1em;margin-bottom:6px';
+    edlHdr.textContent = 'SAVED DECKLISTS';
+    deckSec.insertBefore(edlHdr, miniViewArea);
     seasonDecks.forEach(deck => {
       const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border2)';
+      row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--border2)';
       const codeEl = document.createElement('span');
-      codeEl.style.cssText = 'color:var(--amber);font-family:monospace;font-size:12px;font-weight:bold;min-width:60px';
+      codeEl.style.cssText = 'color:var(--amber);font-family:monospace;font-size:11px;font-weight:bold;min-width:50px';
       codeEl.textContent = deck.code;
       const typeEl = document.createElement('span');
-      typeEl.style.cssText = 'font-size:10px;border:1px solid var(--green);color:var(--green);border-radius:3px;padding:0 6px';
+      typeEl.style.cssText = 'font-size:10px;border:1px solid var(--green);color:var(--green);border-radius:3px;padding:0 5px';
       typeEl.textContent = deck.deckTypeOverride || '?';
       row.appendChild(codeEl); row.appendChild(typeEl);
       if (deck.ydkData || deck.deckUrl) {
-        const viewBtn = document.createElement('button');
-        viewBtn.textContent = 'View';
-        viewBtn.style.cssText = 'background:var(--blue);color:#fff;border:none;font-family:monospace;font-size:10px;padding:2px 8px;border-radius:3px;cursor:pointer;margin-left:auto';
-        viewBtn.onclick = () => showDeckViewPopup(deck);
-        row.appendChild(viewBtn);
+        const vBtn = document.createElement('button');
+        vBtn.textContent = 'View Deck';
+        vBtn.style.cssText = 'background:var(--blue);color:#fff;border:none;font-family:monospace;font-size:10px;padding:2px 7px;border-radius:3px;cursor:pointer;margin-left:auto';
+        vBtn.onclick = () => showDeckViewPopup(deck);
+        row.appendChild(vBtn);
       }
-      deckSec.appendChild(row);
+      deckSec.insertBefore(row, miniViewArea);
     });
-  } else {
-    deckSec.appendChild(Object.assign(document.createElement('div'), { style:'color:var(--dim);font-size:11px', textContent:'No '+season+' decklists found for this player.' }));
+    // Divider
+    const div = document.createElement('div');
+    div.style.cssText = 'font-size:10px;color:var(--muted);letter-spacing:.1em;margin:10px 0 6px';
+    div.textContent = 'MATCHES BY WEEK';
+    deckSec.insertBefore(div, miniViewArea);
   }
+
+  // Render each week group
+  sortedWks.forEach(wkKey => {
+    const grp = wkGroups[wkKey];
+    // Week header
+    const wkHdr = document.createElement('div');
+    wkHdr.style.cssText = 'display:flex;align-items:center;gap:6px;padding:5px 0;cursor:pointer;user-select:none';
+    const wkLabel = document.createElement('span');
+    wkLabel.style.cssText = 'color:var(--amber);font-family:monospace;font-size:11px;font-weight:bold';
+    wkLabel.textContent = wkKey;
+    const wkRecord = (() => {
+      const w = grp.replays.filter(r=>(r.parsed&&r.parsed.result)==='w').length;
+      const l = grp.replays.filter(r=>(r.parsed&&r.parsed.result)==='l').length;
+      return w+l ? `${w}W — ${l}L` : '';
+    })();
+    const wkRec = document.createElement('span');
+    wkRec.style.cssText = 'font-size:10px;font-family:monospace;color:var(--muted)';
+    wkRec.textContent = wkRecord ? ' · '+wkRecord : '';
+    const wkCount = document.createElement('span');
+    wkCount.style.cssText = 'font-size:10px;color:var(--dim);margin-left:auto';
+    wkCount.textContent = grp.replays.length + (grp.replays.length===1?' match':' matches');
+    wkHdr.appendChild(wkLabel); wkHdr.appendChild(wkRec); wkHdr.appendChild(wkCount);
+    deckSec.insertBefore(wkHdr, miniViewArea);
+
+    // Match cards
+    grp.replays.forEach(r => {
+      const parsed = r.parsed || {};
+      const result = parsed.result;
+      const oppName = parsed.oppName || r.oppName || '—';
+      const myDeck = r.myDeckOverride || parsed.myDeck || '—';
+      const oppDeck = r.oppDeckOverride || parsed.oppDeck || '—';
+      const score = parsed.score || '';
+
+      const card = document.createElement('div');
+      card.style.cssText = 'display:flex;align-items:center;gap:6px;padding:5px 8px;margin:2px 0;border-radius:5px;cursor:pointer;background:var(--card2);border:1px solid var(--border2);transition:border-color .1s';
+      card.onmouseenter = () => card.style.borderColor = 'var(--border)';
+      card.onmouseleave = () => card.style.borderColor = _miniSelected===r.replayId?'var(--green)':'var(--border2)';
+
+      // Result badge
+      const resBadge = document.createElement('span');
+      resBadge.style.cssText = 'font-family:monospace;font-weight:bold;font-size:11px;color:'+(result==='w'?'var(--green)':'var(--red)')+';min-width:30px';
+      resBadge.textContent = result==='w'?'W':'L';
+      if (score) resBadge.textContent += ' '+score;
+
+      // Deck badge
+      const deckBadge = document.createElement('span');
+      deckBadge.style.cssText = 'font-size:9px;border:1px solid var(--green);color:var(--green);border-radius:3px;padding:0 4px;white-space:nowrap;max-width:100px;overflow:hidden;text-overflow:ellipsis';
+      deckBadge.textContent = myDeck;
+
+      // Opponent
+      const oppEl = document.createElement('span');
+      oppEl.style.cssText = 'font-size:11px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      oppEl.textContent = 'vs '+oppName;
+
+      // Opp deck
+      const oppDeckEl = document.createElement('span');
+      oppDeckEl.style.cssText = 'font-size:9px;color:var(--dim);white-space:nowrap;max-width:80px;overflow:hidden;text-overflow:ellipsis';
+      oppDeckEl.textContent = oppDeck;
+
+      // Replay link + Batch button
+      const actionsEl = document.createElement('div');
+      actionsEl.style.cssText = 'display:flex;gap:4px;flex-shrink:0';
+      const copyBtn = document.createElement('button');
+      copyBtn.textContent = '⎘';
+      copyBtn.title = 'Copy replay link';
+      copyBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--dim);font-size:10px;padding:1px 5px;border-radius:3px;cursor:pointer';
+      copyBtn.onclick = e => { e.stopPropagation(); navigator.clipboard.writeText('https://www.duelingbook.com/replay?id='+r.replayId).then(()=>{copyBtn.textContent='✓';setTimeout(()=>copyBtn.textContent='⎘',1200);}); };
+      const batchBtn = document.createElement('button');
+      batchBtn.textContent = 'Batch';
+      batchBtn.style.cssText = 'background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:9px;padding:1px 6px;border-radius:3px;cursor:pointer';
+      batchBtn.onclick = e => {
+        e.stopPropagation();
+        // Load player's batch and select this replay in Deck Viewer
+        const dTab = document.querySelector('.ntab[onclick*="deck"]');
+        switchTab('deck', dTab);
+        setTimeout(async () => {
+          const bList = await fetch(API+'/batches').then(r2=>r2.json()).catch(()=>[]);
+          const pBatch = bList.find(b=>(b.player||'').toLowerCase()===playerName.toLowerCase());
+          if (pBatch) {
+            await selectBatch(pBatch.id);
+            setTimeout(()=>{
+              const idx = _matches.findIndex(m=>m.replayId===r.replayId);
+              if (idx>=0) selectMatch(idx);
+            }, 800);
+          }
+        }, 300);
+      };
+      actionsEl.appendChild(copyBtn); actionsEl.appendChild(batchBtn);
+
+      card.appendChild(resBadge); card.appendChild(deckBadge); card.appendChild(oppEl);
+      card.appendChild(oppDeckEl); card.appendChild(actionsEl);
+
+      card.onclick = () => {
+        // Toggle mini deck view
+        _miniSelected = _miniSelected===r.replayId ? null : r.replayId;
+        if (_miniSelected) {
+          card.style.borderColor = 'var(--green)';
+          // Show mini deck viewer for this replay
+          miniViewArea.style.display = 'block';
+          miniViewArea.innerHTML = '';
+          const miniHdr = document.createElement('div');
+          miniHdr.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:10px';
+          miniHdr.innerHTML = '<span style="font-size:12px;font-weight:bold;color:var(--text)">vs '+oppName+'</span><span style="font-size:10px;color:var(--muted)">'+wkKey+'</span><a href="https://www.duelingbook.com/replay?id='+r.replayId+'" target="_blank" style="margin-left:auto;color:var(--blue);font-size:10px;font-family:monospace">▶ Watch</a>';
+          miniViewArea.appendChild(miniHdr);
+
+          // Show each game's cards
+          const games = parsed.games || [];
+          if (games.length) {
+            games.forEach((g, gi) => {
+              const gHdr = document.createElement('div');
+              gHdr.style.cssText = 'font-size:10px;color:var(--muted);margin-bottom:4px;margin-top:gi?10px:0';
+              const gWon = g.winner && g.winner.toLowerCase()===playerName.toLowerCase();
+              gHdr.innerHTML = '<b>Game '+(gi+1)+'</b> <span style="color:'+(gWon?'var(--green)':'var(--red)')+';">'+(gWon?'Win':'Loss')+'</span>';
+              miniViewArea.appendChild(gHdr);
+              const cardGrid = document.createElement('div');
+              cardGrid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(48px,1fr));gap:3px;margin-bottom:6px';
+              miniViewArea.appendChild(cardGrid);
+              (g.mine||[]).forEach(c => {
+                const img = document.createElement('img');
+                img.style.cssText = 'width:100%;border-radius:3px;display:block';
+                img.title = c.name||'';
+                img.alt = c.name||'';
+                fetchCardImageUrl(c.id||c.serial_number, c.name).then(src => { if(src) img.src=src; });
+                cardGrid.appendChild(img);
+              });
+            });
+          } else {
+            miniViewArea.appendChild(Object.assign(document.createElement('div'),{style:'color:var(--dim);font-size:11px',textContent:'No game data available for this replay.'}));
+          }
+        } else {
+          miniViewArea.style.display='none';
+          card.style.borderColor='var(--border2)';
+        }
+      };
+      deckSec.insertBefore(card, miniViewArea);
+    });
+  });
 
   // ── Matchup pie ─────────────────────────────────────────────────────────────
   const pieSec = gfwlMakeSection('DECK USAGE — '+season);
@@ -3358,18 +3535,23 @@ async function gfwlOpenWeekReport(season, teamName, wk, oppTeamName, seasonRepla
     });
     const tbl = document.createElement('table');
     tbl.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
-    tbl.innerHTML = '<thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">PLAYER</th><th style="text-align:center;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">RESULT</th><th style="text-align:left;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">DECK</th><th style="text-align:left;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">VS</th></tr></thead>';
+    tbl.innerHTML = '<thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">PLAYER</th><th style="text-align:center;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">RESULT</th><th style="text-align:left;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">DECK</th><th style="text-align:left;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">VS (OPP DECK)</th><th style="padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">REPLAY</th></tr></thead>';
     const tbody = document.createElement('tbody');
     Object.entries(byPlayer).forEach(([player, reps]) => {
       const r = reps[0];
       const result = r.parsed?.result||r.result;
-      const myDeck = r.myDeckOverride||(r.parsed&&r.parsed.myDeck)||'—';
-      const oppDeck = r.oppDeckOverride||(r.parsed&&r.parsed.oppDeck)||'—';
+      // Use buildMatchRecord for proper deck classification
+      const rec = buildMatchRecord(r, player, []);
+      const myDeck = r.myDeckOverride || (rec&&rec.myDeck) || (r.parsed&&r.parsed.myDeck) || '—';
+      const oppDeck = r.oppDeckOverride || (rec&&rec.oppDeck) || (r.parsed&&r.parsed.oppDeck) || '—';
       const oppName = (r.parsed&&r.parsed.oppName)||r.oppName||'—';
+      const score = (r.parsed&&r.parsed.score)||'';
       const tr = document.createElement('tr');
       tr.style.cssText='border-bottom:1px solid var(--border2)';
       const won = result==='w';
-      tr.innerHTML=`<td style="padding:4px 6px;font-weight:bold;color:${tColor}">${player}</td><td style="padding:4px 6px;text-align:center;font-family:monospace;font-weight:bold;color:${won?'var(--green)':'var(--red)'}">${won?'W':'L'}</td><td style="padding:4px 6px;font-size:10px;color:var(--muted)">${myDeck}</td><td style="padding:4px 6px;font-size:10px;color:var(--dim)">${oppName} (${oppDeck})</td>`;
+      // Copy + Replay links
+      const replayUrl = 'https://www.duelingbook.com/replay?id='+r.replayId;
+      tr.innerHTML=`<td style="padding:4px 6px;font-weight:bold;color:${tColor}">${player}</td><td style="padding:4px 6px;text-align:center;font-family:monospace;font-weight:bold;color:${won?'var(--green)':'var(--red)'}">${won?'W':'L'}${score?' '+score:''}</td><td style="padding:4px 6px;font-size:10px;color:var(--muted)">${myDeck}</td><td style="padding:4px 6px;font-size:10px;color:var(--dim)">${oppName} (${oppDeck})</td><td style="padding:4px 6px"><a href="${replayUrl}" target="_blank" style="color:var(--blue);font-size:10px;font-family:monospace">▶</a></td>`;
       tbody.appendChild(tr);
     });
     tbl.appendChild(tbody);
