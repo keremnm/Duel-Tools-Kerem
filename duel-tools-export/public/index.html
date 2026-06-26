@@ -406,6 +406,7 @@ select{cursor:pointer}
     </div>
     <div class="topbar-right">
       <button id="admin-panel-btn" onclick="openAdminPanel()" style="display:none;background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-size:10px;padding:2px 10px;border-radius:4px;cursor:pointer">⚙ Users</button>
+      <button id="error-log-btn" onclick="viewErrorLog()" style="display:none;background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:10px;padding:2px 10px;border-radius:4px;cursor:pointer" title="Server error log">⚠ Errors</button>
       <div id="dt-user-info" style="display:none;align-items:center;gap:6px;font-size:12px;color:var(--muted)">
         <span id="dt-user-name"></span>
         <button onclick="localStorage.removeItem('dt_token');location.reload()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer">Sign out</button>
@@ -10011,6 +10012,8 @@ function applyRoleUI() {
     if (infoEl) infoEl.style.display = 'flex';
     const adminBtn = document.getElementById('admin-panel-btn');
     if (adminBtn) adminBtn.style.display = _userRole === 'admin' ? 'inline-block' : 'none';
+    const errBtn = document.getElementById('error-log-btn');
+    if (errBtn) errBtn.style.display = _userRole === 'admin' ? 'inline-block' : 'none';
   }
   if (_userRole !== 'admin') {
     document.querySelectorAll('[onclick*="openBatchPanel"]').forEach(el => {
@@ -10020,6 +10023,38 @@ function applyRoleUI() {
 }
 
 // ── Admin user management panel ───────────────────────────────────────────────
+async function viewErrorLog() {
+  try {
+    const data = await fetch(API+'/admin/error-log', { headers: authHeaders() }).then(r=>r.json());
+    const mem = data.memory || {};
+    const mb = v => Math.round((v||0)/1024/1024)+'MB';
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:99999;overflow-y:auto;padding:20px;font-family:monospace;font-size:11px';
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap';
+    hdr.innerHTML = '<b style="font-size:14px;color:var(--green)">⚠ Server Error Log</b>'
+      + '<span style="color:var(--muted)">Uptime: '+Math.round((data.uptime||0)/60)+'min</span>'
+      + '<span style="color:var(--muted)">Heap: '+mb(mem.heapUsed)+'/'+mb(mem.heapTotal)+'</span>'
+      + '<span style="color:var(--muted)">RSS: '+mb(mem.rss)+'</span>'
+      + '<button onclick="this.closest('div[style*=fixed]').remove()" style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--dim);padding:3px 10px;border-radius:4px;cursor:pointer">✕ Close</button>';
+    overlay.appendChild(hdr);
+    const errors = data.errors || [];
+    if (!errors.length) {
+      overlay.innerHTML += '<div style="color:var(--green);padding:20px">✓ No errors recorded since last restart.</div>';
+    } else {
+      errors.slice().reverse().forEach(e => {
+        const div = document.createElement('div');
+        div.style.cssText = 'margin-bottom:10px;padding:10px;background:var(--card);border:1px solid var(--red);border-radius:6px';
+        div.innerHTML = '<div style="color:var(--amber)">'+(e.time||'')+' — <b>'+(e.type||'')+'</b></div>'
+          + '<div style="color:var(--red);margin-top:4px">'+(e.msg||'')+'</div>'
+          + (e.stack?'<pre style="color:var(--dim);font-size:9px;margin-top:4px;overflow-x:auto;white-space:pre-wrap">'+(e.stack||'').slice(0,600)+'</pre>':'');
+        overlay.appendChild(div);
+      });
+    }
+    document.body.appendChild(overlay);
+  } catch(e) { alert('Failed to load error log: '+e.message); }
+}
+
 async function openAdminPanel() {
   const res   = await fetch(API+'/admin/users', { headers: authHeaders() });
   const users = await res.json();

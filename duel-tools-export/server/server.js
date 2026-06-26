@@ -112,21 +112,55 @@ function loadFileDB() {
   } catch(e) { console.error('File DB load error:', e.message); }
 }
 
-async function saveDB() {
+// Track which keys have changed since last save
+const _dirtyKeys = new Set(['batches','players','users','gfwl','eventDates']);
+let _saveQueued = false;
+let _saveTimeout = null;
+
+function markDirty(key) {
+  _dirtyKeys.add(key);
+}
+
+async function saveDB(keys) {
+  // If specific keys passed, use those; otherwise save all dirty keys
+  const toSave = keys ? (Array.isArray(keys) ? keys : [keys]) : [..._dirtyKeys];
+  if (!toSave.length) return;
+
   try {
     if (pgClient && pgClient._connected !== false) {
       try {
-        await pgClient.query(`
-          INSERT INTO duel_tools_data (key, value, updated_at)
-          VALUES ('batches',$1,NOW()),('players',$2,NOW()),('users',$3,NOW()),('gfwl',$4,NOW()),('eventDates',$5,NOW())
-          ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()
-        `, [JSON.stringify(db.batches), JSON.stringify(db.players), JSON.stringify(db.users), JSON.stringify(db.gfwl), JSON.stringify(db.eventDates)]);
+        // Build parameterized query for only dirty keys
+        const values = [];
+        const params = [];
+        let idx = 1;
+        for (const key of toSave) {
+          if (!db[key]) continue;
+          let serialized;
+          try { serialized = JSON.stringify(db[key]); }
+          catch(e) { console.error('[saveDB] Serialize error for', key, ':', e.message); continue; }
+          // Skip if too large (>8MB per key — PG JSONB limit)
+          if (serialized.length > 8*1024*1024) {
+            console.warn('[saveDB] Key', key, 'too large:', Math.round(serialized.length/1024)+'KB — skipping');
+            continue;
+          }
+          values.push(`($${idx++},$${idx++},NOW())`);
+          params.push(key, serialized);
+        }
+        if (!values.length) return;
+        await pgClient.query(
+          'INSERT INTO duel_tools_data (key, value, updated_at) VALUES '+values.join(',')+
+          ' ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()',
+          params
+        );
+        // Clear dirty flags for saved keys
+        toSave.forEach(k => _dirtyKeys.delete(k));
       } catch(e) {
         console.error('PG save error:', e.message);
-        // Try reconnecting if connection was lost
         if (e.message.includes('connect') || e.message.includes('Connection') || e.code === 'ECONNRESET') {
-          console.log('[DB] Attempting reconnect...');
-          try { await connectPostgres(); } catch(e2) { console.error('[DB] Reconnect failed:', e2.message); }
+          pgClient = null;
+          setTimeout(async () => {
+            try { await connectPostgres(); } catch(e2) {}
+          }, 2000);
         }
       }
     } else {
@@ -136,6 +170,16 @@ async function saveDB() {
   } catch(e) {
     console.error('[saveDB] Unexpected error:', e.message);
   }
+}
+
+// Debounced save — coalesces rapid saves into one
+function saveDBDebounced(key) {
+  if (key) markDirty(key);
+  if (_saveTimeout) clearTimeout(_saveTimeout);
+  _saveTimeout = setTimeout(() => {
+    _saveTimeout = null;
+    saveDB().catch(e => console.error('[saveDB debounced]', e.message));
+  }, 2000); // Wait 2s for more changes before saving
 }
 
 // ── stripPlay: remove bloat from play objects before storing ─────────────────
@@ -528,7 +572,7 @@ const server = http.createServer(async (req, res) => {
           if (data.myDeckOverride)  r.parsed.myDeck  = data.myDeckOverride;
           if (data.oppDeckOverride) r.parsed.oppDeck = data.oppDeckOverride;
         }
-        await saveDB();
+        await saveDB('batches');
         return json(res, 200, { ok:true, found:true });
       }
       return json(res, 200, { ok:true, found:false });
@@ -579,7 +623,7 @@ const server = http.createServer(async (req, res) => {
           const cl = crossLinkReplay(data, data.oppName);
           if (cl) crossLinks.push(cl);
         }
-        await saveDB();
+        saveDBDebounced('batches');
         } catch(saveErr) { console.error('[replay POST] Save error:', saveErr.message); }
       } else if (dup.timedOut && !data.timedOut) {
         // Existing timed-out entry being updated with real data — overwrite it
@@ -615,6 +659,12 @@ const server = http.createServer(async (req, res) => {
     if (removed > 0) await saveDB();
     console.log(`[cleanup] Batch ${bId} (${b.name}): removed ${removed} invalid replays`);
     return json(res, 200, { ok:true, removed, kept:b.replays.length });
+  }
+
+  // ── GET /api/admin/error-log — view recent server errors ────────────────────
+  if (parts[0]==='admin' && parts[1]==='error-log' && method==='GET') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    return json(res, 200, { errors: _errorLog, uptime: process.uptime(), memory: process.memoryUsage() });
   }
 
   // ── GET /api/event-dates — get cached event dates ───────────────────────────
@@ -887,15 +937,21 @@ server.listen(PORT, '0.0.0.0', () => {
 process.on('SIGINT',  () => { saveDB().then(() => process.exit(0)).catch(() => process.exit(1)); });
 process.on('SIGTERM', () => { saveDB().then(() => process.exit(0)).catch(() => process.exit(1)); });
 
+// ── In-memory error log (last 100 errors) ────────────────────────────────────
+const _errorLog = [];
+function logError(type, msg, stack) {
+  _errorLog.push({ time: new Date().toISOString(), type, msg, stack: stack||'' });
+  if (_errorLog.length > 100) _errorLog.shift();
+  console.error('['+type+']', msg);
+}
+
 // ── Global crash prevention ────────────────────────────────────────────────────
 process.on('uncaughtException', (err) => {
-  console.error('[CRASH PREVENTED] uncaughtException:', err.message, err.stack);
-  // Don't exit — keep server running
+  logError('uncaughtException', err.message, err.stack);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('[CRASH PREVENTED] unhandledRejection:', reason?.message || reason);
-  // Don't exit — keep server running
+  logError('unhandledRejection', reason?.message || String(reason), reason?.stack||'');
 });
 
 
