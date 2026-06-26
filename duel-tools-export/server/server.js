@@ -40,6 +40,24 @@ async function connectPostgres() {
   if (!db.gfwl)    db.gfwl    = {};
   if (!db.eventDates) db.eventDates = {};
   pgClient = client;
+  // Handle PG client-level errors (e.g. connection dropped by server)
+  // Without this, 'error' events on the pg client crash Node
+  client.on('error', (err) => {
+    console.error('[PG] Client error event:', err.message);
+    pgClient = null;
+    setTimeout(async () => {
+      try { await connectPostgres(); console.log('[PG] Reconnected after error'); }
+      catch(e) { console.error('[PG] Reconnect failed:', e.message); }
+    }, 3000);
+  });
+  client.on('end', () => {
+    console.warn('[PG] Client connection ended');
+    pgClient = null;
+    setTimeout(async () => {
+      try { await connectPostgres(); console.log('[PG] Reconnected after end'); }
+      catch(e) { console.error('[PG] Reconnect after end failed:', e.message); }
+    }, 1000);
+  });
   console.log('Connected to PostgreSQL, batches:', Object.keys(db.batches).length);
 }
 
@@ -96,7 +114,7 @@ function loadFileDB() {
 
 async function saveDB() {
   try {
-    if (pgClient) {
+    if (pgClient && pgClient._connected !== false) {
       try {
         await pgClient.query(`
           INSERT INTO duel_tools_data (key, value, updated_at)
@@ -195,12 +213,19 @@ function json(res, status, data) {
 }
 function readBody(req, cb) {
   let raw = '';
-  req.on('data', d => { raw += d; if (raw.length > 50*1024*1024) { raw = '{}'; } }); // 50MB limit
+  req.on('data', d => { raw += d; if (raw.length > 50*1024*1024) { raw = '{}'; } });
   req.on('end', () => {
-    try { cb(JSON.parse(raw||'{}')); }
-    catch(e) { console.warn('[readBody] JSON parse error:', e.message, 'size:', raw.length); cb({}); }
+    let parsed = {};
+    try { parsed = JSON.parse(raw||'{}'); } catch(e) { console.warn('[readBody] JSON parse error:', e.message); }
+    // Wrap callback in promise catch to prevent unhandled rejections
+    try {
+      const result = cb(parsed);
+      if (result && typeof result.catch === 'function') {
+        result.catch(e => console.error('[readBody] Async callback error:', e.message));
+      }
+    } catch(e) { console.error('[readBody] Callback error:', e.message); }
   });
-  req.on('error', e => { console.error('[readBody] Request error:', e.message); cb({}); });
+  req.on('error', e => { console.error('[readBody] Request error:', e.message); });
 }
 
 function playerNames(entry) {
@@ -1024,13 +1049,20 @@ async function silentRefreshEventCode(code) {
 // ── PostgreSQL connection keep-alive ─────────────────────────────────────────
 setInterval(async () => {
   if (pgClient) {
-    try { await pgClient.query('SELECT 1'); }
-    catch(e) {
-      console.warn('[PG] Keep-alive failed, reconnecting:', e.message);
-      try { await connectPostgres(); } catch(e2) { console.error('[PG] Reconnect failed:', e2.message); }
+    try {
+      await pgClient.query('SELECT 1');
+    } catch(e) {
+      console.warn('[PG] Keep-alive failed:', e.message);
+      pgClient = null;
+      try { await connectPostgres(); console.log('[PG] Reconnected via keep-alive'); }
+      catch(e2) { console.error('[PG] Keep-alive reconnect failed:', e2.message); }
     }
+  } else if (process.env.DATABASE_URL) {
+    // pgClient is null — try to reconnect
+    try { await connectPostgres(); console.log('[PG] Reconnected (was null)'); }
+    catch(e) {}
   }
-}, 60000); // Every 60 seconds
+}, 30000); // Every 30 seconds
 
 // ── Keep-alive ping — prevents Railway cold starts ───────────────────────────
 const APP_URL = process.env.RAILWAY_PUBLIC_DOMAIN
