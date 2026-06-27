@@ -3878,7 +3878,7 @@ async function go() {
       } else {
         // Create new batch
         const r = await fetch(API+'/batches', {
-          method:'POST', headers:{'Content-Type':'application/json'},
+          method:'POST', headers: authHeaders(),
           body: JSON.stringify({ name: player, player, aliases })
         });
         _activeBatch = await r.json();
@@ -3925,12 +3925,19 @@ async function go() {
     const _parsedStore = _parsed ? { games:_parsed.games, allMine:_parsed.allMine, allOpp:_parsed.allOpp, oppName:_parsed.oppName, myW:_parsed.myW, oppW:_parsed.oppW, draws:_parsed.draws, score:_parsed.score, result:_parsed.result } : null;
     // Per-replay event label: from tab-separated data takes priority, then batch-level label
     const _replayEventLabel = _idEventMap[result.id] || _batchEventLabel || '';
+
+    // Warn if parseMatch failed — common cause: username doesn't match replay player1/player2
+    if (!_parsed && !result.timedOut && (result.allPlays||result.plays||[]).length > 0) {
+      const p1 = result.player1||'?', p2 = result.player2||'?';
+      qi(`<span style="color:var(--amber)">⚠ Replay ${result.id}: could not identify player.<br>Replay players: <b>${p1}</b> vs <b>${p2}</b>. Batch player: <b>${_activeBatch.player}</b> (aliases: ${(_activeBatch.aliases||[]).join(', ')||'none'})<br>If username doesn't match, add it as an alias.</span>`);
+    }
+
     _activeBatch.replays.push({ replayId:result.id, plays:_rpsPlays, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, parsed:_parsedStore, oppName:_oppName, eventLabel:_replayEventLabel });
     // Save to server — server handles duplicate detection + cross-linking
     if (!_activeBatch.isTemp) try {
       const targetBatchId = (_activeBatch._mergedIds && _activeBatch._mergedIds[0]) || _activeBatch.id;
       const saveRes = await fetch(`${API}/batches/${targetBatchId}/replay`, {
-        method:'POST', headers:{'Content-Type':'application/json'},
+        method:'POST', headers: authHeaders(),
         body: JSON.stringify({ replayId:result.id, plays:_rpsPlays, allPlays:[],
           timedOut:result.timedOut, oppName:_oppName, player1:result.player1||null, player2:result.player2||null, parsed:_parsedStore, eventLabel:_replayEventLabel })
       });
@@ -3973,7 +3980,7 @@ async function go() {
         _activeBatch.replays.push({replayId:result.id,plays:_rp2,allPlays:[],timedOut:result.timedOut,parsed:_ps2,oppName:_pp2?_pp2.oppName:''});
         try {
           await fetch(API+'/batches/'+_activeBatch.id+'/replay', {
-            method:'POST', headers:{'Content-Type':'application/json'},
+            method:'POST', headers: authHeaders(),
             body: JSON.stringify({replayId:result.id,plays:_rp2,allPlays:[],timedOut:result.timedOut,parsed:_ps2,oppName:_pp2?_pp2.oppName:''})
           });
         } catch(e) {}
