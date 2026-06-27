@@ -52,7 +52,12 @@ async function connectPostgres() {
   if (!db.eventDates) db.eventDates = {};
   if (!db.permissions) db.permissions = {};
   pgClient = client;
-  // Handle PG client-level errors (e.g. connection dropped by server)
+  // Write a local file backup immediately after loading from Postgres
+  // This gives a recovery option if Postgres data is ever lost/corrupted
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+    console.log('[PG] Local backup written:', DB_FILE);
+  } catch(e) { console.warn('[PG] Could not write local backup:', e.message); }
   // Without this, 'error' events on the pg client crash Node
   client.on('error', (err) => {
     console.error('[PG] Client error event:', err.message);
@@ -74,9 +79,10 @@ async function connectPostgres() {
 }
 
 async function initDB() {
+  let pgLoaded = false;
   if (process.env.DATABASE_URL) {
     for (let attempt = 1; attempt <= 5; attempt++) {
-      try { await connectPostgres(); break; }
+      try { await connectPostgres(); pgLoaded = true; break; }
       catch(e) {
         console.error(`PG attempt ${attempt}/5 failed: ${e.message}`);
         if (attempt < 5) await new Promise(r => setTimeout(r, attempt * 2000));
@@ -86,6 +92,19 @@ async function initDB() {
   } else {
     loadFileDB();
   }
+
+  const batchCount = Object.keys(db.batches||{}).length;
+  const playerCount = Object.keys(db.players||{}).length;
+  console.log(`[initDB] Loaded: ${batchCount} batches, ${playerCount} players, pgLoaded=${pgLoaded}`);
+
+  // SAFETY: if we failed to load from Postgres and fell back to an empty file DB,
+  // do NOT save — we would overwrite real Postgres data with empty data.
+  // Only save the bootstrap admin if we successfully loaded from our primary DB.
+  if (!pgLoaded && process.env.DATABASE_URL) {
+    console.error('[initDB] WARNING: Postgres unavailable — skipping bootstrap save to avoid data loss');
+    return;
+  }
+
   // Bootstrap admin — always ensure admin account exists and password matches env
   const existingAdmin = Object.values(db.users).find(u => u.email === BOOTSTRAP_EMAIL);
   if (!existingAdmin) {
@@ -95,7 +114,8 @@ async function initDB() {
       password: hashPassword(BOOTSTRAP_PASSWORD),
       role: 'admin', approved: true, createdAt: Date.now()
     };
-    await saveDB();
+    // Only save the users key — never save batches/players here
+    await saveDB(['users']);
     console.log(`Bootstrap admin created: ${BOOTSTRAP_EMAIL}`);
   } else {
     // Always sync password from env (handles secret rotation)
@@ -104,7 +124,8 @@ async function initDB() {
       existingAdmin.password = correctHash;
       existingAdmin.approved = true;
       existingAdmin.role = 'admin';
-      await saveDB();
+      // Only save the users key — never save batches/players here
+      await saveDB(['users']);
       console.log(`Bootstrap admin password synced: ${BOOTSTRAP_EMAIL}`);
     }
   }
@@ -124,19 +145,16 @@ function loadFileDB() {
   } catch(e) { console.error('File DB load error:', e.message); }
 }
 
-// Track which keys have changed since last save
-const _dirtyKeys = new Set(['batches','players','users','gfwl','eventDates']);
+// Track in-flight save timeout
 let _saveQueued = false;
 let _saveTimeout = null;
 
-function markDirty(key) {
-  _dirtyKeys.add(key);
-}
 
 async function saveDB(keys) {
-  // If specific keys passed, use those; otherwise save all dirty keys
-  const toSave = keys ? (Array.isArray(keys) ? keys : [keys]) : [..._dirtyKeys];
-  if (!toSave.length) return;
+  // If specific keys passed, use those; otherwise save ALL data keys
+  // (dirty-key tracking was removed to prevent accidental empty saves on startup)
+  const ALL_KEYS = ['batches','players','users','gfwl','eventDates','permissions'];
+  const toSave = keys ? (Array.isArray(keys) ? keys : [keys]) : ALL_KEYS;
 
   try {
     if (pgClient && pgClient._connected !== false) {
@@ -164,8 +182,8 @@ async function saveDB(keys) {
           ' ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()',
           params
         );
-        // Clear dirty flags for saved keys
-        toSave.forEach(k => _dirtyKeys.delete(k));
+        // Clear save timeout since we just saved
+        if (_saveTimeout) { clearTimeout(_saveTimeout); _saveTimeout = null; }
       } catch(e) {
         console.error('PG save error:', e.message);
         if (e.message.includes('connect') || e.message.includes('Connection') || e.code === 'ECONNRESET') {
@@ -186,11 +204,11 @@ async function saveDB(keys) {
 
 // Debounced save — coalesces rapid saves into one
 function saveDBDebounced(key) {
-  if (key) markDirty(key);
   if (_saveTimeout) clearTimeout(_saveTimeout);
   _saveTimeout = setTimeout(() => {
     _saveTimeout = null;
-    saveDB().catch(e => console.error('[saveDB debounced]', e.message));
+    // Save only the specified key to avoid saving all keys on every replay import
+    saveDB(key || undefined).catch(e => console.error('[saveDB debounced]', e.message));
   }, 2000); // Wait 2s for more changes before saving
 }
 
