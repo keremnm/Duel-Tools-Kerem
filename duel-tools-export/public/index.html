@@ -1639,18 +1639,23 @@ function extractIdsWithEvents(text) {
   if (hasTabFormat) {
     for (const line of lines) {
       const parts = line.split('\t');
-      if (parts.length < 2) continue;
-      const eventLabel = (parts[0]||'').trim().toUpperCase();
-      // Skip header row
-      if (eventLabel === 'EVENT_ID' || eventLabel === 'EVENTID' || eventLabel === 'EVENT ID') continue;
-      const urlOrId = (parts[1]||'').trim();
-      // Extract replay ID from the URL in column B
-      const mUrl = reUrl.exec(urlOrId);
-      const mId  = reId.exec(urlOrId);
-      const id = mUrl ? mUrl[1] : mId ? mId[1] : null;
-      if (id && !seen.has(id)) {
-        seen.add(id);
-        results.push({ id, eventLabel: eventLabel || '' });
+      if (parts.length >= 2) {
+        // Tab-separated line: col A = event label, col B = URL
+        const eventLabel = (parts[0]||'').trim().toUpperCase();
+        // Skip header row
+        if (eventLabel === 'EVENT_ID' || eventLabel === 'EVENTID' || eventLabel === 'EVENT ID') continue;
+        const urlOrId = (parts[1]||'').trim();
+        if (!urlOrId) continue; // blank URL column
+        const mUrl = reUrl.exec(urlOrId);
+        const mId  = reId.exec(urlOrId);
+        const id = mUrl ? mUrl[1] : mId ? mId[1] : null;
+        if (id && !seen.has(id)) { seen.add(id); results.push({ id, eventLabel: eventLabel || '' }); }
+      } else {
+        // No tab on this line — try to extract a plain URL/ID (no event label)
+        const mUrl = reUrl.exec(line);
+        const mId  = reId.exec(line);
+        const id = mUrl ? mUrl[1] : mId ? mId[1] : null;
+        if (id && !seen.has(id)) { seen.add(id); results.push({ id, eventLabel: '' }); }
       }
     }
   } else {
@@ -4293,19 +4298,30 @@ function wireUrlsInput() {
 
 function updateExtractedList() {
   const raw  = (document.getElementById('urls-inp').value||'').trim();
-  const ids  = extractIds(raw);
+  const idEvents = extractIdsWithEvents(raw);
   const listEl  = document.getElementById('extracted-ids-list');
   const labelEl = document.getElementById('extracted-ids-label');
   listEl.innerHTML = '';
-  if (!ids.length) { labelEl.style.display='none'; return; }
+  if (!idEvents.length) { labelEl.style.display='none'; return; }
+  const hasLabels = idEvents.some(x => x.eventLabel);
   labelEl.style.display='block';
-  labelEl.textContent = `EXTRACTED (${ids.length})`;
-  ids.forEach(id => {
+  labelEl.textContent = `EXTRACTED (${idEvents.length})${hasLabels ? ' · with event labels' : ''}`;
+  idEvents.forEach(({id, eventLabel}) => {
     const row = document.createElement('div');
     row.style.cssText='display:flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--border);border-radius:5px;padding:4px 8px;font-size:11px;font-family:monospace;color:var(--muted)';
     const label = document.createElement('span');
     label.style.flex='1'; label.style.overflow='hidden'; label.style.textOverflow='ellipsis'; label.style.whiteSpace='nowrap';
     label.textContent = 'replay?id='+id;
+    if (eventLabel) {
+      const evBadge = document.createElement('span');
+      evBadge.style.cssText = 'background:rgba(91,141,255,.13);color:var(--blue);border:1px solid rgba(91,141,255,.3);border-radius:3px;font-size:9px;padding:1px 5px;white-space:nowrap;flex-shrink:0;max-width:90px;overflow:hidden;text-overflow:ellipsis';
+      evBadge.textContent = eventLabel;
+      evBadge.title = eventLabel;
+      row.appendChild(label);
+      row.appendChild(evBadge);
+    } else {
+      row.appendChild(label);
+    }
     const del = document.createElement('button');
     del.textContent='✕'; del.style.cssText='background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px;padding:0 2px;font-family:monospace;flex-shrink:0';
     del.onmouseover=()=>del.style.color='var(--red)'; del.onmouseout=()=>del.style.color='var(--dim)';
@@ -4316,7 +4332,7 @@ function updateExtractedList() {
       inp.value = lines.join('\n');
       updateExtractedList();
     };
-    row.appendChild(label); row.appendChild(del);
+    row.appendChild(del);
     listEl.appendChild(row);
   });
 }
