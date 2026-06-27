@@ -7904,93 +7904,53 @@ function renderProfileGrid(batches) {
     return;
   }
 
+  // Get latest GFWL season from all teams data
+  const _latestGFWLSeason = (() => {
+    const seasons = Object.keys(_gfwlData||{}).filter(k=>/^S\d+$/i.test(k));
+    if (!seasons.length) return 'S9'; // default
+    return seasons.sort((a,b)=>parseInt(b.slice(1))-parseInt(a.slice(1)))[0];
+  })();
+
   // Sort players alphabetically
   Object.entries(byPlayer).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([player, pBatches]) => {
-    let totalReplays = 0;
-    for (const b of pBatches) totalReplays += b.replayCount || (b.replays||[]).length;
-
-    // Render card immediately with basic info, enrich with stats in background
-    const isActive = _activeBatch && _activeBatch.player === player && _matches && _matches.length;
-
-    // Card shell — renders instantly
+    // Card — minimal: just name + current GFWL team
     const card = document.createElement('div');
-    card.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;cursor:pointer;transition:all .15s;position:relative;overflow:hidden';
-    card.onmouseover = () => { card.style.borderColor='var(--green)'; card.style.transform='translateY(-2px)'; card.style.boxShadow='0 6px 20px rgba(0,229,150,.1)'; };
-    card.onmouseout  = () => { card.style.borderColor='var(--border)'; card.style.transform=''; card.style.boxShadow=''; };
+    card.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;cursor:pointer;transition:border-color .12s,transform .12s;display:flex;align-items:center;gap:10px';
+    card.onmouseover = () => { card.style.borderColor='var(--green)'; card.style.transform='translateY(-1px)'; };
+    card.onmouseout  = () => { card.style.borderColor='var(--border)'; card.style.transform=''; };
     card.onclick = () => openProfile(player, pBatches, []);
 
-    // Current GFWL team from player registry
+    // Get GFWL team for current/latest season
     const _pReg = window._playerRegistry && window._playerRegistry[player.toLowerCase()];
     const _teams = _pReg ? (_pReg.gfwlTeams || _pReg.teams || []) : [];
-    const _latestTeam = _teams.length ? [..._teams].sort((a,b) => b.season.localeCompare(a.season))[0] : null;
 
-    card.innerHTML = `
-      <div class="pc-bar" style="position:absolute;top:0;left:0;right:0;height:3px;background:var(--green)"></div>
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;margin-top:4px">
-        <div>
-          <div style="font-size:15px;font-weight:bold;color:var(--text);margin-bottom:3px">${player}</div>
-          <div style="font-size:11px;color:var(--muted)">${pBatches.length} batch${pBatches.length!==1?'es':''} · ${totalReplays} replay${totalReplays!==1?'s':''}</div>
-        </div>
-        <div class="pc-wr" style="text-align:right">
-          <div style="font-size:20px;font-weight:bold;color:var(--muted)">—</div>
-          <div style="font-size:10px;color:var(--muted)">loading...</div>
-        </div>
-      </div>
-      <div class="pc-wl" style="display:flex;gap:8px;margin-bottom:8px;min-height:20px"></div>
-      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-        <div class="pc-deck" style="display:inline-block;background:rgba(0,0,0,.3);border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:20px">…</div>
-        ${_latestTeam ? `<div style="font-size:10px;color:var(--amber);font-family:monospace">${_latestTeam.season} · ${_latestTeam.team}</div>` : ''}
-      </div>
-    `;
+    // Find team for latest season, fall back to most recent any season
+    let _currentTeam = _teams.find(t => gfwlNormalizeSeason && gfwlNormalizeSeason(t.season||'') === _latestGFWLSeason);
+    if (!_currentTeam && _teams.length) {
+      _currentTeam = [..._teams].sort((a,b)=>(b.season||'').localeCompare(a.season||''))[0];
+    }
+
+    // Conf color for team badge
+    const _teamConf = _currentTeam && _gfwlData[_latestGFWLSeason]?.teams[_currentTeam.team]?.conference;
+    const _confColor = _teamConf ? (CONF_COLORS&&CONF_COLORS[_teamConf]?.text||'var(--amber)') : 'var(--muted)';
+
+    // Player name
+    const nameEl = document.createElement('div');
+    nameEl.style.cssText = 'font-size:14px;font-weight:bold;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    nameEl.textContent = player;
+    card.appendChild(nameEl);
+
+    // Team badge (if on a team)
+    if (_currentTeam) {
+      const teamEl = document.createElement('div');
+      teamEl.style.cssText = 'font-size:10px;font-family:monospace;color:'+_confColor+';border:1px solid '+_confColor+';padding:1px 7px;border-radius:4px;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis;flex-shrink:0';
+      teamEl.textContent = _currentTeam.season+' · '+_currentTeam.team;
+      teamEl.title = _currentTeam.team;
+      card.appendChild(teamEl);
+    }
+
     grid.appendChild(card);
 
-    // Enrich card in background — fetch full batch data and compute stats
-    (async () => {
-      try {
-        let records = [];
-        if (isActive) {
-          records = _matches.map(m => ({ result:m.result, allMine:m.allMine, matchWon:m.result==='w', matchLost:m.result==='l' }));
-        } else {
-          const aliases = _pReg ? (_pReg.aliases||[]) : (pBatches[0]?.aliases||[]);
-          const fullBatches = await Promise.all(pBatches.map(async b => {
-            if (b.replays && b.replays.length > 0) return b;
-            try { const r = await fetch(API+'/batches/'+b.id); return await r.json(); } catch(e) { return b; }
-          }));
-          // Update pBatches in _allProfileBatches with full data for when profile is clicked
-          fullBatches.forEach(fb => {
-            const idx = _allProfileBatches.findIndex(x => x.id === fb.id);
-            if (idx >= 0) _allProfileBatches[idx] = fb;
-          });
-          for (const b of fullBatches) {
-            for (const r of (b.replays||[])) {
-              try { const rec = buildMatchRecord(r, player, aliases); if (rec) records.push(rec); } catch(e) {}
-            }
-          }
-        }
-        if (!records.length) {
-          card.querySelector('.pc-wr').innerHTML = '<div style="font-size:14px;font-weight:bold;color:var(--muted)">—</div><div style="font-size:10px;color:var(--muted)">No data</div>';
-          card.querySelector('.pc-deck').textContent = '—';
-          return;
-        }
-        const W = records.filter(r=>r.matchWon).length;
-        const L = records.filter(r=>r.matchLost).length;
-        const WR = pct(W, records.length);
-        const dc = {};
-        records.forEach(r => { const d = r.myDeck || (classifyFromCards(r.allMine||[])||{dc:'Unknown'}).dc; dc[d]=(dc[d]||0)+1; });
-        const topDeck = Object.entries(dc).sort((a,b)=>b[1]-a[1])[0]?.[0] || '—';
-        const topDeckColor = getDeckColor(topDeck, 0);
-        // Update card elements
-        card.querySelector('.pc-bar').style.background = topDeckColor;
-        card.querySelector('.pc-wr').innerHTML = `<div style="font-size:20px;font-weight:bold;color:${WR>=50?'var(--green)':'var(--red)'}">${WR}%</div><div style="font-size:10px;color:var(--muted)">Win Rate</div>`;
-        card.querySelector('.pc-wl').innerHTML = `<span style="font-size:13px;font-weight:bold;color:var(--green)">${W}W</span><span style="color:var(--muted)">—</span><span style="font-size:13px;font-weight:bold;color:var(--red)">${L}L</span>`;
-        const deckEl = card.querySelector('.pc-deck');
-        deckEl.textContent = topDeck;
-        deckEl.style.borderColor = topDeckColor;
-        deckEl.style.color = topDeckColor;
-      } catch(e) {
-        card.querySelector('.pc-wr').innerHTML = '<div style="font-size:14px;color:var(--muted)">—</div>';
-      }
-    })();
   });
 }
 
