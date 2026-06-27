@@ -514,6 +514,7 @@ select{cursor:pointer}
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
             <div class="dsb-hl" style="margin-bottom:0">Matches</div>
             <button id="deck-goto-profile-btn" onclick="gotoActiveProfile()" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:9px;padding:2px 7px;border-radius:4px;cursor:pointer;white-space:nowrap" title="Go to this player's profile">→ Profile</button>
+            <button id="deck-clean-btn" onclick="cleanBatchFromDeck()" style="display:none;background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:9px;padding:2px 7px;border-radius:4px;cursor:pointer;white-space:nowrap" title="Remove replays where batch player doesn't appear">🧹 Clean</button>
           </div>
           <div style="display:flex;gap:4px;margin-bottom:4px">
             <input class="dsearch" id="dsearch" type="text" placeholder="Search opponent…" oninput="filterMatches(this.value)" style="flex:1"/>
@@ -1567,6 +1568,7 @@ function banLimit(name){ const n=(name||'').toLowerCase().trim(); if(FORBIDDEN.h
 // STATE
 // ══════════════════════════════════════════════════════════════════════
 let _activeBatch = null; // current batch object
+let _batchLocalEdits = false; // true if user has made local deletions not yet confirmed by server
 let _matches     = [];   // processed match objects for deck viewer
 let _activeMatch = -1;
 let _showOpp     = false;
@@ -1678,10 +1680,17 @@ async function loadReplay(id) {
       player2_choice: p.player2_choice || p.p2pick || null,
     }));
 
-    // Extract username strings from player objects
-    const p1 = replay.player1 ? (replay.player1.username || replay.player1) : null;
-    const p2 = replay.player2 ? (replay.player2.username || replay.player2) : null;
+    // Extract username strings from player objects — handle multiple API formats
+    const extractUsername = (p) => {
+      if (!p) return null;
+      if (typeof p === 'string') return p;
+      // Try all known field names
+      return p.username || p.name || p.user_name || p.display_name || p.handle || String(p.id||'') || null;
+    };
+    const p1 = extractUsername(replay.player1);
+    const p2 = extractUsername(replay.player2);
 
+    console.log(`[loadReplay ${id}] player1:`, JSON.stringify(replay.player1), '→', p1, '| player2:', JSON.stringify(replay.player2), '→', p2);
     return {
       id,
       plays:    rps,
@@ -1689,6 +1698,8 @@ async function loadReplay(id) {
       timedOut: false,
       player1:  p1,
       player2:  p2,
+      rawPlayer1: replay.player1,
+      rawPlayer2: replay.player2,
     };
   } catch(e) {
     console.warn('loadReplay failed for', id, e.message);
@@ -3761,6 +3772,7 @@ async function selectPlayerBatches(ids) {
 }
 
 async function selectBatch(id) {
+  _batchLocalEdits = false;
   // Handle temp batch click — it lives in memory only
   if (_tempBatch && id === _tempBatch.id) {
     _activeBatch = _tempBatch;
@@ -3780,6 +3792,7 @@ async function selectBatch(id) {
     const addBtn = document.getElementById('add-to-batch-btn');
     if (addBtn) addBtn.style.display = 'block';
     const _cb = document.getElementById('clean-batch-btn'); if (_cb) _cb.style.display = 'block';
+    const _dcb = document.getElementById('deck-clean-btn'); if (_dcb) _dcb.style.display = '';
   } catch(e) { st('Failed to load batch', 'var(--red)'); }
 }
 
@@ -3893,6 +3906,9 @@ async function go() {
   closeBatchPanel();
 
   _stopping = false; _matches = []; _activeMatch = -1;
+  // Clear any previous mismatch report from a prior import
+  const _prevReport = document.getElementById('import-mismatch-report');
+  if (_prevReport) _prevReport.remove();
   document.getElementById('gobtn').disabled = true;
   document.getElementById('stopbtn').style.display = 'inline-block';
   document.getElementById('rps-empty').style.display = 'none';
@@ -3903,6 +3919,9 @@ async function go() {
   pb(0);
 
   const toRetry = [];
+  // Replays skipped because the batch player wasn't found in them
+  // Each entry: { id, player1, player2 }
+  const _skippedMismatch = [];
 
   // Pass 1
   for (let i=0; i<ids.length; i++) {
@@ -3926,10 +3945,19 @@ async function go() {
     // Per-replay event label: from tab-separated data takes priority, then batch-level label
     const _replayEventLabel = _idEventMap[result.id] || _batchEventLabel || '';
 
-    // Warn if parseMatch failed — common cause: username doesn't match replay player1/player2
-    if (!_parsed && !result.timedOut && (result.allPlays||result.plays||[]).length > 0) {
+    // Show player names found in replay to help diagnose mismatches
+    if (!result.timedOut) {
       const p1 = result.player1||'?', p2 = result.player2||'?';
-      qi(`<span style="color:var(--amber)">⚠ Replay ${result.id}: could not identify player.<br>Replay players: <b>${p1}</b> vs <b>${p2}</b>. Batch player: <b>${_activeBatch.player}</b> (aliases: ${(_activeBatch.aliases||[]).join(', ')||'none'})<br>If username doesn't match, add it as an alias.</span>`);
+      if (_parsed) {
+        qi(`<span style="color:var(--green)">✓ ${result.id}: <b>${p1}</b> vs <b>${p2}</b> → ${_parsed.result==='w'?'W':'L'} ${_parsed.score||''}</span>`);
+      } else if ((result.allPlays||[]).length > 0) {
+        qi(`<span style="color:var(--red)">✗ ${result.id}: players in replay = <b>[${p1}]</b> vs <b>[${p2}]</b> — no match for batch player <b>[${_activeBatch.player}]</b>. Skipped.</span>`);
+        st('Player mismatch — replay skipped (add alias to fix)', 'var(--red)');
+        _skippedMismatch.push({ id: result.id, player1: p1, player2: p2 });
+        continue; // skip saving this replay — player not in it
+      } else {
+        qi(`<span style="color:var(--amber)">⚠ ${result.id}: loaded but empty (0 plays)</span>`);
+      }
     }
 
     _activeBatch.replays.push({ replayId:result.id, plays:_rpsPlays, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, parsed:_parsedStore, oppName:_oppName, eventLabel:_replayEventLabel });
@@ -4001,17 +4029,86 @@ async function go() {
   qi('');
 
   // Try to reload from server; fall back to in-memory data
-  try {
-    const rb = await fetch(`${API}/batches/${_activeBatch.id}`);
-    const serverBatch = await rb.json();
-    // Only use server data if it has replays; otherwise keep in-memory
-    if (serverBatch && serverBatch.replays && serverBatch.replays.length > 0) {
-      _activeBatch = serverBatch;
-    }
-    // else keep _activeBatch with in-memory replays
-  } catch(e) { console.warn('Server reload failed, using in-memory data:', e.message); }
+  // Skip if user has made local deletions (avoid restoring removed replays)
+  if (!_batchLocalEdits) {
+    try {
+      const rb = await fetch(`${API}/batches/${_activeBatch.id}`);
+      const serverBatch = await rb.json();
+      // Only use server data if it has replays; otherwise keep in-memory
+      if (serverBatch && serverBatch.replays && serverBatch.replays.length > 0) {
+        _activeBatch = serverBatch;
+      }
+      // else keep _activeBatch with in-memory replays
+    } catch(e) { console.warn('Server reload failed, using in-memory data:', e.message); }
+  }
   clearForm();
   closeBatchPanel();
+
+  // Show persistent summary of skipped (mismatched) replays if any
+  if (_skippedMismatch.length > 0) {
+    // Remove any previous mismatch report
+    const prev = document.getElementById('import-mismatch-report');
+    if (prev) prev.remove();
+
+    const report = document.createElement('div');
+    report.id = 'import-mismatch-report';
+    report.style.cssText = 'margin:14px 0 0 0;padding:12px 14px;background:rgba(255,85,85,.07);border:1px solid rgba(255,85,85,.35);border-radius:8px;font-size:12px;font-family:monospace';
+
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:8px';
+    const title = document.createElement('span');
+    title.style.cssText = 'color:var(--red);font-weight:bold;font-size:12px';
+    title.textContent = `⚠ ${_skippedMismatch.length} replay(s) skipped — "${_activeBatch.player}" not found in them`;
+    const copyBtn = document.createElement('button');
+    copyBtn.textContent = '⎘ Copy IDs';
+    copyBtn.style.cssText = 'margin-left:auto;background:var(--card);border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:2px 9px;border-radius:4px;cursor:pointer;white-space:nowrap';
+    copyBtn.onclick = () => {
+      const text = _skippedMismatch.map(s => s.id).join('\n');
+      navigator.clipboard.writeText(text).then(() => { copyBtn.textContent = '✓ Copied'; setTimeout(() => copyBtn.textContent = '⎘ Copy IDs', 1800); });
+    };
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = 'background:none;border:none;color:var(--dim);font-family:monospace;font-size:13px;cursor:pointer;padding:0 2px';
+    closeBtn.onclick = () => report.remove();
+    hdr.appendChild(title);
+    hdr.appendChild(copyBtn);
+    hdr.appendChild(closeBtn);
+    report.appendChild(hdr);
+
+    const sub = document.createElement('div');
+    sub.style.cssText = 'color:var(--muted);font-size:10px;margin-bottom:8px';
+    sub.textContent = 'Add the correct username as an alias to the batch to include these replays.';
+    report.appendChild(sub);
+
+    const table = document.createElement('div');
+    table.style.cssText = 'display:flex;flex-direction:column;gap:3px;max-height:180px;overflow-y:auto';
+    _skippedMismatch.forEach(s => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:10px;align-items:center;padding:3px 6px;background:var(--card);border-radius:4px;font-size:11px';
+      const idEl = document.createElement('a');
+      idEl.href = `https://www.duelingbook.com/replay?id=${s.id}`;
+      idEl.target = '_blank';
+      idEl.style.cssText = 'color:var(--blue);font-family:monospace;text-decoration:none;min-width:80px';
+      idEl.textContent = '…' + s.id.slice(-10);
+      idEl.title = s.id;
+      const namesEl = document.createElement('span');
+      namesEl.style.color = 'var(--muted)';
+      namesEl.textContent = `${s.player1} vs ${s.player2}`;
+      row.appendChild(idEl);
+      row.appendChild(namesEl);
+      table.appendChild(row);
+    });
+    report.appendChild(table);
+
+    // Insert after the .qinfo element (below progress bar area) in the sidebar
+    const qinfo = document.getElementById('urls-inp')?.closest('.sb-section');
+    if (qinfo) qinfo.after(report);
+    else {
+      const sidebar = document.querySelector('.sidebar');
+      if (sidebar) sidebar.insertBefore(report, sidebar.firstChild.nextSibling);
+    }
+  }
+
   renderRPS();
   buildDeck();
 }
@@ -4262,8 +4359,12 @@ function renderRPS() {
     if (!u) return false;
     const ul = String(u).toLowerCase().trim();
     if (_rpsNames.has(ul)) return true;
-    // Partial match — handles "Player 1." vs actual names won't match, but real aliases will
-    for (const n of _rpsNames) { if (n.length > 3 && (ul === n || ul.startsWith(n) || n.startsWith(ul))) return true; }
+    // Only do partial match if both sides are at least 4 chars to avoid false prefix matches
+    for (const n of _rpsNames) {
+      if (n.length >= 4 && ul.length >= 4) {
+        if (ul.startsWith(n + ' ') || ul.startsWith(n + '_') || n.startsWith(ul + ' ') || n.startsWith(ul + '_')) return true;
+      }
+    }
     return false;
   };
 
@@ -4362,7 +4463,51 @@ function renderRPS() {
     });
   }
 
-  HR(c); const s5=S(c,'REPLAY LOG  ('+log.length+' entries)');
+  HR(c); 
+  const s5hdr = document.createElement('div');
+  s5hdr.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:10px';
+  const s5lbl = document.createElement('span');
+  s5lbl.className = 'slbl';
+  s5lbl.style.margin = '0';
+  s5lbl.textContent = 'REPLAY LOG  ('+log.length+' entries)';
+  s5hdr.appendChild(s5lbl);
+
+  // "Remove all not found" button — only show if there are player-not-found entries
+  const notFoundIds = log.filter(i => i.err && i.err.includes('not found')).map(i => i.id);
+  if (notFoundIds.length > 0) {
+    const rmAllBtn = document.createElement('button');
+    rmAllBtn.textContent = '✕ Remove all "not found" ('+notFoundIds.length+')';
+    rmAllBtn.style.cssText = 'background:var(--red);color:#fff;border:none;font-family:monospace;font-weight:bold;font-size:10px;padding:3px 10px;border-radius:4px;cursor:pointer;white-space:nowrap';
+    rmAllBtn.onclick = async () => {
+      if (!_activeBatch) return;
+      if (!confirm('Remove '+notFoundIds.length+' "Player not found" replays from this batch?')) return;
+      rmAllBtn.disabled = true; rmAllBtn.textContent = 'Removing…';
+      _activeBatch.replays = (_activeBatch.replays||[]).filter(r => !notFoundIds.includes(r.replayId));
+      _batchLocalEdits = true;
+      let failed = 0;
+      if (_activeBatch.id && !_activeBatch.id.startsWith('local-')) {
+        const deletes = notFoundIds.map(rid =>
+          fetch(`${API}/batches/${_activeBatch.id}/replay/${encodeURIComponent(rid)}`, { method:'DELETE' })
+            .then(r => r.ok ? null : rid)
+            .catch(() => rid)
+        );
+        const results = await Promise.all(deletes);
+        failed = results.filter(Boolean).length;
+        if (failed === 0) _batchLocalEdits = false;
+      } else {
+        _batchLocalEdits = false;
+      }
+      if (failed > 0) st(`Removed locally — ${failed} server deletes failed`, 'var(--amber)');
+      else st(`Removed ${notFoundIds.length} replays`, 'var(--green)');
+      renderRPS(); buildDeck();
+    };
+    s5hdr.appendChild(rmAllBtn);
+  }
+
+  c.appendChild(s5hdr);
+  const s5 = document.createElement('div');
+  s5.className = 'sec';
+  c.appendChild(s5);
   const ll=mk(s5,'ll');
   log.forEach(item=>{
     const row=mk(ll,'lr'); E(row,'span','…'+item.id.slice(-10),'lid');
@@ -4406,10 +4551,20 @@ function renderRPS() {
         if (!_activeBatch) return;
         const rid = item.id;
         _activeBatch.replays = (_activeBatch.replays||[]).filter(r => r.replayId !== rid);
-        if (_activeBatch.id) {
-          try { await fetch(`${API}/batches/${_activeBatch.id}/replay/${encodeURIComponent(rid)}`, { method:'DELETE' }); } catch(e) {}
+        _batchLocalEdits = true;
+        if (_activeBatch.id && !_activeBatch.id.startsWith('local-')) {
+          try {
+            const delRes = await fetch(`${API}/batches/${_activeBatch.id}/replay/${encodeURIComponent(rid)}`, { method:'DELETE' });
+            if (delRes.ok) {
+              const delData = await delRes.json();
+              if (delData.removed === 0) st('Warning: replay not found on server', 'var(--amber)');
+              else { st('Replay removed', 'var(--green)'); _batchLocalEdits = false; }
+            } else { st('Server delete failed — removed locally only', 'var(--amber)'); }
+          } catch(e) { st('Removed locally (server unreachable)', 'var(--amber)'); }
+        } else {
+          st('Replay removed', 'var(--green)');
+          _batchLocalEdits = false;
         }
-        st('Replay removed', 'var(--green)');
         renderRPS(); buildDeck();
       };
       row.appendChild(xBtn);
@@ -5299,8 +5454,15 @@ function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlaye
     if (!u) return false;
     const ul = String(u).toLowerCase().trim();
     if (_playerNames.has(ul)) return true;
-    // Partial match fallback — handles trailing spaces, extra chars, emoji suffixes
-    for (const n of _playerNames) { if (ul.includes(n) || n.includes(ul)) return true; }
+    // Partial match fallback — only match if one name fully contains the other
+    // AND the shorter name is at least 4 chars (avoids "mc" matching "mcdonald")
+    for (const n of _playerNames) {
+      if (n.length >= 4 && ul.length >= 4) {
+        if (ul === n) return true;
+        // Only match if one fully contains the other (e.g. trailing space/emoji suffix)
+        if (ul.startsWith(n + ' ') || ul.startsWith(n + '_') || n.startsWith(ul + ' ') || n.startsWith(ul + '_')) return true;
+      }
+    }
     return false;
   };
 
@@ -8526,7 +8688,87 @@ Continue?`;
   }
 }
 
-// Remove all timed-out replays from the active batch
+// Clean batch from Deck Viewer — uses both server cleanup AND client-side match check
+async function cleanBatchFromDeck() {
+  if (!_activeBatch || _activeBatch.isTemp) { st('No batch selected', 'var(--amber)'); return; }
+  const player = _activeBatch.player || _activeBatch.name || '';
+  const aliases = (_activeBatch.aliases||[]);
+  // Also pull from player registry
+  const _regEntry = window._playerRegistry && window._playerRegistry[player.toLowerCase()];
+  const _regAliases = _regEntry ? (_regEntry.aliases||[]) : [];
+  const allNames = new Set([player, ...aliases, ..._regAliases].map(n => n.toLowerCase()).filter(Boolean));
+
+  const msg = `Remove replays from "${_activeBatch.name}" where "${player}"${aliases.length?' (or '+aliases.join(', ')+')':''} is not one of the players?\n\nThis fixes wrong cross-links and mis-imported replays.`;
+  if (!confirm(msg)) return;
+
+  // Client-side: identify which loaded replays don't feature this player
+  // Checks player1/player2 fields AND parsed oppName (if oppName matches our player, we're actually the opponent — wrong batch)
+  const isOurPlayer = u => {
+    if (!u) return false;
+    const ul = String(u).toLowerCase().trim();
+    return allNames.has(ul);
+  };
+
+  const mismatchedReplayIds = (_activeBatch.replays||[]).filter(r => {
+    if (r.timedOut) return false; // keep timeouts — can't validate
+    // If player1/player2 are set, check them
+    if (r.player1 || r.player2) {
+      return !isOurPlayer(r.player1) && !isOurPlayer(r.player2);
+    }
+    // If only parsed data: check if oppName matches our player (means WE are the opp in someone else's replay)
+    if (r.parsed && r.parsed.oppName) {
+      if (isOurPlayer(r.parsed.oppName)) return true; // oppName is us — wrong perspective
+    }
+    return false; // can't determine, keep it
+  }).map(r => r.replayId);
+
+  if (mismatchedReplayIds.length === 0 && _activeBatch.id && !_activeBatch.id.startsWith('local-')) {
+    // Fall back to server cleanup which may catch things client missed
+    try {
+      const res = await fetch(`${API}/batches/${_activeBatch.id}/cleanup`, { method:'POST' });
+      const data = await res.json();
+      if (data.removed > 0) {
+        st(`Cleaned — removed ${data.removed} invalid replay(s), ${data.kept} remain`, 'var(--green)');
+        _batchLocalEdits = false;
+        await selectBatch(_activeBatch.id);
+      } else {
+        st('No invalid replays found — batch is clean ✓', 'var(--green)');
+      }
+    } catch(e) { st('Cleanup failed: ' + e.message, 'var(--red)'); }
+    return;
+  }
+
+  if (mismatchedReplayIds.length === 0) {
+    st('No invalid replays found — batch is clean ✓', 'var(--green)'); return;
+  }
+
+  // Remove locally
+  _activeBatch.replays = (_activeBatch.replays||[]).filter(r => !mismatchedReplayIds.includes(r.replayId));
+  _batchLocalEdits = true;
+
+  // Remove from server in parallel
+  let serverFailed = 0;
+  if (_activeBatch.id && !_activeBatch.id.startsWith('local-')) {
+    const deletes = mismatchedReplayIds.map(rid =>
+      fetch(`${API}/batches/${_activeBatch.id}/replay/${encodeURIComponent(rid)}`, { method:'DELETE' })
+        .then(r => r.ok ? null : rid).catch(() => rid)
+    );
+    const results = await Promise.all(deletes);
+    serverFailed = results.filter(Boolean).length;
+    if (serverFailed === 0) _batchLocalEdits = false;
+  } else {
+    _batchLocalEdits = false;
+  }
+
+  if (serverFailed > 0) {
+    st(`Removed ${mismatchedReplayIds.length} locally — ${serverFailed} server deletes failed`, 'var(--amber)');
+  } else {
+    st(`Cleaned — removed ${mismatchedReplayIds.length} mismatched replay(s)`, 'var(--green)');
+  }
+  renderRPS(); buildDeck();
+}
+
+
 async function removeTimedOutReplays() {
   if (!_activeBatch || !_activeBatch.replays) return;
   const timedOut = _activeBatch.replays.filter(r => r.timedOut).map(r => r.replayId);
@@ -10032,16 +10274,43 @@ async function openAdminPanel() {
 
   const hdr = document.createElement('div');
   hdr.style.cssText = 'display:flex;align-items:center;gap:10px';
+  // Tab state
+  let _adminTab = 'users';
   const title = document.createElement('div'); title.style.cssText='font-size:14px;font-weight:bold;color:var(--text);flex:1'; title.textContent='USER MANAGEMENT';
+
+  // Tab buttons
+  const tabBar = document.createElement('div');
+  tabBar.style.cssText = 'display:flex;gap:6px;padding-bottom:4px;border-bottom:1px solid var(--border);margin-bottom:4px';
+  ['Users','Roles & Permissions'].forEach(tab => {
+    const tb = document.createElement('button');
+    tb.textContent = tab;
+    tb.style.cssText = 'background:none;border:none;font-family:monospace;font-size:12px;cursor:pointer;padding:4px 12px;border-radius:4px;color:var(--muted)';
+    tb.onclick = () => {
+      _adminTab = tab === 'Users' ? 'users' : 'perms';
+      tabBar.querySelectorAll('button').forEach(b => { b.style.background='none'; b.style.color='var(--muted)'; });
+      tb.style.background = 'var(--card2)'; tb.style.color = 'var(--text)';
+      usersSection.style.display = _adminTab === 'users' ? 'flex' : 'none';
+      permsSection.style.display  = _adminTab === 'perms' ? 'block' : 'none';
+    };
+    if (tab === 'Users') { tb.style.background='var(--card2)'; tb.style.color='var(--text)'; }
+    tabBar.appendChild(tb);
+  });
   const closeBtn = document.createElement('button'); closeBtn.textContent='✕'; closeBtn.style.cssText='background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px'; closeBtn.onclick=()=>overlay.remove();
   hdr.appendChild(title); hdr.appendChild(closeBtn);
 
   // Add user form
   const addRow = document.createElement('div');
   addRow.style.cssText = 'display:flex;gap:7px;flex-wrap:wrap;padding:10px;background:var(--card);border:1px solid var(--border);border-radius:7px';
-  addRow.innerHTML = '<input id="au-name" placeholder="Name" style="flex:1;min-width:90px"/><input id="au-email" placeholder="Email" type="email" style="flex:2;min-width:140px"/><input id="au-pass" placeholder="Password" type="password" style="flex:1;min-width:90px"/><select id="au-role" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px;border-radius:5px;outline:none"><option value="user">User</option><option value="admin">Admin</option></select><button class="btn-go" onclick="adminAddUser()" style="font-size:12px;padding:6px 12px;white-space:nowrap">+ Add</button>';
+  addRow.innerHTML = '<input id="au-name" placeholder="Name" style="flex:1;min-width:90px"/><input id="au-email" placeholder="Email" type="email" style="flex:2;min-width:140px"/><input id="au-pass" placeholder="Password" type="password" style="flex:1;min-width:90px"/><select id="au-role" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px;border-radius:5px;outline:none"><option value="user">User</option><option value="moderator">Moderator</option><option value="admin">Admin</option></select><button class="btn-go" onclick="adminAddUser()" style="font-size:12px;padding:6px 12px;white-space:nowrap">+ Add</button>';
 
   // User list
+  const usersSection = document.createElement('div');
+  usersSection.style.cssText = 'display:flex;flex-direction:column;gap:8px;flex:1;overflow:hidden';
+
+  const permsSection = document.createElement('div');
+  permsSection.style.display = 'none';
+  permsSection.style.cssText = 'display:none;flex:1;overflow-y:auto';
+
   const listEl = document.createElement('div');
   listEl.style.cssText = 'flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:5px';
   users.sort((a,b)=>(a.email||'').localeCompare(b.email||'')).forEach(u => {
@@ -10086,9 +10355,9 @@ async function openAdminPanel() {
     // Role select
     const sel = document.createElement('select');
     sel.style.cssText = 'background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:3px 6px;border-radius:4px;outline:none';
-    ['user','admin'].forEach(r => {
+    ['user','moderator','admin'].forEach(r => {
       const opt = document.createElement('option');
-      opt.value = r; opt.textContent = r === 'admin' ? 'Admin' : 'User';
+      opt.value = r; opt.textContent = r === 'admin' ? 'Admin' : r === 'moderator' ? 'Moderator' : 'User';
       if (u.role === r) opt.selected = true;
       sel.appendChild(opt);
     });
@@ -10105,7 +10374,80 @@ async function openAdminPanel() {
     listEl.appendChild(row);
   });
 
-  box.appendChild(hdr); box.appendChild(addRow); box.appendChild(listEl);
+  // Assemble users section
+  usersSection.appendChild(addRow);
+  usersSection.appendChild(listEl);
+
+  // Build permissions section
+  const permKeys = [
+    { key:'canAddBatch',    label:'Add / Import Batches' },
+    { key:'canEditBatch',   label:'Edit Replays & Labels' },
+    { key:'canDeleteBatch', label:'Delete Batches / Replays' },
+    { key:'canViewAll',     label:'View All Players' },
+    { key:'canManageUsers', label:'Manage Users' },
+    { key:'canManageGFWL',  label:'Manage GFWL Teams' },
+    { key:'canExport',      label:'Export Data' },
+  ];
+  async function renderPerms() {
+    permsSection.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:8px">Loading...</div>';
+    try {
+      const perms = await fetch(API+'/admin/permissions', { headers:authHeaders() }).then(r=>r.json());
+      permsSection.innerHTML = '';
+      const tbl = document.createElement('table');
+      tbl.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
+      const hRow = document.createElement('tr');
+      hRow.innerHTML = '<th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:normal;font-size:10px;border-bottom:1px solid var(--border)">PERMISSION</th>'
+        + ['User','Moderator','Admin'].map(r=>`<th style="text-align:center;padding:6px 12px;color:var(--muted);font-weight:normal;font-size:10px;border-bottom:1px solid var(--border)">${r.toUpperCase()}</th>`).join('');
+      tbl.appendChild(hRow);
+      permKeys.forEach(({key, label}) => {
+        const tr = document.createElement('tr');
+        tr.style.borderBottom = '1px solid var(--border2)';
+        const labelTd = document.createElement('td');
+        labelTd.style.cssText = 'padding:8px;color:var(--text)';
+        labelTd.textContent = label;
+        tr.appendChild(labelTd);
+        ['user','moderator','admin'].forEach(role => {
+          const td = document.createElement('td');
+          td.style.cssText = 'padding:8px;text-align:center';
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.checked = !!(perms[role] && perms[role][key]);
+          cb.disabled = role === 'admin';
+          cb.style.cssText = 'width:16px;height:16px;cursor:'+(role==='admin'?'not-allowed':'pointer');
+          cb.onchange = async () => {
+            try {
+              await fetch(`${API}/admin/permissions/${role}`, {
+                method:'PATCH', headers:authHeaders(),
+                body: JSON.stringify({ [key]: cb.checked })
+              });
+              st('Saved: '+role+' — '+label+' = '+(cb.checked?'ON':'OFF'), 'var(--green)');
+            } catch(e) { cb.checked = !cb.checked; st('Save failed', 'var(--red)'); }
+          };
+          td.appendChild(cb);
+          tr.appendChild(td);
+        });
+        tbl.appendChild(tr);
+      });
+      permsSection.appendChild(tbl);
+      const note = document.createElement('div');
+      note.style.cssText = 'font-size:10px;color:var(--dim);margin-top:12px;padding:8px;background:var(--card);border-radius:4px';
+      note.textContent = 'Admin always has all permissions. Changes take effect on next login.';
+      permsSection.appendChild(note);
+    } catch(e) {
+      permsSection.innerHTML = '<div style="color:var(--red);padding:8px">Failed: '+e.message+'</div>';
+    }
+  }
+
+  // Wire Permissions tab to load
+  const permTab = tabBar.querySelectorAll('button')[1];
+  const origPermClick = permTab.onclick;
+  permTab.onclick = () => { origPermClick && origPermClick(); renderPerms(); };
+
+  // Assemble
+  box.appendChild(hdr);
+  box.appendChild(tabBar);
+  box.appendChild(usersSection);
+  box.appendChild(permsSection);
   overlay.appendChild(box);
   document.body.appendChild(overlay);
   overlay.onclick = e => { if(e.target===overlay) overlay.remove(); };

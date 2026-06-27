@@ -19,7 +19,18 @@ const BOOTSTRAP_PASSWORD = process.env.ADMIN_PASSWORD || 'ilovesui';
 
 // ── DB ────────────────────────────────────────────────────────────────────────
 let pgClient = null;
-let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {} };
+let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {}, permissions: {} };
+
+// Default role permissions
+const DEFAULT_PERMISSIONS = {
+  admin:      { canAddBatch:true, canEditBatch:true, canDeleteBatch:true, canViewAll:true, canManageUsers:true, canManageGFWL:true, canExport:true },
+  moderator:  { canAddBatch:true, canEditBatch:true, canDeleteBatch:false, canViewAll:true, canManageUsers:false, canManageGFWL:true, canExport:true },
+  user:       { canAddBatch:true, canEditBatch:false, canDeleteBatch:false, canViewAll:false, canManageUsers:false, canManageGFWL:false, canExport:false },
+};
+
+function getPermissions(role) {
+  return db.permissions[role] || DEFAULT_PERMISSIONS[role] || DEFAULT_PERMISSIONS.user;
+}
 
 async function connectPostgres() {
   const { Client } = require('pg');
@@ -32,13 +43,14 @@ async function connectPostgres() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
-  const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('batches','players','users','gfwl','eventDates')");
+  const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('batches','players','users','gfwl','eventDates','permissions')");
   for (const row of res.rows) { db[row.key] = row.value; }
   if (!db.batches) db.batches = {};
   if (!db.players) db.players = {};
   if (!db.users)   db.users   = {};
   if (!db.gfwl)    db.gfwl    = {};
   if (!db.eventDates) db.eventDates = {};
+  if (!db.permissions) db.permissions = {};
   pgClient = client;
   // Handle PG client-level errors (e.g. connection dropped by server)
   // Without this, 'error' events on the pg client crash Node
@@ -289,20 +301,29 @@ function findOrCreateBatchForPlayer(playerEntry) {
     b.player && playerNames(playerEntry).includes(b.player.toLowerCase())
   );
   if (pBatches.length) return pBatches.sort((a,b) => b.createdAt - a.createdAt)[0];
+  // Only auto-create a batch if the player has a real name (prevents ghost batches)
+  if (!playerEntry.name || !playerEntry.name.trim()) return null;
   const id = crypto.randomUUID();
   const batch = { id, name: playerEntry.name, player: playerEntry.name, replays: [], createdAt: Date.now(), status: 'pending' };
   db.batches[id] = batch;
   return batch;
 }
-function crossLinkReplay(replayData, opponentUsername) {
+function crossLinkReplay(replayData, opponentUsername, originalBatchPlayer) {
   const opponentEntry = findPlayerByUsername(opponentUsername);
   if (!opponentEntry) return null;
   const batch = findOrCreateBatchForPlayer(opponentEntry);
+  if (!batch) return null; // player entry has no valid name, skip
+  // (prevents replays landing on wrong batch when aliases overlap)
+  const batchPlayerLower = (batch.player||'').toLowerCase();
+  const originalPlayerLower = (originalBatchPlayer||'').toLowerCase();
+  if (originalPlayerLower && batchPlayerLower === originalPlayerLower) return null;
   const exists = (batch.replays||[]).find(r => r.replayId === replayData.replayId);
   if (exists) return { linked: false, duplicate: true, batchId: batch.id, player: opponentEntry.name };
   if (!batch.replays) batch.replays = [];
   const clParsed = replayData.parsed || null;
-  batch.replays.push({ replayId: replayData.replayId, plays: replayData.plays||[], allPlays: clParsed?[]:(replayData.allPlays||[]).map(stripPlay), parsed: clParsed, timedOut: !!replayData.timedOut, eventLabel: replayData.eventLabel||'', oppName: replayData.oppName||'', crossLinked: true, savedAt: Date.now() });
+  // oppName on the cross-linked replay = the original batch's player (their opponent)
+  const clOppName = originalBatchPlayer || replayData.oppName || '';
+  batch.replays.push({ replayId: replayData.replayId, plays: replayData.plays||[], allPlays: clParsed?[]:(replayData.allPlays||[]).map(stripPlay), parsed: clParsed, timedOut: !!replayData.timedOut, eventLabel: replayData.eventLabel||'', oppName: clOppName, crossLinked: true, savedAt: Date.now() });
   batch.status = 'ready';
   return { linked: true, duplicate: false, batchId: batch.id, player: opponentEntry.name };
 }
@@ -620,7 +641,7 @@ const server = http.createServer(async (req, res) => {
         b.status = 'ready';
         // Only cross-link when explicitly allowed (new batch creation, not manual add-to-batch)
         if (data.oppName && !data.noCrossLink) {
-          const cl = crossLinkReplay(data, data.oppName);
+          const cl = crossLinkReplay(data, data.oppName, b.player);
           if (cl) crossLinks.push(cl);
         }
         saveDBDebounced('batches');
@@ -644,21 +665,55 @@ const server = http.createServer(async (req, res) => {
     if (!b) return json(res, 404, { error:'Batch not found' });
     const player = (b.player||'').toLowerCase();
     const aliases = (b.aliases||[]).map(a=>a.toLowerCase());
+    const allNames = new Set([player, ...aliases].filter(Boolean));
     const isPlayer = u => {
       if (!u) return false;
       const ul = String(u).toLowerCase().trim();
-      return ul === player || aliases.includes(ul);
+      return allNames.has(ul);
     };
     const before = b.replays.length;
     b.replays = b.replays.filter(r => {
       if (r.timedOut) return true;
-      if (!r.player1 && !r.player2) return true;
-      return isPlayer(r.player1) || isPlayer(r.player2);
+      // If player1/player2 are set, use them as the authority
+      if (r.player1 || r.player2) {
+        return isPlayer(r.player1) || isPlayer(r.player2);
+      }
+      // No player1/player2 — check parsed data
+      // If parsed.oppName matches our player, this replay is from the wrong perspective
+      if (r.parsed && r.parsed.oppName && isPlayer(r.parsed.oppName)) return false;
+      // If oppName field matches our player, same issue
+      if (r.oppName && isPlayer(r.oppName)) return false;
+      // Can't determine — keep it
+      return true;
     });
     const removed = before - b.replays.length;
     if (removed > 0) await saveDB();
     console.log(`[cleanup] Batch ${bId} (${b.name}): removed ${removed} invalid replays`);
     return json(res, 200, { ok:true, removed, kept:b.replays.length });
+  }
+
+  // ── GET /api/admin/permissions — get role permissions ───────────────────────
+  if (parts[0]==='admin' && parts[1]==='permissions' && method==='GET') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    // Return current permissions merged with defaults
+    const perms = {};
+    ['admin','moderator','user'].forEach(role => {
+      perms[role] = { ...DEFAULT_PERMISSIONS[role], ...(db.permissions[role]||{}) };
+    });
+    return json(res, 200, perms);
+  }
+
+  // ── PATCH /api/admin/permissions/:role — update role permissions ──────────
+  if (parts[0]==='admin' && parts[1]==='permissions' && parts[2] && method==='PATCH') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    const role = parts[2];
+    if (!['admin','moderator','user'].includes(role)) return json(res, 400, { error:'Invalid role' });
+    return readBody(req, async data => {
+      if (!db.permissions[role]) db.permissions[role] = { ...DEFAULT_PERMISSIONS[role] };
+      Object.assign(db.permissions[role], data);
+      await saveDB('permissions');
+      return json(res, 200, { ok:true, role, permissions: db.permissions[role] });
+    });
   }
 
   // ── GET /api/admin/error-log — view recent server errors ────────────────────
