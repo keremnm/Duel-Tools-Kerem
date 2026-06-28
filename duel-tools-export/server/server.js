@@ -400,7 +400,28 @@ const server = http.createServer(async (req, res) => {
 
   // ── GET /api/health ─────────────────────────────────────────────────────────
   if (parts[0]==='health' && method==='GET') {
-    return json(res, 200, { ok:true, db: pgClient?'postgres':'file', batches: Object.keys(db.batches).length, players: Object.keys(db.players).length, users: Object.keys(db.users).length });
+    return json(res, 200, { ok:true, db: pgClient?'postgres':'file', batches: Object.keys(db.batches).length, players: Object.keys(db.players).length, users: Object.keys(db.users).length, capsolver: !!process.env.CAPSOLVER_API_KEY, proxyQueue: _proxyQueue.length, proxyActive: _proxyActive });
+  }
+
+  // ── GET /api/proxy/test — quick CapSolver connectivity test ─────────────────
+  if (parts[0]==='proxy' && parts[1]==='test' && method==='GET') {
+    const key = process.env.CAPSOLVER_API_KEY;
+    if (!key) return json(res, 500, { ok:false, error: 'CAPSOLVER_API_KEY env var not set' });
+    try {
+      const https = require('https');
+      const result = await new Promise((resolve, reject) => {
+        const data = JSON.stringify({ clientKey: key, task: { type: 'AntiTurnstileTaskProxyLess', websiteURL: 'https://www.duelingbook.com', websiteKey: '0x4AAAAAAC17T9xSOtcacJq5' } });
+        const req2 = https.request({ hostname: 'api.capsolver.com', path: '/createTask', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } }, r2 => {
+          let buf = ''; r2.on('data', d => buf += d); r2.on('end', () => { try { resolve(JSON.parse(buf)); } catch(e) { reject(new Error('Bad JSON: ' + buf.slice(0,100))); } });
+        });
+        req2.on('error', reject); req2.setTimeout(15000, () => { req2.destroy(); reject(new Error('timeout')); });
+        req2.write(data); req2.end();
+      });
+      if (result.errorId) return json(res, 502, { ok:false, error: result.errorDescription, errorId: result.errorId });
+      return json(res, 200, { ok:true, taskId: result.taskId, message: 'CapSolver reachable and accepted the task' });
+    } catch(e) {
+      return json(res, 502, { ok:false, error: e.message });
+    }
   }
 
   // ── POST /api/auth/login ────────────────────────────────────────────────────

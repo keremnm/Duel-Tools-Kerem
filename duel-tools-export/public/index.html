@@ -1708,7 +1708,7 @@ async function loadReplay(id) {
     };
   } catch(e) {
     console.warn('loadReplay failed for', id, e.message);
-    return { id, plays: [], allPlays: [], timedOut: true, player1: null, player2: null };
+    return { id, plays: [], allPlays: [], timedOut: true, player1: null, player2: null, _error: e.message };
   }
 }
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
@@ -3951,7 +3951,11 @@ async function go() {
     const _replayEventLabel = _idEventMap[result.id] || _batchEventLabel || '';
 
     // Show player names found in replay to help diagnose mismatches
-    if (!result.timedOut) {
+    if (result.timedOut) {
+      const errMsg = result._error || 'Timed out / failed to load';
+      qi(`<span style="color:var(--red)">✗ ${result.id}: <b>${errMsg}</b></span>`);
+      st(errMsg, 'var(--red)');
+    } else {
       const p1 = result.player1||'?', p2 = result.player2||'?';
       if (_parsed) {
         qi(`<span style="color:var(--green)">✓ ${result.id}: <b>${p1}</b> vs <b>${p2}</b> → ${_parsed.result==='w'?'W':'L'} ${_parsed.score||''}</span>`);
