@@ -19,18 +19,7 @@ const BOOTSTRAP_PASSWORD = process.env.ADMIN_PASSWORD || 'ilovesui';
 
 // ── DB ────────────────────────────────────────────────────────────────────────
 let pgClient = null;
-let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {}, permissions: {} };
-
-// Default role permissions
-const DEFAULT_PERMISSIONS = {
-  admin:      { canAddBatch:true, canEditBatch:true, canDeleteBatch:true, canViewAll:true, canManageUsers:true, canManageGFWL:true, canExport:true },
-  moderator:  { canAddBatch:true, canEditBatch:true, canDeleteBatch:false, canViewAll:true, canManageUsers:false, canManageGFWL:true, canExport:true },
-  user:       { canAddBatch:true, canEditBatch:false, canDeleteBatch:false, canViewAll:false, canManageUsers:false, canManageGFWL:false, canExport:false },
-};
-
-function getPermissions(role) {
-  return db.permissions[role] || DEFAULT_PERMISSIONS[role] || DEFAULT_PERMISSIONS.user;
-}
+let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {} };
 
 async function connectPostgres() {
   const { Client } = require('pg');
@@ -43,21 +32,15 @@ async function connectPostgres() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
-  const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('batches','players','users','gfwl','eventDates','permissions')");
+  const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('batches','players','users','gfwl','eventDates')");
   for (const row of res.rows) { db[row.key] = row.value; }
   if (!db.batches) db.batches = {};
   if (!db.players) db.players = {};
   if (!db.users)   db.users   = {};
   if (!db.gfwl)    db.gfwl    = {};
   if (!db.eventDates) db.eventDates = {};
-  if (!db.permissions) db.permissions = {};
   pgClient = client;
-  // Write a local file backup immediately after loading from Postgres
-  // This gives a recovery option if Postgres data is ever lost/corrupted
-  try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
-    console.log('[PG] Local backup written:', DB_FILE);
-  } catch(e) { console.warn('[PG] Could not write local backup:', e.message); }
+  // Handle PG client-level errors (e.g. connection dropped by server)
   // Without this, 'error' events on the pg client crash Node
   client.on('error', (err) => {
     console.error('[PG] Client error event:', err.message);
@@ -79,10 +62,9 @@ async function connectPostgres() {
 }
 
 async function initDB() {
-  let pgLoaded = false;
   if (process.env.DATABASE_URL) {
     for (let attempt = 1; attempt <= 5; attempt++) {
-      try { await connectPostgres(); pgLoaded = true; break; }
+      try { await connectPostgres(); break; }
       catch(e) {
         console.error(`PG attempt ${attempt}/5 failed: ${e.message}`);
         if (attempt < 5) await new Promise(r => setTimeout(r, attempt * 2000));
@@ -92,19 +74,6 @@ async function initDB() {
   } else {
     loadFileDB();
   }
-
-  const batchCount = Object.keys(db.batches||{}).length;
-  const playerCount = Object.keys(db.players||{}).length;
-  console.log(`[initDB] Loaded: ${batchCount} batches, ${playerCount} players, pgLoaded=${pgLoaded}`);
-
-  // SAFETY: if we failed to load from Postgres and fell back to an empty file DB,
-  // do NOT save — we would overwrite real Postgres data with empty data.
-  // Only save the bootstrap admin if we successfully loaded from our primary DB.
-  if (!pgLoaded && process.env.DATABASE_URL) {
-    console.error('[initDB] WARNING: Postgres unavailable — skipping bootstrap save to avoid data loss');
-    return;
-  }
-
   // Bootstrap admin — always ensure admin account exists and password matches env
   const existingAdmin = Object.values(db.users).find(u => u.email === BOOTSTRAP_EMAIL);
   if (!existingAdmin) {
@@ -114,8 +83,7 @@ async function initDB() {
       password: hashPassword(BOOTSTRAP_PASSWORD),
       role: 'admin', approved: true, createdAt: Date.now()
     };
-    // Only save the users key — never save batches/players here
-    await saveDB(['users']);
+    await saveDB();
     console.log(`Bootstrap admin created: ${BOOTSTRAP_EMAIL}`);
   } else {
     // Always sync password from env (handles secret rotation)
@@ -124,8 +92,7 @@ async function initDB() {
       existingAdmin.password = correctHash;
       existingAdmin.approved = true;
       existingAdmin.role = 'admin';
-      // Only save the users key — never save batches/players here
-      await saveDB(['users']);
+      await saveDB();
       console.log(`Bootstrap admin password synced: ${BOOTSTRAP_EMAIL}`);
     }
   }
@@ -145,16 +112,19 @@ function loadFileDB() {
   } catch(e) { console.error('File DB load error:', e.message); }
 }
 
-// Track in-flight save timeout
+// Track which keys have changed since last save
+const _dirtyKeys = new Set(['batches','players','users','gfwl','eventDates']);
 let _saveQueued = false;
 let _saveTimeout = null;
 
+function markDirty(key) {
+  _dirtyKeys.add(key);
+}
 
 async function saveDB(keys) {
-  // If specific keys passed, use those; otherwise save ALL data keys
-  // (dirty-key tracking was removed to prevent accidental empty saves on startup)
-  const ALL_KEYS = ['batches','players','users','gfwl','eventDates','permissions'];
-  const toSave = keys ? (Array.isArray(keys) ? keys : [keys]) : ALL_KEYS;
+  // If specific keys passed, use those; otherwise save all dirty keys
+  const toSave = keys ? (Array.isArray(keys) ? keys : [keys]) : [..._dirtyKeys];
+  if (!toSave.length) return;
 
   try {
     if (pgClient && pgClient._connected !== false) {
@@ -182,8 +152,8 @@ async function saveDB(keys) {
           ' ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()',
           params
         );
-        // Clear save timeout since we just saved
-        if (_saveTimeout) { clearTimeout(_saveTimeout); _saveTimeout = null; }
+        // Clear dirty flags for saved keys
+        toSave.forEach(k => _dirtyKeys.delete(k));
       } catch(e) {
         console.error('PG save error:', e.message);
         if (e.message.includes('connect') || e.message.includes('Connection') || e.code === 'ECONNRESET') {
@@ -204,11 +174,11 @@ async function saveDB(keys) {
 
 // Debounced save — coalesces rapid saves into one
 function saveDBDebounced(key) {
+  if (key) markDirty(key);
   if (_saveTimeout) clearTimeout(_saveTimeout);
   _saveTimeout = setTimeout(() => {
     _saveTimeout = null;
-    // Save only the specified key to avoid saving all keys on every replay import
-    saveDB(key || undefined).catch(e => console.error('[saveDB debounced]', e.message));
+    saveDB().catch(e => console.error('[saveDB debounced]', e.message));
   }, 2000); // Wait 2s for more changes before saving
 }
 
@@ -319,8 +289,6 @@ function findOrCreateBatchForPlayer(playerEntry) {
     b.player && playerNames(playerEntry).includes(b.player.toLowerCase())
   );
   if (pBatches.length) return pBatches.sort((a,b) => b.createdAt - a.createdAt)[0];
-  // Only auto-create a batch if the player has a real name (prevents ghost batches)
-  if (!playerEntry.name || !playerEntry.name.trim()) return null;
   const id = crypto.randomUUID();
   const batch = { id, name: playerEntry.name, player: playerEntry.name, replays: [], createdAt: Date.now(), status: 'pending' };
   db.batches[id] = batch;
@@ -330,45 +298,16 @@ function crossLinkReplay(replayData, opponentUsername, originalBatchPlayer) {
   const opponentEntry = findPlayerByUsername(opponentUsername);
   if (!opponentEntry) return null;
   const batch = findOrCreateBatchForPlayer(opponentEntry);
-  if (!batch) return null; // player entry has no valid name, skip
-  // (prevents replays landing on wrong batch when aliases overlap)
-  const batchPlayerLower = (batch.player||'').toLowerCase();
-  const originalPlayerLower = (originalBatchPlayer||'').toLowerCase();
-  if (originalPlayerLower && batchPlayerLower === originalPlayerLower) return null;
   const exists = (batch.replays||[]).find(r => r.replayId === replayData.replayId);
   if (exists) return { linked: false, duplicate: true, batchId: batch.id, player: opponentEntry.name };
   if (!batch.replays) batch.replays = [];
   const clParsed = replayData.parsed || null;
-  // oppName on the cross-linked replay = the original batch's player (their opponent)
-  const clOppName = originalBatchPlayer || replayData.oppName || '';
-  batch.replays.push({ replayId: replayData.replayId, plays: replayData.plays||[], allPlays: clParsed?[]:(replayData.allPlays||[]).map(stripPlay), parsed: clParsed, timedOut: !!replayData.timedOut, eventLabel: replayData.eventLabel||'', oppName: clOppName, crossLinked: true, savedAt: Date.now() });
+  batch.replays.push({ replayId: replayData.replayId, plays: replayData.plays||[], allPlays: clParsed?[]:(replayData.allPlays||[]).map(stripPlay), parsed: clParsed, timedOut: !!replayData.timedOut, eventLabel: replayData.eventLabel||'', oppName: replayData.oppName||'', crossLinked: true, savedAt: Date.now() });
   batch.status = 'ready';
   return { linked: true, duplicate: false, batchId: batch.id, player: opponentEntry.name };
 }
 
-// ── Proxy request queue — limits concurrent CapSolver+DuelingBook calls ──────
-// Too many simultaneous requests causes CapSolver failures and DB timeouts
-let _proxyQueue = [];
-let _proxyActive = 0;
-const PROXY_CONCURRENCY = 3; // max simultaneous replay fetches
-
-function proxyEnqueue(fn) {
-  return new Promise((resolve, reject) => {
-    _proxyQueue.push({ fn, resolve, reject });
-    proxyDrain();
-  });
-}
-
-function proxyDrain() {
-  while (_proxyActive < PROXY_CONCURRENCY && _proxyQueue.length > 0) {
-    const { fn, resolve, reject } = _proxyQueue.shift();
-    _proxyActive++;
-    fn().then(v => { _proxyActive--; resolve(v); proxyDrain(); })
-        .catch(e => { _proxyActive--; reject(e); proxyDrain(); });
-  }
-}
-
-
+// ── HTTP server ───────────────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
@@ -400,28 +339,7 @@ const server = http.createServer(async (req, res) => {
 
   // ── GET /api/health ─────────────────────────────────────────────────────────
   if (parts[0]==='health' && method==='GET') {
-    return json(res, 200, { ok:true, db: pgClient?'postgres':'file', batches: Object.keys(db.batches).length, players: Object.keys(db.players).length, users: Object.keys(db.users).length, capsolver: !!process.env.CAPSOLVER_API_KEY, proxyQueue: _proxyQueue.length, proxyActive: _proxyActive });
-  }
-
-  // ── GET /api/proxy/test — quick CapSolver connectivity test ─────────────────
-  if (parts[0]==='proxy' && parts[1]==='test' && method==='GET') {
-    const key = process.env.CAPSOLVER_API_KEY;
-    if (!key) return json(res, 500, { ok:false, error: 'CAPSOLVER_API_KEY env var not set' });
-    try {
-      const https = require('https');
-      const result = await new Promise((resolve, reject) => {
-        const data = JSON.stringify({ clientKey: key, task: { type: 'AntiTurnstileTaskProxyLess', websiteURL: 'https://www.duelingbook.com', websiteKey: '0x4AAAAAAC17T9xSOtcacJq5' } });
-        const req2 = https.request({ hostname: 'api.capsolver.com', path: '/createTask', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } }, r2 => {
-          let buf = ''; r2.on('data', d => buf += d); r2.on('end', () => { try { resolve(JSON.parse(buf)); } catch(e) { reject(new Error('Bad JSON: ' + buf.slice(0,100))); } });
-        });
-        req2.on('error', reject); req2.setTimeout(15000, () => { req2.destroy(); reject(new Error('timeout')); });
-        req2.write(data); req2.end();
-      });
-      if (result.errorId) return json(res, 502, { ok:false, error: result.errorDescription, errorId: result.errorId });
-      return json(res, 200, { ok:true, taskId: result.taskId, message: 'CapSolver reachable and accepted the task' });
-    } catch(e) {
-      return json(res, 502, { ok:false, error: e.message });
-    }
+    return json(res, 200, { ok:true, db: pgClient?'postgres':'file', batches: Object.keys(db.batches).length, players: Object.keys(db.players).length, users: Object.keys(db.users).length, capsolver: !!process.env.CAPSOLVER_API_KEY });
   }
 
   // ── POST /api/auth/login ────────────────────────────────────────────────────
@@ -727,55 +645,21 @@ const server = http.createServer(async (req, res) => {
     if (!b) return json(res, 404, { error:'Batch not found' });
     const player = (b.player||'').toLowerCase();
     const aliases = (b.aliases||[]).map(a=>a.toLowerCase());
-    const allNames = new Set([player, ...aliases].filter(Boolean));
     const isPlayer = u => {
       if (!u) return false;
       const ul = String(u).toLowerCase().trim();
-      return allNames.has(ul);
+      return ul === player || aliases.includes(ul);
     };
     const before = b.replays.length;
     b.replays = b.replays.filter(r => {
       if (r.timedOut) return true;
-      // If player1/player2 are set, use them as the authority
-      if (r.player1 || r.player2) {
-        return isPlayer(r.player1) || isPlayer(r.player2);
-      }
-      // No player1/player2 — check parsed data
-      // If parsed.oppName matches our player, this replay is from the wrong perspective
-      if (r.parsed && r.parsed.oppName && isPlayer(r.parsed.oppName)) return false;
-      // If oppName field matches our player, same issue
-      if (r.oppName && isPlayer(r.oppName)) return false;
-      // Can't determine — keep it
-      return true;
+      if (!r.player1 && !r.player2) return true;
+      return isPlayer(r.player1) || isPlayer(r.player2);
     });
     const removed = before - b.replays.length;
     if (removed > 0) await saveDB();
     console.log(`[cleanup] Batch ${bId} (${b.name}): removed ${removed} invalid replays`);
     return json(res, 200, { ok:true, removed, kept:b.replays.length });
-  }
-
-  // ── GET /api/admin/permissions — get role permissions ───────────────────────
-  if (parts[0]==='admin' && parts[1]==='permissions' && method==='GET') {
-    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
-    // Return current permissions merged with defaults
-    const perms = {};
-    ['admin','moderator','user'].forEach(role => {
-      perms[role] = { ...DEFAULT_PERMISSIONS[role], ...(db.permissions[role]||{}) };
-    });
-    return json(res, 200, perms);
-  }
-
-  // ── PATCH /api/admin/permissions/:role — update role permissions ──────────
-  if (parts[0]==='admin' && parts[1]==='permissions' && parts[2] && method==='PATCH') {
-    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
-    const role = parts[2];
-    if (!['admin','moderator','user'].includes(role)) return json(res, 400, { error:'Invalid role' });
-    return readBody(req, async data => {
-      if (!db.permissions[role]) db.permissions[role] = { ...DEFAULT_PERMISSIONS[role] };
-      Object.assign(db.permissions[role], data);
-      await saveDB('permissions');
-      return json(res, 200, { ok:true, role, permissions: db.permissions[role] });
-    });
   }
 
   // ── GET /api/admin/error-log — view recent server errors ────────────────────
@@ -936,10 +820,10 @@ const server = http.createServer(async (req, res) => {
 
     if (!CAPSOLVER_API_KEY) return json(res, 500, { error: 'CAPSOLVER_API_KEY not set in environment' });
 
-    // Queue the actual fetch work so we never run more than PROXY_CONCURRENCY at once
-    proxyEnqueue(async () => {
+    try {
       const https = require('https');
 
+      // Step 1: Ask CapSolver to solve the Turnstile
       function httpsPost(hostname, path, body) {
         return new Promise((resolve, reject) => {
           const data = JSON.stringify(body);
@@ -958,30 +842,47 @@ const server = http.createServer(async (req, res) => {
       // Create task
       const taskRes = await httpsPost('api.capsolver.com', '/createTask', {
         clientKey: CAPSOLVER_API_KEY,
-        task: { type: 'AntiTurnstileTaskProxyLess', websiteURL: DUELINGBOOK_URL, websiteKey: TURNSTILE_SITE_KEY }
+        task: {
+          type: 'AntiTurnstileTaskProxyLess',
+          websiteURL: DUELINGBOOK_URL,
+          websiteKey: TURNSTILE_SITE_KEY,
+        }
       });
+
       if (taskRes.errorId) throw new Error('CapSolver createTask error: ' + taskRes.errorDescription);
       const taskId = taskRes.taskId;
       console.log(`[proxy/replay] CapSolver taskId=${taskId} for replay ${replayId}`);
 
       // Poll for solution (max 30s)
-      let token = null, userAgent = null;
+      let token = null;
+      let userAgent = null;
       for (let i = 0; i < 20; i++) {
         await new Promise(r => setTimeout(r, 1500));
         const resultRes = await httpsPost('api.capsolver.com', '/getTaskResult', { clientKey: CAPSOLVER_API_KEY, taskId });
-        if (resultRes.status === 'ready') { token = resultRes.solution?.token; userAgent = resultRes.solution?.userAgent; break; }
+        if (resultRes.status === 'ready') {
+          token = resultRes.solution?.token;
+          userAgent = resultRes.solution?.userAgent;
+          break;
+        }
         if (resultRes.errorId) throw new Error('CapSolver poll error: ' + resultRes.errorDescription);
       }
       if (!token) throw new Error('CapSolver timed out waiting for token');
+      console.log(`[proxy/replay] Got Turnstile token for ${replayId}`);
 
-      // POST to duelingbook
+      // Step 2: POST to duelingbook view-replay with the token as multipart form data
       const replayData = await new Promise((resolve, reject) => {
         const boundary = '----FormBoundary' + Math.random().toString(36).slice(2);
         function field(name, value) {
-          return `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`;
+          return `--${boundary}
+Content-Disposition: form-data; name="${name}"
+
+${value}
+`;
         }
-        const body = field('token', token) + field('turnstile', 'true') + field('master', 'false') + `--${boundary}--\r\n`;
+        const body = field('token', token) + field('turnstile', 'true') + field('master', 'false') + `--${boundary}--
+`;
         const bodyBuf = Buffer.from(body);
+
         const req2 = https.request({
           hostname: 'www.duelingbook.com',
           path: `/view-replay?id=${encodeURIComponent(replayId)}`,
@@ -996,7 +897,10 @@ const server = http.createServer(async (req, res) => {
         }, (r2) => {
           let buf = '';
           r2.on('data', d => buf += d);
-          r2.on('end', () => { try { resolve(JSON.parse(buf)); } catch(e) { reject(new Error('Duelingbook returned non-JSON: ' + buf.slice(0, 200))); } });
+          r2.on('end', () => {
+            try { resolve(JSON.parse(buf)); }
+            catch(e) { reject(new Error('Duelingbook returned non-JSON: ' + buf.slice(0, 200))); }
+          });
         });
         req2.on('error', reject);
         req2.setTimeout(20000, () => { req2.destroy(); reject(new Error('duelingbook timeout')); });
@@ -1005,19 +909,14 @@ const server = http.createServer(async (req, res) => {
       });
 
       if (replayData.action === 'Error') throw new Error('Duelingbook error: ' + replayData.message);
-      if (!replayData.plays && !replayData.action) {
-        console.error(`[proxy/replay] Unexpected response for ${replayId}:`, JSON.stringify(replayData).slice(0, 300));
-        throw new Error('Duelingbook returned unexpected response: ' + JSON.stringify(replayData).slice(0, 150));
-      }
+
       console.log(`[proxy/replay] Got replay data for ${replayId} — ${(replayData.plays||[]).length} plays`);
-      return replayData;
-    }).then(replayData => {
-      json(res, 200, { ok: true, replay: replayData });
-    }).catch(e => {
+      return json(res, 200, { ok: true, replay: replayData });
+
+    } catch(e) {
       console.error(`[proxy/replay] Failed for ${replayId}:`, e.message);
-      json(res, 502, { error: e.message });
-    });
-    return; // response sent async via queue
+      return json(res, 502, { error: e.message });
+    }
   }
 
   return json(res, 404, { error:'Not found' });
