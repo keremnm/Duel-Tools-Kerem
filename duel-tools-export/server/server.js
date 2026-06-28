@@ -346,7 +346,29 @@ function crossLinkReplay(replayData, opponentUsername, originalBatchPlayer) {
   return { linked: true, duplicate: false, batchId: batch.id, player: opponentEntry.name };
 }
 
-// ── HTTP server ───────────────────────────────────────────────────────────────
+// ── Proxy request queue — limits concurrent CapSolver+DuelingBook calls ──────
+// Too many simultaneous requests causes CapSolver failures and DB timeouts
+let _proxyQueue = [];
+let _proxyActive = 0;
+const PROXY_CONCURRENCY = 3; // max simultaneous replay fetches
+
+function proxyEnqueue(fn) {
+  return new Promise((resolve, reject) => {
+    _proxyQueue.push({ fn, resolve, reject });
+    proxyDrain();
+  });
+}
+
+function proxyDrain() {
+  while (_proxyActive < PROXY_CONCURRENCY && _proxyQueue.length > 0) {
+    const { fn, resolve, reject } = _proxyQueue.shift();
+    _proxyActive++;
+    fn().then(v => { _proxyActive--; resolve(v); proxyDrain(); })
+        .catch(e => { _proxyActive--; reject(e); proxyDrain(); });
+  }
+}
+
+
 const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
@@ -892,10 +914,10 @@ const server = http.createServer(async (req, res) => {
 
     if (!CAPSOLVER_API_KEY) return json(res, 500, { error: 'CAPSOLVER_API_KEY not set in environment' });
 
-    try {
+    // Queue the actual fetch work so we never run more than PROXY_CONCURRENCY at once
+    proxyEnqueue(async () => {
       const https = require('https');
 
-      // Step 1: Ask CapSolver to solve the Turnstile
       function httpsPost(hostname, path, body) {
         return new Promise((resolve, reject) => {
           const data = JSON.stringify(body);
@@ -914,47 +936,30 @@ const server = http.createServer(async (req, res) => {
       // Create task
       const taskRes = await httpsPost('api.capsolver.com', '/createTask', {
         clientKey: CAPSOLVER_API_KEY,
-        task: {
-          type: 'AntiTurnstileTaskProxyLess',
-          websiteURL: DUELINGBOOK_URL,
-          websiteKey: TURNSTILE_SITE_KEY,
-        }
+        task: { type: 'AntiTurnstileTaskProxyLess', websiteURL: DUELINGBOOK_URL, websiteKey: TURNSTILE_SITE_KEY }
       });
-
       if (taskRes.errorId) throw new Error('CapSolver createTask error: ' + taskRes.errorDescription);
       const taskId = taskRes.taskId;
-      console.log(`[proxy/replay] CapSolver taskId=${taskId} for replay ${replayId}`);
+      console.log(`[proxy/replay] CapSolver taskId=${taskId} for replay ${replayId} (queue active: ${_proxyActive})`);
 
       // Poll for solution (max 30s)
-      let token = null;
-      let userAgent = null;
+      let token = null, userAgent = null;
       for (let i = 0; i < 20; i++) {
         await new Promise(r => setTimeout(r, 1500));
         const resultRes = await httpsPost('api.capsolver.com', '/getTaskResult', { clientKey: CAPSOLVER_API_KEY, taskId });
-        if (resultRes.status === 'ready') {
-          token = resultRes.solution?.token;
-          userAgent = resultRes.solution?.userAgent;
-          break;
-        }
+        if (resultRes.status === 'ready') { token = resultRes.solution?.token; userAgent = resultRes.solution?.userAgent; break; }
         if (resultRes.errorId) throw new Error('CapSolver poll error: ' + resultRes.errorDescription);
       }
       if (!token) throw new Error('CapSolver timed out waiting for token');
-      console.log(`[proxy/replay] Got Turnstile token for ${replayId}`);
 
-      // Step 2: POST to duelingbook view-replay with the token as multipart form data
+      // POST to duelingbook
       const replayData = await new Promise((resolve, reject) => {
         const boundary = '----FormBoundary' + Math.random().toString(36).slice(2);
         function field(name, value) {
-          return `--${boundary}
-Content-Disposition: form-data; name="${name}"
-
-${value}
-`;
+          return `--${boundary}\nContent-Disposition: form-data; name="${name}"\n\n${value}\n`;
         }
-        const body = field('token', token) + field('turnstile', 'true') + field('master', 'false') + `--${boundary}--
-`;
+        const body = field('token', token) + field('turnstile', 'true') + field('master', 'false') + `--${boundary}--\n`;
         const bodyBuf = Buffer.from(body);
-
         const req2 = https.request({
           hostname: 'www.duelingbook.com',
           path: `/view-replay?id=${encodeURIComponent(replayId)}`,
@@ -962,17 +967,14 @@ ${value}
           headers: {
             'Content-Type': `multipart/form-data; boundary=${boundary}`,
             'Content-Length': bodyBuf.length,
-            'User-Agent': userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Referer': DUELINGBOOK_URL + '/',
             'Origin': DUELINGBOOK_URL,
           }
         }, (r2) => {
           let buf = '';
           r2.on('data', d => buf += d);
-          r2.on('end', () => {
-            try { resolve(JSON.parse(buf)); }
-            catch(e) { reject(new Error('Duelingbook returned non-JSON: ' + buf.slice(0, 200))); }
-          });
+          r2.on('end', () => { try { resolve(JSON.parse(buf)); } catch(e) { reject(new Error('Duelingbook returned non-JSON: ' + buf.slice(0, 200))); } });
         });
         req2.on('error', reject);
         req2.setTimeout(20000, () => { req2.destroy(); reject(new Error('duelingbook timeout')); });
@@ -981,14 +983,15 @@ ${value}
       });
 
       if (replayData.action === 'Error') throw new Error('Duelingbook error: ' + replayData.message);
-
       console.log(`[proxy/replay] Got replay data for ${replayId} — ${(replayData.plays||[]).length} plays`);
-      return json(res, 200, { ok: true, replay: replayData });
-
-    } catch(e) {
+      return replayData;
+    }).then(replayData => {
+      json(res, 200, { ok: true, replay: replayData });
+    }).catch(e => {
       console.error(`[proxy/replay] Failed for ${replayId}:`, e.message);
-      return json(res, 502, { error: e.message });
-    }
+      json(res, 502, { error: e.message });
+    });
+    return; // response sent async via queue
   }
 
   return json(res, 404, { error:'Not found' });

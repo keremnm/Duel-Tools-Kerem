@@ -3998,7 +3998,7 @@ async function go() {
   if (!_stopping && toRetry.length) {
     let remaining = toRetry.map(r=>r.id);
     for (let attempt=1; attempt<=3 && remaining.length>0 && !_stopping; attempt++) {
-      const delay = attempt===1 ? 4000 : attempt===2 ? 7000 : 12000;
+      const delay = attempt===1 ? 2000 : attempt===2 ? 4000 : 6000;
       qi(`Auto-retry <b>${attempt}/3</b> &nbsp;·&nbsp; <b>${remaining.length}</b> replay(s) — waiting ${delay/1000}s each`);
       st(`Retry attempt ${attempt}/3 — ${remaining.length} replay(s)`, 'var(--amber)');
       const stillFailing = [];
@@ -8643,25 +8643,36 @@ function loadProfileBatch() {
 // Retry specific failed replay IDs
 async function retryFailed(btn) {
   if (!btn._failedIds || !btn._failedIds.length) return;
-  const ids = btn._failedIds;
+  const ids = [...btn._failedIds];
   btn.style.display = 'none';
   btn._failedIds = [];
-  st('Retrying '+ids.length+' failed replay(s)...', 'var(--amber)');
+  st('Retrying '+ids.length+' failed replay(s)…', 'var(--amber)');
 
   const stillFailing = [];
+  const DELAY = 2000;
+
   for (let i=0; i<ids.length; i++) {
     if (_stopping) break;
     st('Retrying '+(i+1)+'/'+ids.length+' — '+ids[i], 'var(--amber)');
-    await sleep(5000);
+    if (i > 0) await sleep(DELAY);
     const result = await loadReplay(ids[i]);
+    const _rp2 = (result.allPlays||result.plays||[]).filter(p=>p.play==='RPS').map(p=>({game:p.game||null,player1:p.player1||null,player2:p.player2||null,player1_choice:p.player1_choice||p.p1pick||null,player2_choice:p.player2_choice||p.p2pick||null,pick:p.pick||null}));
+    const _pp2 = parseMatch(result.id, result.allPlays||result.plays||[], _activeBatch.player||'', _activeBatch.aliases||[], result.player1, result.player2);
+    const _ps2 = _pp2 ? { games:_pp2.games, allMine:_pp2.allMine, allOpp:_pp2.allOpp, oppName:_pp2.oppName, myW:_pp2.myW, oppW:_pp2.oppW, draws:_pp2.draws, score:_pp2.score, result:_pp2.result } : null;
+    const _aliases2 = (_activeBatch.aliases||[]).map(a=>a.toLowerCase());
+    const _isP2 = u => { if(!u) return false; const ul=String(u).toLowerCase().trim(); return ul===(_activeBatch.player||'').toLowerCase() || _aliases2.includes(ul); };
+    const _oppName2 = [result.player1, result.player2].filter(Boolean).find(u=>!_isP2(u)) || '';
+    const _existing2 = (_activeBatch.replays||[]).find(r=>r.replayId===result.id);
+    const _evLabel2 = (_existing2 && _existing2.eventLabel) || '';
+
     _activeBatch.replays = (_activeBatch.replays||[]).filter(r=>r.replayId!==result.id);
-    _activeBatch.replays.push({replayId:result.id,plays:result.plays,allPlays:result.allPlays,timedOut:result.timedOut});
+    _activeBatch.replays.push({replayId:result.id,plays:_rp2,allPlays:[],timedOut:result.timedOut,player1:result.player1||null,player2:result.player2||null,oppName:_oppName2,parsed:_ps2,eventLabel:_evLabel2});
     try {
-      await fetch(API+'/batches/'+_activeBatch.id+'/replay', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({replayId:result.id,plays:result.plays,allPlays:result.allPlays,timedOut:result.timedOut})
+      await fetch(`${API}/batches/${_activeBatch.id}/replay`, {
+        method:'POST', headers: authHeaders(),
+        body: JSON.stringify({replayId:result.id,plays:_rp2,allPlays:[],timedOut:result.timedOut,player1:result.player1||null,player2:result.player2||null,oppName:_oppName2,parsed:_ps2,eventLabel:_evLabel2})
       });
-    } catch(e) {}
+    } catch(e) { console.warn('Server save failed for', result.id, e.message); }
     if (result.timedOut) stillFailing.push(ids[i]);
   }
 
@@ -8669,10 +8680,11 @@ async function retryFailed(btn) {
     btn._failedIds = stillFailing;
     btn.style.display = 'inline-block';
     btn.textContent = '↺ Retry '+stillFailing.length+' still failing';
-    st(stillFailing.length+' still timed out — check replay links or try later', 'var(--red)');
+    st(stillFailing.length+' still timed out — try again later', 'var(--amber)');
   } else {
     st('All retried successfully!', 'var(--green)');
   }
+  _batchLocalEdits = true;
   renderRPS();
   buildDeck();
 }
@@ -8807,38 +8819,58 @@ async function manualRetryTimedOut() {
   const timedOut = _activeBatch.replays.filter(r => r.timedOut).map(r => r.replayId);
   if (!timedOut.length) { alert('No timed-out replays to retry.'); return; }
 
-  st('Retrying '+timedOut.length+' timed-out replay(s)...', 'var(--amber)');
+  // Find and disable the retry button so it can't be double-clicked
+  const retryBtns = document.querySelectorAll('button[onclick*="manualRetryTimedOut"]');
+  retryBtns.forEach(b => { b.disabled = true; b.textContent = 'Retrying…'; });
+
+  st(`Retrying ${timedOut.length} timed-out replay(s) — this may take a while…`, 'var(--amber)');
   const stillFailing = [];
+  const DELAY = 2000; // 2s between retries — server queues concurrent CapSolver calls
 
   for (let i=0; i<timedOut.length; i++) {
-    st('Retrying '+(i+1)+'/'+timedOut.length+' — '+timedOut[i], 'var(--amber)');
+    if (_stopping) break;
+    st(`Retrying ${i+1}/${timedOut.length} — ${timedOut[i]}`, 'var(--amber)');
+    if (i > 0) await sleep(DELAY); // delay between each, not before first
+
     const result = await loadReplay(timedOut[i]);
-    // Parse immediately
     const _rp5 = (result.allPlays||result.plays||[]).filter(p=>p.play==='RPS').map(p=>({game:p.game||null,player1:p.player1||null,player2:p.player2||null,player1_choice:p.player1_choice||p.p1pick||null,player2_choice:p.player2_choice||p.p2pick||null,pick:p.pick||null}));
     const _pp5 = parseMatch(result.id, result.allPlays||result.plays||[], _activeBatch.player||'', _activeBatch.aliases||[], result.player1, result.player2);
     const _ps5 = _pp5 ? { games:_pp5.games, allMine:_pp5.allMine, allOpp:_pp5.allOpp, oppName:_pp5.oppName, myW:_pp5.myW, oppW:_pp5.oppW, draws:_pp5.draws, score:_pp5.score, result:_pp5.result } : null;
-    const aliases = _activeBatch.aliases||[];
-    const _aliases = aliases.map(a=>a.toLowerCase());
-    const _isPlayer = u => { if(!u) return false; const ul=String(u).toLowerCase().trim(); if(ul===(_activeBatch.player||'').toLowerCase()) return true; return _aliases.some(a=>ul===a); };
-    const _oppName = [result.player1, result.player2].filter(Boolean).find(u => !_isPlayer(u)) || '';
+    const _aliases = (_activeBatch.aliases||[]).map(a=>a.toLowerCase());
+    const _isP = u => { if(!u) return false; const ul=String(u).toLowerCase().trim(); return ul===(_activeBatch.player||'').toLowerCase() || _aliases.includes(ul); };
+    const _oppName = [result.player1, result.player2].filter(Boolean).find(u => !_isP(u)) || '';
+
+    // Update eventLabel from the stored timed-out replay
+    const _existingReplay = _activeBatch.replays.find(r => r.replayId === result.id);
+    const _eventLabel = (_existingReplay && _existingReplay.eventLabel) || '';
+
     _activeBatch.replays = _activeBatch.replays.filter(r => r.replayId !== result.id);
-    _activeBatch.replays.push({ replayId:result.id, plays:_rp5, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, oppName:_oppName, parsed:_ps5 });
-    // Save to server
-    try {
-      await fetch(API+'/batches/'+_activeBatch.id+'/replay', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({replayId:result.id, plays:_rp5, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, oppName:_oppName, parsed:_ps5})
-      });
-    } catch(e) {}
-    if (result.timedOut) stillFailing.push(result.id);
+
+    if (result.timedOut) {
+      // Still timing out — put it back as timed-out, keep event label
+      _activeBatch.replays.push({ replayId:result.id, plays:_rp5, allPlays:[], timedOut:true, player1:null, player2:null, oppName:'', parsed:null, eventLabel:_eventLabel });
+      stillFailing.push(result.id);
+      st(`${i+1}/${timedOut.length} still timed out, continuing…`, 'var(--amber)');
+    } else {
+      _activeBatch.replays.push({ replayId:result.id, plays:_rp5, allPlays:[], timedOut:false, player1:result.player1||null, player2:result.player2||null, oppName:_oppName, parsed:_ps5, eventLabel:_eventLabel });
+      // Save to server
+      try {
+        await fetch(`${API}/batches/${_activeBatch.id}/replay`, {
+          method: 'POST', headers: authHeaders(),
+          body: JSON.stringify({ replayId:result.id, plays:_rp5, allPlays:[], timedOut:false, player1:result.player1||null, player2:result.player2||null, oppName:_oppName, parsed:_ps5, eventLabel:_eventLabel })
+        });
+      } catch(e) { console.warn('Server save failed for', result.id, e.message); }
+    }
   }
 
+  retryBtns.forEach(b => { b.disabled = false; b.textContent = '↺ Retry Now'; });
+
   if (stillFailing.length) {
-    st(stillFailing.length+' replay(s) still timing out — try removing them and re-adding later', 'var(--red)');
+    st(`${timedOut.length - stillFailing.length} succeeded, ${stillFailing.length} still timing out — try again later or remove them`, 'var(--amber)');
   } else {
     st('All retries successful!', 'var(--green)');
   }
-  // Refresh RPS and deck viewer
+  _batchLocalEdits = true;
   renderRPS();
   buildDeck();
 }
