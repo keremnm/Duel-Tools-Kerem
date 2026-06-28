@@ -578,7 +578,8 @@ const server = http.createServer(async (req, res) => {
     return readBody(req, async data => {
       const b = db.batches[parts[1]];
       if (!b) return json(res, 404, { error:'Not found' });
-      if (data.name) b.name = data.name;
+      if (data.name    !== undefined) b.name    = data.name;
+      if (data.aliases !== undefined) b.aliases = data.aliases;
       await saveDB();
       return json(res, 200, b);
     });
@@ -940,7 +941,7 @@ const server = http.createServer(async (req, res) => {
       });
       if (taskRes.errorId) throw new Error('CapSolver createTask error: ' + taskRes.errorDescription);
       const taskId = taskRes.taskId;
-      console.log(`[proxy/replay] CapSolver taskId=${taskId} for replay ${replayId} (queue active: ${_proxyActive})`);
+      console.log(`[proxy/replay] CapSolver taskId=${taskId} for replay ${replayId}`);
 
       // Poll for solution (max 30s)
       let token = null, userAgent = null;
@@ -956,9 +957,9 @@ const server = http.createServer(async (req, res) => {
       const replayData = await new Promise((resolve, reject) => {
         const boundary = '----FormBoundary' + Math.random().toString(36).slice(2);
         function field(name, value) {
-          return `--${boundary}\nContent-Disposition: form-data; name="${name}"\n\n${value}\n`;
+          return `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`;
         }
-        const body = field('token', token) + field('turnstile', 'true') + field('master', 'false') + `--${boundary}--\n`;
+        const body = field('token', token) + field('turnstile', 'true') + field('master', 'false') + `--${boundary}--\r\n`;
         const bodyBuf = Buffer.from(body);
         const req2 = https.request({
           hostname: 'www.duelingbook.com',
@@ -967,7 +968,7 @@ const server = http.createServer(async (req, res) => {
           headers: {
             'Content-Type': `multipart/form-data; boundary=${boundary}`,
             'Content-Length': bodyBuf.length,
-            'User-Agent': userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'User-Agent': userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Referer': DUELINGBOOK_URL + '/',
             'Origin': DUELINGBOOK_URL,
           }
@@ -983,6 +984,10 @@ const server = http.createServer(async (req, res) => {
       });
 
       if (replayData.action === 'Error') throw new Error('Duelingbook error: ' + replayData.message);
+      if (!replayData.plays && !replayData.action) {
+        console.error(`[proxy/replay] Unexpected response for ${replayId}:`, JSON.stringify(replayData).slice(0, 300));
+        throw new Error('Duelingbook returned unexpected response: ' + JSON.stringify(replayData).slice(0, 150));
+      }
       console.log(`[proxy/replay] Got replay data for ${replayId} — ${(replayData.plays||[]).length} plays`);
       return replayData;
     }).then(replayData => {
