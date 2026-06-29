@@ -59,6 +59,11 @@ async function connectPostgres() {
     }, 1000);
   });
   console.log('Connected to PostgreSQL, batches:', Object.keys(db.batches).length);
+  // Flush any data that was buffered while Postgres was down
+  if (_pendingFlushKeys && _pendingFlushKeys.size > 0) {
+    console.log('[PG] Reconnected — flushing', _pendingFlushKeys.size, 'buffered keys...');
+    flushPendingToPostgres().catch(e => console.error('[PG] Post-reconnect flush failed:', e.message));
+  }
 }
 
 async function initDB() {
@@ -114,6 +119,53 @@ function loadFileDB() {
 
 // Track which keys have changed since last save
 const _dirtyKeys = new Set(['batches','players','users','gfwl','eventDates']);
+
+// ── Write-ahead buffer — holds pending saves when Postgres is temporarily down ─
+// Keys accumulate here; flushed automatically when connection is restored.
+const _pendingFlushKeys = new Set();
+let _flushRetryTimer = null;
+
+async function flushPendingToPostgres() {
+  if (!_pendingFlushKeys.size) return;
+  if (!pgClient) return; // still down, will retry
+  const keys = [..._pendingFlushKeys];
+  console.log('[saveDB] Flushing', keys.length, 'pending keys to Postgres after reconnect:', keys);
+  try {
+    const values = [], params = [];
+    let idx = 1;
+    for (const key of keys) {
+      if (!db[key]) continue;
+      let serialized;
+      try { serialized = JSON.stringify(db[key]); } catch(e) { continue; }
+      if (serialized.length > 8*1024*1024) { console.warn('[flush] Key', key, 'too large, skipping'); continue; }
+      values.push(`($${idx++},$${idx++},NOW())`);
+      params.push(key, serialized);
+    }
+    if (!values.length) { _pendingFlushKeys.clear(); return; }
+    await pgClient.query(
+      'INSERT INTO duel_tools_data (key, value, updated_at) VALUES '+values.join(',')+
+      ' ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()',
+      params
+    );
+    _pendingFlushKeys.clear();
+    if (_flushRetryTimer) { clearTimeout(_flushRetryTimer); _flushRetryTimer = null; }
+    console.log('[saveDB] Pending flush complete — all data saved to Postgres.');
+  } catch(e) {
+    console.error('[saveDB] Flush failed:', e.message, '— will retry in 10s');
+    scheduleFlushRetry();
+  }
+}
+
+function scheduleFlushRetry() {
+  if (_flushRetryTimer) return;
+  _flushRetryTimer = setTimeout(async () => {
+    _flushRetryTimer = null;
+    if (!pgClient) {
+      try { await connectPostgres(); } catch(e) {}
+    }
+    await flushPendingToPostgres();
+  }, 10000);
+}
 let _saveQueued = false;
 let _saveTimeout = null;
 
@@ -164,8 +216,17 @@ async function saveDB(keys) {
         }
       }
     } else {
-      try { fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2)); }
-      catch(e) { console.error('File DB save error:', e.message); }
+      if (process.env.DATABASE_URL) {
+        // Postgres is configured but disconnected — buffer the dirty keys in memory.
+        // They will be flushed to Postgres as soon as the connection is restored.
+        // Do NOT write to local file — Railway wipes it on every redeploy.
+        toSave.forEach(k => _pendingFlushKeys.add(k));
+        console.error('[saveDB] Postgres down — buffered keys:', [..._pendingFlushKeys], '— will flush on reconnect');
+        scheduleFlushRetry();
+      } else {
+        try { fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2)); }
+        catch(e) { console.error('File DB save error:', e.message); }
+      }
     }
   } catch(e) {
     console.error('[saveDB] Unexpected error:', e.message);
