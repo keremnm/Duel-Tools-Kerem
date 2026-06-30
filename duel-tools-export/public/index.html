@@ -3904,14 +3904,21 @@ async function go() {
         _activeBatch.aliases = aliases;
       }
     } catch(e) {
-      console.warn('Server unavailable, using local batch:', e.message);
-      _activeBatch = { id:'local-'+Date.now(), name:player, player, aliases, replays:[], createdAt:Date.now(), status:'pending' };
+      console.error('Server unavailable, batch creation FAILED:', e.message);
+      // DO NOT silently fall back to a local-only batch — this causes permanent,
+      // invisible data loss because nothing in a "local-" batch is ever sent to
+      // the server. Stop the import and make the user retry instead.
+      alert('⚠ Could not reach the server to create this batch.\n\nError: ' + e.message + '\n\nNo replays will be imported because they would NOT be saved. Check your connection / Railway status and try again.');
+      st('Batch creation failed — server unreachable. Import cancelled.', 'var(--red)');
+      document.getElementById('gobtn').disabled = false;
+      return;
     }
   }
   loadBatches();
   closeBatchPanel();
 
   _stopping = false; _matches = []; _activeMatch = -1;
+  const _failedServerSaves = [];
   // Clear any previous mismatch report from a prior import
   const _prevReport = document.getElementById('import-mismatch-report');
   if (_prevReport) _prevReport.remove();
@@ -3979,6 +3986,10 @@ async function go() {
         body: JSON.stringify({ replayId:result.id, plays:_rpsPlays, allPlays:[],
           timedOut:result.timedOut, oppName:_oppName, player1:result.player1||null, player2:result.player2||null, parsed:_parsedStore, eventLabel:_replayEventLabel })
       });
+      if (!saveRes.ok) {
+        const errBody = await saveRes.json().catch(()=>({}));
+        throw new Error(errBody.error || `HTTP ${saveRes.status}`);
+      }
       const saveData = await saveRes.json().catch(()=>({}));
       // Show duplicate warnings
       if (saveData.duplicateWarnings && saveData.duplicateWarnings.length) {
@@ -3993,7 +4004,12 @@ async function go() {
           if (cl.linked) qi(`<span style="color:var(--blue)">🔗 Replay cross-linked to <b>${cl.player}</b>'s batch</span>`);
         }
       }
-    } catch(e) { console.warn('Server save failed (server may not be running):', e.message); } // end !isTemp
+    } catch(e) {
+      // Server save failed — this replay was NOT persisted. Track it and tell the user loudly.
+      console.error('[SAVE FAILED] Replay', result.id, 'was NOT saved to server:', e.message);
+      _failedServerSaves.push({ id: result.id, error: e.message });
+      qi(`<span style="color:var(--red)">⚠ ${result.id}: SAVE TO SERVER FAILED (${e.message}) — this replay will be LOST if you don't retry!</span>`);
+    } // end !isTemp
     if (result.timedOut) toRetry.push({ id:ids[i] });
     pb(Math.round((i+1)/ids.length*50));
     if (i<ids.length-1) await sleep(1200);
@@ -4037,6 +4053,13 @@ async function go() {
   document.getElementById('gobtn').disabled = false;
   document.getElementById('stopbtn').style.display = 'none';
   qi('');
+
+  // Loudly warn if any replays failed to save to the server during this import
+  if (_failedServerSaves.length > 0) {
+    const idList = _failedServerSaves.map(f => f.id).join(', ');
+    st(`⚠ ${_failedServerSaves.length} replay(s) FAILED to save — they will be lost on redeploy!`, 'var(--red)');
+    alert(`⚠ WARNING: ${_failedServerSaves.length} replay(s) failed to save to the server:\n\n${idList}\n\nThese replays are only in your browser right now and will be LOST if you redeploy or close the tab. Click the 💾 Save button, and if it still fails, re-import this batch once the server connection is stable.`);
+  }
 
   // Try to reload from server; fall back to in-memory data
   // Skip if user has made local deletions (avoid restoring removed replays)
