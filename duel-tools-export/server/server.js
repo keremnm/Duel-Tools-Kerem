@@ -143,11 +143,20 @@ function loadFileDB() {
   } catch(e) { console.error('File DB load error:', e.message); }
 }
 
-// Track which keys have changed since last save.
-// NOTE: 'batches' is intentionally excluded — it's persisted via
-// saveBatchToPostgres() on a per-batch basis at the call site, not through
-// this generic dirty-key flush (storing all batches as one blob doesn't scale).
-const _dirtyKeys = new Set(['players','users','gfwl','eventDates']);
+// Keys saved via the generic single-row-per-key table. None of these ever
+// approach the 8MB JSONB cap (only 'batches' historically did, which is why
+// batches now has its own per-row table — see saveBatchToPostgres).
+//
+// IMPORTANT: this is a fixed list, always saved in full on every bare
+// saveDB() call — NOT a "dirty" tracking set. An earlier version tried to
+// only save keys that were explicitly marked dirty via markDirty(), but
+// most mutation call sites never called markDirty(), so once a key like
+// 'players' was saved once and removed from the dirty set, every later
+// change to player aliases/teams was silently never persisted again.
+// Always-save-everything is simpler and can't silently drop data — these
+// four keys are small enough that resaving all of them every time is cheap.
+const _ALWAYS_SAVE_KEYS = ['players','users','gfwl','eventDates'];
+const _dirtyKeys = new Set(_ALWAYS_SAVE_KEYS);
 
 // ── Write-ahead buffer — holds pending saves when Postgres is temporarily down ─
 // Keys accumulate here; flushed automatically when connection is restored.
@@ -275,7 +284,7 @@ async function deleteBatchFromPostgres(batchId) {
 
 async function saveDB(keys) {
   // If specific keys passed, use those; otherwise save all dirty keys
-  const toSave = keys ? (Array.isArray(keys) ? keys : [keys]) : [..._dirtyKeys];
+  const toSave = keys ? (Array.isArray(keys) ? keys : [keys]) : [..._ALWAYS_SAVE_KEYS];
   if (!toSave.length) return;
 
   // 'batches' is handled separately via the per-row table — never serialize
@@ -326,8 +335,7 @@ async function saveDB(keys) {
           ' ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()',
           params
         );
-        // Clear dirty flags for saved keys
-        otherKeys.forEach(k => _dirtyKeys.delete(k));
+        // (no dirty-flag bookkeeping needed — _ALWAYS_SAVE_KEYS is fixed, see comment above)
       } catch(e) {
         console.error('PG save error:', e.message);
         if (e.message.includes('connect') || e.message.includes('Connection') || e.code === 'ECONNRESET') {
@@ -675,7 +683,7 @@ const server = http.createServer(async (req, res) => {
       const key = name.toLowerCase();
       if (!db.players[key]) {
         db.players[key] = { name, aliases: data.aliases||[], topPlayer: false, gfwlTeams: [], eventDecklists: [] };
-        await saveDB();
+        await saveDB('players');
       }
       return json(res, 200, db.players[key]);
     });
@@ -690,7 +698,8 @@ const server = http.createServer(async (req, res) => {
       if (data.topPlayer  !== undefined) p.topPlayer  = !!data.topPlayer;
       if (data.gfwlTeams  !== undefined) p.gfwlTeams  = data.gfwlTeams;
       if (data.eventDecklists !== undefined) p.eventDecklists = data.eventDecklists;
-      await saveDB();
+      await saveDB('players'); // explicit key — bare saveDB() can silently skip 'players'
+                                 // once it's fallen out of the dirty-key tracking set
       return json(res, 200, p);
     });
   }
