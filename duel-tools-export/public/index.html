@@ -1924,7 +1924,7 @@ function renderTopPlayers(playerRegistry) {
     item.onmouseout  = () => item.style.background = '';
     const star = document.createElement('span'); star.textContent = '⭐'; star.style.fontSize = '11px';
     const name = document.createElement('span'); name.style.cssText = 'font-size:13px;font-weight:bold;color:var(--text);flex:1'; name.textContent = p.name;
-    const teams = (p.teams||[]);
+    const teams = (p.gfwlTeams||p.teams||[]);
     const teamEl = document.createElement('span'); teamEl.style.cssText = 'font-size:10px;color:var(--muted)';
     if (teams.length) teamEl.textContent = teams[teams.length-1].team;
     item.appendChild(star); item.appendChild(name); item.appendChild(teamEl);
@@ -8228,23 +8228,33 @@ async function saveTeamEntry() {
 
   const key     = player.toLowerCase();
   const entry   = window._playerRegistry && window._playerRegistry[key];
-  const teams   = [...(entry ? (entry.teams||[]) : []), { season, team }];
+  // NOTE: the server field is "gfwlTeams", not "teams" — reading the wrong
+  // field here meant every save silently discarded all previously saved teams.
+  const teams   = [...(entry ? (entry.gfwlTeams||[]) : []), { season, team }];
 
   try {
-    await fetch(`${API}/players/${encodeURIComponent(player)}/aliases`, {
-      method:'PATCH', headers:{'Content-Type':'application/json'},
+    const r = await fetch(`${API}/players/${encodeURIComponent(player)}/aliases`, {
+      method:'PATCH', headers: authHeaders(),
       body: JSON.stringify({ gfwlTeams: teams })
     });
-    if (window._playerRegistry && window._playerRegistry[key]) {
-      window._playerRegistry[key].teams = teams;
-      window._playerRegistry[key].gfwlTeams = teams;
+    if (!r.ok) {
+      const body = await r.json().catch(()=>({}));
+      throw new Error(body.error || `HTTP ${r.status}`);
     }
+    const saved = await r.json().catch(()=>null);
+    if (!window._playerRegistry) window._playerRegistry = {};
+    if (!window._playerRegistry[key]) window._playerRegistry[key] = { name: player, aliases: [] };
+    // Use what the server actually persisted, not just our optimistic guess
+    window._playerRegistry[key].gfwlTeams = (saved && saved.gfwlTeams) || teams;
     document.getElementById('team-season-inp').value = '';
     document.getElementById('team-name-inp').value   = '';
     document.getElementById('add-team-form').style.display = 'none';
-    renderProfileTeams(player, teams);
+    renderProfileTeams(player, window._playerRegistry[key].gfwlTeams);
     st('Team saved', 'var(--green)');
-  } catch(e) { st('Failed to save team', 'var(--red)'); }
+  } catch(e) {
+    console.error('[saveTeamEntry] Failed:', e.message);
+    st('Failed to save team: ' + e.message, 'var(--red)');
+  }
 }
 
 function renderProfileTeams(player, teams) {
@@ -8272,15 +8282,20 @@ function renderProfileTeams(player, teams) {
 async function deleteTeamEntry(player, entry) {
   const key   = player.toLowerCase();
   const reg   = window._playerRegistry && window._playerRegistry[key];
-  const teams = (reg ? (reg.teams||[]) : []).filter(t => !(t.season===entry.season && t.team===entry.team));
+  const teams = (reg ? (reg.gfwlTeams||[]) : []).filter(t => !(t.season===entry.season && t.team===entry.team));
   try {
-    await fetch(`${API}/players/${encodeURIComponent(player)}/aliases`, {
-      method:'PATCH', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ teams })
+    const r = await fetch(`${API}/players/${encodeURIComponent(player)}/aliases`, {
+      method:'PATCH', headers: authHeaders(),
+      body: JSON.stringify({ gfwlTeams: teams })
     });
-    if (reg) reg.teams = teams;
+    if (!r.ok) { const body = await r.json().catch(()=>({})); throw new Error(body.error || `HTTP ${r.status}`); }
+    if (reg) reg.gfwlTeams = teams;
     renderProfileTeams(player, teams);
-  } catch(e) {}
+    st('Team removed', 'var(--green)');
+  } catch(e) {
+    console.error('[deleteTeamEntry] Failed:', e.message);
+    st('Failed to remove team: ' + e.message, 'var(--red)');
+  }
 }
 
 async function editAliases() {

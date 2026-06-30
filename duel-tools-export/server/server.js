@@ -543,7 +543,7 @@ const server = http.createServer(async (req, res) => {
   // ── GET /api/health ─────────────────────────────────────────────────────────
   if (parts[0]==='health' && method==='GET') {
     const totalBatchSize = Object.values(db.batches).reduce((sum,b) => { try { return sum + JSON.stringify(b).length; } catch(e) { return sum; } }, 0);
-    return json(res, 200, { ok:true, db: pgClient?'postgres':'file', batches: Object.keys(db.batches).length, batchStorageMB: Math.round(totalBatchSize/1024/1024*10)/10, players: Object.keys(db.players).length, users: Object.keys(db.users).length, capsolver: !!process.env.CAPSOLVER_API_KEY, pendingFlush: [..._pendingFlushKeys] });
+    return json(res, 200, { ok:true, db: pgClient?'postgres':'file', batches: Object.keys(db.batches).length, batchStorageMB: Math.round(totalBatchSize/1024/1024*10)/10, players: Object.keys(db.players).length, users: Object.keys(db.users).length, capsolver: !!process.env.CAPSOLVER_API_KEY, dbSessionCookie: !!process.env.DUELINGBOOK_SESSION_COOKIE, pendingFlush: [..._pendingFlushKeys] });
   }
 
   // ── POST /api/auth/login ────────────────────────────────────────────────────
@@ -1024,6 +1024,9 @@ const server = http.createServer(async (req, res) => {
     const DUELINGBOOK_URL = 'https://www.duelingbook.com';
 
     if (!CAPSOLVER_API_KEY) return json(res, 500, { error: 'CAPSOLVER_API_KEY not set in environment' });
+    if (!process.env.DUELINGBOOK_SESSION_COOKIE) {
+      console.warn('[proxy/replay] WARNING: DUELINGBOOK_SESSION_COOKIE not set — replays may intermittently fail with "must be logged in" errors');
+    }
 
     try {
       const https = require('https');
@@ -1038,7 +1041,7 @@ const server = http.createServer(async (req, res) => {
             r2.on('end', () => { try { resolve(JSON.parse(buf)); } catch(e) { reject(new Error('Bad JSON: ' + buf.slice(0, 100))); } });
           });
           req2.on('error', reject);
-          req2.setTimeout(30000, () => { req2.destroy(); reject(new Error('timeout')); });
+          req2.setTimeout(25000, () => { req2.destroy(); reject(new Error('CapSolver request timeout')); });
           req2.write(data);
           req2.end();
         });
@@ -1058,10 +1061,10 @@ const server = http.createServer(async (req, res) => {
       const taskId = taskRes.taskId;
       console.log(`[proxy/replay] CapSolver taskId=${taskId} for replay ${replayId}`);
 
-      // Poll for solution (max 30s)
+      // Poll for solution (max 90s — Turnstile solves can take 40-60s+ under load)
       let token = null;
       let userAgent = null;
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 60; i++) {
         await new Promise(r => setTimeout(r, 1500));
         const resultRes = await httpsPost('api.capsolver.com', '/getTaskResult', { clientKey: CAPSOLVER_API_KEY, taskId });
         if (resultRes.status === 'ready') {
@@ -1071,7 +1074,7 @@ const server = http.createServer(async (req, res) => {
         }
         if (resultRes.errorId) throw new Error('CapSolver poll error: ' + resultRes.errorDescription);
       }
-      if (!token) throw new Error('CapSolver timed out waiting for token');
+      if (!token) throw new Error('CapSolver timed out waiting for token (90s)');
       console.log(`[proxy/replay] Got Turnstile token for ${replayId}`);
 
       // Step 2: POST to duelingbook view-replay with the token as multipart form data
@@ -1098,6 +1101,7 @@ ${value}
             'User-Agent': userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Referer': DUELINGBOOK_URL + '/',
             'Origin': DUELINGBOOK_URL,
+            ...(process.env.DUELINGBOOK_SESSION_COOKIE ? { 'Cookie': `PHPSESSID=${process.env.DUELINGBOOK_SESSION_COOKIE}` } : {}),
           }
         }, (r2) => {
           let buf = '';
@@ -1108,7 +1112,7 @@ ${value}
           });
         });
         req2.on('error', reject);
-        req2.setTimeout(20000, () => { req2.destroy(); reject(new Error('duelingbook timeout')); });
+        req2.setTimeout(30000, () => { req2.destroy(); reject(new Error('duelingbook timeout (30s)')); });
         req2.write(bodyBuf);
         req2.end();
       });
