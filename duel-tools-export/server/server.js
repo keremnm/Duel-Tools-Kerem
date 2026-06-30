@@ -398,6 +398,21 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+
+  // ── POST /api/save — manual save all data to Postgres immediately ────────────
+  if (parts[0]==='save' && method==='POST') {
+    try {
+      await saveDB();
+      // Also flush any pending buffered keys
+      if (_pendingFlushKeys && _pendingFlushKeys.size > 0) {
+        await flushPendingToPostgres();
+      }
+      return json(res, 200, { ok: true, message: 'All data saved to Postgres successfully', batches: Object.keys(db.batches).length, players: Object.keys(db.players).length });
+    } catch(e) {
+      return json(res, 500, { ok: false, error: e.message });
+    }
+  }
+
   // ── GET /api/health ─────────────────────────────────────────────────────────
   if (parts[0]==='health' && method==='GET') {
     return json(res, 200, { ok:true, db: pgClient?'postgres':'file', batches: Object.keys(db.batches).length, players: Object.keys(db.players).length, users: Object.keys(db.users).length, capsolver: !!process.env.CAPSOLVER_API_KEY });
@@ -685,7 +700,7 @@ const server = http.createServer(async (req, res) => {
           const cl = crossLinkReplay(data, data.oppName, b.player);
           if (cl) crossLinks.push(cl);
         }
-        saveDBDebounced('batches');
+        await saveDB('batches');
         } catch(saveErr) { console.error('[replay POST] Save error:', saveErr.message); }
       } else if (dup.timedOut && !data.timedOut) {
         // Existing timed-out entry being updated with real data — overwrite it

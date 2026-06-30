@@ -405,6 +405,7 @@ select{cursor:pointer}
       <button class="ntab" id="gfwl-prep-tab" onclick="switchTab('gfwl',this)">GFWL Prep</button>
     </div>
     <div class="topbar-right">
+      <button id="manual-save-btn" onclick="manualSave()" title="Force save all data to Postgres now" style="background:none;border:1px solid var(--green);color:var(--green);font-family:monospace;font-size:10px;padding:2px 10px;border-radius:4px;cursor:pointer">💾 Save</button>
       <button id="admin-panel-btn" onclick="openAdminPanel()" style="display:none;background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-size:10px;padding:2px 10px;border-radius:4px;cursor:pointer">⚙ Users</button>
       <button id="error-log-btn" onclick="viewErrorLog()" style="display:none;background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:10px;padding:2px 10px;border-radius:4px;cursor:pointer" title="Server error log">⚠ Errors</button>
       <div id="dt-user-info" style="display:none;align-items:center;gap:6px;font-size:12px;color:var(--muted)">
@@ -10258,6 +10259,33 @@ async function gateSignup() {
     gateMsg('Account created! Waiting for admin approval.', '#00e596');
     btn.textContent = 'Request Access'; btn.disabled = false;
   } catch(e) { gateMsg('Network error'); btn.textContent='Request Access'; btn.disabled=false; }
+}
+
+async function manualSave() {
+  const btn = document.getElementById('manual-save-btn');
+  const orig = btn.textContent;
+  btn.textContent = '💾 Saving...';
+  btn.disabled = true;
+  try {
+    const r = await fetch(API + '/save', { method: 'POST', headers: authHeaders() });
+    const data = await r.json();
+    if (r.ok) {
+      btn.textContent = '✓ Saved!';
+      btn.style.borderColor = 'var(--green)';
+      btn.style.color = 'var(--green)';
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
+    } else {
+      btn.textContent = '✗ Failed';
+      btn.style.borderColor = 'var(--red)';
+      btn.style.color = 'var(--red)';
+      alert('Save failed: ' + (data.error || 'Unknown error'));
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; btn.style.borderColor = 'var(--green)'; btn.style.color = 'var(--green)'; }, 3000);
+    }
+  } catch(e) {
+    btn.textContent = '✗ Error';
+    alert('Save error: ' + e.message);
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
+  }
 }
 
 function authHeaders() {
