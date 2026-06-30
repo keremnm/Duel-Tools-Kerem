@@ -32,8 +32,34 @@ async function connectPostgres() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
-  const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('batches','players','users','gfwl','eventDates')");
+  // Batches get their own table — one row per batch — because storing all
+  // batches as a single JSONB blob under one key hits row size limits as
+  // the dataset grows (each row blob was capped at 8MB and silently skipped
+  // once batches exceeded that, causing replays to never reach Postgres).
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS duel_tools_batches (
+      id TEXT PRIMARY KEY,
+      value JSONB NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('players','users','gfwl','eventDates')");
   for (const row of res.rows) { db[row.key] = row.value; }
+  const batchRes = await client.query('SELECT id, value FROM duel_tools_batches');
+  db.batches = {};
+  for (const row of batchRes.rows) { db.batches[row.id] = row.value; }
+  // Migrate any legacy batches still stored under the old single-blob key
+  const legacyRes = await client.query("SELECT value FROM duel_tools_data WHERE key='batches'");
+  if (legacyRes.rows.length && legacyRes.rows[0].value && Object.keys(legacyRes.rows[0].value).length) {
+    console.log('[PG] Migrating', Object.keys(legacyRes.rows[0].value).length, 'legacy batches to per-row storage...');
+    for (const [id, batch] of Object.entries(legacyRes.rows[0].value)) {
+      if (!db.batches[id]) db.batches[id] = batch; // don't overwrite if already split
+    }
+    pgClient = client; // needed before saveAllBatchesToPostgres can run
+    await saveAllBatchesToPostgres();
+    await client.query("DELETE FROM duel_tools_data WHERE key='batches'");
+    console.log('[PG] Legacy batch migration complete — old blob removed.');
+  }
   if (!db.batches) db.batches = {};
   if (!db.players) db.players = {};
   if (!db.users)   db.users   = {};
@@ -117,8 +143,11 @@ function loadFileDB() {
   } catch(e) { console.error('File DB load error:', e.message); }
 }
 
-// Track which keys have changed since last save
-const _dirtyKeys = new Set(['batches','players','users','gfwl','eventDates']);
+// Track which keys have changed since last save.
+// NOTE: 'batches' is intentionally excluded — it's persisted via
+// saveBatchToPostgres() on a per-batch basis at the call site, not through
+// this generic dirty-key flush (storing all batches as one blob doesn't scale).
+const _dirtyKeys = new Set(['players','users','gfwl','eventDates']);
 
 // ── Write-ahead buffer — holds pending saves when Postgres is temporarily down ─
 // Keys accumulate here; flushed automatically when connection is restored.
@@ -130,28 +159,52 @@ async function flushPendingToPostgres() {
   if (!pgClient) return; // still down, will retry
   const keys = [..._pendingFlushKeys];
   console.log('[saveDB] Flushing', keys.length, 'pending keys to Postgres after reconnect:', keys);
-  try {
-    const values = [], params = [];
-    let idx = 1;
-    for (const key of keys) {
-      if (!db[key]) continue;
-      let serialized;
-      try { serialized = JSON.stringify(db[key]); } catch(e) { continue; }
-      if (serialized.length > 8*1024*1024) { console.warn('[flush] Key', key, 'too large, skipping'); continue; }
-      values.push(`($${idx++},$${idx++},NOW())`);
-      params.push(key, serialized);
+
+  const batchIds = keys.filter(k => k.startsWith('batches:')).map(k => k.slice('batches:'.length));
+  const plainKeys = keys.filter(k => !k.startsWith('batches:'));
+
+  let anyFailed = false;
+
+  // Flush individual batch rows
+  for (const bid of batchIds) {
+    if (!db.batches[bid]) { _pendingFlushKeys.delete('batches:'+bid); continue; }
+    try {
+      await saveBatchToPostgres(bid);
+    } catch(e) { anyFailed = true; }
+  }
+
+  // Flush plain top-level keys (players, users, gfwl, eventDates)
+  if (plainKeys.length) {
+    try {
+      const values = [], params = [];
+      let idx = 1;
+      for (const key of plainKeys) {
+        if (!db[key]) continue;
+        let serialized;
+        try { serialized = JSON.stringify(db[key]); } catch(e) { continue; }
+        if (serialized.length > 8*1024*1024) { console.warn('[flush] Key', key, 'too large, skipping'); continue; }
+        values.push(`($${idx++},$${idx++},NOW())`);
+        params.push(key, serialized);
+      }
+      if (values.length) {
+        await pgClient.query(
+          'INSERT INTO duel_tools_data (key, value, updated_at) VALUES '+values.join(',')+
+          ' ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()',
+          params
+        );
+      }
+      plainKeys.forEach(k => _pendingFlushKeys.delete(k));
+    } catch(e) {
+      console.error('[saveDB] Flush of plain keys failed:', e.message);
+      anyFailed = true;
     }
-    if (!values.length) { _pendingFlushKeys.clear(); return; }
-    await pgClient.query(
-      'INSERT INTO duel_tools_data (key, value, updated_at) VALUES '+values.join(',')+
-      ' ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()',
-      params
-    );
-    _pendingFlushKeys.clear();
+  }
+
+  if (!anyFailed) {
     if (_flushRetryTimer) { clearTimeout(_flushRetryTimer); _flushRetryTimer = null; }
     console.log('[saveDB] Pending flush complete — all data saved to Postgres.');
-  } catch(e) {
-    console.error('[saveDB] Flush failed:', e.message, '— will retry in 10s');
+  } else {
+    console.error('[saveDB] Some keys still failed to flush — will retry in 10s');
     scheduleFlushRetry();
   }
 }
@@ -173,10 +226,79 @@ function markDirty(key) {
   _dirtyKeys.add(key);
 }
 
+// Save a single batch as its own row — used for per-replay immediate saves.
+// This avoids ever needing to serialize the entire batches collection.
+async function saveBatchToPostgres(batchId) {
+  if (!pgClient) { _pendingFlushKeys.add('batches:'+batchId); scheduleFlushRetry(); return; }
+  const batch = db.batches[batchId];
+  if (!batch) return;
+  try {
+    const serialized = JSON.stringify(batch);
+    if (serialized.length > 50*1024*1024) {
+      console.error('[saveBatch] Batch', batchId, 'is', Math.round(serialized.length/1024/1024)+'MB — exceeds safe limit, NOT saved!');
+      return;
+    }
+    await pgClient.query(
+      'INSERT INTO duel_tools_batches (id, value, updated_at) VALUES ($1,$2,NOW()) ON CONFLICT (id) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()',
+      [batchId, serialized]
+    );
+    _pendingFlushKeys.delete('batches:'+batchId);
+  } catch(e) {
+    console.error('[saveBatch] Failed for', batchId, ':', e.message);
+    _pendingFlushKeys.add('batches:'+batchId);
+    if (e.message.includes('connect') || e.message.includes('Connection') || e.code === 'ECONNRESET') {
+      pgClient = null;
+      setTimeout(async () => { try { await connectPostgres(); } catch(e2) {} }, 2000);
+    }
+    scheduleFlushRetry();
+    throw e; // let the caller (e.g. the HTTP handler) know the save failed
+  }
+}
+
+// Save every batch currently in memory — used by manual Save button and migration.
+async function saveAllBatchesToPostgres() {
+  if (!pgClient) { Object.keys(db.batches).forEach(id => _pendingFlushKeys.add('batches:'+id)); scheduleFlushRetry(); return; }
+  const ids = Object.keys(db.batches);
+  let failed = 0;
+  for (const id of ids) {
+    try { await saveBatchToPostgres(id); } catch(e) { failed++; }
+  }
+  console.log('[saveAllBatches]', ids.length-failed, '/', ids.length, 'batches saved to Postgres.');
+  return { total: ids.length, failed };
+}
+
+async function deleteBatchFromPostgres(batchId) {
+  if (!pgClient) return;
+  try { await pgClient.query('DELETE FROM duel_tools_batches WHERE id=$1', [batchId]); }
+  catch(e) { console.error('[deleteBatch] Failed for', batchId, ':', e.message); }
+}
+
 async function saveDB(keys) {
   // If specific keys passed, use those; otherwise save all dirty keys
   const toSave = keys ? (Array.isArray(keys) ? keys : [keys]) : [..._dirtyKeys];
   if (!toSave.length) return;
+
+  // 'batches' is handled separately via the per-row table — never serialize
+  // the whole collection into one JSONB blob (that's what caused replays to
+  // silently stop saving once the dataset passed 8MB).
+  const wantsBatches = toSave.includes('batches');
+  const otherKeys = toSave.filter(k => k !== 'batches');
+
+  if (wantsBatches) {
+    if (pgClient) {
+      await saveAllBatchesToPostgres();
+      _dirtyKeys.delete('batches');
+    } else if (process.env.DATABASE_URL) {
+      Object.keys(db.batches).forEach(id => _pendingFlushKeys.add('batches:'+id));
+      console.error('[saveDB] Postgres down — buffered all batch ids for flush on reconnect');
+      scheduleFlushRetry();
+    } else {
+      try { fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2)); }
+      catch(e) { console.error('File DB save error:', e.message); }
+    }
+  }
+
+  if (!otherKeys.length) return;
 
   try {
     if (pgClient && pgClient._connected !== false) {
@@ -185,7 +307,7 @@ async function saveDB(keys) {
         const values = [];
         const params = [];
         let idx = 1;
-        for (const key of toSave) {
+        for (const key of otherKeys) {
           if (!db[key]) continue;
           let serialized;
           try { serialized = JSON.stringify(db[key]); }
@@ -205,7 +327,7 @@ async function saveDB(keys) {
           params
         );
         // Clear dirty flags for saved keys
-        toSave.forEach(k => _dirtyKeys.delete(k));
+        otherKeys.forEach(k => _dirtyKeys.delete(k));
       } catch(e) {
         console.error('PG save error:', e.message);
         if (e.message.includes('connect') || e.message.includes('Connection') || e.code === 'ECONNRESET') {
@@ -220,7 +342,7 @@ async function saveDB(keys) {
         // Postgres is configured but disconnected — buffer the dirty keys in memory.
         // They will be flushed to Postgres as soon as the connection is restored.
         // Do NOT write to local file — Railway wipes it on every redeploy.
-        toSave.forEach(k => _pendingFlushKeys.add(k));
+        otherKeys.forEach(k => _pendingFlushKeys.add(k));
         console.error('[saveDB] Postgres down — buffered keys:', [..._pendingFlushKeys], '— will flush on reconnect');
         scheduleFlushRetry();
       } else {
@@ -402,10 +524,15 @@ const server = http.createServer(async (req, res) => {
   // ── POST /api/save — manual save all data to Postgres immediately ────────────
   if (parts[0]==='save' && method==='POST') {
     try {
-      await saveDB();
+      const batchResult = await saveAllBatchesToPostgres();
+      await saveDB(); // saves players/users/gfwl/eventDates
       // Also flush any pending buffered keys
       if (_pendingFlushKeys && _pendingFlushKeys.size > 0) {
         await flushPendingToPostgres();
+      }
+      const failedCount = (batchResult && batchResult.failed) || 0;
+      if (failedCount > 0) {
+        return json(res, 207, { ok: false, message: `${failedCount} batch(es) failed to save — check server logs`, batches: Object.keys(db.batches).length, players: Object.keys(db.players).length, failed: failedCount });
       }
       return json(res, 200, { ok: true, message: 'All data saved to Postgres successfully', batches: Object.keys(db.batches).length, players: Object.keys(db.players).length });
     } catch(e) {
@@ -415,7 +542,8 @@ const server = http.createServer(async (req, res) => {
 
   // ── GET /api/health ─────────────────────────────────────────────────────────
   if (parts[0]==='health' && method==='GET') {
-    return json(res, 200, { ok:true, db: pgClient?'postgres':'file', batches: Object.keys(db.batches).length, players: Object.keys(db.players).length, users: Object.keys(db.users).length, capsolver: !!process.env.CAPSOLVER_API_KEY });
+    const totalBatchSize = Object.values(db.batches).reduce((sum,b) => { try { return sum + JSON.stringify(b).length; } catch(e) { return sum; } }, 0);
+    return json(res, 200, { ok:true, db: pgClient?'postgres':'file', batches: Object.keys(db.batches).length, batchStorageMB: Math.round(totalBatchSize/1024/1024*10)/10, players: Object.keys(db.players).length, users: Object.keys(db.users).length, capsolver: !!process.env.CAPSOLVER_API_KEY, pendingFlush: [..._pendingFlushKeys] });
   }
 
   // ── POST /api/auth/login ────────────────────────────────────────────────────
@@ -531,7 +659,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (changed) totalBatches++;
     }
-    await saveDB();
+    await saveAllBatchesToPostgres();
     return json(res, 200, { ok:true, cleanedBatches:totalBatches, cleanedReplays:totalReplays });
   }
 
@@ -578,7 +706,7 @@ const server = http.createServer(async (req, res) => {
       const id = crypto.randomUUID();
       const batch = { id, name: data.name||data.player||'Batch', player: data.player||'', aliases: data.aliases||[], replays: [], createdAt: Date.now(), status: 'pending' };
       db.batches[id] = batch;
-      await saveDB();
+      await saveBatchToPostgres(id);
       return json(res, 200, batch);
     });
   }
@@ -595,7 +723,7 @@ const server = http.createServer(async (req, res) => {
       if (!b) return json(res, 404, { error:'Not found' });
       if (data.name    !== undefined) b.name    = data.name;
       if (data.aliases !== undefined) b.aliases = data.aliases;
-      await saveDB();
+      await saveBatchToPostgres(b.id);
       return json(res, 200, b);
     });
   }
@@ -603,7 +731,7 @@ const server = http.createServer(async (req, res) => {
   if (parts[0]==='batches' && parts[1] && !parts[2] && method==='DELETE') {
     if (!db.batches[parts[1]]) return json(res, 404, { error:'Not found' });
     delete db.batches[parts[1]];
-    await saveDB();
+    await deleteBatchFromPostgres(parts[1]);
     return json(res, 200, { ok:true });
   }
 
@@ -614,7 +742,7 @@ const server = http.createServer(async (req, res) => {
     const replayId = decodeURIComponent(parts[3]);
     const before = (b.replays||[]).length;
     b.replays = (b.replays||[]).filter(r => r.replayId !== replayId);
-    await saveDB();
+    await saveBatchToPostgres(b.id);
     return json(res, 200, { ok:true, removed: before - b.replays.length });
   }
 
@@ -628,7 +756,7 @@ const server = http.createServer(async (req, res) => {
         if (data.parsed) r.parsed = data.parsed;
         if (data.plays)  r.plays  = data.plays;
         r.allPlays = []; // clear raw plays once parsed
-        await saveDB();
+        await saveBatchToPostgres(b.id);
         console.log(`[parsed] Migrated replay ${r.replayId} — allPlays cleared`);
       }
       return json(res, 200, { ok:true });
@@ -649,7 +777,7 @@ const server = http.createServer(async (req, res) => {
           if (data.myDeckOverride)  r.parsed.myDeck  = data.myDeckOverride;
           if (data.oppDeckOverride) r.parsed.oppDeck = data.oppDeckOverride;
         }
-        await saveDB('batches');
+        await saveBatchToPostgres(b.id);
         return json(res, 200, { ok:true, found:true });
       }
       return json(res, 200, { ok:true, found:false });
@@ -662,7 +790,7 @@ const server = http.createServer(async (req, res) => {
     if (!b) return json(res, 404, { error:'Not found' });
     return readBody(req, async data => {
       const r = (b.replays||[]).find(r => r.replayId === parts[3]);
-      if (r) { r.eventLabel = data.eventLabel||''; await saveDB(); }
+      if (r) { r.eventLabel = data.eventLabel||''; await saveBatchToPostgres(b.id); }
       return json(res, 200, { ok:true });
     });
   }
@@ -699,16 +827,17 @@ const server = http.createServer(async (req, res) => {
         if (data.oppName && !data.noCrossLink) {
           const cl = crossLinkReplay(data, data.oppName, b.player);
           if (cl) crossLinks.push(cl);
+          if (cl && cl.batchId) await saveBatchToPostgres(cl.batchId).catch(e=>console.error('[crosslink save]',e.message));
         }
-        await saveDB('batches');
-        } catch(saveErr) { console.error('[replay POST] Save error:', saveErr.message); }
+        await saveBatchToPostgres(b.id);
+        } catch(saveErr) { console.error('[replay POST] Save error:', saveErr.message); throw saveErr; }
       } else if (dup.timedOut && !data.timedOut) {
         // Existing timed-out entry being updated with real data — overwrite it
         const parsedData2 = data.parsed || null;
         b.replays[dupIdx] = { replayId:data.replayId, plays:data.plays||[], allPlays:parsedData2?[]:(minPlays||[]).map(stripPlay), parsed:parsedData2, timedOut:false, eventLabel:dup.eventLabel||data.eventLabel||'', oppName:data.oppName||dup.oppName||'', player1:data.player1||dup.player1||null, player2:data.player2||dup.player2||null, savedAt:Date.now() };
         b.status = 'ready';
         console.log(`[replay] Updated timed-out replay ${data.replayId} with real data`);
-        await saveDB();
+        await saveBatchToPostgres(b.id);
       }
       return json(res, 200, { ok:true, duplicate:!!dup, crossLinks });
     });
@@ -733,7 +862,7 @@ const server = http.createServer(async (req, res) => {
       return isPlayer(r.player1) || isPlayer(r.player2);
     });
     const removed = before - b.replays.length;
-    if (removed > 0) await saveDB();
+    if (removed > 0) await saveBatchToPostgres(b.id);
     console.log(`[cleanup] Batch ${bId} (${b.name}): removed ${removed} invalid replays`);
     return json(res, 200, { ok:true, removed, kept:b.replays.length });
   }
