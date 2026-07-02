@@ -529,6 +529,39 @@ const server = http.createServer(async (req, res) => {
   }
 
 
+  // ── POST /api/gfwl/dedup — one-time fix: merge case-duplicate team names ────
+  // e.g. merges "Birdcage" (from schedule import) into "birdcage" (from roster)
+  if (parts[0]==='gfwl' && parts[1]==='dedup' && method==='POST') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    let merged = 0;
+    for (const season of Object.keys(db.gfwl)) {
+      const teams = db.gfwl[season].teams || {};
+      const seen = {}; // lowercase → first canonical key
+      const toDelete = [];
+      for (const name of Object.keys(teams)) {
+        const lower = name.toLowerCase();
+        if (seen[lower]) {
+          // Duplicate — merge into the first-seen canonical entry
+          const canonical = seen[lower];
+          const src = teams[name];
+          const dst = teams[canonical];
+          if (!dst.conference && src.conference) dst.conference = src.conference;
+          if ((!dst.schedule || !dst.schedule.length) && src.schedule && src.schedule.length) dst.schedule = src.schedule;
+          if (src.roster && src.roster.length) dst.roster = [...new Set([...(dst.roster||[]), ...src.roster])];
+          if (src.aliases && src.aliases.length) dst.aliases = [...new Set([...(dst.aliases||[]), ...src.aliases])];
+          toDelete.push(name);
+          merged++;
+          console.log(`[dedup] ${season}: merged "${name}" into "${canonical}"`);
+        } else {
+          seen[lower] = name;
+        }
+      }
+      for (const name of toDelete) delete teams[name];
+    }
+    if (merged > 0) await saveDB('gfwl');
+    return json(res, 200, { ok:true, merged });
+  }
+
   // ── POST /api/save — manual save all data to Postgres immediately ────────────
   if (parts[0]==='save' && method==='POST') {
     try {
@@ -904,9 +937,17 @@ const server = http.createServer(async (req, res) => {
       if (!db.gfwl[season]) db.gfwl[season] = { season, numWeeks:9, teams:{} };
       const incoming = data.teams || {};
       let added=0, updated=0;
+      // Build a lowercase → canonical name map of existing teams for dedup
+      const existingLower = {};
+      for (const name of Object.keys(db.gfwl[season].teams)) {
+        existingLower[name.toLowerCase()] = name;
+      }
       for (const [teamName, teamData] of Object.entries(incoming)) {
-        if (!db.gfwl[season].teams[teamName]) {
-          // New team
+        // Find existing team case-insensitively to prevent duplicates like
+        // "Birdcage" vs "birdcage" appearing as separate teams
+        const existingKey = existingLower[teamName.toLowerCase()];
+        if (!existingKey) {
+          // New team — use the incoming name as canonical
           db.gfwl[season].teams[teamName] = {
             conference: teamData.conference || '',
             aliases: teamData.aliases || [],
@@ -915,10 +956,11 @@ const server = http.createServer(async (req, res) => {
             schedule: teamData.schedule || [],
             notes: teamData.notes || ''
           };
+          existingLower[teamName.toLowerCase()] = teamName;
           added++;
         } else {
           // Existing team — only update conference and schedule, preserve roster/addDrops
-          const t = db.gfwl[season].teams[teamName];
+          const t = db.gfwl[season].teams[existingKey];
           if (teamData.conference) t.conference = teamData.conference;
           if (teamData.schedule && teamData.schedule.length) t.schedule = teamData.schedule;
           if (teamData.aliases && teamData.aliases.length) t.aliases = teamData.aliases;
@@ -926,7 +968,7 @@ const server = http.createServer(async (req, res) => {
         }
       }
       if (data.numWeeks) db.gfwl[season].numWeeks = data.numWeeks;
-      await saveDB();
+      await saveDB('gfwl');
       console.log('[BulkImport] S'+season+': '+added+' added, '+updated+' updated');
       return json(res, 200, { ok:true, added, updated, total:Object.keys(db.gfwl[season].teams).length });
     });

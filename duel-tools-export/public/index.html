@@ -703,12 +703,26 @@ select{cursor:pointer}
       <!-- Profile browser — shown when no profile selected -->
       <div id="profile-browser" style="flex:1;display:flex;flex-direction:column;overflow:hidden">
         <!-- Header -->
-        <div style="padding:16px 20px;border-bottom:1px solid var(--border);background:var(--panel);flex-shrink:0;display:flex;align-items:center;gap:12px">
-          <div style="font-size:15px;font-weight:bold;color:var(--text);letter-spacing:.08em">PLAYER PROFILES</div>
-          <div style="font-size:12px;color:var(--muted)">All saved batches organized by player</div>
-          <input id="profile-search" type="text" placeholder="Search players…"
-            style="margin-left:auto;width:200px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;outline:none"
-            oninput="filterProfiles(this.value)"/>
+        <div style="padding:12px 20px;border-bottom:1px solid var(--border);background:var(--panel);flex-shrink:0">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+            <div style="font-size:15px;font-weight:bold;color:var(--text);letter-spacing:.08em">PLAYER PROFILES</div>
+            <div style="font-size:12px;color:var(--muted)">All saved batches organized by player</div>
+            <input id="profile-search" type="text" placeholder="Search players…"
+              style="margin-left:auto;width:200px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;outline:none"
+              oninput="profileTabFilter()"/>
+          </div>
+          <!-- Filter tabs -->
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+            <!-- Mode selector -->
+            <div style="display:flex;gap:4px;margin-right:6px">
+              <button class="ptab-mode active" id="ptab-mode-alpha" onclick="setProfileMode('alpha')" style="font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--green);color:var(--green);background:none;cursor:pointer">A–Z</button>
+              <button class="ptab-mode" id="ptab-mode-season" onclick="setProfileMode('season')" style="font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--border);color:var(--muted);background:none;cursor:pointer">Season</button>
+              <button class="ptab-mode" id="ptab-mode-conf" onclick="setProfileMode('conf')" style="display:none;font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--border);color:var(--muted);background:none;cursor:pointer">Conference</button>
+            </div>
+            <div style="width:1px;height:18px;background:var(--border);margin:0 2px"></div>
+            <!-- Dynamic sub-tabs rendered by JS -->
+            <div id="profile-subtabs" style="display:flex;gap:4px;flex-wrap:wrap"></div>
+          </div>
         </div>
         <!-- Player grid -->
         <div id="profile-grid" style="flex:1;overflow-y:auto;padding:20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;align-content:start"></div>
@@ -8041,6 +8055,9 @@ async function loadProfiles() {
   if (browser) browser.style.display = 'flex';
   if (view)    view.style.display    = 'none';
 
+  // Initialize sub-tabs (builds them from current mode + player registry)
+  renderProfileSubTabs();
+
   const grid = document.getElementById('profile-grid');
   if (!grid) return;
 
@@ -8072,7 +8089,8 @@ async function loadProfiles() {
       grid.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:20px">No profiles yet. Analyze or import a batch first.</div>';
       return;
     }
-    renderProfileGrid(_allProfileBatches);
+    renderProfileSubTabs();
+    profileTabFilter();
   } catch(e) {
     console.error('[Profiles] loadProfiles error:', e.message);
     // Only show error state if we have nothing rendered yet
@@ -8087,13 +8105,184 @@ async function loadProfiles() {
   }
 }
 
-function filterProfiles(query) {
-  const q = query.toLowerCase().trim();
-  const filtered = q ? _allProfileBatches.filter(b =>
-    (b.player||'').toLowerCase().includes(q) || (b.name||'').toLowerCase().includes(q)
-  ) : _allProfileBatches;
-  renderProfileGrid(filtered);
+// ── Profile tab filter system ─────────────────────────────────────────────────
+let _profileMode    = 'alpha';  // 'alpha' | 'season' | 'conf'
+let _profileSubTab  = 'all';    // current sub-tab value
+
+const ALPHA_TABS = [
+  { label:'All', value:'all' },
+  { label:'A–C', value:'ac' },
+  { label:'D–F', value:'df' },
+  { label:'G–I', value:'gi' },
+  { label:'J–L', value:'jl' },
+  { label:'M–O', value:'mo' },
+  { label:'P–R', value:'pr' },
+  { label:'S–U', value:'su' },
+  { label:'V–Z', value:'vz' },
+  { label:'#',   value:'num' },
+];
+
+function _alphaMatch(name, tab) {
+  if (tab === 'all') return true;
+  const c = (name||'')[0].toLowerCase();
+  const ranges = { ac:'abc', df:'def', gi:'ghi', jl:'jkl', mo:'mno', pr:'pqr', su:'stu', vz:'vwxyz' };
+  if (tab === 'num') return !'abcdefghijklmnopqrstuvwxyz'.includes(c);
+  return (ranges[tab]||'').includes(c);
 }
+
+let _profileSelectedSeason = 'all'; // tracks which season was selected in season mode
+
+function setProfileMode(mode) {
+  _profileMode = mode;
+  _profileSubTab = 'all';
+
+  // When switching to conf mode, preserve the season that was selected
+  // (conf filters within that season). Can only enter conf from season mode.
+  const confBtn = document.getElementById('ptab-mode-conf');
+
+  // Update mode button styles — conf button uses amber when active since it's a sub-mode
+  document.querySelectorAll('.ptab-mode').forEach(b => {
+    const active = b.id === 'ptab-mode-'+mode;
+    const isConf = b.id === 'ptab-mode-conf';
+    b.style.borderColor = active ? (isConf ? 'var(--amber)' : 'var(--green)') : 'var(--border)';
+    b.style.color = active ? (isConf ? 'var(--amber)' : 'var(--green)') : 'var(--muted)';
+  });
+
+  // Show conf button only when in season mode (and a specific season is selected)
+  if (confBtn) {
+    confBtn.style.display = (mode === 'season' || mode === 'conf') ? '' : 'none';
+  }
+
+  renderProfileSubTabs();
+  profileTabFilter();
+}
+
+function renderProfileSubTabs() {
+  const el = document.getElementById('profile-subtabs');
+  if (!el) return;
+  el.innerHTML = '';
+
+  let tabs = [];
+  if (_profileMode === 'alpha') {
+    tabs = ALPHA_TABS;
+  } else if (_profileMode === 'season') {
+    // Build from player registry gfwlTeams
+    const seasons = new Set(['all']);
+    if (window._playerRegistry) {
+      for (const p of Object.values(window._playerRegistry)) {
+        for (const t of (p.gfwlTeams||[])) { if (t.season) seasons.add(t.season.toUpperCase()); }
+      }
+    }
+    const sorted = [...seasons].filter(s=>s!=='all').sort((a,b)=>b.localeCompare(a));
+    tabs = [{ label:'All', value:'all' }, ...sorted.map(s=>({ label:s, value:s }))];
+  } else if (_profileMode === 'conf') {
+    tabs = [
+      { label:'All',    value:'all'    },
+      { label:'🔴 Red',    value:'Red'    },
+      { label:'🔵 Blue',   value:'Blue'   },
+      { label:'🟡 Yellow', value:'Yellow' },
+      { label:'No Team',  value:'none'   },
+    ];
+  }
+
+  for (const tab of tabs) {
+    const btn = document.createElement('button');
+    const active = _profileSubTab === tab.value;
+    btn.textContent = tab.label;
+    btn.style.cssText = 'font-family:monospace;font-size:11px;padding:3px 9px;border-radius:4px;cursor:pointer;background:none;border:1px solid '+(active?'var(--amber)':'var(--border)')+';color:'+(active?'var(--amber)':'var(--muted)');
+    btn.onclick = () => {
+      _profileSubTab = tab.value;
+      document.querySelectorAll('#profile-subtabs button').forEach(b => {
+        b.style.borderColor = 'var(--border)'; b.style.color = 'var(--muted)';
+      });
+      btn.style.borderColor = 'var(--amber)'; btn.style.color = 'var(--amber)';
+      // Show/hide conf button depending on whether a specific season is selected
+      const confBtn = document.getElementById('ptab-mode-conf');
+      if (confBtn && _profileMode === 'season') {
+        if (tab.value !== 'all') {
+          _profileSelectedSeason = tab.value;
+          confBtn.style.display = '';
+        } else {
+          confBtn.style.display = 'none';
+          // If we were in conf mode, switch back to season
+          if (_profileMode === 'conf') setProfileMode('season');
+        }
+      }
+      profileTabFilter();
+    };
+    el.appendChild(btn);
+  }
+}
+
+function profileTabFilter() {
+  const q = (document.getElementById('profile-search')?.value||'').toLowerCase().trim();
+
+  // Determine the latest season for conf/season lookups
+  const latestSeason = (() => {
+    const seasons = Object.keys(_gfwlData||{}).filter(k=>/^S\d+$/i.test(k));
+    if (!seasons.length) return 'S9';
+    return seasons.sort((a,b)=>parseInt(b.slice(1))-parseInt(a.slice(1)))[0];
+  })();
+
+  // Get player's team info for a given player name
+  const getTeamInfo = (player) => {
+    const reg = window._playerRegistry && window._playerRegistry[player.toLowerCase()];
+    const teams = reg ? (reg.gfwlTeams||[]) : [];
+    // For season mode: use assigned season; for conf/latest: use latest season
+    return { teams, reg };
+  };
+
+  // Group _allProfileBatches by player first
+  const byPlayer = {};
+  for (const b of (_allProfileBatches||[])) {
+    if (!b || !b.player) continue;
+    if (!byPlayer[b.player]) byPlayer[b.player] = [];
+    byPlayer[b.player].push(b);
+  }
+
+  const playerNames = Object.keys(byPlayer).sort((a,b)=>a.localeCompare(b));
+
+  const filtered = playerNames.filter(player => {
+    // Search filter
+    if (q && !player.toLowerCase().includes(q)) return false;
+
+    if (_profileSubTab === 'all') return true;
+
+    const { teams } = getTeamInfo(player);
+
+    if (_profileMode === 'alpha') {
+      return _alphaMatch(player, _profileSubTab);
+    }
+    if (_profileMode === 'season') {
+      return teams.some(t => (t.season||'').toUpperCase() === _profileSubTab);
+    }
+    if (_profileMode === 'conf') {
+      if (_profileSubTab === 'none') {
+        // No team in the selected season specifically
+        return !teams.some(t => (t.season||'').toUpperCase() === _profileSelectedSeason);
+      }
+      // Only look at teams from the season that was selected before entering conf mode
+      return teams.some(t => {
+        if ((t.season||'').toUpperCase() !== _profileSelectedSeason) return false;
+        const gfwlSeason = _gfwlData[_profileSelectedSeason];
+        const teamData = gfwlSeason && gfwlSeason.teams;
+        if (!teamData) return false;
+        const key = Object.keys(teamData).find(k=>k.toLowerCase()===(t.team||'').toLowerCase());
+        return key && teamData[key].conference === _profileSubTab;
+      });
+    }
+    return true;
+  });
+
+  // Build flat batch list for the filtered players
+  const filteredBatches = filtered.flatMap(p => byPlayer[p]);
+  renderProfileGrid(filteredBatches);
+}
+
+function filterProfiles(query) {
+  profileTabFilter();
+}
+
 
 function renderProfileGrid(batches) {
   const grid = document.getElementById('profile-grid');
