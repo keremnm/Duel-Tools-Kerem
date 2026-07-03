@@ -8310,9 +8310,9 @@ function renderProfileGrid(batches) {
 
   // Sort players alphabetically
   Object.entries(byPlayer).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([player, pBatches]) => {
-    // Card — stacked: player name on top, team name below, tags row
+    // Card — horizontal: name left (wraps), team badge right, tags below if any
     const card = document.createElement('div');
-    card.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:10px;padding:11px 14px;cursor:pointer;transition:border-color .12s,transform .12s;display:flex;flex-direction:column;gap:5px';
+    card.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 14px;cursor:pointer;transition:border-color .12s,transform .12s;display:flex;flex-direction:column;gap:4px';
     card.onmouseover = () => { card.style.borderColor='var(--green)'; card.style.transform='translateY(-1px)'; };
     card.onmouseout  = () => { card.style.borderColor='var(--border)'; card.style.transform=''; };
     card.onclick = () => openProfile(player, pBatches, []);
@@ -8334,25 +8334,28 @@ function renderProfileGrid(batches) {
     const _teamConf = _teamKey && _teamLookup[_teamKey]?.conference;
     const _confColor = _teamConf ? (CONF_COLORS&&CONF_COLORS[_teamConf]?.text||'var(--amber)') : 'var(--amber)';
 
-    // Row 1: Player name (never truncated)
-    const nameEl = document.createElement('div');
-    nameEl.style.cssText = 'font-size:14px;font-weight:bold;color:var(--text);word-break:break-word;line-height:1.2';
-    nameEl.textContent = player;
-    card.appendChild(nameEl);
+    // Top row: name + team badge side by side, name wraps, badge shrinks to content
+    const topRow = document.createElement('div');
+    topRow.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap';
 
-    // Row 2: Team badge (full name, no truncation)
+    const nameEl = document.createElement('div');
+    nameEl.style.cssText = 'font-size:14px;font-weight:bold;color:var(--text);flex:1;min-width:0;word-break:break-word';
+    nameEl.textContent = player;
+    topRow.appendChild(nameEl);
+
     if (_currentTeam) {
       const teamEl = document.createElement('div');
-      teamEl.style.cssText = 'font-size:10px;font-family:monospace;color:'+_confColor+';border:1px solid '+_confColor+';padding:2px 8px;border-radius:4px;align-self:flex-start;word-break:break-word;line-height:1.3';
+      teamEl.style.cssText = 'font-size:10px;font-family:monospace;color:'+_confColor+';border:1px solid '+_confColor+';padding:1px 7px;border-radius:4px;white-space:nowrap;flex-shrink:0';
       teamEl.textContent = _currentTeam.season+' · '+_currentTeam.team;
-      card.appendChild(teamEl);
+      topRow.appendChild(teamEl);
     }
+    card.appendChild(topRow);
 
-    // Row 3: Tags (if any)
+    // Tags row (only if player has tags)
     const _tags = _pReg ? (_pReg.tags||[]) : [];
     if (_tags.length) {
       const tagsRow = document.createElement('div');
-      tagsRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:3px;margin-top:1px';
+      tagsRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:3px';
       for (const tag of _tags) {
         const t = document.createElement('span');
         t.style.cssText = 'font-size:9px;font-family:monospace;color:var(--muted);border:1px solid var(--border);padding:1px 5px;border-radius:3px';
