@@ -715,7 +715,7 @@ const server = http.createServer(async (req, res) => {
       if (!name) return json(res, 400, { error:'Name required' });
       const key = name.toLowerCase();
       if (!db.players[key]) {
-        db.players[key] = { name, aliases: data.aliases||[], topPlayer: false, gfwlTeams: [], eventDecklists: [] };
+        db.players[key] = { name, aliases: data.aliases||[], topPlayer: false, gfwlTeams: [], eventDecklists: [], tags: [] };
         await saveDB('players');
       }
       return json(res, 200, db.players[key]);
@@ -731,6 +731,7 @@ const server = http.createServer(async (req, res) => {
       if (data.topPlayer  !== undefined) p.topPlayer  = !!data.topPlayer;
       if (data.gfwlTeams  !== undefined) p.gfwlTeams  = data.gfwlTeams;
       if (data.eventDecklists !== undefined) p.eventDecklists = data.eventDecklists;
+      if (data.tags       !== undefined) p.tags       = data.tags;
       await saveDB('players'); // explicit key — bare saveDB() can silently skip 'players'
                                  // once it's fallen out of the dirty-key tracking set
       return json(res, 200, p);

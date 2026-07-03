@@ -489,13 +489,7 @@ select{cursor:pointer}
       <div class="no-batches">No batches yet.</div>
     </div>
 
-    <!-- Top Players -->
-    <div style="padding:6px 12px 2px;border-top:1px solid var(--border);flex-shrink:0">
-      <div class="sb-label" style="margin-bottom:2px">Top Players</div>
-    </div>
-    <div id="top-players-list" style="max-height:160px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) var(--bg)">
-      <div class="no-batches">No top players flagged yet.</div>
-    </div>
+
   </aside>
 
   <main class="right" id="right-panel">
@@ -718,6 +712,7 @@ select{cursor:pointer}
               <button class="ptab-mode active" id="ptab-mode-alpha" onclick="setProfileMode('alpha')" style="font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--green);color:var(--green);background:none;cursor:pointer">A–Z</button>
               <button class="ptab-mode" id="ptab-mode-season" onclick="setProfileMode('season')" style="font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--border);color:var(--muted);background:none;cursor:pointer">Season</button>
               <button class="ptab-mode" id="ptab-mode-conf" onclick="setProfileMode('conf')" style="display:none;font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--border);color:var(--muted);background:none;cursor:pointer">Conference</button>
+              <button class="ptab-mode" id="ptab-mode-tags" onclick="setProfileMode('tags')" style="font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--border);color:var(--muted);background:none;cursor:pointer"># Tags</button>
             </div>
             <div style="width:1px;height:18px;background:var(--border);margin:0 2px"></div>
             <!-- Dynamic sub-tabs rendered by JS -->
@@ -825,15 +820,21 @@ select{cursor:pointer}
           <!-- RIGHT: teams + event decklists panel -->
           <div style="width:480px;flex-shrink:0;border-left:1px solid var(--border);background:var(--panel);overflow-y:auto;display:flex;flex-direction:column">
 
-            <!-- Top Player flag -->
+            <!-- Tags -->
             <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
-              <div style="display:flex;align-items:center;gap:8px">
-                <div class="slbl" style="margin:0">TOP PLAYER</div>
-                <label style="margin-left:auto;display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--muted)">
-                  <input type="checkbox" id="profile-top-flag" onchange="toggleTopPlayer(this.checked)"
-                    style="width:auto;margin:0;accent-color:var(--amber)"/>
-                  <span id="profile-top-flag-label">Flag as Top Player</span>
-                </label>
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                <div class="slbl" style="margin:0">TAGS</div>
+                <button onclick="document.getElementById('tag-add-row').style.display='flex'" style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:4px;cursor:pointer">+ Add</button>
+              </div>
+              <div id="profile-tags-list" style="display:flex;flex-wrap:wrap;gap:5px;min-height:20px">
+                <div style="font-size:12px;color:var(--muted)">No tags yet.</div>
+              </div>
+              <div id="tag-add-row" style="display:none;margin-top:8px;gap:6px;align-items:center">
+                <input id="tag-inp" type="text" placeholder="#TopPlayer, #NeverWL…"
+                  style="flex:1;background:var(--card2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-family:monospace;font-size:12px;padding:4px 8px;outline:none"
+                  onkeydown="if(event.key==='Enter')addProfileTag()"/>
+                <button onclick="addProfileTag()" style="background:none;border:1px solid var(--green);color:var(--green);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">Add</button>
+                <button onclick="document.getElementById('tag-add-row').style.display='none';document.getElementById('tag-inp').value=''" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:3px 8px;border-radius:4px;cursor:pointer">✕</button>
               </div>
             </div>
 
@@ -1923,28 +1924,7 @@ document.addEventListener('click', e => {
 });
 
 function renderTopPlayers(playerRegistry) {
-  const el = document.getElementById('top-players-list');
-  if (!el) return;
-  const tops = Object.values(playerRegistry||window._playerRegistry||{}).filter(p => p.topPlayer);
-  if (!tops.length) {
-    el.innerHTML = '<div class="no-batches">No top players flagged yet.<br><span style="font-size:10px;opacity:.6">Open a player profile to flag them.</span></div>';
-    return;
-  }
-  el.innerHTML = '';
-  tops.sort((a,b) => a.name.localeCompare(b.name)).forEach(p => {
-    const item = document.createElement('div');
-    item.style.cssText = 'padding:9px 14px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;align-items:center;gap:8px';
-    item.onmouseover = () => item.style.background = 'var(--card)';
-    item.onmouseout  = () => item.style.background = '';
-    const star = document.createElement('span'); star.textContent = '⭐'; star.style.fontSize = '11px';
-    const name = document.createElement('span'); name.style.cssText = 'font-size:13px;font-weight:bold;color:var(--text);flex:1'; name.textContent = p.name;
-    const teams = (p.gfwlTeams||p.teams||[]);
-    const teamEl = document.createElement('span'); teamEl.style.cssText = 'font-size:10px;color:var(--muted)';
-    if (teams.length) teamEl.textContent = teams[teams.length-1].team;
-    item.appendChild(star); item.appendChild(name); item.appendChild(teamEl);
-    item.onclick = () => { switchTab('profiles'); setTimeout(() => openPlayerByName(p.name), 100); };
-    el.appendChild(item);
-  });
+  // Top Players sidebar removed — tags system replaces this. No-op kept for safety.
 }
 
 async function openPlayerByName(name) {
@@ -8183,6 +8163,17 @@ function renderProfileSubTabs() {
       { label:'🟡 Yellow', value:'Yellow' },
       { label:'No Team',  value:'none'   },
     ];
+  } else if (_profileMode === 'tags') {
+    // Collect all unique tags across player registry
+    const allTags = new Set();
+    if (window._playerRegistry) {
+      for (const p of Object.values(window._playerRegistry)) {
+        for (const tag of (p.tags||[])) allTags.add(tag);
+      }
+    }
+    // Also show a tag input for filtering by any typed tag
+    const sorted = [...allTags].sort((a,b)=>a.localeCompare(b));
+    tabs = [{ label:'All', value:'all' }, ...sorted.map(t=>({ label:t, value:t }))];
   }
 
   for (const tab of tabs) {
@@ -8258,10 +8249,8 @@ function profileTabFilter() {
     }
     if (_profileMode === 'conf') {
       if (_profileSubTab === 'none') {
-        // No team in the selected season specifically
         return !teams.some(t => (t.season||'').toUpperCase() === _profileSelectedSeason);
       }
-      // Only look at teams from the season that was selected before entering conf mode
       return teams.some(t => {
         if ((t.season||'').toUpperCase() !== _profileSelectedSeason) return false;
         const gfwlSeason = _gfwlData[_profileSelectedSeason];
@@ -8270,6 +8259,12 @@ function profileTabFilter() {
         const key = Object.keys(teamData).find(k=>k.toLowerCase()===(t.team||'').toLowerCase());
         return key && teamData[key].conference === _profileSubTab;
       });
+    }
+    if (_profileMode === 'tags') {
+      const reg = window._playerRegistry && window._playerRegistry[player.toLowerCase()];
+      const tags = reg ? (reg.tags||[]) : [];
+      if (_profileSubTab === 'all') return tags.length > 0; // "all tags" = has any tag
+      return tags.includes(_profileSubTab);
     }
     return true;
   });
@@ -8315,9 +8310,9 @@ function renderProfileGrid(batches) {
 
   // Sort players alphabetically
   Object.entries(byPlayer).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([player, pBatches]) => {
-    // Card — minimal: just name + current GFWL team
+    // Card — stacked: player name on top, team name below, tags row
     const card = document.createElement('div');
-    card.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;cursor:pointer;transition:border-color .12s,transform .12s;display:flex;align-items:center;gap:10px';
+    card.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:10px;padding:11px 14px;cursor:pointer;transition:border-color .12s,transform .12s;display:flex;flex-direction:column;gap:5px';
     card.onmouseover = () => { card.style.borderColor='var(--green)'; card.style.transform='translateY(-1px)'; };
     card.onmouseout  = () => { card.style.borderColor='var(--border)'; card.style.transform=''; };
     card.onclick = () => openProfile(player, pBatches, []);
@@ -8333,22 +8328,38 @@ function renderProfileGrid(batches) {
     }
 
     // Conf color for team badge
-    const _teamConf = _currentTeam && _gfwlData[_latestGFWLSeason]?.teams[_currentTeam.team]?.conference;
-    const _confColor = _teamConf ? (CONF_COLORS&&CONF_COLORS[_teamConf]?.text||'var(--amber)') : 'var(--muted)';
+    const _teamSeason = _currentTeam?.season?.toUpperCase();
+    const _teamLookup = _teamSeason && _gfwlData[_teamSeason]?.teams;
+    const _teamKey = _teamLookup && Object.keys(_teamLookup).find(k=>k.toLowerCase()===(_currentTeam.team||'').toLowerCase());
+    const _teamConf = _teamKey && _teamLookup[_teamKey]?.conference;
+    const _confColor = _teamConf ? (CONF_COLORS&&CONF_COLORS[_teamConf]?.text||'var(--amber)') : 'var(--amber)';
 
-    // Player name
+    // Row 1: Player name (never truncated)
     const nameEl = document.createElement('div');
-    nameEl.style.cssText = 'font-size:14px;font-weight:bold;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    nameEl.style.cssText = 'font-size:14px;font-weight:bold;color:var(--text);word-break:break-word;line-height:1.2';
     nameEl.textContent = player;
     card.appendChild(nameEl);
 
-    // Team badge (if on a team)
+    // Row 2: Team badge (full name, no truncation)
     if (_currentTeam) {
       const teamEl = document.createElement('div');
-      teamEl.style.cssText = 'font-size:10px;font-family:monospace;color:'+_confColor+';border:1px solid '+_confColor+';padding:1px 7px;border-radius:4px;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis;flex-shrink:0';
+      teamEl.style.cssText = 'font-size:10px;font-family:monospace;color:'+_confColor+';border:1px solid '+_confColor+';padding:2px 8px;border-radius:4px;align-self:flex-start;word-break:break-word;line-height:1.3';
       teamEl.textContent = _currentTeam.season+' · '+_currentTeam.team;
-      teamEl.title = _currentTeam.team;
       card.appendChild(teamEl);
+    }
+
+    // Row 3: Tags (if any)
+    const _tags = _pReg ? (_pReg.tags||[]) : [];
+    if (_tags.length) {
+      const tagsRow = document.createElement('div');
+      tagsRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:3px;margin-top:1px';
+      for (const tag of _tags) {
+        const t = document.createElement('span');
+        t.style.cssText = 'font-size:9px;font-family:monospace;color:var(--muted);border:1px solid var(--border);padding:1px 5px;border-radius:3px';
+        t.textContent = tag;
+        tagsRow.appendChild(t);
+      }
+      card.appendChild(tagsRow);
     }
 
     grid.appendChild(card);
@@ -8356,35 +8367,74 @@ function renderProfileGrid(batches) {
   });
 }
 
-// ── Top Player flag ──────────────────────────────────────────────────────────
-async function toggleTopPlayer(checked) {
-  const nameEl = document.getElementById('profile-view-name');
-  if (!nameEl) return;
-  const player = nameEl.textContent.trim();
-  const labelEl = document.getElementById('profile-top-flag-label');
-  const key = player.toLowerCase();
-  // Ensure player exists in registry before patching
-  if (!window._playerRegistry[key]) {
-    try {
-      await fetch(`${API}/players`, {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ name: player, aliases: [] })
-      });
-      window._playerRegistry[key] = { name: player, aliases: [] };
-    } catch(e) {}
+// ── Player Tags ──────────────────────────────────────────────────────────────
+function renderProfileTags(player, tags) {
+  const el = document.getElementById('profile-tags-list');
+  if (!el) return;
+  if (!tags || !tags.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--muted)">No tags yet.</div>';
+    return;
   }
+  el.innerHTML = '';
+  for (const tag of tags) {
+    const chip = document.createElement('span');
+    chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:11px;font-family:monospace;color:var(--amber);border:1px solid var(--amber);padding:2px 8px;border-radius:4px;cursor:default';
+    chip.innerHTML = `${tag} <span onclick="removeProfileTag('${tag.replace(/'/g,"\'")}','${player.replace(/'/g,"\'")}');event.stopPropagation()" style="cursor:pointer;color:var(--muted);font-size:10px" title="Remove">✕</span>`;
+    el.appendChild(chip);
+  }
+}
+
+async function addProfileTag() {
+  const inp = document.getElementById('tag-inp');
+  const raw = (inp?.value||'').trim();
+  if (!raw) return;
+  // Normalize: ensure starts with #, split by comma for multiple tags at once
+  const newTags = raw.split(',').map(t => {
+    t = t.trim();
+    if (t && !t.startsWith('#')) t = '#' + t;
+    return t;
+  }).filter(Boolean);
+  if (!newTags.length) return;
+
+  const nameEl = document.getElementById('profile-view-name');
+  const player = nameEl?.textContent.trim();
+  if (!player) return;
+  const key = player.toLowerCase();
+  if (!window._playerRegistry[key]) window._playerRegistry[key] = { name: player, aliases: [], tags: [] };
+  const existing = window._playerRegistry[key].tags || [];
+  const merged = [...new Set([...existing, ...newTags])];
+
   try {
-    const res = await fetch(`${API}/players/${encodeURIComponent(player)}/aliases`, {
-      method:'PATCH', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ topPlayer: checked })
+    const r = await fetch(`${API}/players/${encodeURIComponent(player)}/aliases`, {
+      method:'PATCH', headers: authHeaders(),
+      body: JSON.stringify({ tags: merged })
     });
-    const data = await res.json();
-    if (labelEl) labelEl.textContent = checked ? '⭐ Top Player' : 'Flag as Top Player';
-    if (window._playerRegistry[key]) window._playerRegistry[key].topPlayer = checked;
-    else window._playerRegistry[key] = { name: player, aliases: [], topPlayer: checked };
-    renderTopPlayers();
-    st(checked ? '⭐ '+player+' flagged as Top Player' : player+' removed from Top Players', 'var(--green)');
-  } catch(e) { st('Failed to save: '+e.message, 'var(--red)'); console.error(e); }
+    if (!r.ok) { const b = await r.json().catch(()=>{}); throw new Error(b?.error||`HTTP ${r.status}`); }
+    window._playerRegistry[key].tags = merged;
+    renderProfileTags(player, merged);
+    if (inp) { inp.value = ''; }
+    document.getElementById('tag-add-row').style.display = 'none';
+    // Refresh subtabs if in tags mode so new tag appears
+    if (_profileMode === 'tags') renderProfileSubTabs();
+    st('Tags saved', 'var(--green)');
+  } catch(e) { st('Failed to save tag: '+e.message, 'var(--red)'); }
+}
+
+async function removeProfileTag(tag, player) {
+  const key = player.toLowerCase();
+  const existing = (window._playerRegistry[key]?.tags)||[];
+  const updated = existing.filter(t => t !== tag);
+  try {
+    const r = await fetch(`${API}/players/${encodeURIComponent(player)}/aliases`, {
+      method:'PATCH', headers: authHeaders(),
+      body: JSON.stringify({ tags: updated })
+    });
+    if (!r.ok) { const b = await r.json().catch(()=>{}); throw new Error(b?.error||`HTTP ${r.status}`); }
+    if (window._playerRegistry[key]) window._playerRegistry[key].tags = updated;
+    renderProfileTags(player, updated);
+    if (_profileMode === 'tags') renderProfileSubTabs();
+    st('Tag removed', 'var(--green)');
+  } catch(e) { st('Failed to remove tag: '+e.message, 'var(--red)'); }
 }
 
 // ── Event label grouping helper ──────────────────────────────────────────────
@@ -8610,12 +8660,8 @@ async function openProfile(player, batches, records) {
   }
 
   // Top Player flag
-  const topFlag = document.getElementById('profile-top-flag');
-  const topLabel = document.getElementById('profile-top-flag-label');
-  if (topFlag) {
-    topFlag.checked = !!(_profileEntry && _profileEntry.topPlayer);
-    if (topLabel) topLabel.textContent = topFlag.checked ? '⭐ Top Player' : 'Flag as Top Player';
-  }
+  // Render tags for this player
+  renderProfileTags(player, _profileEntry ? (_profileEntry.tags||[]) : []);
 
   // Teams — check gfwlTeams (server key) and teams (legacy)
   const _teamList = _profileEntry ? (_profileEntry.gfwlTeams || _profileEntry.teams || []) : [];
