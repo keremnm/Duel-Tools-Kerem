@@ -246,107 +246,317 @@ select{cursor:pointer}
 /* ═══════════════════════════════════════════════════════════════════
    MOBILE — comprehensive responsive layout
    ═══════════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════
+   MOBILE — ≤768px  (tournament viewing: Profiles + GFWL primary)
+   ═══════════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
-  /* ── Layout ── */
+
+  /* ── Global touch / font ─────────────────────────────────────── */
+  input, select, textarea { font-size: 16px !important; } /* prevent iOS auto-zoom */
+  button { -webkit-tap-highlight-color: transparent; }
+
+  /* ── App shell ───────────────────────────────────────────────── */
   .sidebar { display: none !important; }
-  .app { flex-direction: column; overflow: hidden; }
+  .app {
+    display: flex; flex-direction: column;
+    height: 100dvh; /* dynamic viewport height — handles mobile browser chrome */
+    overflow: hidden;
+  }
 
-  /* ── Topbar ── */
-  .topbar { padding: 6px 10px; flex-wrap: wrap; gap: 4px; }
-  .logo { font-size: 13px; }
-  .topbar-right { margin-left: auto; }
-  #clerk-user-info button { font-size: 9px !important; padding: 1px 6px !important; }
+  /* ── Topbar ───────────────────────────────────────────────────── */
+  .topbar {
+    padding: 0 10px;
+    flex-wrap: nowrap;
+    height: 44px; min-height: 44px; /* consistent touch target height */
+    gap: 6px; flex-shrink: 0;
+  }
+  .logo { font-size: 12px; letter-spacing: .06em; flex-shrink: 0; }
   #pill { display: none !important; }
+  .topbar-right { margin-left: auto; display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
+  /* Shrink topbar buttons on mobile */
+  #manual-save-btn, #admin-panel-btn, #error-log-btn {
+    font-size: 9px !important; padding: 4px 8px !important;
+  }
+  #dt-user-info { font-size: 10px; gap: 4px; }
+  #dt-user-info button { font-size: 9px !important; padding: 3px 7px !important; }
+  .tbtn { font-size: 12px !important; padding: 4px 8px !important; }
 
-  /* ── Nav tabs ── */
+  /* ── Nav tabs ─────────────────────────────────────────────────── */
   .nav-tabs {
-    gap: 0; overflow-x: auto; flex-wrap: nowrap;
-    scrollbar-width: none; -webkit-overflow-scrolling: touch;
+    display: flex; flex-wrap: nowrap; overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    gap: 0; flex-shrink: 0;
     border-bottom: 1px solid var(--border);
+    background: var(--panel);
   }
   .nav-tabs::-webkit-scrollbar { display: none; }
   .ntab {
-    font-size: 11px; padding: 8px 12px; white-space: nowrap;
+    font-size: 11px; padding: 0 12px;
+    height: 40px; line-height: 40px;
+    white-space: nowrap; flex-shrink: 0;
     border-radius: 0; border-bottom: 2px solid transparent;
-    min-width: 0; flex-shrink: 0;
+    min-width: 0;
   }
-  .ntab.on { border-bottom-color: var(--green); }
+  .ntab.on { border-bottom-color: var(--green); color: var(--green); }
 
-  /* ── Pages ── */
-  .page { overflow-y: auto; -webkit-overflow-scrolling: touch; }
-  #pg-deckdata, #pg-stats { padding: 10px !important; }
+  /* ── Pages ────────────────────────────────────────────────────── */
+  .page { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .right { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 
-  /* ── Profiles ── */
-  #pg-profiles { padding: 10px !important; }
-  .profile-grid { grid-template-columns: 1fr 1fr !important; }
-  #profile-view { flex-direction: column !important; }
-  #profile-view > div { width: 100% !important; min-width: 0 !important; }
-  .profile-right-col { border-left: none !important; border-top: 1px solid var(--border) !important; }
+  /* ══════════════════════════════════════════════════════════════
+     PROFILES TAB — highest priority
+     ══════════════════════════════════════════════════════════════ */
 
-  /* ── Deck Viewer ── */
-  #pg-deck { flex-direction: column !important; overflow: hidden; }
+  /* Profile browser header: stack filter tabs below title row */
+  #profile-browser > div:first-child {
+    padding: 8px 12px !important;
+  }
+  #profile-browser > div:first-child > div:first-child {
+    margin-bottom: 6px !important;
+  }
+  /* Search bar full width */
+  #profile-search {
+    width: 100% !important; margin-left: 0 !important;
+    margin-top: 6px; display: block;
+  }
+  /* Profile grid — 1 column on small phones, 2 on larger phones */
+  #profile-grid {
+    grid-template-columns: 1fr 1fr !important;
+    padding: 10px !important; gap: 8px !important;
+  }
+
+  /* ── Profile view (open player) ───────────────────────────────── */
+  #profile-view {
+    flex-direction: column !important;
+    overflow-y: auto !important;
+  }
+  /* Header: wrap buttons on small screens */
+  #profile-view > div:first-child {
+    padding: 10px 12px !important;
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+  }
+  #profile-view > div:first-child button {
+    min-height: 36px; font-size: 11px !important;
+  }
+  #profile-load-btn { order: -1; width: 100%; } /* Load button full width, top */
+
+  /* Profile content: single column, right panel goes below */
+  #profile-view > div:nth-child(2) {
+    flex-direction: column !important;
+    overflow-y: visible !important; height: auto !important;
+  }
+  /* Left col: full width */
+  #profile-view > div:nth-child(2) > div:first-child {
+    padding: 12px !important; gap: 12px !important;
+  }
+  /* Deck usage chart + analysis tabs: stack */
+  #profile-view > div:nth-child(2) > div:first-child > div:nth-child(2) {
+    grid-template-columns: 1fr !important;
+  }
+  /* Right panel (tags, teams, decklists): full width, no left border */
+  #profile-view > div:nth-child(2) > div:last-child {
+    width: 100% !important; border-left: none !important;
+    border-top: 1px solid var(--border) !important;
+    flex-shrink: 0;
+  }
+
+  /* Profile stat chips: 2 per row */
+  #profile-stat-chips { gap: 6px !important; }
+  #profile-stat-chips > div { flex: 1 1 calc(50% - 6px); min-width: 0; }
+
+  /* Sub-tabs (Deck Matchups / GFWL History / Card WR) — scrollable */
+  #profile-view .dd-tab { font-size: 10px !important; padding: 5px 8px !important; }
+
+  /* ══════════════════════════════════════════════════════════════
+     GFWL PREP TAB — critical for tournament use
+     ══════════════════════════════════════════════════════════════ */
+  #pg-gfwl { padding: 0; }
+
+  /* GFWL topbar: wrap season selector below buttons */
+  #pg-gfwl > div:first-child {
+    padding: 8px 12px !important; flex-wrap: wrap !important; gap: 6px !important;
+  }
+  #pg-gfwl > div:first-child button {
+    min-height: 36px; font-size: 11px !important; padding: 4px 10px !important;
+  }
+  #gfwl-season-sel {
+    width: 100%; font-size: 14px !important;
+  }
+  #gfwl-season-stats { font-size: 10px !important; width: 100%; }
+
+  /* GFWL main content area */
+  #gfwl-main { padding: 10px 12px !important; }
+
+  /* Team grid: 1 column on phone */
+  #gfwl-main > div[style*="grid"] {
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+  }
+
+  /* Team detail view: single column */
+  #gfwl-main > div[style*="grid-template-columns:1fr 340px"] {
+    grid-template-columns: 1fr !important;
+  }
+  #gfwl-main > div[style*="grid-template-columns:1fr 300px"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Roster table: horizontal scroll */
+  #gfwl-roster-tbody, #gfwl-main table {
+    display: block; overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    white-space: nowrap;
+  }
+  #gfwl-main table thead { display: block; }
+  #gfwl-main table tbody { display: block; }
+
+  /* Schedule table rows: make touch-friendly */
+  #gfwl-main table tr { min-height: 44px; }
+  #gfwl-main table td, #gfwl-main table th {
+    padding: 8px 6px !important;
+  }
+
+  /* Week Report button: touch target */
+  #gfwl-main button { min-height: 36px; }
+
+  /* Player stats chips in GFWL player view */
+  #gfwl-main > div[style*="display:flex;gap:16px"] {
+    gap: 8px !important; flex-wrap: wrap !important;
+  }
+  #gfwl-main > div[style*="display:flex;gap:16px"] > div {
+    flex: 1 1 calc(33% - 8px); min-width: 80px;
+  }
+
+  /* ══════════════════════════════════════════════════════════════
+     DECK VIEWER — JS drawer pattern (match list → tap → full screen)
+     ══════════════════════════════════════════════════════════════ */
+  #pg-deck {
+    flex-direction: column !important;
+    position: relative; overflow: hidden;
+  }
+
+  /* Match list sidebar becomes a bottom drawer */
   .deck-sb {
+    position: absolute !important;
+    bottom: 0; left: 0; right: 0;
     width: 100% !important; max-width: 100% !important;
-    border-right: none !important; border-bottom: 1px solid var(--border) !important;
-    max-height: 45vw; overflow-y: auto;
+    height: 44px; /* collapsed: just the handle bar */
+    max-height: 65vh;
+    border-right: none !important;
+    border-top: 1px solid var(--border) !important;
+    border-bottom: none !important;
+    border-radius: 14px 14px 0 0;
+    background: var(--panel);
+    z-index: 10;
+    transition: height .25s cubic-bezier(.4,0,.2,1);
+    overflow: hidden;
+    flex-shrink: 0;
   }
-  .deck-main { flex: 1; overflow-y: auto; }
+  .deck-sb.drawer-open {
+    height: 65vh;
+  }
+  /* Handle bar at top of drawer */
+  .deck-sb::before {
+    content: '';
+    display: block;
+    width: 36px; height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    margin: 8px auto 0;
+    flex-shrink: 0;
+  }
+  .dsb-hdr {
+    padding: 4px 12px 8px !important;
+  }
+  .match-list {
+    max-height: calc(65vh - 100px);
+    overflow-y: auto;
+  }
 
-  /* ── Deck Data ── */
+  /* Main deck area fills the space above the drawer */
+  .deck-main {
+    flex: 1;
+    margin-bottom: 44px; /* leave space for collapsed drawer */
+    overflow-y: auto;
+  }
+
+  /* Match items: bigger touch targets */
+  .match-item { min-height: 44px; padding: 8px 10px !important; }
+
+  /* ══════════════════════════════════════════════════════════════
+     RPS ANALYSIS
+     ══════════════════════════════════════════════════════════════ */
+  #pg-rps { padding: 10px !important; }
+
+  /* Pick grid: 3 col stays fine, just reduce padding */
+  .pgrid { gap: 6px !important; }
+  .pcard { padding: 8px 10px !important; }
+
+  /* Chips: wrap naturally */
+  .chips { gap: 6px !important; }
+  .chip { padding: 8px 10px !important; }
+
+  /* Log rows: scrollable */
+  .ll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* Section headers */
+  .slbl { font-size: 9px !important; }
+
+  /* ══════════════════════════════════════════════════════════════
+     BATCH PANEL (new batch slide-in)
+     ══════════════════════════════════════════════════════════════ */
+  .batch-panel-right {
+    width: 100% !important; right: 0 !important;
+    max-height: 90dvh; overflow-y: auto;
+  }
+  #add-to-batch-btn { display: none; }
+
+  /* ══════════════════════════════════════════════════════════════
+     DECK DATA + STATS (secondary — just make scrollable)
+     ══════════════════════════════════════════════════════════════ */
+  #pg-deckdata, #pg-stats { padding: 10px !important; }
   .dd-tabs { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
   .dd-tabs::-webkit-scrollbar { display: none; }
   .dd-table { font-size: 11px; }
-  .dd-table th, .dd-table td { padding: 5px 6px !important; }
+  .dd-table th, .dd-table td { padding: 5px 6px !important; white-space: nowrap; }
   #dd-deck-hotkeys, #dd-cwr-hotkeys {
     overflow-x: auto; flex-wrap: nowrap !important;
     scrollbar-width: none; gap: 3px !important;
   }
   #dd-deck-hotkeys::-webkit-scrollbar, #dd-cwr-hotkeys::-webkit-scrollbar { display: none; }
-  #dd-deck-hotkeys button, #dd-cwr-hotkeys button { font-size: 10px !important; padding: 3px 7px !important; white-space: nowrap; flex-shrink: 0; }
-
-  /* ── Stats ── */
+  #dd-deck-hotkeys button, #dd-cwr-hotkeys button {
+    font-size: 10px !important; padding: 3px 8px !important;
+    white-space: nowrap; flex-shrink: 0; min-height: 36px;
+  }
   #pg-stats .stats-grid { grid-template-columns: 1fr !important; }
 
-  /* ── Batch panel ── */
-  .batch-panel-right { width: 100% !important; right: 0 !important; }
-
-  /* ── In-Game Tools ── */
-  #pg-ingame .topbar-igt { flex-wrap: nowrap !important; overflow-x: auto; gap: 4px !important; }
-  [id^="igt-tab-"] { font-size: 10px !important; padding: 5px 7px !important; white-space: nowrap; flex-shrink: 0; }
-  /* Timer compact on mobile */
-  #igt-timer-display { font-size: 16px !important; min-width: 46px !important; }
-  #igt-timer-btn, #pg-ingame button[onclick="igtTimerReset()"] { font-size: 10px !important; padding: 3px 7px !important; }
-
-  /* Deck Builder — scroll horizontally */
-  #igt-main-tiles { grid-template-columns: repeat(10, 58px) !important; gap: 2px !important; overflow-x: auto; }
-  #igt-side-tiles  { grid-template-columns: repeat(15, 58px) !important; gap: 2px !important; overflow-x: auto; }
-  #igt-extra-tiles { grid-template-columns: repeat(15, 58px) !important; gap: 2px !important; }
-
-  /* Side Practice */
-  #igt-sp-main-tiles { grid-template-columns: repeat(10, 58px) !important; gap: 2px !important; overflow-x: auto; }
-  #igt-sp-side-tiles { grid-template-columns: repeat(15, 58px) !important; gap: 2px !important; overflow-x: auto; }
-
-  /* My Tracker / Opp Tracker */
-  #igt-mt-tiles, #igt-ot-tiles { grid-template-columns: repeat(10, 58px) !important; gap: 2px !important; overflow-x: auto; }
-  #igt-mt-side-tiles, #igt-ot-side-tiles { grid-template-columns: repeat(15, 58px) !important; gap: 2px !important; overflow-x: auto; }
-  /* Notes panel stacks below on mobile */
-  #igt-mytrack > div:last-child,
-  #igt-opptrack > div:last-child { grid-template-columns: 1fr !important; }
+  /* ══════════════════════════════════════════════════════════════
+     IN-GAME TOOLS (deprioritised — just keep it functional)
+     ══════════════════════════════════════════════════════════════ */
+  #pg-ingame .topbar-igt { flex-wrap: nowrap !important; overflow-x: auto; gap: 4px !important; scrollbar-width: none; }
+  #pg-ingame .topbar-igt::-webkit-scrollbar { display: none; }
+  [id^="igt-tab-"] { font-size: 10px !important; padding: 5px 8px !important; white-space: nowrap; flex-shrink: 0; min-height: 36px; }
+  #igt-timer-display { font-size: 18px !important; min-width: 52px !important; }
+  #igt-main-tiles, #igt-sp-main-tiles, #igt-mt-tiles, #igt-ot-tiles {
+    grid-template-columns: repeat(10, 56px) !important; gap: 2px !important; overflow-x: auto;
+  }
+  #igt-side-tiles, #igt-sp-side-tiles, #igt-mt-side-tiles, #igt-ot-side-tiles, #igt-extra-tiles {
+    grid-template-columns: repeat(15, 56px) !important; gap: 2px !important; overflow-x: auto;
+  }
+  #igt-mytrack > div:last-child, #igt-opptrack > div:last-child { grid-template-columns: 1fr !important; }
   .igt-notes-col { border-left: none !important; border-top: 1px solid var(--border) !important; }
-
-  /* Tools — 2 col on mobile */
   #igt-tools > div { grid-template-columns: 1fr 1fr !important; }
   #igt-tools > div > div:last-child { grid-column: 1/-1 !important; }
-
-  /* Misc */
-  #add-to-batch-btn { display: none; }
-  .slbl { font-size: 9px !important; }
-  input, select, textarea { font-size: 14px !important; } /* prevent iOS zoom */
 }
 
+/* ── Narrow phones ≤420px ─────────────────────────────────────── */
 @media (max-width: 420px) {
-  .ntab { font-size: 10px; padding: 7px 9px; }
-  .profile-grid { grid-template-columns: 1fr !important; }
+  .ntab { font-size: 10px !important; padding: 0 9px !important; }
+  #profile-grid { grid-template-columns: 1fr !important; }
+  #profile-stat-chips > div { flex: 1 1 100%; }
+  .pgrid { grid-template-columns: 1fr !important; } /* RPS picks stack */
   #igt-tools > div { grid-template-columns: 1fr !important; }
   #igt-main-tiles { grid-template-columns: repeat(8, 56px) !important; }
   #igt-sp-main-tiles { grid-template-columns: repeat(8, 56px) !important; }
@@ -2318,14 +2528,16 @@ function computeTeamRecord(season, teamName, team) {
   const roster = (team.roster||[]).map(p => (p.player||'').toLowerCase());
   if (!roster.length) return { w:0, l:0, total:0 };
 
-  // Scan _allProfileBatches for relevant replays
-  const allBatches = _allProfileBatches || [];
+  // Use _allProfileBatches if available (profiles tab loaded), otherwise gfwlBatchCache
+  const allBatches = (_allProfileBatches && _allProfileBatches.length)
+    ? _allProfileBatches
+    : Object.values(window._gfwlBatchCache || {});
+
   for (const batch of allBatches) {
     if (!roster.includes((batch.player||'').toLowerCase())) continue;
     for (const r of (batch.replays||[])) {
       const lbl = (r.eventLabel||'').toUpperCase();
       const seasonKey = season.toUpperCase();
-      // Match S9: WK* pattern
       if (!lbl.startsWith(seasonKey+':') && !lbl.startsWith(seasonKey+' ')) continue;
       if (r.parsed) {
         if (r.parsed.result === 'w') w++;
@@ -2873,16 +3085,24 @@ async function gfwlOpenTeam(season, teamName, team) {
     // Remove loading banner
     const banner = document.getElementById('gfwl-loading-banner');
     if (banner) banner.remove();
-    // Re-collect and re-render pies now that data is loaded
+    // Re-collect season replays now that batch data is loaded
     collectSeasonReplays();
+    // Re-render the roster table so W/L/Main Deck columns populate
+    if (window._gfwlRerenderRoster) window._gfwlRerenderRoster();
+    // Re-render schedule so week scores populate
+    if (window._gfwlRerenderSchedule) window._gfwlRerenderSchedule();
+    // Re-render pies
     if (window._gfwlRenderPies) window._gfwlRenderPies();
   }
   loadAllBatches(); // fire and forget - page renders immediately
 
-  const allGFWLBatches = Object.values(gfwlBatchCache);
+  // NOTE: allGFWLBatches must NOT be a snapshot — it must read gfwlBatchCache
+  // fresh each time collectSeasonReplays is called, because loadAllBatches()
+  // fills gfwlBatchCache asynchronously AFTER this code runs synchronously.
   const seasonReplays = [];
   function collectSeasonReplays() {
     seasonReplays.length = 0;
+    const allGFWLBatches = Object.values(gfwlBatchCache); // fresh read each time
     for (const b of allGFWLBatches) {
       if (!rosterNames.includes((b.player||'').toLowerCase())) continue;
       for (const r of (b.replays||[])) {
@@ -2967,13 +3187,19 @@ async function gfwlOpenTeam(season, teamName, team) {
     tbody.appendChild(tr);
   }
 
-  activeRoster.forEach(p => addRosterRow(p, false));
-  if (droppedRoster.length) {
-    const sep = document.createElement('tr');
-    sep.innerHTML = '<td colspan="6" style="padding:6px 8px;font-size:10px;color:var(--dim);letter-spacing:.1em">DROPPED</td>';
-    tbody.appendChild(sep);
-    droppedRoster.forEach(p => addRosterRow(p, true));
+  function renderRosterBody() {
+    tbody.innerHTML = '';
+    applyDecklistOverridesToSeasonReplays();
+    activeRoster.forEach(p => addRosterRow(p, false));
+    if (droppedRoster.length) {
+      const sep = document.createElement('tr');
+      sep.innerHTML = '<td colspan="6" style="padding:6px 8px;font-size:10px;color:var(--dim);letter-spacing:.1em">DROPPED</td>';
+      tbody.appendChild(sep);
+      droppedRoster.forEach(p => addRosterRow(p, true));
+    }
   }
+  renderRosterBody();
+  window._gfwlRerenderRoster = renderRosterBody;
 
   if (_userRole === 'admin') {
     const addPlayerBtn = document.createElement('button');
@@ -3036,56 +3262,73 @@ async function gfwlOpenTeam(season, teamName, team) {
   schTable.appendChild(schHead);
   schSec.appendChild(schTable);
 
-  // Season record summary above schedule
-  if (seasonWkW+seasonWkL > 0) {
+  // Season record summary above schedule — always render so it can be updated
+  {
     const recRow = document.createElement('div');
-    recRow.style.cssText = 'font-size:12px;font-family:monospace;margin-bottom:8px;display:flex;gap:16px';
-    recRow.innerHTML = `<span style="color:var(--muted)">Season Week Record:</span> <span style="color:var(--green)">${seasonWkW}W</span> <span style="color:var(--dim)">—</span> <span style="color:var(--red)">${seasonWkL}L</span> <span style="color:var(--muted);font-size:10px">${Math.round(seasonWkW/(seasonWkW+seasonWkL)*100)}% week win</span>`;
+    recRow.style.cssText = 'font-size:12px;font-family:monospace;margin-bottom:8px;display:flex;gap:16px;flex-wrap:wrap';
+    recRow.innerHTML = seasonWkW+seasonWkL > 0
+      ? '<span style="color:var(--muted)">Season Week Record:</span> <span style="color:var(--green)">'+seasonWkW+'W</span> <span style="color:var(--dim)">—</span> <span style="color:var(--red)">'+seasonWkL+'L</span> <span style="color:var(--muted);font-size:10px">'+Math.round(seasonWkW/(seasonWkW+seasonWkL)*100)+'% week win</span>'
+      : '<span style="color:var(--dim);font-size:11px">Season record — loading replay data...</span>';
     schSec.insertBefore(recRow, schTable);
+    _schRecRow = recRow; // store ref so renderScheduleBody can update it
   }
 
   const schBody = document.createElement('tbody');
   schTable.appendChild(schBody);
+  let _schRecRow = null; // reference to season record row so we can update it
 
-  for (let wk = 1; wk <= numWeeks; wk++) {
-    const schEntry = schedule.find(s => s.week === wk);
-    const opp = schEntry?.opponent || '—';
-    const sc = getWeekScore(wk);
-    const matchPct = (sc.matchW+sc.matchL) ? Math.round(sc.matchW/(sc.matchW+sc.matchL)*100) : null;
-    // Week score color: green if team won week, red if lost
-    const wkWon = sc.hasData && sc.teamW > sc.teamL;
-    const wkLost = sc.hasData && sc.teamL > sc.teamW;
+  function renderScheduleBody() {
+    schBody.innerHTML = '';
+    // Update season record
+    let swW=0, swL=0;
+    for (let wk=1; wk<=numWeeks; wk++) {
+      const sc2=getWeekScore(wk);
+      if (sc2.hasData) { if(sc2.teamW>sc2.teamL) swW++; else if(sc2.teamL>sc2.teamW) swL++; }
+    }
+    if (_schRecRow) {
+      _schRecRow.innerHTML = '<span style="color:var(--muted)">Season Week Record:</span> <span style="color:var(--green)">'+swW+'W</span> <span style="color:var(--dim)">—</span> <span style="color:var(--red)">'+swL+'L</span>'+(swW+swL>0?' <span style="color:var(--muted);font-size:10px">'+Math.round(swW/(swW+swL)*100)+'% week win</span>':'');
+    }
 
-    const tr = document.createElement('tr');
-    tr.style.cssText = 'border-bottom:1px solid var(--border2)';
+    for (let wk = 1; wk <= numWeeks; wk++) {
+      const schEntry = schedule.find(s => s.week === wk);
+      const opp = schEntry?.opponent || '—';
+      const sc = getWeekScore(wk);
+      const matchPct = (sc.matchW+sc.matchL) ? Math.round(sc.matchW/(sc.matchW+sc.matchL)*100) : null;
+      const wkWon = sc.hasData && sc.teamW > sc.teamL;
+      const wkLost = sc.hasData && sc.teamL > sc.teamW;
 
-    const wkTd = document.createElement('td');
-    wkTd.style.cssText='padding:5px 8px;font-family:monospace;color:var(--amber)';
-    wkTd.textContent='WK'+wk;
-    const oppTd = document.createElement('td');
-    oppTd.style.cssText='padding:5px 8px;color:var(--text)';
-    oppTd.textContent = opp;
-    const scoreTd = document.createElement('td');
-    scoreTd.style.cssText='padding:5px 8px;text-align:center;font-family:monospace;font-weight:bold;color:'+(sc.hasData?(wkWon?'var(--green)':'var(--red)'):'var(--dim)');
-    scoreTd.textContent = sc.hasData?sc.teamW+'-'+sc.teamL:'—';
-    const matchTd = document.createElement('td');
-    matchTd.style.cssText='padding:5px 8px;text-align:center;font-family:monospace;font-size:11px';
-    matchTd.innerHTML = sc.hasData?'<span style="color:var(--green)">'+sc.matchW+'W</span> <span style="color:var(--dim)">-</span> <span style="color:var(--red)">'+sc.matchL+'L</span>':'<span style="color:var(--dim)">—</span>';
-    const pctTd = document.createElement('td');
-    pctTd.style.cssText='padding:5px 8px;text-align:center;font-family:monospace;color:'+(matchPct===null?'var(--dim)':matchPct>=50?'var(--green)':'var(--red)');
-    pctTd.textContent=matchPct===null?'—':matchPct+'%';
-    // Week Report button
-    const rptTd = document.createElement('td');
-    rptTd.style.cssText='padding:5px 8px';
-    const rptBtn = document.createElement('button');
-    rptBtn.textContent='Week Report';
-    rptBtn.style.cssText='background:var(--amber);color:#050508;border:none;font-family:monospace;font-size:10px;font-weight:bold;padding:2px 8px;border-radius:3px;cursor:pointer;white-space:nowrap';
-    rptBtn.onclick = () => gfwlOpenWeekReport(season, teamName, wk, opp, seasonReplays);
-    rptTd.appendChild(rptBtn);
-    tr.appendChild(wkTd); tr.appendChild(oppTd); tr.appendChild(scoreTd);
-    tr.appendChild(matchTd); tr.appendChild(pctTd); tr.appendChild(rptTd);
-    schBody.appendChild(tr);
+      const tr = document.createElement('tr');
+      tr.style.cssText = 'border-bottom:1px solid var(--border2)';
+
+      const wkTd = document.createElement('td');
+      wkTd.style.cssText='padding:5px 8px;font-family:monospace;color:var(--amber)';
+      wkTd.textContent='WK'+wk;
+      const oppTd = document.createElement('td');
+      oppTd.style.cssText='padding:5px 8px;color:var(--text)';
+      oppTd.textContent = opp;
+      const scoreTd = document.createElement('td');
+      scoreTd.style.cssText='padding:5px 8px;text-align:center;font-family:monospace;font-weight:bold;color:'+(sc.hasData?(wkWon?'var(--green)':'var(--red)'):'var(--dim)');
+      scoreTd.textContent = sc.hasData?sc.teamW+'-'+sc.teamL:'—';
+      const matchTd = document.createElement('td');
+      matchTd.style.cssText='padding:5px 8px;text-align:center;font-family:monospace;font-size:11px';
+      matchTd.innerHTML = sc.hasData?'<span style="color:var(--green)">'+sc.matchW+'W</span> <span style="color:var(--dim)">-</span> <span style="color:var(--red)">'+sc.matchL+'L</span>':'<span style="color:var(--dim)">—</span>';
+      const pctTd = document.createElement('td');
+      pctTd.style.cssText='padding:5px 8px;text-align:center;font-family:monospace;color:'+(matchPct===null?'var(--dim)':matchPct>=50?'var(--green)':'var(--red)');
+      pctTd.textContent=matchPct===null?'—':matchPct+'%';
+      const rptTd = document.createElement('td');
+      rptTd.style.cssText='padding:5px 8px';
+      const rptBtn = document.createElement('button');
+      rptBtn.textContent='Week Report';
+      rptBtn.style.cssText='background:var(--amber);color:#050508;border:none;font-family:monospace;font-size:10px;font-weight:bold;padding:2px 8px;border-radius:3px;cursor:pointer;white-space:nowrap';
+      rptBtn.onclick = () => gfwlOpenWeekReport(season, teamName, wk, opp, seasonReplays);
+      rptTd.appendChild(rptBtn);
+      tr.appendChild(wkTd); tr.appendChild(oppTd); tr.appendChild(scoreTd);
+      tr.appendChild(matchTd); tr.appendChild(pctTd); tr.appendChild(rptTd);
+      schBody.appendChild(tr);
+    }
   }
+  renderScheduleBody();
+  window._gfwlRerenderSchedule = renderScheduleBody;
 
   // ── Add/Drop log ──────────────────────────────────────────────────────────
   if (addDrops.length || _userRole === 'admin') {
@@ -3236,8 +3479,27 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
 
   main.appendChild(hdr);
 
-  // Get player's season replays
-  const playerReplays = (seasonReplays||[]).filter(x => x.player.toLowerCase() === playerName.toLowerCase());
+  // Re-collect this player's season replays fresh from the batch cache.
+  // The seasonReplays parameter passed from the roster button is captured at
+  // render time when the team page first loads — it may be empty if batches
+  // hadn't finished loading yet (loadAllBatches is async/fire-and-forget).
+  const _freshPlayerBatches = Object.values(window._gfwlBatchCache||{})
+    .filter(b => (b.player||'').toLowerCase() === playerName.toLowerCase());
+  const _freshPlayerReplays = [];
+  for (const b of _freshPlayerBatches) {
+    for (const r of (b.replays||[])) {
+      const lbl=(r.eventLabel||'').toUpperCase().trim();
+      const sk=season.toUpperCase();
+      if (lbl.startsWith(sk+':') || lbl.startsWith(sk+' ') || lbl===sk) {
+        _freshPlayerReplays.push({player:b.player, replay:r, label:lbl});
+      }
+    }
+  }
+  // Fall back to passed-in seasonReplays if cache is still empty
+  const playerReplays = _freshPlayerReplays.length
+    ? _freshPlayerReplays
+    : (seasonReplays||[]).filter(x => x.player.toLowerCase() === playerName.toLowerCase());
+
   const w = playerReplays.filter(x=>x.replay.parsed?.result==='w').length;
   const l = playerReplays.filter(x=>x.replay.parsed?.result==='l').length;
   const total = w+l;
@@ -3599,8 +3861,27 @@ async function gfwlOpenWeekReport(season, teamName, wk, oppTeamName, seasonRepla
   hdr.appendChild(subTitle);
   main.appendChild(hdr);
 
+  // Re-collect this team's replays fresh from the batch cache (the seasonReplays
+  // parameter passed from the schedule button is captured at render time and may
+  // be empty if batches hadn't loaded yet when the schedule was first drawn)
+  const team2 = _gfwlData[season]?.teams[teamName];
+  const roster2 = (team2?.roster||[]).map(r=>r.player.toLowerCase());
+  const freshSeasonReplays = [];
+  const batchSrc = Object.values(window._gfwlBatchCache||{});
+  for (const b of batchSrc) {
+    if (!roster2.includes((b.player||'').toLowerCase())) continue;
+    for (const r of (b.replays||[])) {
+      const lbl=(r.eventLabel||'').toUpperCase().trim();
+      const sk=season.toUpperCase();
+      if (lbl.startsWith(sk+':') || lbl.startsWith(sk+' ') || lbl===sk) {
+        freshSeasonReplays.push({player:b.player,replay:r,label:lbl});
+      }
+    }
+  }
+  const effectiveSeasonReplays = freshSeasonReplays.length ? freshSeasonReplays : (seasonReplays||[]);
+
   // Get this team's WK replays
-  const wkReplays = (seasonReplays||[]).filter(x => {
+  const wkReplays = effectiveSeasonReplays.filter(x => {
     const lbl = x.label;
     return lbl.includes(':') && parseInt((lbl.split(':')[1]||'').replace(/\D/g,'')) === wk;
   });
@@ -4674,6 +4955,24 @@ function buildDeck() {
       m.eventLabel       = r.eventLabel       || '';
       m.myDeckOverride   = r.myDeckOverride   || null;
       m.oppDeckOverride  = r.oppDeckOverride  || null;
+
+      // Apply event decklist type if no explicit override exists.
+      // This is how e.g. "FLC30" replays get the deck type from the uploaded
+      // FLC30 decklist on the player's profile without needing a per-replay override.
+      if (!m.myDeckOverride && m.eventLabel) {
+        const _evCode = m.eventLabel.split(':')[0].trim().toUpperCase();
+        if (!/^S\d+$/i.test(_evCode) && _evCode !== 'LADDER' && _evCode !== 'ACAD') {
+          const _evDecks = getEventDecks(player);
+          const _evMatch = _evDecks && _evDecks.find(d => {
+            const dc = (d.code||'').toUpperCase();
+            return dc === _evCode || dc === m.eventLabel.trim().toUpperCase();
+          });
+          if (_evMatch && _evMatch.deckTypeOverride) {
+            m.myDeckOverride = _evMatch.deckTypeOverride;
+          }
+        }
+      }
+
       if (m.myDeckOverride)  m.myDeck  = m.myDeckOverride;
       if (m.oppDeckOverride) m.oppDeck = m.oppDeckOverride;
       _matches.push(m);
@@ -5342,6 +5641,11 @@ async function deleteMatch(idx, m) {
 }
 
 function selectMatch(idx) {
+  // On mobile: collapse the drawer so the deck detail is visible
+  if (window.innerWidth <= 768) {
+    const sb = document.querySelector('.deck-sb');
+    if (sb) sb.classList.remove('drawer-open');
+  }
   document.querySelectorAll('#match-list .match-item').forEach(el => el.classList.remove('on'));
   const item = document.querySelector(`[data-idx="${idx}"]`);
   if (item) { item.classList.add('on'); item.scrollIntoView({block:'nearest'}); }
@@ -11070,7 +11374,29 @@ async function initAuth() {
 }
 
 // Run after app loads
-document.addEventListener('DOMContentLoaded', () => setTimeout(initAuth, 100));
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(initAuth, 100);
+  initMobileDrawer();
+});
+
+// Mobile deck viewer drawer
+function initMobileDrawer() {
+  const sb = document.querySelector('.deck-sb');
+  if (!sb) return;
+  sb.addEventListener('click', e => {
+    if (window.innerWidth > 768) return;
+    const tgt = e.target;
+    const inHeader = tgt.closest('.dsb-hdr') || tgt === sb || tgt.classList.contains('deck-sb');
+    if (inHeader && !tgt.closest('button') && !tgt.closest('input') && !tgt.closest('select')) {
+      sb.classList.toggle('drawer-open');
+    }
+  });
+}
+window.addEventListener('resize', () => {
+  const sb = document.querySelector('.deck-sb');
+  if (sb && window.innerWidth > 768) sb.classList.remove('drawer-open');
+});
+
 </script>
 </body>
 </html>
