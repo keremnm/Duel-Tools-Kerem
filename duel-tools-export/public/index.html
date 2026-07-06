@@ -3405,11 +3405,21 @@ async function gfwlOpenTeam(season, teamName, team) {
     const myDeckUsage = {}, oppDeckUsage = {};
     seasonReplays.forEach(x => {
       const r = x.replay || x;
-      // Build a match record to get properly classified deck types
-      const rec = buildMatchRecord(r, x.player || '', []);
-      const my = r.myDeckOverride || (rec && rec.myDeck) || (r.parsed && r.parsed.myDeck);
-      const opp = r.oppDeckOverride || (rec && rec.oppDeck) || (r.parsed && r.parsed.oppDeck);
-      if (my && my !== 'Unknown')  myDeckUsage[my]  = (myDeckUsage[my]||0)+1;
+      const player = x.player || '';
+      // Use buildMatchRecord for full deck classification (handles allMine/allOpp card arrays)
+      // Fall back to event decklist type, then stored parsed myDeck if already classified
+      let my = r.myDeckOverride;
+      let opp = r.oppDeckOverride;
+      if (!my || my === '—' || my === '-') {
+        const rec = buildMatchRecord(r, player, []);
+        my = (rec && rec.myDeck && rec.myDeck !== 'Unknown') ? rec.myDeck : null;
+        if (!opp || opp === '—' || opp === '-') {
+          opp = (rec && rec.oppDeck && rec.oppDeck !== 'Unknown') ? rec.oppDeck : null;
+        }
+      }
+      if (!my || my === '—' || my === '-') my = (r.parsed && r.parsed.myDeck !== '—' && r.parsed.myDeck !== '-') ? r.parsed.myDeck : null;
+      if (!opp || opp === '—' || opp === '-') opp = (r.parsed && r.parsed.oppDeck !== '—' && r.parsed.oppDeck !== '-') ? r.parsed.oppDeck : null;
+      if (my && my !== 'Unknown') myDeckUsage[my] = (myDeckUsage[my]||0)+1;
       if (opp && opp !== 'Unknown') oppDeckUsage[opp] = (oppDeckUsage[opp]||0)+1;
     });
     console.log('[GFWLPies] entries my:', Object.keys(myDeckUsage).length, 'opp:', Object.keys(oppDeckUsage).length);
@@ -3550,8 +3560,14 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
     wkReplays.forEach(x => {
       const r = x.replay;
       const result = r.parsed?.result;
-      const myDeck = r.myDeckOverride || r.parsed?.myDeck || '—';
-      const oppDeck = r.oppDeckOverride || r.parsed?.oppDeck || '—';
+      // Use buildMatchRecord for proper deck classification
+      const _wkRec = buildMatchRecord(r, playerName, []);
+      const myDeck = r.myDeckOverride ||
+        (_wkRec && _wkRec.myDeck && _wkRec.myDeck !== 'Unknown' ? _wkRec.myDeck : null) ||
+        (r.parsed?.myDeck !== '—' && r.parsed?.myDeck !== '-' ? r.parsed?.myDeck : null) || '—';
+      const oppDeck = r.oppDeckOverride ||
+        (_wkRec && _wkRec.oppDeck && _wkRec.oppDeck !== 'Unknown' ? _wkRec.oppDeck : null) ||
+        (r.parsed?.oppDeck !== '—' && r.parsed?.oppDeck !== '-' ? r.parsed?.oppDeck : null) || '—';
       const oppName = (r.parsed&&r.parsed.oppName) || r.oppName || '—';
       // Get opponent team from schedule
       const teamSch = (_gfwlData[season]&&_gfwlData[season].teams&&_gfwlData[season].teams[teamName]&&_gfwlData[season].teams[teamName].schedule)||[];
@@ -3823,11 +3839,20 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
   }
   console.log('[PlayerPie] freshReplays:', freshReplays.length, 'sample parsed:', freshReplays[0]?.parsed);
   freshReplays.forEach(r => {
-    const my = r.myDeckOverride || (r.parsed && r.parsed.myDeck);
-    const opp = r.oppDeckOverride || (r.parsed && r.parsed.oppDeck);
-    console.log('[PlayerPie] my:', my, 'opp:', opp);
-    if (my && my!=='Unknown') myDU[my]=(myDU[my]||0)+1;
-    if (opp && opp!=='Unknown') oppDU[opp]=(oppDU[opp]||0)+1;
+    let my = r.myDeckOverride;
+    let opp = r.oppDeckOverride;
+    // Use buildMatchRecord for proper classification if stored value is empty/dash
+    if (!my || my === '—' || my === '-') {
+      const rec = buildMatchRecord(r, playerName, []);
+      my = (rec && rec.myDeck && rec.myDeck !== 'Unknown') ? rec.myDeck : null;
+      if (!opp || opp === '—' || opp === '-') {
+        opp = (rec && rec.oppDeck && rec.oppDeck !== 'Unknown') ? rec.oppDeck : null;
+      }
+    }
+    if (!my || my === '—' || my === '-') my = (r.parsed && r.parsed.myDeck !== '—' && r.parsed.myDeck !== '-') ? r.parsed.myDeck : null;
+    if (!opp || opp === '—' || opp === '-') opp = (r.parsed && r.parsed.oppDeck !== '—' && r.parsed.oppDeck !== '-') ? r.parsed.oppDeck : null;
+    if (my && my !== 'Unknown') myDU[my] = (myDU[my]||0)+1;
+    if (opp && opp !== 'Unknown') oppDU[opp] = (oppDU[opp]||0)+1;
   });
   const myE=Object.entries(myDU).sort((a,b)=>b[1]-a[1]).slice(0,8);
   const oppE=Object.entries(oppDU).sort((a,b)=>b[1]-a[1]).slice(0,8);
@@ -3887,12 +3912,32 @@ async function gfwlOpenWeekReport(season, teamName, wk, oppTeamName, seasonRepla
     return lbl.includes(':') && parseInt((lbl.split(':')[1]||'').replace(/\D/g,'')) === wk;
   });
 
-  // Get opponent team's replays for this week
+  // Get opponent team's replays for this week.
+  // _gfwlBatchCache only loaded the home team's batches — fetch opponent batches now.
   const oppTeam = oppTeamName ? (_gfwlData[season]?.teams[gfwlResolveTeam(season, oppTeamName)||oppTeamName]) : null;
   const oppRoster = oppTeam ? (oppTeam.roster||[]).map(r=>r.player.toLowerCase()) : [];
   const oppWkReplays = [];
-  if (oppRoster.length && window._gfwlBatchCache) {
-    for (const b of Object.values(window._gfwlBatchCache)) {
+
+  if (oppRoster.length) {
+    try {
+      const bList = await fetch(API+'/batches').then(r=>r.json()).catch(()=>[]);
+      const oppFetches = [];
+      for (const pName of oppRoster) {
+        const pBatches = bList.filter(b=>(b.player||'').toLowerCase()===pName);
+        for (const pb of pBatches) {
+          if (!window._gfwlBatchCache[pb.id]) {
+            oppFetches.push(
+              fetch(API+'/batches/'+pb.id).then(r=>r.json())
+                .then(full=>{ if(full&&full.replays) window._gfwlBatchCache[pb.id]=full; })
+                .catch(()=>{})
+            );
+          }
+        }
+      }
+      if (oppFetches.length) await Promise.all(oppFetches);
+    } catch(e) { console.warn('[WeekReport] opp batch fetch failed:', e.message); }
+
+    for (const b of Object.values(window._gfwlBatchCache||{})) {
       if (!oppRoster.includes((b.player||'').toLowerCase())) continue;
       for (const r of (b.replays||[])) {
         const lbl=(r.eventLabel||'').toUpperCase().trim();
@@ -3986,8 +4031,14 @@ async function gfwlOpenWeekReport(season, teamName, wk, oppTeamName, seasonRepla
   const deckCounts = {};
   [...wkReplays, ...oppWkReplays].forEach(x => {
     const r = x.replay||x;
-    const d = r.myDeckOverride||(r.parsed&&r.parsed.myDeck);
-    if (d&&d!=='Unknown') deckCounts[d]=(deckCounts[d]||0)+1;
+    const player = x.player || '';
+    let d = r.myDeckOverride;
+    if (!d || d === '—' || d === '-') {
+      const rec = buildMatchRecord(r, player, []);
+      d = (rec && rec.myDeck && rec.myDeck !== 'Unknown') ? rec.myDeck : null;
+    }
+    if (!d || d === '—' || d === '-') d = (r.parsed?.myDeck !== '—' && r.parsed?.myDeck !== '-') ? r.parsed?.myDeck : null;
+    if (d && d !== 'Unknown') deckCounts[d] = (deckCounts[d]||0)+1;
   });
   const deckEntries = Object.entries(deckCounts).sort((a,b)=>b[1]-a[1]);
   if (deckEntries.length) buildDonutChart('gfwl-week-chart','gfwl-week-legend', deckEntries, 'Week '+wk+' Decks');
