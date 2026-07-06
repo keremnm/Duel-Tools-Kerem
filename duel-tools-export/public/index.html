@@ -1015,7 +1015,7 @@ select{cursor:pointer}
             <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px">
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
                 <div class="slbl" style="margin:0">ALL MATCHES</div>
-                <select id="profile-year-filter" onchange="if(_activeProfile){renderAllMatchesSection(_activeProfile.player,_profileRecords);buildProfileMatchupTable(_profileRecords);}" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;outline:none;margin-left:auto">
+                <select id="profile-year-filter" onchange="if(_activeProfile){renderAllMatchesSection(_activeProfile.player,_profileRecords);buildProfileMatchupTable(_profileRecords);refreshProfileDeckChart();}" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;outline:none;margin-left:auto">
                   <option value="">All Years</option>
                 </select>
               </div>
@@ -3262,6 +3262,8 @@ async function gfwlOpenTeam(season, teamName, team) {
   schTable.appendChild(schHead);
   schSec.appendChild(schTable);
 
+  let _schRecRow = null; // declared first so the block below can assign it
+
   // Season record summary above schedule — always render so it can be updated
   {
     const recRow = document.createElement('div');
@@ -3270,12 +3272,11 @@ async function gfwlOpenTeam(season, teamName, team) {
       ? '<span style="color:var(--muted)">Season Week Record:</span> <span style="color:var(--green)">'+seasonWkW+'W</span> <span style="color:var(--dim)">—</span> <span style="color:var(--red)">'+seasonWkL+'L</span> <span style="color:var(--muted);font-size:10px">'+Math.round(seasonWkW/(seasonWkW+seasonWkL)*100)+'% week win</span>'
       : '<span style="color:var(--dim);font-size:11px">Season record — loading replay data...</span>';
     schSec.insertBefore(recRow, schTable);
-    _schRecRow = recRow; // store ref so renderScheduleBody can update it
+    _schRecRow = recRow;
   }
 
   const schBody = document.createElement('tbody');
   schTable.appendChild(schBody);
-  let _schRecRow = null; // reference to season record row so we can update it
 
   function renderScheduleBody() {
     schBody.innerHTML = '';
@@ -3405,7 +3406,7 @@ async function gfwlOpenTeam(season, teamName, team) {
     seasonReplays.forEach(x => {
       const r = x.replay || x;
       // Build a match record to get properly classified deck types
-      const rec = buildMatchRecord(r, x.player || (allGFWLBatches.find(b=>b.replays&&b.replays.includes(r))?.player) || '', []);
+      const rec = buildMatchRecord(r, x.player || '', []);
       const my = r.myDeckOverride || (rec && rec.myDeck) || (r.parsed && r.parsed.myDeck);
       const opp = r.oppDeckOverride || (rec && rec.oppDeck) || (r.parsed && r.parsed.oppDeck);
       if (my && my !== 'Unknown')  myDeckUsage[my]  = (myDeckUsage[my]||0)+1;
@@ -6540,6 +6541,27 @@ function ddCardWRGlobal() {
 // ── Profile sub-tabs ─────────────────────────────────────────────────────────
 let _profileRecords = []; // records for currently open profile
 
+// Rebuild the profile deck usage chart filtered by the currently selected year
+function refreshProfileDeckChart() {
+  if (!_activeProfile || typeof buildDonutChart !== 'function') return;
+  const pyf = document.getElementById('profile-year-filter');
+  const yr = pyf ? pyf.value : '';
+  let recs = _activeProfile.records || [];
+  if (yr) {
+    recs = recs.filter(r => {
+      const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+      const d = getEventDate(code);
+      return !d || d.startsWith(yr) || isGFWLSeason(code);
+    });
+  }
+  const du = {};
+  recs.forEach(r => { const k = r.myDeck||'Unknown'; du[k] = (du[k]||0)+1; });
+  const sorted = Object.entries(du).filter(([k])=>k!=='Unknown').sort((a,b)=>b[1]-a[1]).slice(0,10);
+  if (sorted.length) {
+    buildDonutChart('profile-deck-chart', 'profile-deck-legend', sorted, _activeProfile.player+(yr?' — '+yr:' — All Time'));
+  }
+}
+
 function profileSubTab(tab, btn) {
   document.querySelectorAll('#profile-tab-matchups,#profile-tab-gfwl,#profile-tab-cardwr').forEach(b => b.classList.remove('on'));
   btn.classList.add('on');
@@ -9168,6 +9190,20 @@ async function openProfile(player, batches, records) {
 
   // Matchup table — use ALL records for this player (all batches)
   _profileRecords = records;
+
+  // Populate year filter from actual event dates in this player's records
+  const _pyf = document.getElementById('profile-year-filter');
+  if (_pyf) {
+    const _curYr = _pyf.value;
+    const _yrs = [...new Set(records.map(r => {
+      const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+      const d = getEventDate(code);
+      return d ? d.slice(0,4) : null;
+    }).filter(Boolean))].sort((a,b) => b-a);
+    _pyf.innerHTML = '<option value="">All Years</option>' +
+      _yrs.map(y => `<option value="${y}"${y===_curYr?' selected':''}>${y}</option>`).join('');
+  }
+
   buildProfileMatchupTable(records);
   // Update matchup header to confirm source
   const matchupHdr = document.getElementById('profile-matchup-header');
