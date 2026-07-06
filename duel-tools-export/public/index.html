@@ -519,6 +519,7 @@ select{cursor:pointer}
           </div>
         </div>
         <div class="match-list" id="match-list"><div class="dno">Select a batch first.</div></div>
+        <div id="failed-replays-list" style="flex-shrink:0;border-top:1px solid var(--border);padding:4px 6px;display:none"></div>
       </div>
       <div class="deck-main" id="deck-main">
         <div class="empty-pg" id="deck-empty">
@@ -713,6 +714,7 @@ select{cursor:pointer}
               <button class="ptab-mode" id="ptab-mode-season" onclick="setProfileMode('season')" style="font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--border);color:var(--muted);background:none;cursor:pointer">Season</button>
               <button class="ptab-mode" id="ptab-mode-conf" onclick="setProfileMode('conf')" style="display:none;font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--border);color:var(--muted);background:none;cursor:pointer">Conference</button>
               <button class="ptab-mode" id="ptab-mode-tags" onclick="setProfileMode('tags')" style="font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--border);color:var(--muted);background:none;cursor:pointer"># Tags</button>
+              <button class="ptab-mode" id="ptab-mode-unknown" onclick="setProfileMode('unknown')" style="font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--border);color:var(--muted);background:none;cursor:pointer" title="Players with replays that have unknown deck type — usually failed imports that need re-submitting">? Unknown</button>
             </div>
             <div style="width:1px;height:18px;background:var(--border);margin:0 2px"></div>
             <!-- Dynamic sub-tabs rendered by JS -->
@@ -1320,7 +1322,7 @@ const TFIDF_WEIGHTS = {
   'dust tornado':                      { 'Warrior': 0.42, 'Earth Aggro': 0.38 },
   'd.d. assailant':                    { 'Warrior': 0.45, 'Earth Aggro': 0.50, 'Aggro Lockdown': 0.45 },
   'warrior returning alive':           { 'Warrior': 0.55, 'Chaos Warrior': 0.40, 'Gearfried Warriors': 0.55 },
-  'zombyra the dark':                  { 'Chaos Warrior': 0.75 },
+  'zombyra the dark':                  { 'Chaos Warrior': 0.30, 'Warrior': 0.20 }, // zombyra alone is not a reliable CW indicator
   // Gearfried weights now handled above
   'jurai gumo':                        { 'Aggro Lockdown': 0.95 },
   'skill drain':                       { 'Aggro Lockdown': 0.72, 'Drain Burn': 0.40 },
@@ -3134,8 +3136,28 @@ async function gfwlOpenTeam(season, teamName, team) {
   right.appendChild(matchupSec);
   matchupSec.innerHTML += '<canvas id="gfwl-pie-matchup" style="width:100%;max-height:200px"></canvas><div id="gfwl-pie-matchup-legend" style="margin-top:8px;display:flex;flex-direction:column;gap:3px"></div>';
 
+  // Apply player decklist deck type overrides to all season replays before charting.
+  // Without this, replays tagged with an event ID that has a decklist type set won't
+  // show in the deck usage pie or matchup charts (they'd appear as Unknown).
+  function applyDecklistOverridesToSeasonReplays() {
+    for (const x of seasonReplays) {
+      const r = x.replay;
+      if (r.myDeckOverride) continue; // already has an override
+      const playerReg2 = window._playerRegistry && window._playerRegistry[(x.player||'').toLowerCase()];
+      const evDecks2 = playerReg2 ? (playerReg2.eventDecklists||[]) : [];
+      const evId = (r.eventLabel||'').toUpperCase();
+      for (const d of evDecks2) {
+        if (d.code && d.deckTypeOverride && d.code.toUpperCase() === evId) {
+          r.myDeckOverride = d.deckTypeOverride;
+          break;
+        }
+      }
+    }
+  }
+
   // renderGFWLPies: uses buildDonutChart with static IDs (same as rest of app)
   function renderGFWLPies() {
+    applyDecklistOverridesToSeasonReplays();
     const myDeckUsage = {}, oppDeckUsage = {};
     seasonReplays.forEach(x => {
       const r = x.replay || x;
@@ -3298,13 +3320,23 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
   const evDecks = playerReg ? (playerReg.eventDecklists||[]) : [];
   const seasonDecks = evDecks.filter(d => gfwlNormalizeSeason(d.code) === season.toUpperCase());
 
+  // Apply decklist deck type overrides to player replays before display/charts
+  const decklistTypeMap = {};
+  evDecks.forEach(d => { if (d.code && d.deckTypeOverride) decklistTypeMap[d.code.toUpperCase()] = d.deckTypeOverride; });
+  playerReplays.forEach(x => {
+    const r = x.replay;
+    const evId = (r.eventLabel||'').toUpperCase();
+    if (evId && decklistTypeMap[evId] && !r.myDeckOverride) r.myDeckOverride = decklistTypeMap[evId];
+  });
+
   // ── Mini Deck Viewer: season matches grouped by week ──────────────────────
   const deckSec = gfwlMakeSection('SEASON MATCHES — '+season);
   left.appendChild(deckSec);
 
-  // Group playerReplays by week
+  // Group playerReplays by week (freshReplays built below in pie section, use playerReplays here)
   const wkGroups = {};
-  freshReplays.forEach(r => {
+  playerReplays.forEach(x => {
+    const r = x.replay || x;
     const lbl = (r.eventLabel||'').toUpperCase().trim();
     const wkMatch = lbl.match(/:.*?(\d+)/);
     const wkNum = wkMatch ? parseInt(wkMatch[1]) : 0;
@@ -4647,6 +4679,9 @@ function buildDeck() {
       _matches.push(m);
     }
   }
+  // Collect failed replays (timedOut or no parsed data = no deck image/type generated)
+  const failedReplays = replays.filter(r => r.timedOut || (!r.parsed && !(r.allPlays&&r.allPlays.length) && !(r.plays&&r.plays.length)));
+
   // Populate year filter dropdown from event dates
   const yearSel = document.getElementById('deck-year-filter');
   if (yearSel) {
@@ -4675,6 +4710,95 @@ function buildDeck() {
     }
   }
   renderMatchSidebar('');
+
+  // Render failed replays panel (timedOut / no deck data = Unknown)
+  const failedEl = document.getElementById('failed-replays-list');
+  if (failedEl) {
+    if (failedReplays.length) {
+      failedEl.style.display = 'block';
+      failedEl.innerHTML = `<div style="font-size:9px;color:var(--red);font-family:monospace;letter-spacing:.1em;padding:4px 2px 3px">⚠ FAILED REPLAYS (${failedReplays.length}) — click ↺ to retry</div>`;
+      for (const r of failedReplays) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 2px;border-bottom:1px solid var(--border2)';
+
+        const idEl = document.createElement('span');
+        idEl.style.cssText = 'font-size:10px;font-family:monospace;color:var(--dim);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        idEl.textContent = '…' + (r.replayId||'').slice(-10);
+        idEl.title = r.replayId;
+        row.appendChild(idEl);
+
+        const evEl = document.createElement('span');
+        evEl.style.cssText = 'font-size:9px;color:var(--amber);font-family:monospace;flex-shrink:0';
+        evEl.textContent = r.eventLabel || '';
+        row.appendChild(evEl);
+
+        const retryBtn = document.createElement('button');
+        retryBtn.textContent = '↺';
+        retryBtn.title = 'Retry fetching this replay';
+        retryBtn.style.cssText = 'background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:10px;padding:1px 7px;border-radius:3px;cursor:pointer;flex-shrink:0';
+        retryBtn.onclick = async () => {
+          if (!_activeBatch) return;
+          retryBtn.disabled = true; retryBtn.textContent = '…';
+          const rid = r.replayId;
+          try {
+            const result = await loadReplay(rid);
+            if (result.timedOut) {
+              retryBtn.disabled = false; retryBtn.textContent = '↺';
+              st('Still failing — try again later (' + (result._error||'timeout') + ')', 'var(--red)');
+              return;
+            }
+            const _rpa = (result.allPlays||result.plays||[]).filter(p=>p.play==='RPS').map(p=>({game:p.game||null,player1:p.player1||null,player2:p.player2||null,player1_choice:p.player1_choice||p.p1pick||null,player2_choice:p.player2_choice||p.p2pick||null,pick:p.pick||null}));
+            const _ppa = parseMatch(rid, result.allPlays||result.plays||[], _activeBatch.player||'', _activeBatch.aliases||[], result.player1, result.player2);
+            const _psa = _ppa ? { games:_ppa.games, allMine:_ppa.allMine, allOpp:_ppa.allOpp, oppName:_ppa.oppName, myW:_ppa.myW, oppW:_ppa.oppW, draws:_ppa.draws, score:_ppa.score, result:_ppa.result } : null;
+            const _oppName = _ppa ? _ppa.oppName : '';
+            const _evLabel = r.eventLabel || '';
+            // Replace the replay in the batch
+            _activeBatch.replays = (_activeBatch.replays||[]).filter(rep => rep.replayId !== rid);
+            const entry = { replayId:rid, plays:_rpa, allPlays:[], timedOut:false, player1:result.player1||null, player2:result.player2||null, oppName:_oppName, parsed:_psa, eventLabel:_evLabel };
+            _activeBatch.replays.push(entry);
+            // Save to server
+            if (_activeBatch.id) {
+              try {
+                await fetch(`${API}/batches/${_activeBatch.id}/replay`, {
+                  method:'POST', headers: authHeaders(),
+                  body: JSON.stringify({replayId:rid,plays:_rpa,allPlays:[],timedOut:false,oppName:_oppName,player1:result.player1||null,player2:result.player2||null,parsed:_psa,eventLabel:_evLabel})
+                });
+              } catch(e) { console.warn('Server save after retry failed:', e.message); }
+            }
+            st('Retry successful: '+rid, 'var(--green)');
+            row.remove();
+            if (!document.querySelector('#failed-replays-list div[style*="amber"]')?.nextSibling) failedEl.style.display = 'none';
+            buildDeck();
+          } catch(e) {
+            retryBtn.disabled = false; retryBtn.textContent = '↺';
+            st('Retry failed: '+e.message, 'var(--red)');
+          }
+        };
+        row.appendChild(retryBtn);
+
+        const delBtn = document.createElement('button');
+        delBtn.textContent = '✕';
+        delBtn.title = 'Remove from batch';
+        delBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--dim);font-family:monospace;font-size:10px;padding:1px 6px;border-radius:3px;cursor:pointer;flex-shrink:0';
+        delBtn.onclick = async () => {
+          if (!confirm('Remove replay '+r.replayId+' from batch?')) return;
+          _activeBatch.replays = (_activeBatch.replays||[]).filter(rep => rep.replayId !== r.replayId);
+          if (_activeBatch.id) {
+            await fetch(`${API}/batches/${_activeBatch.id}/replay/${encodeURIComponent(r.replayId)}`, { method:'DELETE', headers: authHeaders() }).catch(()=>{});
+          }
+          row.remove();
+          if (!failedEl.querySelector('div[style]')?.nextSibling) failedEl.style.display = 'none';
+          buildDeck();
+        };
+        row.appendChild(delBtn);
+
+        failedEl.appendChild(row);
+      }
+    } else {
+      failedEl.style.display = 'none';
+      failedEl.innerHTML = '';
+    }
+  }
 }
 
 // ── Card image loading ───────────────────────────────────────────────────────
@@ -4805,13 +4929,13 @@ function classifyFromCards(cards) {
 
   if (has('thunder dragon')) { scores['Chaos Turbo']+=0.50; scores['Chaos Control']+=0.30; scores['Chaos Warrior']+=0.40; scores['Goat Control']=Math.max(0,scores['Goat Control']-0.50); scores['Warrior']=Math.max(0,scores['Warrior']-0.60); }
   if (has('night assailant')) {
-    const wm = ['blade knight','don zaloog','mystic swordsman lv2','kycoo the ghost destroyer','zombyra the dark','exiled force'].filter(has).length;
+    const wm = ['blade knight','don zaloog','mystic swordsman lv2','kycoo the ghost destroyer','sasuke samurai','exiled force'].filter(has).length; // zombyra excluded — not a reliable CW indicator
     if (wm>=3) { scores['Chaos Warrior']+=0.40; scores['Chaos Turbo']=Math.max(0,scores['Chaos Turbo']-0.20); }
     else if (wm>=1) { scores['Chaos Turbo']+=0.30; scores['Chaos Warrior']+=0.20; }
     else scores['Chaos Turbo']+=0.60;
   }
   if (hasc('thunder dragon','night assailant')) {
-    const wc=['blade knight','don zaloog','mystic swordsman lv2','zombyra the dark'].filter(has).length;
+    const wc=['blade knight','don zaloog','mystic swordsman lv2','sasuke samurai'].filter(has).length;
     if (wc<3) scores['Chaos Turbo']+=0.50; else scores['Chaos Warrior']+=0.35;
   }
   // Scapegoat + Metamorphosis: weight by how many copies seen
@@ -4832,8 +4956,21 @@ function classifyFromCards(cards) {
   if (has('abyss soldier')) scores['Chaos Control']+=0.45;
   if (has('reinforcement of the army')) {
     scores['Warrior']+=0.30; scores['Chaos Warrior']+=0.28; scores['Aggro Lockdown']+=0.18;
-    if (has('thunder dragon')) { scores['Chaos Warrior']+=0.55; scores['Warrior']=Math.max(0,scores['Warrior']-0.40); }
-    else {
+    if (has('thunder dragon')) {
+      // ROTA + Thunder Dragon = Chaos Warrior (chaos engine + warrior package)
+      scores['Chaos Warrior']+=0.55; scores['Warrior']=Math.max(0,scores['Warrior']-0.40);
+    } else if (has('injection fairy lily') || has('raigeki break')) {
+      // ROTA + Lily or Raigeki Break = strong Chaos Warrior signal
+      // (Lily and Raigeki Break are key CW cards alongside the warrior monster package)
+      const cwWarriors = ['blade knight','sasuke samurai','don zaloog','mystic swordsman lv2','kycoo the ghost destroyer'].filter(has).length;
+      if (cwWarriors >= 2) {
+        scores['Chaos Warrior'] += 0.50 + cwWarriors*0.10;
+        scores['Warrior'] = Math.max(0, scores['Warrior'] - 0.30);
+      } else {
+        scores['Chaos Warrior'] += 0.30;
+      }
+    } else {
+      // ROTA without chaos engine: lean Warrior, suppress CW proportionally
       const ws = ['sasuke samurai','don zaloog','blade knight','mystic swordsman lv2','kycoo the ghost destroyer'].filter(has).length + (cnt('solemn judgment')>=2?1:0) + (!has('gigantes')?1:0);
       scores['Warrior'] += 0.30 + ws*0.08; scores['Chaos Warrior']=Math.max(0,scores['Chaos Warrior']-0.25-ws*0.05);
       if (ws>=3) { scores['Warrior']+=0.25; scores['Chaos Warrior']=Math.max(0,scores['Chaos Warrior']-0.20); }
@@ -7322,10 +7459,12 @@ async function reclassifyAllDecklists() {
   }
 
   if (updated > 0) {
-    saveEventDecks(player, decks);
+    saveEventDecks(player, decks); // saveEventDecks also calls propagateDecklistTypesToReplays
     renderEventDecks(player, _activeProfile.batches||[], _activeProfile.records||[]);
     st(`Re-classified ${ydkDecks.length} decklists — ${updated} type${updated!==1?'s':''} updated`, 'var(--green)');
   } else {
+    // Even if no types changed, still propagate existing types to any replays that may not have them
+    propagateDecklistTypesToReplays(player, decks);
     st(`Re-classified ${ydkDecks.length} decklists — no changes`, 'var(--green)');
   }
 }
@@ -8132,6 +8271,8 @@ function setProfileMode(mode) {
   if (confBtn) {
     confBtn.style.display = (mode === 'season' || mode === 'conf') ? '' : 'none';
   }
+  // Unknown mode has no sub-tabs — filter applied directly in profileTabFilter
+  if (mode === 'unknown') _profileSubTab = 'all';
 
   renderProfileSubTabs();
   profileTabFilter();
@@ -8164,16 +8305,17 @@ function renderProfileSubTabs() {
       { label:'No Team',  value:'none'   },
     ];
   } else if (_profileMode === 'tags') {
-    // Collect all unique tags across player registry
     const allTags = new Set();
     if (window._playerRegistry) {
       for (const p of Object.values(window._playerRegistry)) {
         for (const tag of (p.tags||[])) allTags.add(tag);
       }
     }
-    // Also show a tag input for filtering by any typed tag
     const sorted = [...allTags].sort((a,b)=>a.localeCompare(b));
-    tabs = [{ label:'All', value:'all' }, ...sorted.map(t=>({ label:t, value:t }))];
+    tabs = [{ label:'All Tagged', value:'all' }, ...sorted.map(t=>({ label:t, value:t }))];
+  } else if (_profileMode === 'unknown') {
+    // No sub-tabs for unknown mode — shows a single filtered list
+    tabs = [{ label:'Has Unknown Decks', value:'all' }];
   }
 
   for (const tab of tabs) {
@@ -8263,8 +8405,20 @@ function profileTabFilter() {
     if (_profileMode === 'tags') {
       const reg = window._playerRegistry && window._playerRegistry[player.toLowerCase()];
       const tags = reg ? (reg.tags||[]) : [];
-      if (_profileSubTab === 'all') return tags.length > 0; // "all tags" = has any tag
+      if (_profileSubTab === 'all') return tags.length > 0;
       return tags.includes(_profileSubTab);
+    }
+    if (_profileMode === 'unknown') {
+      // Show players who have at least one replay with Unknown/missing deck type
+      // These usually need to be re-submitted to fix the detection failure
+      const playerBatches = byPlayer[player] || [];
+      return playerBatches.some(b =>
+        (b.replays||[]).some(r => {
+          if (r.timedOut) return true; // timed out = no data
+          const dt = r.myDeckOverride || r.parsed?.myDeck || r.parsed?.myDeckTag?.dc || '';
+          return !dt || dt === 'Unknown' || dt === '?' || dt === '—';
+        })
+      );
     }
     return true;
   });
@@ -8339,14 +8493,17 @@ function renderProfileGrid(batches) {
     topRow.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap';
 
     const nameEl = document.createElement('div');
-    nameEl.style.cssText = 'font-size:14px;font-weight:bold;color:var(--text);flex:1;min-width:0;word-break:break-word';
+    nameEl.style.cssText = 'font-size:14px;font-weight:bold;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
     nameEl.textContent = player;
+    nameEl.title = player; // show full name on hover
     topRow.appendChild(nameEl);
 
     if (_currentTeam) {
       const teamEl = document.createElement('div');
-      teamEl.style.cssText = 'font-size:10px;font-family:monospace;color:'+_confColor+';border:1px solid '+_confColor+';padding:1px 7px;border-radius:4px;white-space:nowrap;flex-shrink:0';
+      // Team name: allow wrapping on · separator so long team names don't blow out the card
+      teamEl.style.cssText = 'font-size:10px;font-family:monospace;color:'+_confColor+';border:1px solid '+_confColor+';padding:1px 7px;border-radius:4px;white-space:nowrap;flex-shrink:0;max-width:55%;overflow:hidden;text-overflow:ellipsis';
       teamEl.textContent = _currentTeam.season+' · '+_currentTeam.team;
+      teamEl.title = _currentTeam.season+' · '+_currentTeam.team;
       topRow.appendChild(teamEl);
     }
     card.appendChild(topRow);
@@ -9162,6 +9319,42 @@ async function manualRetryTimedOut() {
 // ══════════════════════════════════════════════════════════════════════
 
 // Storage key: eventDecklists_{player} → [{eventCode, deckUrl, cards[], addedAt}]
+// ── Propagate decklist deck types to matching replays ────────────────────────
+// When a decklist for event X has a deckTypeOverride, all replays tagged with
+// event X in this player's batches inherit that deck type for display purposes.
+// This makes manually-set decklist types take precedence over auto-detection.
+function propagateDecklistTypesToReplays(player, decklists) {
+  if (!decklists || !decklists.length) return;
+  // Build a map of eventId → deckTypeOverride
+  const typeMap = {};
+  for (const d of decklists) {
+    if (d.code && d.deckTypeOverride) typeMap[d.code.toUpperCase()] = d.deckTypeOverride;
+  }
+  if (!Object.keys(typeMap).length) return;
+
+  // Find all batches belonging to this player
+  const batches = [];
+  if (_activeBatch && _activeBatch.player === player) batches.push(_activeBatch);
+  if (_activeProfile && _activeProfile.player === player) {
+    (_activeProfile.batches||[]).forEach(b => { if (!batches.find(x=>x.id===b.id)) batches.push(b); });
+  }
+
+  let changed = false;
+  for (const batch of batches) {
+    for (const replay of (batch.replays||[])) {
+      const evId = (replay.eventLabel||replay.eventId||'').toUpperCase();
+      if (evId && typeMap[evId]) {
+        // Write to replay.myDeckOverride — this is what all deck type display paths check first
+        if (replay.myDeckOverride !== typeMap[evId]) {
+          replay.myDeckOverride = typeMap[evId];
+          changed = true;
+        }
+      }
+    }
+  }
+  if (changed) console.log('[EDL] Propagated deck types to replays for', player, typeMap);
+}
+
 function getEventDecks(player) {
   // Always return a copy to avoid stale reference mutations
   const key = player.toLowerCase();
@@ -9219,9 +9412,14 @@ function saveEventDecks(player, list) {
 
   // Always also save to the player registry (persistent, batch-independent)
   fetch(`${API}/players/${encodeURIComponent(player)}/aliases`, {
-    method: 'PATCH', headers: {'Content-Type':'application/json'},
+    method: 'PATCH', headers: authHeaders(),
     body: JSON.stringify({ eventDecklists: list })
   }).then(() => console.log('[EDL] Saved to player registry')).catch(() => {});
+
+  // Propagate deckTypeOverride from decklists to matching replays in all batches.
+  // When a decklist has a deck type set, any replay with the same event_id in this
+  // player's batches should use that deck type in the deck viewer + RPS analysis.
+  propagateDecklistTypesToReplays(player, list);
 
   // If no batch found in memory, scan server batches
   if (!batchesToUpdate.length) {

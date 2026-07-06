@@ -764,8 +764,9 @@ const server = http.createServer(async (req, res) => {
     return readBody(req, async data => {
       const b = db.batches[parts[1]];
       if (!b) return json(res, 404, { error:'Not found' });
-      if (data.name    !== undefined) b.name    = data.name;
-      if (data.aliases !== undefined) b.aliases = data.aliases;
+      if (data.name           !== undefined) b.name           = data.name;
+      if (data.aliases        !== undefined) b.aliases        = data.aliases;
+      if (data.eventDecklists !== undefined) b.eventDecklists = data.eventDecklists;
       await saveBatchToPostgres(b.id);
       return json(res, 200, b);
     });
