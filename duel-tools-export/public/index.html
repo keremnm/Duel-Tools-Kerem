@@ -922,7 +922,7 @@ select{cursor:pointer}
               <button class="ptab-mode" id="ptab-mode-season" onclick="setProfileMode('season')" style="font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--border);color:var(--muted);background:none;cursor:pointer">Season</button>
               <button class="ptab-mode" id="ptab-mode-conf" onclick="setProfileMode('conf')" style="display:none;font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--border);color:var(--muted);background:none;cursor:pointer">Conference</button>
               <button class="ptab-mode" id="ptab-mode-tags" onclick="setProfileMode('tags')" style="font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--border);color:var(--muted);background:none;cursor:pointer"># Tags</button>
-              <button class="ptab-mode" id="ptab-mode-unknown" onclick="setProfileMode('unknown')" style="font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--border);color:var(--muted);background:none;cursor:pointer" title="Players with replays that have unknown deck type — usually failed imports that need re-submitting">? Unknown</button>
+
             </div>
             <div style="width:1px;height:18px;background:var(--border);margin:0 2px"></div>
             <!-- Dynamic sub-tabs rendered by JS -->
@@ -1846,6 +1846,7 @@ function banLimit(name){ const n=(name||'').toLowerCase().trim(); if(FORBIDDEN.h
 let _activeBatch = null; // current batch object
 let _batchLocalEdits = false; // true if user has made local deletions not yet confirmed by server
 let _matches     = [];   // processed match objects for deck viewer
+let _rpsGFWLOnly = false; // RPS filter: show only GFWL season replays (S#: WK#)
 let _activeMatch = -1;
 let _showOpp     = false;
 let _currentCardSize = 'M';
@@ -4347,7 +4348,7 @@ async function go() {
   loadBatches();
   closeBatchPanel();
 
-  _stopping = false; _matches = []; _activeMatch = -1;
+  _stopping = false; _matches = []; _activeMatch = -1; _rpsGFWLOnly = false;
   const _failedServerSaves = [];
   // Clear any previous mismatch report from a prior import
   const _prevReport = document.getElementById('import-mismatch-report');
@@ -4818,7 +4819,11 @@ function bar(par,p,color,h,mb){ const t=document.createElement('div'); t.style.c
 function renderRPS() {
   if (!_activeBatch) return;
   const player  = _activeBatch.player;
-  const replays = _activeBatch.replays || [];
+  // Apply GFWL-only filter if toggled
+  const _allReplays = _activeBatch.replays || [];
+  const replays = _rpsGFWLOnly
+    ? _allReplays.filter(r => /^S\d+:/i.test((r.eventLabel||'').trim()))
+    : _allReplays;
 
   const picks=z3(), aft=z3(), fp=z3();
   const abp={ Rock:z3(), Paper:z3(), Scissors:z3() };
@@ -4888,6 +4893,17 @@ function renderRPS() {
   const tp=sv(picks), tat=sv(aft), tfp=sv(fp);
 
   const s1=S(c,'SUMMARY');
+  // GFWL-only toggle button
+  const gfwlHas = (_allReplays||[]).some(r => /^S\d+:/i.test((r.eventLabel||'').trim()));
+  if (gfwlHas) {
+    const gfwlBtn = document.createElement('button');
+    gfwlBtn.textContent = _rpsGFWLOnly ? '🏆 GFWL Only ✓' : '🏆 GFWL Only';
+    gfwlBtn.title = _rpsGFWLOnly ? 'Showing GFWL season replays only — click to show all' : 'Filter to GFWL season replays only (S#: WK#)';
+    gfwlBtn.style.cssText = 'float:right;background:none;border:1px solid '+(_rpsGFWLOnly?'var(--amber)':'var(--border)')+';color:'+(_rpsGFWLOnly?'var(--amber)':'var(--muted)')+';font-family:monospace;font-size:9px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-top:-2px;margin-left:6px';
+    gfwlBtn.onclick = () => { _rpsGFWLOnly = !_rpsGFWLOnly; renderRPS(); };
+    s1.appendChild(gfwlBtn);
+  }
+
   // Add → Profile button if batch has a real player
   if (_activeBatch && !_activeBatch.isTemp && _activeBatch.player) {
     const profBtn = document.createElement('button');
