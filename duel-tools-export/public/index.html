@@ -1856,7 +1856,7 @@ let _stopping    = false;
 // ══════════════════════════════════════════════════════════════════════
 // Mobile tab switcher — called by the dropdown select
 function switchTabMobile(name) {
-  const btn = document.querySelector('#nav-tabs-desktop .ntab[onclick*="''+name+''"]');
+  const btn = document.querySelector('#nav-tabs-desktop button[onclick*="' + name + '"]');
   switchTab(name, btn || null);
 }
 
