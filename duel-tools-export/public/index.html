@@ -282,23 +282,9 @@ select{cursor:pointer}
   .tbtn { font-size: 12px !important; padding: 4px 8px !important; }
 
   /* ── Nav tabs ─────────────────────────────────────────────────── */
-  .nav-tabs {
-    display: flex; flex-wrap: nowrap; overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    gap: 0; flex-shrink: 0;
-    border-bottom: 1px solid var(--border);
-    background: var(--panel);
-  }
-  .nav-tabs::-webkit-scrollbar { display: none; }
-  .ntab {
-    font-size: 11px; padding: 0 12px;
-    height: 40px; line-height: 40px;
-    white-space: nowrap; flex-shrink: 0;
-    border-radius: 0; border-bottom: 2px solid transparent;
-    min-width: 0;
-  }
-  .ntab.on { border-bottom-color: var(--green); color: var(--green); }
+  /* Hide desktop tab row, show mobile dropdown */
+  #nav-tabs-desktop { display: none !important; }
+  #nav-mobile-wrap { display: flex !important; height: 52px; }
 
   /* ── Pages ────────────────────────────────────────────────────── */
   .page { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
@@ -605,7 +591,7 @@ select{cursor:pointer}
 <div class="app">
   <header class="topbar">
     <div class="logo"><span class="logo-icon">🃏</span>DUEL TOOLS</div>
-    <div class="nav-tabs">
+    <div class="nav-tabs" id="nav-tabs-desktop">
       <button class="ntab on" onclick="switchTab('profiles',this)">Profiles</button>
       <button class="ntab" onclick="switchTab('deck',this)">Deck Viewer</button>
       <button class="ntab" onclick="switchTab('rps',this)">RPS Analysis</button>
@@ -613,6 +599,18 @@ select{cursor:pointer}
       <button class="ntab" onclick="switchTab('stats',this)">Stats</button>
       <button class="ntab" onclick="switchTab('ingame',this)">In-Game Tools</button>
       <button class="ntab" id="gfwl-prep-tab" onclick="switchTab('gfwl',this)">GFWL Prep</button>
+    </div>
+    <!-- Mobile nav dropdown — replaces tab row on small screens -->
+    <div id="nav-mobile-wrap" style="display:none;padding:0 10px;flex-shrink:0;align-items:center;border-bottom:1px solid var(--border);background:var(--panel)">
+      <select id="nav-mobile-sel" onchange="switchTabMobile(this.value)"
+        style="width:100%;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:13px;padding:8px 10px;border-radius:6px;outline:none;height:40px">
+        <option value="profiles">Profiles</option>
+        <option value="deck">Deck Viewer</option>
+        <option value="rps">RPS Analysis</option>
+        <option value="deckdata">Deck Data</option>
+        <option value="stats">Stats</option>
+        <option value="gfwl">GFWL Prep</option>
+      </select>
     </div>
     <div class="topbar-right">
       <button id="manual-save-btn" onclick="manualSave()" title="Force save all data to Postgres now" style="background:none;border:1px solid var(--green);color:var(--green);font-family:monospace;font-size:10px;padding:2px 10px;border-radius:4px;cursor:pointer">💾 Save</button>
@@ -1747,10 +1745,60 @@ const _eventSeriesOrder = {
   'TISIS': '2020-10', 'FLC':  '2020-01',
 };
 
+// ── Event date inference ─────────────────────────────────────────────────────
+// Returns a date string 'YYYY-MM-DD' or null. First checks the server-synced
+// _eventDates map, then falls back to heuristic inference for known series.
+// GFWL seasons (S#) are excluded and always return null.
+function inferEventYear(code) {
+  if (!code) return null;
+  const upper = code.toUpperCase().trim();
+  // Skip GFWL seasons
+  if (/^S\d+$/i.test(upper) || /^(LADDER|ACAD)/i.test(upper)) return null;
+  // Already in _eventDates
+  if (window._eventDates && window._eventDates[upper]) {
+    const d = window._eventDates[upper];
+    return typeof d === 'string' ? d : (d.date || null);
+  }
+  // Heuristic: extract trailing number and map to approximate year
+  // Known anchor points (from FormatLibrary data):
+  //   FLC1 ≈ 2020-01, FLC21 ≈ 2021-01, FLC30 ≈ 2022-01, FLC37 ≈ 2023-01, FLC40 ≈ 2026
+  //   CLASH1 ≈ 2021, CLASH24 ≈ 2024, CLASH25 ≈ 2025
+  //   GFC1 ≈ 2020, GFC22 ≈ 2022
+  const m = upper.match(/^([A-Z]+)(\d+)/);
+  if (!m) return null;
+  const [, prefix, numStr] = m;
+  const n = parseInt(numStr);
+  const anchors = {
+    FLC:   [[1,2020],[10,2020],[21,2021],[30,2022],[34,2022],[37,2023],[39,2024],[40,2026]],
+    CLASH: [[1,2021],[10,2022],[20,2023],[24,2024],[25,2025]],
+    GFC:   [[1,2020],[10,2021],[20,2022],[22,2022]],
+    GGI:   [[1,2021],[5,2022],[10,2023]],
+    PBR:   [[1,2021],[20,2022],[30,2023],[35,2024]],
+    GLCQ:  [[1,2022],[5,2023]],
+    HOBA:  [[1,2023]],
+    GWM:   [[1,2022]],
+    PWCQ:  [[1,2022],[50,2023],[80,2024],[100,2025]],
+  };
+  const pts = anchors[prefix];
+  if (!pts) return null;
+  // Find closest anchor points and interpolate
+  let lo = pts[0], hi = pts[pts.length-1];
+  for (const pt of pts) {
+    if (pt[0] <= n) lo = pt;
+    if (pt[0] >= n && hi[0] >= n) hi = pt;
+  }
+  if (lo[0] === hi[0]) return lo[1]+'-01-01';
+  const yr = Math.round(lo[1] + (hi[1]-lo[1]) * (n-lo[0]) / (hi[0]-lo[0]));
+  return yr+'-01-01';
+}
+
 function getEventDate(code) {
   if (!code) return null;
   const c = code.toUpperCase().trim();
   if (_eventDates[c] && _eventDates[c].date) return _eventDates[c].date;
+  // Use heuristic year inference as fallback before triggering a server refresh
+  const _inferred = inferEventYear(code);
+  if (_inferred) return _inferred;
   // Trigger background refresh if unknown non-season code
   if (!/^(S\d+|LADDER|ACAD|ACADEMY)/i.test(c)) {
     fetch(API+'/event-dates/refresh', { method:'POST', headers:authHeaders() }).catch(()=>{});
@@ -1806,7 +1854,17 @@ let _stopping    = false;
 // ══════════════════════════════════════════════════════════════════════
 // NAV
 // ══════════════════════════════════════════════════════════════════════
+// Mobile tab switcher — called by the dropdown select
+function switchTabMobile(name) {
+  const btn = document.querySelector('#nav-tabs-desktop .ntab[onclick*="''+name+''"]');
+  switchTab(name, btn || null);
+}
+
 function switchTab(name, btn) {
+  // Keep mobile dropdown in sync
+  const mobileSel = document.getElementById('nav-mobile-sel');
+  if (mobileSel && mobileSel.value !== name) mobileSel.value = name;
+
   document.querySelectorAll('.ntab').forEach(b=>b.classList.remove('on'));
   if (btn) btn.classList.add('on');
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
@@ -3425,16 +3483,23 @@ async function gfwlOpenTeam(season, teamName, team) {
     console.log('[GFWLPies] entries my:', Object.keys(myDeckUsage).length, 'opp:', Object.keys(oppDeckUsage).length);
     const myEntries  = Object.entries(myDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,8);
     const oppEntries = Object.entries(oppDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    // Always re-show canvas before building chart — it may have been hidden
+    // by a previous call that found no data (before batches had loaded)
+    const _pc = document.getElementById('gfwl-pie-deck');
+    const _pm = document.getElementById('gfwl-pie-matchup');
+    if (_pc) _pc.style.display = '';
+    if (_pm) _pm.style.display = '';
+
     if (myEntries.length) {
       buildDonutChart('gfwl-pie-deck','gfwl-pie-deck-legend', myEntries, teamName);
     } else {
-      const c = document.getElementById('gfwl-pie-deck'); if(c) c.style.display='none';
+      if (_pc) _pc.style.display='none';
       const l = document.getElementById('gfwl-pie-deck-legend'); if(l) l.textContent='No deck data — ensure replays are classified.';
     }
     if (oppEntries.length) {
       buildDonutChart('gfwl-pie-matchup','gfwl-pie-matchup-legend', oppEntries, 'Opp Decks');
     } else {
-      const c2 = document.getElementById('gfwl-pie-matchup'); if(c2) c2.style.display='none';
+      if (_pm) _pm.style.display='none';
       const l2 = document.getElementById('gfwl-pie-matchup-legend'); if(l2) l2.textContent='No matchup data yet.';
     }
   }
@@ -3856,10 +3921,16 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
   });
   const myE=Object.entries(myDU).sort((a,b)=>b[1]-a[1]).slice(0,8);
   const oppE=Object.entries(oppDU).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  // Re-show canvases — they may have been hidden by a previous call that found no data
+  const _pp1 = document.getElementById('gfwl-player-pie-deck');
+  const _pp2 = document.getElementById('gfwl-player-pie-opp');
+  if (_pp1) _pp1.style.display = '';
+  if (_pp2) _pp2.style.display = '';
+
   if (myE.length) buildDonutChart('gfwl-player-pie-deck','gfwl-player-pie-deck-legend', myE, playerName+' — '+season);
-  else { const l=document.getElementById('gfwl-player-pie-deck-legend'); if(l) l.textContent='No deck data ('+freshReplays.length+' replays, no deck classification).'; }
+  else { const l=document.getElementById('gfwl-player-pie-deck-legend'); if(l) l.textContent='No deck data ('+freshReplays.length+' replays, no deck classification).'; if(_pp1) _pp1.style.display='none'; }
   if (oppE.length) buildDonutChart('gfwl-player-pie-opp','gfwl-player-pie-opp-legend', oppE, 'vs Opp Decks');
-  else { const l=document.getElementById('gfwl-player-pie-opp-legend'); if(l) l.textContent='No matchup data.'; }
+  else { const l=document.getElementById('gfwl-player-pie-opp-legend'); if(l) l.textContent='No matchup data.'; if(_pp2) _pp2.style.display='none'; }
 }
 
 // ── Week Report ──────────────────────────────────────────────────────────────
@@ -5268,6 +5339,21 @@ function classifyFromCards(cards) {
 
   if (has('armed samurai') || has('ben-kei') || has('ben kei')) { scores['Ben Kai OTK']+=1.50; Object.keys(scores).filter(k=>k!=='Ben Kai OTK').forEach(k=>scores[k]*=0.1); }
   if (has('relinquished')) { scores['Chaos Relinquished']+=1.50; Object.keys(scores).filter(k=>k!=='Chaos Relinquished').forEach(k=>scores[k]*=0.1); }
+  // Manju + Black Illusion Ritual is the Chaos Relinquished setup engine — very strong signal
+  // even in games where Relinquished itself wasn't seen yet
+  else if (has('manju of the ten thousand hands') || has('senju of the thousand hands')) {
+    if (has('black illusion ritual')) {
+      scores['Chaos Relinquished'] += 1.20;
+      Object.keys(scores).filter(k=>k!=='Chaos Relinquished').forEach(k=>scores[k]*=0.15);
+    } else {
+      scores['Chaos Relinquished'] += 0.55;
+    }
+    // Thunder Dragon alongside Manju/Senju = almost certainly Chaos Relinquished
+    if (has('thunder dragon')) {
+      scores['Chaos Relinquished'] += 0.40;
+      scores['Chaos Turbo'] = Math.max(0, scores['Chaos Turbo'] * 0.3);
+    }
+  }
   if (has('necrovalley')) { scores['Gravekeeper']+=1.50; Object.keys(scores).filter(k=>k!=='Gravekeeper').forEach(k=>scores[k]*=0.1); }
   if (has('last turn')) { scores['Last Turn']+=1.50; Object.keys(scores).filter(k=>k!=='Last Turn').forEach(k=>scores[k]*=0.1); }
   if (has('royal magical library')) { scores['Library FTK']+=1.50; Object.keys(scores).filter(k=>k!=='Library FTK').forEach(k=>scores[k]*=0.1); }
