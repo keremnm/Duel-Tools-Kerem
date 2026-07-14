@@ -6146,18 +6146,18 @@ function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlaye
   const CARD_NAME_RE = /"([^"]+)"/g;
 
   function extractCardName(play, publicLog, privateLog) {
-    // First: use play.card.name directly
+    // First: use play.card.name directly — fastest path
     if (play.card && play.card.name) return play.card.name;
-    // Second: search logs for known card names in quotes
+    // Second: search logs for quoted strings, then verify against known card names
+    // Use regex to find all quoted strings first (avoids O(cardNames) scan per log)
     for (const log of [privateLog, publicLog]) {
       if (!log) continue;
-      for (const name of cardNames) {
-        if (log.includes('"' + name + '"')) return name;
-      }
-      // Fallback: any quoted string
       CARD_NAME_RE.lastIndex = 0;
-      const m = CARD_NAME_RE.exec(String(log));
-      if (m) return m[1];
+      let m;
+      while ((m = CARD_NAME_RE.exec(String(log))) !== null) {
+        const candidate = m[1];
+        if (cardIdMap[candidate]) return candidate; // O(1) map lookup
+      }
     }
     return null;
   }
