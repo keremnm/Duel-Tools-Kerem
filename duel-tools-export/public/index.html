@@ -1456,7 +1456,7 @@ const DECK_CATEGORY = {
   'Strike Ninja Return':    'Midrange',
   'Stein OTK':              'OTK',
   'SWAG':                   'OTK',
-  'SWAG Rescue Cat':        'OTK',
+  'Rescue Cat OTK':        'OTK',
   'Rescue Cat OTK':         'OTK',
   'Library FTK':            'OTK',
   'Empty Jar':              'OTK',
@@ -1464,6 +1464,7 @@ const DECK_CATEGORY = {
   'Drain Burn':             'Burn',
   'Speed Burn':             'Burn',
   'Rescue Cat Burn':        'Burn',
+  'Chaos Fairy':            'Control',
   'Rescue Cat Earth Aggro': 'Other',
   'Gravekeeper':            'Other',
   'Other':                  'Other',
@@ -1498,8 +1499,8 @@ const TFIDF_WEIGHTS = {
   'raigeki break':                     { 'Chaos Turbo': 0.55, 'Chaos Warrior': 0.45 },
   'abyss soldier':                     { 'Chaos Control': 0.80, 'Goat Control': 0.60 },
   'reflect bounder':                   { 'Chaos Control': 0.75 },
-  'injection fairy lily':              { 'Chaos Control': 0.55, 'Chaos Warrior': 0.50, 'SWAG': 0.45, 'SWAG Rescue Cat': 0.45, 'Rescue Cat OTK': 0.45 },
-  'scapegoat':                         { 'Goat Control': 0.65, 'Chaos Control': 0.50, 'Stein OTK': 0.40, 'Reasoning Gate Turbo': 0.30, 'SWAG': 0.40, 'SWAG Rescue Cat': 0.38 },
+  'injection fairy lily':              { 'Chaos Control': 0.55, 'Chaos Warrior': 0.50, 'Stein OTK': 0.45, 'Rescue Cat OTK': 0.45, 'Rescue Cat OTK': 0.45 },
+  'scapegoat':                         { 'Goat Control': 0.65, 'Chaos Control': 0.50, 'Stein OTK': 0.40, 'Reasoning Gate Turbo': 0.30, 'Stein OTK': 0.40, 'Rescue Cat OTK': 0.38 },
   'metamorphosis':                     { 'Goat Control': 0.65, 'Chaos Control': 0.45, 'Stein OTK': 0.55, 'Reasoning Gate Turbo': 0.40 },
   'thousand-eyes restrict':            { 'Goat Control': 0.80 },
   'tsukuyomi':                         { 'Goat Control': 0.75, 'Chaos Control': 0.20 },
@@ -1517,12 +1518,12 @@ const TFIDF_WEIGHTS = {
   'royal decree':                      { 'Chaos Control': 0.55, 'Goat Control': 0.52 },
   'asura priest':                      { 'Chaos Control': 0.55, 'Goat Control': 0.52 },
   'creature swap':                     { 'Chaos Control': 0.50, 'Goat Control': 0.50, 'Chaos Recruiter': 0.40 },
-  'reinforcement of the army':         { 'Warrior': 0.55, 'Chaos Warrior': 0.52, 'Chaos Return': 0.25, 'Aggro Lockdown': 0.40, 'Gearfried Warriors': 0.50, 'SWAG': 0.35, 'SWAG Rescue Cat': 0.32 },
+  'reinforcement of the army':         { 'Warrior': 0.55, 'Chaos Warrior': 0.52, 'Chaos Return': 0.25, 'Aggro Lockdown': 0.40, 'Gearfried Warriors': 0.50, 'Stein OTK': 0.35, 'Rescue Cat OTK': 0.32 },
   'blade knight':                      { 'Warrior': 0.52, 'Chaos Warrior': 0.50, 'Chaos Return': 0.42, 'Aggro Lockdown': 0.38 },
   'don zaloog':                        { 'Warrior': 0.55, 'Chaos Warrior': 0.48 },
   'mystic swordsman lv2':              { 'Warrior': 0.52, 'Chaos Warrior': 0.32, 'Earth Aggro': 0.30 },
   'kycoo the ghost destroyer':         { 'Warrior': 0.60, 'Chaos Warrior': 0.55, 'Bazoo Return': 0.50 },
-  'exiled force':                      { 'Warrior': 0.40, 'Chaos Warrior': 0.38, 'SWAG': 0.32 },
+  'exiled force':                      { 'Warrior': 0.40, 'Chaos Warrior': 0.38, 'Stein OTK': 0.32 },
   'sasuke samurai':                    { 'Warrior': 0.70 },
   'trap dustshoot':                    { 'Warrior': 0.52, 'Aggro Lockdown': 0.42 },
   'solemn judgment':                   { 'Warrior': 0.40, 'Chaos Return': 0.40, 'Aggro Lockdown': 0.42 },
@@ -1565,6 +1566,8 @@ const TFIDF_WEIGHTS = {
   'roulette barrel':                   { 'Chaos Return': 0.80 },
   'd.d. survivor':                     { 'Chaos Return': 0.75, 'Bazoo Return': 0.45 },
   'manju of the ten thousand hands':   { 'Chaos Relinquished': 0.72 },
+  'mystic shine ball':                 { 'Chaos Fairy': 0.90 },
+  'the agent of creation - venus':     { 'Chaos Fairy': 0.85 },
   'senju of the thousand hands':       { 'Chaos Relinquished': 0.70 },
   'recruiter of the guardians':        { 'Chaos Recruiter': 0.92 },
   'newdoria':                          { 'Chaos Recruiter': 0.80 },
@@ -1581,19 +1584,19 @@ const TFIDF_WEIGHTS = {
   'dark magician of chaos':            { 'Reasoning Gate Turbo': 0.50, 'Reasoning Gate Machine': 0.48 },
   'megamorph':                         { 'Reasoning Gate Turbo': 0.60, 'Reasoning Gate Machine': 0.62, 'Stein OTK': 0.55 },
   'limiter removal':                   { 'Reasoning Gate Machine': 0.85 },
-  'byser shock':                       { 'Reasoning Gate Machine': 0.78, 'SWAG': 0.60 },
+  'byser shock':                       { 'Reasoning Gate Machine': 0.78, 'Stein OTK': 0.60 },
   'blowback dragon':                   { 'Reasoning Gate Machine': 0.82 },
   'convulsion of nature':              { 'Library FTK': 0.78, 'Empty Jar': 0.45 },
-  'cyber-stein':                       { 'Stein OTK': 0.90, 'SWAG': 0.50 },
-  'giant trunade':                     { 'Stein OTK': 0.65, 'SWAG': 0.60, 'SWAG Rescue Cat': 0.58 },
-  'amazoness archer':                  { 'SWAG': 0.95, 'SWAG Rescue Cat': 0.92 },
-  'last will':                         { 'SWAG': 0.68, 'SWAG Rescue Cat': 0.65, 'Rescue Cat OTK': 0.62 },
-  'secret barrel':                     { 'SWAG': 0.50, 'Drain Burn': 0.60, 'Panda Burn': 0.45, 'Speed Burn': 0.52 },
-  'the big march of animals':          { 'SWAG Rescue Cat': 0.88 },
-  'rescue cat':                        { 'Rescue Cat OTK': 0.60, 'Rescue Cat Burn': 0.58, 'Rescue Cat Earth Aggro': 0.58, 'SWAG Rescue Cat': 0.55 },
-  'gyaku-gire panda':                  { 'Rescue Cat OTK': 0.78, 'Rescue Cat Burn': 0.80, 'Rescue Cat Earth Aggro': 0.72, 'SWAG Rescue Cat': 0.75, 'Panda Burn': 0.82 },
+  'cyber-stein':                       { 'Stein OTK': 0.90, 'Stein OTK': 0.50 },
+  'giant trunade':                     { 'Stein OTK': 0.65, 'Stein OTK': 0.60, 'Rescue Cat OTK': 0.58 },
+  'amazoness archer':                  { 'Stein OTK': 0.95, 'Rescue Cat OTK': 0.92 },
+  'last will':                         { 'Stein OTK': 0.68, 'Rescue Cat OTK': 0.65, 'Rescue Cat OTK': 0.62 },
+  'secret barrel':                     { 'Stein OTK': 0.50, 'Drain Burn': 0.60, 'Panda Burn': 0.45, 'Speed Burn': 0.52 },
+  'the big march of animals':          { 'Rescue Cat OTK': 0.88 },
+  'rescue cat':                        { 'Rescue Cat OTK': 0.60, 'Rescue Cat Burn': 0.58, 'Rescue Cat Earth Aggro': 0.58, 'Rescue Cat OTK': 0.55 },
+  'gyaku-gire panda':                  { 'Rescue Cat OTK': 0.78, 'Rescue Cat Burn': 0.80, 'Rescue Cat Earth Aggro': 0.72, 'Rescue Cat OTK': 0.75, 'Panda Burn': 0.82 },
   'des wombat':                        { 'Rescue Cat OTK': 0.88 },
-  'milus radiant':                     { 'Rescue Cat OTK': 0.82, 'SWAG Rescue Cat': 0.78 },
+  'milus radiant':                     { 'Rescue Cat OTK': 0.82, 'Rescue Cat OTK': 0.78 },
   'ojama trio':                        { 'Rescue Cat Burn': 0.75, 'Panda Burn': 0.68, 'Drain Burn': 0.42 },
   'just desserts':                     { 'Rescue Cat Burn': 0.60, 'Panda Burn': 0.58, 'Drain Burn': 0.55, 'Speed Burn': 0.62 },
   'big shield gardna':                 { 'Panda Burn': 0.65 },
@@ -1809,6 +1812,25 @@ function getEventDate(code) {
 }
 
 // Sort event group keys: Seasons first (S9→S1), then by FL date desc, then ACAD/LADDER last
+// Extract week number from a GFWL event label for ascending sort within a season
+// e.g. "S9: WK 1" -> 1, "S9: WK 12" -> 12, "S9" -> 0
+function gfwlWeekNum(label) {
+  if (!label) return 0;
+  const u = label.toUpperCase();
+  // Regular weeks: WK1, WK 1, WK2 etc — sort first (1-999)
+  const wkM = u.match(/WK\s*(\d+)/);
+  if (wkM) return parseInt(wkM[1]);
+  // Tournament rounds after regular season — ascending: WC < T10 < T8 < T4 < T2
+  if (u.includes('WC'))  return 1000;   // Wild Card
+  if (u.includes('T16')) return 1010;
+  if (u.includes('T10')) return 1020;
+  if (u.includes('T8'))  return 1030;
+  if (u.includes('T4'))  return 1040;
+  if (u.includes('T2'))  return 1050;
+  if (u.includes('FINAL') || u.includes('GRAND')) return 1060;
+  return 999; // unknown label sorts before tournament rounds
+}
+
 function sortEventKeys(keys) {
   const isSeasonKey = k => /^S\d+$/i.test(k);
   const isLast      = k => /^(LADDER|ACAD|ACADEMY)/i.test(k);
@@ -5355,6 +5377,18 @@ function classifyFromCards(cards) {
 
   if (has('armed samurai') || has('ben-kei') || has('ben kei')) { scores['Ben Kai OTK']+=1.50; Object.keys(scores).filter(k=>k!=='Ben Kai OTK').forEach(k=>scores[k]*=0.1); }
   if (has('relinquished')) { scores['Chaos Relinquished']+=1.50; Object.keys(scores).filter(k=>k!=='Chaos Relinquished').forEach(k=>scores[k]*=0.1); }
+  // Chaos Fairy: Venus + Mystic Shine Ball are the decisive indicators
+  if (has('the agent of creation - venus') || cnt('mystic shine ball') >= 1) {
+    scores['Chaos Fairy'] += 0.90;
+    if (has('black luster soldier - envoy of the beginning') || has('chaos sorcerer')) {
+      scores['Chaos Fairy'] += 0.50; // chaos engine confirms it
+    }
+    // Suppress decks that don't run Venus/Shine Ball
+    ['Chaos Turbo','Chaos Control','Chaos Warrior','Goat Control','Warrior'].forEach(k => {
+      scores[k] = Math.max(0, (scores[k]||0) * 0.3);
+    });
+  }
+
   // Manju + Black Illusion Ritual is the Chaos Relinquished setup engine — very strong signal
   // even in games where Relinquished itself wasn't seen yet
   else if (has('manju of the ten thousand hands') || has('senju of the thousand hands')) {
@@ -5433,28 +5467,22 @@ function classifyFromCards(cards) {
   if (has('time seal')) scores['Aggro Lockdown']+=0.45;
   if (hasc('reasoning','monster gate')) { scores['Reasoning Gate Turbo']+=0.65; scores['Reasoning Gate Machine']+=0.60; scores['Chaos Turbo']=Math.max(0,scores['Chaos Turbo']-0.30); }
   if (has('blowback dragon')&&has('reasoning')) scores['Reasoning Gate Machine']+=0.40;
-  // ── Stein OTK vs SWAG distinction ─────────────────────────────────────────
+  // ── Stein OTK / SWAG — all merged into Stein OTK ───────────────────────────
+  // SWAG decks are now classified as Stein OTK per the deck type consolidation.
   if (has('cyber-stein') && has('megamorph')) {
-    if (has('amazoness archer')) {
-      // Amazoness Archer = SWAG, not Stein OTK
-      scores['SWAG'] += 1.20;
-      scores['Stein OTK'] = Math.max(0, scores['Stein OTK'] * 0.10);
-    } else if (has('secret barrel')) {
-      // Secret Barrel = Burn variant, not Stein OTK
+    if (has('secret barrel')) {
+      // Secret Barrel variant = Burn
       scores['Burn'] += 0.60;
       scores['Stein OTK'] = Math.max(0, scores['Stein OTK'] * 0.20);
     } else {
-      // Cyber-Stein + Megamorph, no Archer, no Secret Barrel = Stein OTK
+      // Cyber-Stein + Megamorph (with or without Amazoness Archer) = Stein OTK
       scores['Stein OTK'] += 1.50;
       Object.keys(scores).filter(k=>k!=='Stein OTK').forEach(k => scores[k] = Math.max(0, scores[k]*0.15));
     }
   } else if (has('cyber-stein') && has('amazoness archer')) {
-    scores['SWAG'] += 0.80;
-    scores['Stein OTK'] = Math.max(0, scores['Stein OTK'] * 0.20);
+    scores['Stein OTK'] += 0.80;
   } else if (has('cyber-stein')) {
-    // Cyber-Stein alone — lean Stein OTK but not definitive
     scores['Stein OTK'] += 0.55;
-    scores['SWAG'] += 0.20;
   }
   // ── Chaos Return guard: if strong Chaos Return signals present, suppress Monarch ──
   // Chaos Return runs Zaborg as a beater, not a tribute engine — don't let it lock Monarch
@@ -5530,7 +5558,7 @@ function classifyFromCards(cards) {
     if (has('des wombat')) scores['Rescue Cat OTK']+=0.55;
     if (has('ojama trio')) scores['Rescue Cat Burn']+=0.50;
     if (has('gigantes')) scores['Rescue Cat Earth Aggro']+=0.55;
-    if (has('amazoness archer')) scores['SWAG Rescue Cat']+=0.50;
+    if (has('amazoness archer')) scores['Rescue Cat OTK']+=0.50;
   }
   const bkEquips=['axe of despair','big bang shot','united we stand'].filter(has);
   if (bkEquips.length>=2) scores['Ben Kai OTK']+=0.40;
@@ -5635,6 +5663,12 @@ function renderMatchSidebar(query) {
   });
 
   // Sort: GFWL seasons (S#) descending numeric, then events alpha, Untagged last
+  // Within GFWL season groups, sort matches by week number ascending (WK1 first)
+  for (const key of Object.keys(groups)) {
+    if (isGFWLSeason(key)) {
+      groups[key].sort((a,b) => gfwlWeekNum(a.eventLabel) - gfwlWeekNum(b.eventLabel));
+    }
+  }
   const sortedKeys = sortEventKeys(Object.keys(groups));
 
   // Track which groups are collapsed (persist in window._matchGroupCollapsed)
@@ -5826,7 +5860,7 @@ const DECK_TYPE_LIST = [
   'Aggro Lockdown','Chaos Turbo','Reasoning Gate Turbo','Reasoning Gate Machine',
   'Chaos Return','Chaos Recruiter','Gravekeeper','Burn','Panda Burn','Drain Burn',
   'Last Turn','Pacman','Ben Kai OTK','Relinquished','Chaos Relinquished',
-  'Library FTK','Gumo','Rescue Cat Earth Aggro','SWAG Rescue Cat','Rescue Cat OTK',
+  'Library FTK','Gumo','Rescue Cat Earth Aggro','Rescue Cat OTK','Rescue Cat OTK',
   'Rescue Cat Burn','Gearfried Warriors','Thunder Clap','Zombie','Stein OTK','Unknown'
 ].sort();
 
@@ -6857,6 +6891,8 @@ function renderGFWLHistory() {
       body.style.cssText = 'display:flex;flex-direction:column;gap:3px;margin-bottom:6px;padding-left:8px';
       body.style.display = isOpen ? 'flex' : 'none';
 
+      // Sort replays within this season by week number ascending (WK1 first)
+      recs.sort((a,b) => gfwlWeekNum(a.eventLabel) - gfwlWeekNum(b.eventLabel));
       recs.forEach(r => {
         const row = document.createElement('div');
         row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:5px 8px;background:var(--card);border:1px solid var(--border);border-radius:5px;font-size:12px';
@@ -8855,8 +8891,16 @@ function profileTabFilter() {
   const playerNames = Object.keys(byPlayer).sort((a,b)=>a.localeCompare(b));
 
   const filtered = playerNames.filter(player => {
-    // Search filter
-    if (q && !player.toLowerCase().includes(q)) return false;
+    // Search filter — match player name OR any alias
+    if (q) {
+      const nameMatch = player.toLowerCase().includes(q);
+      if (!nameMatch) {
+        const reg = window._playerRegistry && window._playerRegistry[player.toLowerCase()];
+        const aliases = reg ? (reg.aliases||[]) : [];
+        const aliasMatch = aliases.some(a => a.toLowerCase().includes(q));
+        if (!aliasMatch) return false;
+      }
+    }
 
     if (_profileSubTab === 'all') return true;
 
@@ -9432,6 +9476,12 @@ async function openProfile(player, batches, records) {
       });
 
       // Sort: GFWL seasons last (S1-S99), then other events alpha, then unlabeled
+      // Within GFWL season groups, sort by week ascending
+      for (const key of Object.keys(groups)) {
+        if (isGFWLSeason(key)) {
+          groups[key].sort((a,b) => gfwlWeekNum(a.eventLabel) - gfwlWeekNum(b.eventLabel));
+        }
+      }
       const sortedKeys = sortEventKeys(Object.keys(groups));
 
       sortedKeys.forEach(key => {

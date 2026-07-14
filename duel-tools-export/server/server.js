@@ -1170,8 +1170,39 @@ ${value}
         req2.end();
       });
 
-      if (replayData.action === 'Error') throw new Error('Duelingbook error: ' + replayData.message);
+      if (replayData.action === 'Error') {
+        // Retry once after a short delay — some replays fail transiently
+        console.warn(`[proxy/replay] Duelingbook error for ${replayId}: ${replayData.message} — retrying in 3s`);
+        await new Promise(r => setTimeout(r, 3000));
+        // Re-solve the Turnstile token and retry the request
+        const taskId2 = await httpsPost('api.capsolver.com', '/createTask', { clientKey: CAPSOLVER_API_KEY, task: { type: 'AntiTurnstileTaskProxyLess', websiteURL: DUELINGBOOK_URL, websiteKey: TURNSTILE_SITE_KEY } }).then(r => { if (r.errorId) throw new Error('CapSolver retry error: ' + r.errorDescription); return r.taskId; });
+        let token2 = null;
+        for (let i = 0; i < 60; i++) {
+          await new Promise(r => setTimeout(r, 1500));
+          const r2 = await httpsPost('api.capsolver.com', '/getTaskResult', { clientKey: CAPSOLVER_API_KEY, taskId: taskId2 });
+          if (r2.status === 'ready') { token2 = r2.solution?.token; break; }
+          if (r2.errorId) throw new Error('CapSolver retry poll error: ' + r2.errorDescription);
+        }
+        if (!token2) throw new Error('Retry: CapSolver timed out');
+        const retryData = await new Promise((resolve, reject) => {
+          const boundary2 = '----FormBoundary' + Math.random().toString(36).slice(2);
+          function field2(name, value) { return `--${boundary2}\nContent-Disposition: form-data; name="${name}"\n\n${value}\n`; }
+          const body2 = field2('token', token2) + field2('turnstile', 'true') + field2('master', 'false') + `--${boundary2}--\n`;
+          const buf2 = Buffer.from(body2);
+          const req3 = require('https').request({ hostname: 'www.duelingbook.com', path: `/view-replay?id=${encodeURIComponent(replayId)}`, method: 'POST', headers: { 'Content-Type': `multipart/form-data; boundary=${boundary2}`, 'Content-Length': buf2.length, 'User-Agent': 'Mozilla/5.0', 'Referer': DUELINGBOOK_URL+'/', 'Origin': DUELINGBOOK_URL, ...(process.env.DUELINGBOOK_SESSION_COOKIE ? { 'Cookie': `PHPSESSID=${process.env.DUELINGBOOK_SESSION_COOKIE}` } : {}) } }, (r3) => { let b3=''; r3.on('data',d=>b3+=d); r3.on('end',()=>{ try{resolve(JSON.parse(b3));}catch(e){reject(new Error('Retry non-JSON: '+b3.slice(0,100)));} }); });
+          req3.on('error', reject); req3.setTimeout(30000, () => { req3.destroy(); reject(new Error('Retry timeout')); });
+          req3.write(buf2); req3.end();
+        });
+        if (retryData.action === 'Error') throw new Error('Duelingbook error (after retry): ' + retryData.message);
+        if (!retryData.plays && !retryData.action) throw new Error('Duelingbook returned unexpected response on retry');
+        console.log(`[proxy/replay] Retry succeeded for ${replayId}`);
+        return json(res, 200, { ok: true, replay: retryData });
+      }
 
+      // Log full response for replays with no plays — helps diagnose format differences
+      if (!(replayData.plays||[]).length) {
+        console.warn(`[proxy/replay] ${replayId} returned 0 plays. Full response keys:`, Object.keys(replayData), '| Sample:', JSON.stringify(replayData).slice(0, 400));
+      }
       console.log(`[proxy/replay] Got replay data for ${replayId} — ${(replayData.plays||[]).length} plays`);
       return json(res, 200, { ok: true, replay: replayData });
 
