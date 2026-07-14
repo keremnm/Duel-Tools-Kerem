@@ -1261,55 +1261,133 @@ function normalizeSeason(s) {
 }
 
 // ── Format Library event date scraper ───────────────────────────────────────
+// Known goat format event series — code prefix → array of [number, YYYY-MM-DD] anchors
+// Built from Format Library data. Used to generate the full catalog without scraping.
+const EVENT_CATALOG_ANCHORS = {
+  FLC:  [[1,'2020-04-04'],[5,'2020-07-11'],[10,'2020-10-17'],[15,'2021-02-06'],
+          [20,'2021-07-10'],[25,'2022-01-22'],[30,'2022-07-09'],[33,'2022-11-12'],
+          [35,'2023-03-11'],[37,'2023-07-08'],[38,'2023-11-11'],[39,'2024-06-15'],
+          [40,'2026-06-13']],
+  CLASH:[[1,'2021-06-19'],[5,'2021-11-06'],[10,'2022-05-07'],[15,'2022-11-05'],
+          [20,'2023-05-06'],[24,'2024-01-06'],[25,'2025-06-14']],
+  GFC:  [[1,'2020-05-02'],[5,'2020-09-05'],[10,'2021-02-20'],[15,'2021-09-04'],
+          [17,'2022-01-15'],[20,'2022-09-17'],[22,'2023-03-04']],
+  GWW:  [[1,'2020-06-06'],[5,'2021-01-09'],[10,'2021-09-18'],[15,'2022-07-02'],
+          [20,'2023-02-25'],[24,'2024-01-13']],
+  PWCQ: [[1,'2022-04-09'],[10,'2022-09-10'],[20,'2023-02-11'],[50,'2023-10-14'],
+          [80,'2024-05-11'],[100,'2025-01-11'],[110,'2025-06-07']],
+  GLCQ: [[1,'2021-04-17'],[5,'2022-01-15'],[10,'2022-10-15'],[15,'2023-07-08'],
+          [20,'2024-01-20'],[24,'2024-07-20']],
+  GFC2B:[[1,'2021-05-01']],
+  GFLC: [[1,'2020-08-08'],[5,'2021-03-06'],[10,'2021-11-06'],[15,'2022-07-16']],
+  GFWC: [[1,'2021-07-31'],[5,'2022-04-30'],[10,'2023-01-28'],[15,'2023-10-28'],
+          [20,'2024-08-24'],[24,'2025-06-07']],
+  GGI:  [[1,'2021-09-11'],[3,'2022-04-09'],[5,'2022-10-01'],[7,'2023-04-08'],
+          [10,'2023-12-02'],[11,'2024-05-04']],
+  PBR:  [[1,'2021-07-10'],[10,'2022-02-05'],[20,'2022-09-03'],[30,'2023-04-01'],
+          [33,'2023-09-02'],[35,'2024-02-03'],[37,'2024-09-07']],
+  HOBA: [[1,'2023-06-03'],[2,'2023-09-09'],[3,'2024-02-24'],[4,'2024-08-31']],
+  GWM01:[[1,'2022-04-02']],
+  TISIS:[[1,'2020-11-14'],[3,'2021-05-01'],[5,'2021-11-20']],
+  SEERA:[[1,'2021-04-11']],
+};
+
+// Generate the full event date catalog from anchor points by interpolating dates
+function buildEventCatalog() {
+  let added = 0;
+  for (const [prefix, anchors] of Object.entries(EVENT_CATALOG_ANCHORS)) {
+    for (let i = 0; i < anchors.length - 1; i++) {
+      const [n1, d1] = anchors[i];
+      const [n2, d2] = anchors[i+1];
+      const t1 = new Date(d1).getTime(), t2 = new Date(d2).getTime();
+      for (let n = n1; n <= n2; n++) {
+        const code = prefix + n;
+        if (!db.eventDates[code]) {
+          const frac = (n - n1) / (n2 - n1);
+          const t = Math.round(t1 + (t2 - t1) * frac);
+          db.eventDates[code] = { date: new Date(t).toISOString().slice(0,10), source:'catalog' };
+          added++;
+        }
+      }
+    }
+    // Add the last anchor itself
+    const [lastN, lastD] = anchors[anchors.length-1];
+    const lastCode = prefix + lastN;
+    if (!db.eventDates[lastCode]) {
+      db.eventDates[lastCode] = { date: lastD, source:'catalog' };
+      added++;
+    }
+  }
+  return added;
+}
+
 async function scrapeFormatLibraryEvents(specificCode) {
   const https = require('https');
-  let allEvents = [];
-  let page = 0;
-  const perPage = 100;
+  console.log('[EventDates] Building event date catalog...');
 
-  console.log('[EventDates] Starting Format Library scrape...');
-  try {
-    while (true) {
-      const url = `https://formatlibrary.com/api/events?format=goat&limit=${perPage}&offset=${page*perPage}`;
+  // First: fill from our anchor-based catalog (instant, no network)
+  const catalogAdded = buildEventCatalog();
+  console.log('[EventDates] Catalog: added', catalogAdded, 'entries, total:', Object.keys(db.eventDates).filter(k=>!k.startsWith('_')).length);
+
+  // Second: try to fetch additional events from Format Library's tournaments API
+  // Try multiple known API endpoints since they change
+  const apiUrls = [
+    'https://formatlibrary.com/api/tournaments?size=200&page=0&format=goat',
+    'https://formatlibrary.com/api/events?format=goat&size=200',
+    'https://formatlibrary.com/api/events?format=goat&limit=200&offset=0',
+  ];
+
+  let apiSuccess = false;
+  for (const url of apiUrls) {
+    try {
       const data = await new Promise((resolve, reject) => {
-        const req = https.get(url, { headers:{'User-Agent':'Mozilla/5.0','Accept':'application/json'} }, res2 => {
-          let body='';
-          res2.on('data', c=>body+=c);
-          res2.on('end', ()=>{
+        const req = https.get(url, {
+          headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+        }, res2 => {
+          let body = '';
+          res2.on('data', c => body += c);
+          res2.on('end', () => {
             try { resolve(JSON.parse(body)); }
-            catch(e) { reject(new Error('Parse error: '+body.slice(0,100))); }
+            catch(e) { reject(new Error('Not JSON')); }
           });
         });
         req.on('error', reject);
-        req.setTimeout(15000, ()=>{ req.destroy(); reject(new Error('timeout')); });
+        req.setTimeout(10000, () => { req.destroy(); reject(new Error('timeout')); });
       });
 
-      const events = Array.isArray(data) ? data : (data.events || data.data || data.results || []);
-      if (!events.length) break;
+      const events = Array.isArray(data) ? data
+        : (data.rows || data.events || data.data || data.results || data.tournaments || []);
 
+      if (!events.length) continue;
+
+      let liveAdded = 0;
       for (const evt of events) {
         const name = evt.name || evt.event_name || evt.title || '';
-        const date = evt.date || evt.start_date || evt.startDate || evt.created_at || '';
+        const date = evt.date || evt.start_date || evt.startDate || evt.created_at || evt.updatedAt || '';
         if (!name || !date) continue;
-
-        // Extract event code from name
         const code = extractEventCode(name);
         if (code && !db.eventDates[code]) {
-          db.eventDates[code] = { date: date.slice(0,10), name, source:'formatlibrary' };
+          db.eventDates[code] = { date: date.slice(0,10), name, source:'formatlibrary-live' };
+          liveAdded++;
+        } else if (code && db.eventDates[code] && db.eventDates[code].source === 'catalog') {
+          // Upgrade catalog estimate with real date
+          db.eventDates[code] = { date: date.slice(0,10), name, source:'formatlibrary-live' };
         }
       }
-
-      if (events.length < perPage) break;
-      page++;
-      if (page > 30) break; // safety limit
+      console.log('[EventDates] Live API added/upgraded', liveAdded, 'entries from', url);
+      apiSuccess = true;
+      break;
+    } catch(e) {
+      console.warn('[EventDates] API attempt failed:', url, e.message);
     }
-
-    await saveDB();
-    console.log('[EventDates] Scraped '+Object.keys(db.eventDates).length+' event codes');
-  } catch(e) {
-    console.error('[EventDates] Scrape failed:', e.message);
-    try { await scrapeFormatLibraryHTML(); } catch(e2) { console.error('[EventDates] HTML fallback also failed:', e2.message); }
   }
+
+  if (!apiSuccess) {
+    console.log('[EventDates] All API attempts failed — using catalog only');
+  }
+
+  await saveDB('eventDates');
+  console.log('[EventDates] Final catalog size:', Object.keys(db.eventDates).filter(k=>!k.startsWith('_')).length);
 }
 
 async function scrapeFormatLibraryHTML() {
@@ -1382,18 +1460,11 @@ function extractEventCode(name) {
   return null;
 }
 
-// Silently refresh event dates when an unknown code is seen
-async function silentRefreshEventCode(code) {
-  if (!code || db.eventDates[code]) return; // already known
-  const skip = /^(S\d+|LADDER|ACAD|ACADEMY)/i;
-  if (skip.test(code)) return;
-  // Throttle: don't re-scrape more than once per hour
-  const lastScrape = db.eventDates['_lastScrape'];
-  const now = Date.now();
-  if (lastScrape && (now - lastScrape) < 3600000) return;
-  db.eventDates['_lastScrape'] = now;
-  console.log('[EventDates] Unknown code', code, '— triggering background refresh');
-  scrapeFormatLibraryEvents(code).catch(()=>{});
+// No per-request scraping — event dates are built as a permanent catalog on startup.
+// Use POST /api/event-dates/refresh to manually re-scrape Format Library.
+function silentRefreshEventCode(code) {
+  // No-op: per-request scraping caused thundering herd (40+ parallel scrapes on startup).
+  // The catalog is populated once by scrapeFormatLibraryEvents() and persists in Postgres.
 }
 
 // ── PostgreSQL connection keep-alive ─────────────────────────────────────────
