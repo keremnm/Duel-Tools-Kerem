@@ -1802,12 +1802,9 @@ function getEventDate(code) {
   // Use heuristic year inference as fallback before triggering a server refresh
   const _inferred = inferEventYear(code);
   if (_inferred) return _inferred;
-  // Trigger background refresh if unknown non-season code
-  if (!/^(S\d+|LADDER|ACAD|ACADEMY)/i.test(c)) {
-    fetch(API+'/event-dates/refresh', { method:'POST', headers:authHeaders() }).catch(()=>{});
-    // Re-load after 5s
-    setTimeout(() => fetch(API+'/event-dates').then(r=>r.json()).then(d=>{ if(d&&!d.error) _eventDates=d; }).catch(()=>{}), 5000);
-  }
+  // Unknown code and not in inference — return null, do NOT trigger a server scrape.
+  // The catalog is built server-side on startup; per-request scraping causes
+  // thundering herd (100+ parallel scrapes on startup).
   return null;
 }
 
@@ -2402,15 +2399,8 @@ const CONF_COLORS = {
   'Yellow': { bg:'rgba(220,180,30,.15)', border:'rgba(220,180,30,.5)', text:'#ddbb30' },
 };
 
-// Load event dates when app starts, then trigger refresh if cache is empty
-loadEventDates().then(() => {
-  if (Object.keys(_eventDates).filter(k=>k!=='_lastScrape').length < 10) {
-    // Cache is empty or minimal - trigger a scrape
-    fetch(API+'/event-dates/refresh', { method:'POST', headers: authHeaders ? authHeaders() : {'Content-Type':'application/json'} }).catch(()=>{});
-    // Re-load after 8 seconds
-    setTimeout(() => loadEventDates(), 8000);
-  }
-});
+// Load event dates when app starts — catalog is built server-side, no client-triggered scrape
+loadEventDates();
 
 async function gfwlInit() {
   // Load all season data

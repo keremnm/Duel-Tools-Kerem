@@ -85,6 +85,16 @@ async function connectPostgres() {
     }, 1000);
   });
   console.log('Connected to PostgreSQL, batches:', Object.keys(db.batches).length);
+  // Build event date catalog from hardcoded anchors (instant, no network)
+  // Only runs if catalog is empty — avoids redundant work on reconnects
+  const knownDates = Object.keys(db.eventDates).filter(k=>!k.startsWith('_')).length;
+  if (knownDates < 10) {
+    const added = buildEventCatalog();
+    if (added > 0) {
+      await saveDB('eventDates');
+      console.log('[EventDates] Built catalog with', Object.keys(db.eventDates).filter(k=>!k.startsWith('_')).length, 'entries');
+    }
+  }
   // Flush any data that was buffered while Postgres was down
   if (_pendingFlushKeys && _pendingFlushKeys.size > 0) {
     console.log('[PG] Reconnected — flushing', _pendingFlushKeys.size, 'buffered keys...');
@@ -1199,11 +1209,48 @@ ${value}
         return json(res, 200, { ok: true, replay: retryData });
       }
 
-      // Log full response for replays with no plays — helps diagnose format differences
-      if (!(replayData.plays||[]).length) {
-        console.warn(`[proxy/replay] ${replayId} returned 0 plays. Full response keys:`, Object.keys(replayData), '| Sample:', JSON.stringify(replayData).slice(0, 400));
-      }
       console.log(`[proxy/replay] Got replay data for ${replayId} — ${(replayData.plays||[]).length} plays`);
+
+      // If 0 plays returned, retry with master=true — some duelingbook replays
+      // are stored as "master" replays and only return play data with that flag set
+      if (!(replayData.plays||[]).length && !replayData.action) {
+        console.warn(`[proxy/replay] ${replayId} returned 0 plays — retrying with master=true. Response keys:`, Object.keys(replayData));
+        const masterData = await new Promise((resolve, reject) => {
+          const boundary3 = '----FormBoundary' + Math.random().toString(36).slice(2);
+          function field3(name, value) {
+            return `--${boundary3}\nContent-Disposition: form-data; name="${name}"\n\n${value}\n`;
+          }
+          const body3 = field3('token', token) + field3('turnstile', 'true') + field3('master', 'true') + `--${boundary3}--\n`;
+          const buf3 = Buffer.from(body3);
+          const req3 = https.request({
+            hostname: 'www.duelingbook.com',
+            path: `/view-replay?id=${encodeURIComponent(replayId)}`,
+            method: 'POST',
+            headers: {
+              'Content-Type': `multipart/form-data; boundary=${boundary3}`,
+              'Content-Length': buf3.length,
+              'User-Agent': userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              'Referer': DUELINGBOOK_URL + '/',
+              'Origin': DUELINGBOOK_URL,
+              ...(process.env.DUELINGBOOK_SESSION_COOKIE ? { 'Cookie': `PHPSESSID=${process.env.DUELINGBOOK_SESSION_COOKIE}` } : {}),
+            }
+          }, (r3) => {
+            let buf = ''; r3.on('data', d => buf += d);
+            r3.on('end', () => { try { resolve(JSON.parse(buf)); } catch(e) { reject(new Error('master retry non-JSON: ' + buf.slice(0,100))); } });
+          });
+          req3.on('error', reject);
+          req3.setTimeout(30000, () => { req3.destroy(); reject(new Error('master retry timeout')); });
+          req3.write(buf3); req3.end();
+        });
+        console.log(`[proxy/replay] master=true retry for ${replayId} — ${(masterData.plays||[]).length} plays. Keys:`, Object.keys(masterData));
+        if ((masterData.plays||[]).length > 0) {
+          return json(res, 200, { ok: true, replay: masterData });
+        }
+        // Still 0 plays — return what we have (may have other useful fields)
+        console.warn(`[proxy/replay] ${replayId} still 0 plays after master=true retry. Full:`, JSON.stringify(replayData).slice(0, 300));
+        return json(res, 200, { ok: true, replay: replayData });
+      }
+
       return json(res, 200, { ok: true, replay: replayData });
 
     } catch(e) {
@@ -1321,7 +1368,11 @@ function buildEventCatalog() {
   return added;
 }
 
+let _scrapeRunning = false; // prevent concurrent scrapes
+
 async function scrapeFormatLibraryEvents(specificCode) {
+  if (_scrapeRunning) { console.log('[EventDates] Scrape already running, skipping'); return; }
+  _scrapeRunning = true;
   const https = require('https');
   console.log('[EventDates] Building event date catalog...');
 
@@ -1388,6 +1439,7 @@ async function scrapeFormatLibraryEvents(specificCode) {
 
   await saveDB('eventDates');
   console.log('[EventDates] Final catalog size:', Object.keys(db.eventDates).filter(k=>!k.startsWith('_')).length);
+  _scrapeRunning = false;
 }
 
 async function scrapeFormatLibraryHTML() {
