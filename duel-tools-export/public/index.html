@@ -980,11 +980,8 @@ select{cursor:pointer}
                 <div id="profile-matchup-panel">
                   <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
                     <div class="slbl" style="margin:0;font-size:10px">WIN RATE VS OPPONENT DECK TYPE</div>
-                    <select id="deckdata-gfwl-filter" onchange="if(this.value){const y=document.getElementById('deckdata-year-filter');if(y)y.value='';const py=document.getElementById('profile-year-filter');if(py)py.value='';}ddRenderMatchups()" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;outline:none;margin-left:auto" title="Filter by GFWL season">
-                      <option value="">All Seasons</option>
-                    </select>
-                    <select id="deckdata-year-filter" onchange="ddRenderMatchups()" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;outline:none" title="Filter by year (excludes GFWL)">
-                      <option value="">All Years</option>
+                    <select id="deckdata-year-filter" onchange="ddRenderMatchups()" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;outline:none;margin-left:auto;width:100%;max-width:320px">
+                      <option value="">All Data</option>
                     </select>
                   </div>
                   <div id="profile-matchup-table"></div>
@@ -1016,7 +1013,7 @@ select{cursor:pointer}
             <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px">
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
                 <div class="slbl" style="margin:0">ALL MATCHES</div>
-                <select id="profile-year-filter" onchange="if(_activeProfile){const _g=document.getElementById('deckdata-gfwl-filter');if(_g&&this.value)_g.value='';renderAllMatchesSection(_activeProfile.player,_profileRecords);buildProfileMatchupTable(_profileRecords);refreshProfileDeckChart();}" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;outline:none;margin-left:auto">
+                <select id="profile-year-filter" onchange="if(_activeProfile){renderAllMatchesSection(_activeProfile.player,_profileRecords);buildProfileMatchupTable(_profileRecords);refreshProfileDeckChart();}" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;outline:none;margin-left:auto">
                   <option value="">All Years</option>
                 </select>
               </div>
@@ -7470,27 +7467,40 @@ function renderMatchupResults(records, player) {
   const ddYrSel = document.getElementById('deckdata-year-filter');
   if (ddYrSel) {
     const cur = ddYrSel.value;
-    ddYrSel.innerHTML = buildYearOptions(records, cur);
-    if (cur) records = records.filter(r => {
+
+    // Build unified options: All Data, GFWL Only, then years descending
+    const yrs = [...new Set(records.map(r => {
       const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
-      if (isGFWLSeason(code)) return false; // GFWL seasons handled separately
+      if (isGFWLSeason(code)) return null;
       const d = getEventDate(code);
-      return !d || d.startsWith(cur);
-    });
+      return d ? d.slice(0,4) : null;
+    }).filter(Boolean))].sort((a,b) => b-a);
+
+    const hasGFWL = records.some(r => isGFWLSeason((r.eventLabel||'').split(':')[0].trim().toUpperCase()));
+
+    ddYrSel.innerHTML =
+      '<option value="">All Data</option>' +
+      (hasGFWL ? '<option value="__gfwl__">GFWL Only</option>' : '') +
+      yrs.map(y => `<option value="${y}"${y===cur?' selected':''}>${y}</option>`).join('');
+
+    // Restore selection if it still exists
+    if (cur && ddYrSel.querySelector(`option[value="${cur}"]`)) ddYrSel.value = cur;
+
+    // Apply filter
+    if (cur === '__gfwl__') {
+      records = records.filter(r => isGFWLSeason((r.eventLabel||'').split(':')[0].trim().toUpperCase()));
+    } else if (cur && cur !== '') {
+      records = records.filter(r => {
+        const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+        if (isGFWLSeason(code)) return false;
+        const d = getEventDate(code);
+        return d && d.startsWith(cur);
+      });
+    }
   }
-  // GFWL season filter
+  // Remove old GFWL filter if it exists (replaced by unified dropdown)
   const gfwlSel = document.getElementById('deckdata-gfwl-filter');
-  if (gfwlSel) {
-    const curG = gfwlSel.value;
-    gfwlSel.innerHTML = buildGFWLSeasonOptions(records.concat(
-      // include all records to populate dropdown, not just year-filtered
-      (_activeProfile && _activeProfile.records) ? _activeProfile.records.filter(r => isGFWLSeason((r.eventLabel||'').split(':')[0].trim().toUpperCase())) : []
-    ), curG);
-    if (curG) records = records.filter(r => {
-      const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
-      return code === curG || (r.eventLabel||'').toUpperCase().startsWith(curG+':');
-    });
-  }
+  if (gfwlSel) gfwlSel.style.display = 'none';
   if (!records.length) {
     out.innerHTML = '<div class="dd-empty">No processable replays in this batch.</div>';
     return;
