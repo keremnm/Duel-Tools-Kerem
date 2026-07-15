@@ -1748,51 +1748,291 @@ const _eventSeriesOrder = {
   'TISIS': '2020-10', 'FLC':  '2020-01',
 };
 
-// ── Event date inference ─────────────────────────────────────────────────────
-// Returns a date string 'YYYY-MM-DD' or null. First checks the server-synced
-// _eventDates map, then falls back to heuristic inference for known series.
-// GFWL seasons (S#) are excluded and always return null.
+const _STATIC_EVENT_DATES = {
+  'GFCEU26': '2026',
+  'SESB18': '2026',
+  'PWCQ88': '2026',
+  'FLC40': '2026',
+  'CLASH26': '2026',
+  'GWW02': '2026',
+  'PWCQ87': '2026',
+  'GFC25': '2026',
+  'PWCQ86': '2026',
+  'GSLP26A': '2026',
+  'PWCQ85': '2026',
+  'PWCQ84': '2026',
+  'FLC39': '2026',
+  'PWCQ83': '2026',
+  'SESB13': '2026',
+  'GBOAT02': '2025',
+  'PWCQ82': '2025',
+  'PWCQ81': '2025',
+  'GFWC25': '2025',
+  'GLCQ25C': '2025',
+  'GLCQ25B': '2025',
+  'GLCQ25A': '2025',
+  'PWCQ80': '2025',
+  'PWCQ79': '2025',
+  'GFC24': '2025',
+  'FLC38': '2025',
+  'GSLP25': '2025',
+  'PWCQ78': '2025',
+  'PWCQ77': '2025',
+  'GFCEU25': '2025',
+  'CLASH25': '2025',
+  'PWCQ76': '2025',
+  'DSGNQ04': '2025',
+  'FLC37': '2025',
+  'DSGNQ03': '2025',
+  'TGFC06': '2025',
+  'PWCQ75': '2025',
+  'PWCQ74': '2025',
+  'PWCQ73': '2025',
+  'DSGNQ02': '2025',
+  'FLC36': '2025',
+  'PWCQ72': '2025',
+  'GFC23': '2025',
+  'DSGNQ01': '2025',
+  'PWCQ71': '2025',
+  'GBOAT01': '2024',
+  'PWCQ70': '2024',
+  'PWCQ69': '2024',
+  'PBR33': '2024',
+  'PBR35': '2024',
+  'GFWC24': '2024',
+  'GLCQ24C': '2024',
+  'GLCQ24B': '2024',
+  'GLCQ24A': '2024',
+  'GGI03': '2024',
+  'PBR31': '2024',
+  'FLC35': '2024',
+  'PWCQ68': '2024',
+  'PWCQ67': '2024',
+  'PWCQ66': '2024',
+  'PWCQ65': '2024',
+  'FLC34': '2024',
+  'PBR29': '2024',
+  'PWCQ63': '2024',
+  'PWCQ64': '2024',
+  'PBR27': '2024',
+  'GFCEU24': '2024',
+  'PWCQ62': '2024',
+  'PWCQ61': '2024',
+  'GFSMT01': '2024',
+  'PBR25': '2024',
+  'PWCQ60': '2024',
+  'FLC33': '2024',
+  'CLASH24': '2024',
+  'PWCQ59': '2024',
+  'PBR23': '2024',
+  'TGFC07': '2024',
+  'PWCQ58': '2024',
+  'PBR21': '2024',
+  'PWCQ57': '2024',
+  'GFC22': '2024',
+  'PBR19': '2024',
+  'PWCQ56': '2024',
+  'FLC32': '2024',
+  'PBR17': '2024',
+  'PWCQ55': '2024',
+  'PWCQ54': '2024',
+  'BDB02': '2024',
+  'GWW01': '2024',
+  'PWCQ53': '2024',
+  'PBR15': '2024',
+  'PWCQ52': '2024',
+  'GFC21': '2024',
+  'PWCQ51': '2024',
+  'HOBA01': '2023',
+  'PBR13': '2023',
+  'PBR11': '2023',
+  'PWCQ48': '2023',
+  'PBR09': '2023',
+  'GFWC23': '2023',
+  'GCICS11': '2023',
+  'PBR07': '2023',
+  'FLC31': '2023',
+  'PBR05': '2023',
+  'PWCQ42': '2023',
+  'PWCQ41': '2023',
+  'PBR03': '2023',
+  'PWCQ40': '2023',
+  'GGPCHI23': '2023',
+  'OBEL27': '2023',
+  'GFCEU23': '2023',
+  'OBEL26': '2023',
+  'SDGIC23': '2023',
+  'FCI02': '2023',
+  'FLC30': '2023',
+  'PWCQ39': '2023',
+  'GFC20': '2023',
+  'PBR01': '2023',
+  'PWCQ38': '2023',
+  'FCI01': '2023',
+  'GCICS10': '2023',
+  'PWCQ37': '2023',
+  'CLASH23': '2023',
+  'OBEL25': '2023',
+  'FLC29': '2023',
+  'PWCQ36': '2023',
+  'PWCQ35': '2023',
+  'OBEL24': '2023',
+  'PWCQ34': '2023',
+  'TGFC05': '2023',
+  'PWCQ33': '2023',
+  'OBEL23': '2023',
+  'PWCQ32': '2023',
+  'FLC28': '2023',
+  'PWCQ31': '2023',
+  'OBEL22': '2023',
+  'GFC19': '2023',
+  'GCICS09': '2023',
+  'PWCQ30': '2023',
+  'BIRD02': '2022',
+  'PWCQ29': '2022',
+  'PWCQ28': '2022',
+  'GCICS08': '2022',
+  'PWCQ27': '2022',
+  'PWCQ26': '2022',
+  'BIRD01': '2022',
+  'GFWC22': '2022',
+  'GGI01': '2022',
+  'GLCQ22B': '2022',
+  'FLC27': '2022',
+  'GLCQ22A': '2022',
+  'OBEL21': '2022',
+  'PWCQ25': '2022',
+  'GGPNE22': '2022',
+  'PWCQ24': '2022',
+  'PWCQ23': '2022',
+  'GCICS07': '2022',
+  'CLASH22': '2022',
+  'GGPIL22': '2022',
+  'OBEL20': '2022',
+  'PWCQ22': '2022',
+  'FLC26': '2022',
+  'PWCQ21': '2022',
+  'PWCQ20': '2022',
+  'TGFC04': '2022',
+  'FLC25': '2022',
+  'OBEL19': '2022',
+  'GFC18': '2022',
+  'PWCQ19': '2022',
+  'PWCQ18': '2022',
+  'OBEL18': '2022',
+  'DDS05': '2022',
+  'PWCQ17': '2022',
+  'LADQ01': '2022',
+  'ITNC22': '2022',
+  'PWCQ16': '2022',
+  'FLC24': '2022',
+  'OBEL17': '2022',
+  'PWCQ15': '2022',
+  'OBEL16': '2022',
+  'PEWCQ': '2022',
+  'PAPL02': '2022',
+  'GCICS06': '2022',
+  'GFC17': '2022',
+  'PWCQ14': '2022',
+  'OBEL15': '2022',
+  'PWCQ13': '2022',
+  'FLC23': '2022',
+  'TGFC03': '2022',
+  'PWCQ12': '2022',
+  'OBEL14': '2022',
+  'GFC16': '2022',
+  'FLC22': '2022',
+  'OBEL13': '2022',
+  'PWCQ11': '2022',
+  'OBEL12': '2022',
+  'PWCQ10': '2021',
+  'GCICS05': '2021',
+  'PWCQ09': '2021',
+  'GFWC21': '2021',
+  'GLCQ21': '2021',
+  'OBEL10': '2021',
+  'FLC21': '2021',
+  'OBEL11': '2021',
+  'PWCQ08': '2021',
+  'GFC15': '2021',
+  'GCICS04': '2021',
+  'PWCQ07': '2021',
+  'FLC20': '2021',
+  'OBEL09': '2021',
+  'GFC14': '2021',
+  'PWCQ06': '2021',
+  'GFC13': '2021',
+  'OBEL08': '2021',
+  'TGFC02': '2021',
+  'PWCQ05': '2021',
+  'FLC19': '2021',
+  'PWCQ04': '2021',
+  'OBEL07': '2021',
+  'PWCQ03': '2021',
+  'OBEL06': '2021',
+  'FLC18': '2021',
+  'GFC12': '2021',
+  'OBEL05': '2021',
+  'PWCQ02': '2021',
+  'FLC17': '2021',
+  'PWCQ01': '2021',
+  'OBEL04': '2021',
+  'TGFC01': '2021',
+  'OBEL03': '2021',
+  'FLC16': '2021',
+  'OBEL02': '2021',
+  'GFC11': '2021',
+  'OBEL01': '2020',
+  'FLC15': '2020',
+  'GCICS03': '2020',
+  'GFC10': '2020',
+  'FLC14': '2020',
+  'GFC09': '2020',
+  'FLC13': '2020',
+  'GFCEU20': '2020',
+  'FLC12': '2020',
+  'GFC08': '2020',
+  'GFC07': '2020',
+  'GFC06': '2020',
+  'GFC05': '2020',
+  'FLC11': '2020',
+  'GFC04': '2020',
+  'GFC03': '2020',
+  'GFC02': '2020',
+  'GFC01': '2020',
+  'GCICS02': '2019',
+  'FLC10': '2019',
+  'GCICS01': '2019',
+  'SWAG': '2019',
+  'FLC09': '2019',
+  'FLC08': '2019',
+  'FLC07': '2019',
+  'FLC06': '2018',
+  'FLC05': '2018',
+  'FLC04': '2018',
+  'FLC03': '2018',
+  'FLC02': '2018',
+  'FLC01': '2018',
+  'SJCIND05': '2005',
+  'SJCSEA05': '2005',
+  'USNC05': '2005',
+  'SJCCHA05': '2005',
+  'SJCNJ05': '2005',
+  'UKNC05': '2005',
+  'SJCHOU05': '2005',
+  'SJCPOM05': '2005',
+};
+
+// Resolve an event code to its year. Checks:
+// 1. Server-synced _eventDates (from Postgres, updated via manual refresh)
+// 2. Static CSV catalog baked in at build time
+// GFWL seasons (S#: WK#) always return null — they sort by week number, not date.
 function inferEventYear(code) {
   if (!code) return null;
-  const upper = code.toUpperCase().trim();
-  // Skip GFWL seasons
-  if (/^S\d+$/i.test(upper) || /^(LADDER|ACAD)/i.test(upper)) return null;
-  // Already in _eventDates
-  if (window._eventDates && window._eventDates[upper]) {
-    const d = window._eventDates[upper];
-    return typeof d === 'string' ? d : (d.date || null);
-  }
-  // Heuristic: extract trailing number and map to approximate year
-  // Known anchor points (from FormatLibrary data):
-  //   FLC1 ≈ 2020-01, FLC21 ≈ 2021-01, FLC30 ≈ 2022-01, FLC37 ≈ 2023-01, FLC40 ≈ 2026
-  //   CLASH1 ≈ 2021, CLASH24 ≈ 2024, CLASH25 ≈ 2025
-  //   GFC1 ≈ 2020, GFC22 ≈ 2022
-  const m = upper.match(/^([A-Z]+)(\d+)/);
-  if (!m) return null;
-  const [, prefix, numStr] = m;
-  const n = parseInt(numStr);
-  const anchors = {
-    FLC:   [[1,2020],[10,2020],[21,2021],[30,2022],[34,2022],[37,2023],[39,2024],[40,2026]],
-    CLASH: [[1,2021],[10,2022],[20,2023],[24,2024],[25,2025]],
-    GFC:   [[1,2020],[10,2021],[20,2022],[22,2022]],
-    GGI:   [[1,2021],[5,2022],[10,2023]],
-    PBR:   [[1,2021],[20,2022],[30,2023],[35,2024]],
-    GLCQ:  [[1,2022],[5,2023]],
-    HOBA:  [[1,2023]],
-    GWM:   [[1,2022]],
-    PWCQ:  [[1,2022],[50,2023],[80,2024],[100,2025]],
-  };
-  const pts = anchors[prefix];
-  if (!pts) return null;
-  // Find closest anchor points and interpolate
-  let lo = pts[0], hi = pts[pts.length-1];
-  for (const pt of pts) {
-    if (pt[0] <= n) lo = pt;
-    if (pt[0] >= n && hi[0] >= n) hi = pt;
-  }
-  if (lo[0] === hi[0]) return lo[1]+'-01-01';
-  const yr = Math.round(lo[1] + (hi[1]-lo[1]) * (n-lo[0]) / (hi[0]-lo[0]));
-  return yr+'-01-01';
+  const c = code.toUpperCase().trim();
+  if (/^S\d+$/i.test(c)) return null; // GFWL season
+  const yr = _STATIC_EVENT_DATES[c];
+  return yr ? (yr + '-01-01') : null;
 }
 
 function getEventDate(code) {
@@ -1866,6 +2106,7 @@ let _activeBatch = null; // current batch object
 let _batchLocalEdits = false; // true if user has made local deletions not yet confirmed by server
 let _matches     = [];   // processed match objects for deck viewer
 let _rpsGFWLOnly = false; // RPS filter: show only GFWL season replays (S#: WK#)
+let _rpsYearFilter = ''; // RPS filter: show only replays from this year
 let _activeMatch = -1;
 let _showOpp     = false;
 let _currentCardSize = 'M';
@@ -4360,7 +4601,7 @@ async function go() {
   loadBatches();
   closeBatchPanel();
 
-  _stopping = false; _matches = []; _activeMatch = -1; _rpsGFWLOnly = false;
+  _stopping = false; _matches = []; _activeMatch = -1; _rpsGFWLOnly = false; _rpsYearFilter = '';
   const _failedServerSaves = [];
   // Clear any previous mismatch report from a prior import
   const _prevReport = document.getElementById('import-mismatch-report');
@@ -4389,7 +4630,19 @@ async function go() {
     if (!_activeBatch.replays) _activeBatch.replays = [];
     _activeBatch.replays = _activeBatch.replays.filter(r => r.replayId !== result.id);
     // Parse immediately — store parsed result, not raw allPlays
-    const _aliases = _activeBatch.aliases || [];
+    const _aliases = (() => {
+      const batchAliases = _activeBatch.aliases || [];
+      // Also pull aliases from player registry — these are saved on the profile
+      // and may not be duplicated on every batch object
+      const regKey = (_activeBatch.player||'').toLowerCase();
+      const regAliases = (window._playerRegistry && window._playerRegistry[regKey])
+        ? (window._playerRegistry[regKey].aliases || []) : [];
+      // Merge, deduplicate (case-insensitive)
+      const seen = new Set(batchAliases.map(a=>a.toLowerCase()));
+      const merged = [...batchAliases];
+      for (const a of regAliases) { if (!seen.has(a.toLowerCase())) { merged.push(a); seen.add(a.toLowerCase()); } }
+      return merged;
+    })();
     const _parsed  = parseMatch(result.id, result.allPlays||result.plays||[], _activeBatch.player||'', _aliases, result.player1, result.player2);
     const _oppName = _parsed ? _parsed.oppName : '';
     const _rpsPlays = (result.allPlays||result.plays||[]).filter(p=>p.play==='RPS').map(p=>({
@@ -4833,9 +5086,17 @@ function renderRPS() {
   const player  = _activeBatch.player;
   // Apply GFWL-only filter if toggled
   const _allReplays = _activeBatch.replays || [];
-  const replays = _rpsGFWLOnly
+  let replays = _rpsGFWLOnly
     ? _allReplays.filter(r => /^S\d+:/i.test((r.eventLabel||'').trim()))
     : _allReplays;
+  // Apply year filter
+  if (_rpsYearFilter) {
+    replays = replays.filter(r => {
+      const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+      const d = getEventDate(code);
+      return d && d.startsWith(_rpsYearFilter);
+    });
+  }
 
   const picks=z3(), aft=z3(), fp=z3();
   const abp={ Rock:z3(), Paper:z3(), Scissors:z3() };
@@ -4914,6 +5175,23 @@ function renderRPS() {
     gfwlBtn.style.cssText = 'float:right;background:none;border:1px solid '+(_rpsGFWLOnly?'var(--amber)':'var(--border)')+';color:'+(_rpsGFWLOnly?'var(--amber)':'var(--muted)')+';font-family:monospace;font-size:9px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-top:-2px;margin-left:6px';
     gfwlBtn.onclick = () => { _rpsGFWLOnly = !_rpsGFWLOnly; renderRPS(); };
     s1.appendChild(gfwlBtn);
+  }
+
+  // Year filter dropdown
+  {
+    const allYears = [...new Set((_allReplays||[]).map(r => {
+      const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+      const d = getEventDate(code);
+      return d ? d.slice(0,4) : null;
+    }).filter(Boolean))].sort((a,b) => b-a);
+    if (allYears.length > 1) {
+      const yrSel = document.createElement('select');
+      yrSel.style.cssText = 'float:right;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:9px;padding:2px 6px;border-radius:4px;cursor:pointer;margin-top:-2px;margin-left:6px;outline:none';
+      yrSel.title = 'Filter by year';
+      yrSel.innerHTML = '<option value="">All Years</option>' + allYears.map(y => `<option value="${y}"${_rpsYearFilter===y?' selected':''}>${y}</option>`).join('');
+      yrSel.onchange = () => { _rpsYearFilter = yrSel.value; renderRPS(); };
+      s1.appendChild(yrSel);
+    }
   }
 
   // Add → Profile button if batch has a real player
@@ -8881,14 +9159,19 @@ function profileTabFilter() {
   const playerNames = Object.keys(byPlayer).sort((a,b)=>a.localeCompare(b));
 
   const filtered = playerNames.filter(player => {
-    // Search filter — match player name OR any alias
+    // Search filter — match player name, any alias, or any team name
     if (q) {
       const nameMatch = player.toLowerCase().includes(q);
       if (!nameMatch) {
         const reg = window._playerRegistry && window._playerRegistry[player.toLowerCase()];
         const aliases = reg ? (reg.aliases||[]) : [];
         const aliasMatch = aliases.some(a => a.toLowerCase().includes(q));
-        if (!aliasMatch) return false;
+        if (!aliasMatch) {
+          // Also search team affiliations (team name across all seasons)
+          const teams = reg ? (reg.gfwlTeams||[]) : [];
+          const teamMatch = teams.some(t => (t.team||'').toLowerCase().includes(q) || (t.season||'').toLowerCase().includes(q));
+          if (!teamMatch) return false;
+        }
       }
     }
 
