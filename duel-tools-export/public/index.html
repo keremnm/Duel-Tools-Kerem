@@ -618,7 +618,7 @@ select{cursor:pointer}
       <button id="error-log-btn" onclick="viewErrorLog()" style="display:none;background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:10px;padding:2px 10px;border-radius:4px;cursor:pointer" title="Server error log">⚠ Errors</button>
       <div id="dt-user-info" style="display:none;align-items:center;gap:6px;font-size:12px;color:var(--muted)">
         <span id="dt-user-name"></span>
-        <button onclick="localStorage.removeItem('dt_token');location.reload()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer">Sign out</button>
+        <button onclick="fetch(API+'/auth/logout',{method:'POST',headers:authHeaders()}).finally(()=>{localStorage.removeItem('dt_token');location.reload()})" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer">Sign out</button>
       </div>
       <div class="tpill" id="pill" style="font-size:12px">Ready — create or select a batch</div>
       <button class="tbtn" onclick="screenshot()">📷</button>
@@ -2051,15 +2051,13 @@ function getEventDate(code) {
 // Build year options from a records array — excludes GFWL seasons (S#: WK#)
 // which have their own season dropdown.
 function buildYearOptions(records, currentVal) {
-  // Only include years that have at least one record with a match result (W or L)
-  // This prevents years from appearing when a player has a replay tagged with that
-  // year's event ID but no usable match data was parsed from it.
+  // Include a year if ANY record has a known event date for that year —
+  // not just W/L records, since some replays may be draws or have no parsed result
+  // but still belong to an event the player participated in.
   const yrSet = new Set();
   for (const r of records) {
     const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
     if (isGFWLSeason(code)) continue;
-    // Must have an actual match result to count
-    if (!r.matchWon && !r.matchLost) continue;
     const d = getEventDate(code);
     if (d) yrSet.add(d.slice(0,4));
   }
@@ -5208,7 +5206,6 @@ function renderRPS() {
     const yrs = [...new Set((_allReplays||[]).map(r => {
       const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
       if (isGFWLSeason(code)) return null;
-      if (!(r.plays&&r.plays.length)) return null; // skip if no RPS play data
       const d = getEventDate(code);
       return d ? d.slice(0,4) : null;
     }).filter(Boolean))].sort((a,b) => b-a);
@@ -7479,11 +7476,9 @@ function renderMatchupResults(records, player) {
     const cur = ddYrSel.value;
 
     // Build unified options: All Data, GFWL Only, then years descending
-    // Only include years with at least one record that has a real match result
     const yrs = [...new Set(records.map(r => {
       const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
       if (isGFWLSeason(code)) return null;
-      if (!r.matchWon && !r.matchLost) return null; // skip if no match result
       const d = getEventDate(code);
       return d ? d.slice(0,4) : null;
     }).filter(Boolean))].sort((a,b) => b-a);
@@ -11714,21 +11709,38 @@ function authHeaders() {
   return _authToken ? { 'Content-Type':'application/json', 'Authorization':'Bearer '+_authToken } : { 'Content-Type':'application/json' };
 }
 
+function isAdminRole(r) { return r === 'admin' || r === 'head_admin'; }
+function isMinerRole(r) { return r === 'admin' || r === 'head_admin' || r === 'miner'; }
+
 function applyRoleUI() {
   if (_authUser) {
-    const roleTag = _userRole === 'admin' ? ' <span style="color:var(--amber);font-size:10px">ADMIN</span>' : '';
+    const roleLabels = { admin:'ADMIN', head_admin:'HEAD ADMIN', miner:'MINER', user:'USER' };
+    const roleColors = { admin:'var(--amber)', head_admin:'var(--red)', miner:'var(--blue)', user:'var(--muted)' };
+    const roleTag = _userRole && _userRole !== 'user'
+      ? ` <span style="color:${roleColors[_userRole]||'var(--muted)'};font-size:10px">${roleLabels[_userRole]||_userRole.toUpperCase()}</span>`
+      : '';
     const nameEl = document.getElementById('dt-user-name');
     if (nameEl) nameEl.innerHTML = '👤 '+(_authUser.name||_authUser.email)+roleTag;
     const infoEl = document.getElementById('dt-user-info');
     if (infoEl) infoEl.style.display = 'flex';
     const adminBtn = document.getElementById('admin-panel-btn');
-    if (adminBtn) adminBtn.style.display = _userRole === 'admin' ? 'inline-block' : 'none';
+    if (adminBtn) adminBtn.style.display = isAdminRole(_userRole) ? 'inline-block' : 'none';
     const errBtn = document.getElementById('error-log-btn');
-    if (errBtn) errBtn.style.display = _userRole === 'admin' ? 'inline-block' : 'none';
+    if (errBtn) errBtn.style.display = isAdminRole(_userRole) ? 'inline-block' : 'none';
   }
-  if (_userRole !== 'admin') {
+  // Users cannot create new batches (only miners and above can)
+  if (!isMinerRole(_userRole)) {
+    document.querySelectorAll('[onclick*="openBatchPanel('new'"]').forEach(el => el.style.display = 'none');
+    document.querySelectorAll('[onclick*="openBatchPanel(\"new\""]').forEach(el => el.style.display = 'none');
+  }
+  // Admins only: show admin panel buttons
+  if (!isAdminRole(_userRole)) {
     document.querySelectorAll('[onclick*="openBatchPanel"]').forEach(el => {
-      if (!el.id || el.id !== 'add-to-batch-btn') el.style.display = 'none';
+      if (!el.id || el.id !== 'add-to-batch-btn') {
+        if ((el.getAttribute('onclick')||'').includes("'new'") || (el.getAttribute('onclick')||'').includes('"new"')) {
+          el.style.display = 'none';
+        }
+      }
     });
   }
 }
@@ -11766,6 +11778,59 @@ async function viewErrorLog() {
   } catch(e) { alert('Failed to load error log: '+e.message); }
 }
 
+async function adminShowSessions() {
+  try {
+    const data = await fetch(API+'/auth/sessions', { headers: authHeaders() }).then(r=>r.json());
+    const sessions = data.sessions || [];
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:99999;overflow-y:auto;padding:20px;font-family:monospace';
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:16px';
+    hdr.innerHTML = '<b style="font-size:14px;color:var(--blue)">👁 Active Sessions</b>'
+      + '<span style="color:var(--muted);font-size:11px">'+sessions.filter(s=>s.isCurrent).length+' currently active</span>'
+      + '<button onclick="this.closest('[style*=fixed]').remove()" style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--dim);padding:3px 10px;border-radius:4px;cursor:pointer">✕ Close</button>';
+    overlay.appendChild(hdr);
+    if (!sessions.length) {
+      overlay.innerHTML += '<div style="color:var(--muted);padding:20px">No session history yet.</div>';
+    }
+    // Group by user
+    const byUser = {};
+    sessions.forEach(s => { if (!byUser[s.userId]) byUser[s.userId]=[]; byUser[s.userId].push(s); });
+    for (const [uid, userSessions] of Object.entries(byUser)) {
+      const u = userSessions[0];
+      const card = document.createElement('div');
+      card.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px';
+      const active = userSessions.find(s=>s.isCurrent);
+      card.innerHTML = '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">'
+        + '<b style="color:var(--text)">' + u.name + '</b>'
+        + '<span style="font-size:10px;color:var(--muted)">' + u.email + '</span>'
+        + '<span style="font-size:10px;padding:1px 7px;border-radius:3px;border:1px solid;'+(active?'color:var(--green);border-color:var(--green)':'color:var(--dim);border-color:var(--border)')+'">'+u.role+'</span>'
+        + (active ? '<span style="font-size:10px;color:var(--green);margin-left:auto">● ACTIVE</span>' : '<span style="font-size:10px;color:var(--muted);margin-left:auto">○ offline</span>')
+        + ((_userRole==='head_admin'||_userRole==='admin') && active ? '<button onclick="adminForceLogout(''+uid+'',this)" style="background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer">⏏ Force Logout</button>' : '')
+        + '</div>';
+      userSessions.slice(0,5).forEach(sess => {
+        const time = new Date(sess.loginAt).toLocaleString();
+        const status = sess.isCurrent ? '🟢 Active' : sess.loggedOutAt ? '⬜ Logged out' : sess.kickedAt ? '🔴 Kicked' : '⬜ Ended';
+        card.innerHTML += '<div style="font-size:10px;color:var(--muted);padding:3px 0;border-top:1px solid var(--border2)">'
+          + status + ' · ' + time + ' · ' + (sess.ip||'?') + ' · ' + (sess.ua||'').slice(0,60)
+          + '</div>';
+      });
+      overlay.appendChild(card);
+    }
+    document.body.appendChild(overlay);
+  } catch(e) { alert('Failed to load sessions: '+e.message); }
+}
+
+async function adminForceLogout(userId, btn) {
+  if (!confirm('Force-logout this user? They will be kicked immediately.')) return;
+  try {
+    const r = await fetch(API+'/auth/sessions/'+userId, { method:'DELETE', headers: authHeaders() });
+    const d = await r.json();
+    if (r.ok) { btn.textContent = '✓ Kicked'; btn.disabled = true; st('User force-logged out', 'var(--green)'); }
+    else alert('Failed: ' + d.error);
+  } catch(e) { alert('Error: '+e.message); }
+}
+
 async function openAdminPanel() {
   const res   = await fetch(API+'/admin/users', { headers: authHeaders() });
   const users = await res.json();
@@ -11783,16 +11848,20 @@ async function openAdminPanel() {
   // Tab buttons
   const tabBar = document.createElement('div');
   tabBar.style.cssText = 'display:flex;gap:6px;padding-bottom:4px;border-bottom:1px solid var(--border);margin-bottom:4px';
-  ['Users','Roles & Permissions'].forEach(tab => {
+  ['Users','Roles & Permissions','Sessions','Cross-Links'].forEach(tab => {
     const tb = document.createElement('button');
     tb.textContent = tab;
     tb.style.cssText = 'background:none;border:none;font-family:monospace;font-size:12px;cursor:pointer;padding:4px 12px;border-radius:4px;color:var(--muted)';
     tb.onclick = () => {
-      _adminTab = tab === 'Users' ? 'users' : 'perms';
+      _adminTab = tab === 'Users' ? 'users' : tab === 'Sessions' ? 'sessions' : tab === 'Cross-Links' ? 'crosslinks' : 'perms';
       tabBar.querySelectorAll('button').forEach(b => { b.style.background='none'; b.style.color='var(--muted)'; });
       tb.style.background = 'var(--card2)'; tb.style.color = 'var(--text)';
       usersSection.style.display = _adminTab === 'users' ? 'flex' : 'none';
       permsSection.style.display  = _adminTab === 'perms' ? 'block' : 'none';
+      if (_adminTab === 'sessions') { sessionsSection.style.display='block'; loadSessionsSection(sessionsSection); }
+      else sessionsSection.style.display = 'none';
+      if (_adminTab === 'crosslinks') { crosslinksSection.style.display='block'; loadCrosslinksSection(crosslinksSection); }
+      else crosslinksSection.style.display = 'none';
     };
     if (tab === 'Users') { tb.style.background='var(--card2)'; tb.style.color='var(--text)'; }
     tabBar.appendChild(tb);
@@ -11803,7 +11872,7 @@ async function openAdminPanel() {
   // Add user form
   const addRow = document.createElement('div');
   addRow.style.cssText = 'display:flex;gap:7px;flex-wrap:wrap;padding:10px;background:var(--card);border:1px solid var(--border);border-radius:7px';
-  addRow.innerHTML = '<input id="au-name" placeholder="Name" style="flex:1;min-width:90px"/><input id="au-email" placeholder="Email" type="email" style="flex:2;min-width:140px"/><input id="au-pass" placeholder="Password" type="password" style="flex:1;min-width:90px"/><select id="au-role" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px;border-radius:5px;outline:none"><option value="user">User</option><option value="moderator">Moderator</option><option value="admin">Admin</option></select><button class="btn-go" onclick="adminAddUser()" style="font-size:12px;padding:6px 12px;white-space:nowrap">+ Add</button>';
+  addRow.innerHTML = '<input id="au-name" placeholder="Name" style="flex:1;min-width:90px"/><input id="au-email" placeholder="Email" type="email" style="flex:2;min-width:140px"/><input id="au-pass" placeholder="Password" type="password" style="flex:1;min-width:90px"/><select id="au-role" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px;border-radius:5px;outline:none"><option value="user">User</option><option value="miner">Miner</option><option value="admin">Admin</option><option value="head_admin">Head Admin</option></select><button class="btn-go" onclick="adminAddUser()" style="font-size:12px;padding:6px 12px;white-space:nowrap">+ Add</button>';
 
   // User list
   const usersSection = document.createElement('div');
@@ -11857,10 +11926,10 @@ async function openAdminPanel() {
     // Role select
     const sel = document.createElement('select');
     sel.style.cssText = 'background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:3px 6px;border-radius:4px;outline:none';
-    ['user','moderator','admin'].forEach(r => {
+    [['user','User'],['miner','Miner'],['admin','Admin'],['head_admin','Head Admin']].forEach(([val,label]) => {
       const opt = document.createElement('option');
-      opt.value = r; opt.textContent = r === 'admin' ? 'Admin' : r === 'moderator' ? 'Moderator' : 'User';
-      if (u.role === r) opt.selected = true;
+      opt.value = val; opt.textContent = label;
+      if (u.role === val) opt.selected = true;
       sel.appendChild(opt);
     });
     sel.onchange = () => adminSetRole(u.id, sel.value);
@@ -11950,10 +12019,127 @@ async function openAdminPanel() {
   box.appendChild(tabBar);
   box.appendChild(usersSection);
   box.appendChild(permsSection);
+  box.appendChild(permsSection);
+
+  // ── Sessions section ──────────────────────────────────────────────────────
+  const sessionsSection = document.createElement('div');
+  sessionsSection.style.cssText = 'display:none;overflow-y:auto;max-height:55vh;flex-direction:column;gap:8px';
+  box.appendChild(sessionsSection);
+
+  // ── Cross-links section ───────────────────────────────────────────────────
+  const crosslinksSection = document.createElement('div');
+  crosslinksSection.style.cssText = 'display:none;padding:8px';
+  box.appendChild(crosslinksSection);
+
   overlay.appendChild(box);
   document.body.appendChild(overlay);
   overlay.onclick = e => { if(e.target===overlay) overlay.remove(); };
   window._adminOverlay = overlay;
+}
+
+async function loadCrosslinksSection(el) {
+  el.innerHTML = `
+    <div style="font-size:13px;color:var(--text);margin-bottom:12px">
+      <b>Retroactive Cross-Link Scan</b>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5">
+        Scans all existing replays in all batches and links them to any known player profile
+        where the opponent name matches a username or alias. This is safe to run multiple
+        times — duplicates are always detected and skipped.
+      </div>
+    </div>
+    <div id="cl-scan-result" style="font-size:12px;color:var(--muted);min-height:20px"></div>
+    <button id="cl-scan-btn" onclick="runCrosslinkScan()" style="background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:12px;padding:8px 20px;border-radius:6px;cursor:pointer;margin-top:8px">
+      🔗 Scan & Link All Replays
+    </button>`;
+}
+
+async function runCrosslinkScan() {
+  const btn = document.getElementById('cl-scan-btn');
+  const res = document.getElementById('cl-scan-result');
+  if (!btn || !res) return;
+  btn.disabled = true; btn.textContent = '⏳ Scanning...';
+  res.style.color = 'var(--muted)'; res.textContent = 'Running scan — this may take a moment for large datasets...';
+  try {
+    const r = await fetch(API+'/crosslink/scan', { method:'POST', headers: authHeaders() });
+    const d = await r.json();
+    if (r.ok) {
+      res.style.color = 'var(--green)';
+      res.textContent = `✓ Done — ${d.linked} replays cross-linked to ${d.batchesUpdated} batches · ${d.skipped} already linked or no match · ${d.errors} errors`;
+    } else {
+      res.style.color = 'var(--red)';
+      res.textContent = '✗ Failed: ' + (d.error||'unknown error');
+    }
+  } catch(e) {
+    res.style.color = 'var(--red)';
+    res.textContent = '✗ Error: ' + e.message;
+  }
+  btn.disabled = false; btn.textContent = '🔗 Scan & Link All Replays';
+}
+
+async function loadSessionsSection(el) {
+  el.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:8px">Loading...</div>';
+  try {
+    const data = await fetch(API+'/auth/sessions', { headers: authHeaders() }).then(r=>r.json());
+    const sessions = data.sessions || [];
+    el.innerHTML = '';
+
+    // Summary
+    const active = sessions.filter(s=>s.isCurrent);
+    const summ = document.createElement('div');
+    summ.style.cssText = 'font-size:11px;color:var(--muted);padding:4px 0 8px;border-bottom:1px solid var(--border);margin-bottom:8px';
+    summ.innerHTML = `<b style="color:var(--text)">${active.length}</b> users currently active · <b style="color:var(--text)">${sessions.length}</b> sessions in history`;
+    el.appendChild(summ);
+
+    // Group by user
+    const byUser = {};
+    sessions.forEach(s => { if (!byUser[s.userId]) byUser[s.userId]=[]; byUser[s.userId].push(s); });
+
+    for (const [uid, userSessions] of Object.entries(byUser)) {
+      const u = userSessions[0];
+      const isActive = userSessions.some(s=>s.isCurrent);
+      const card = document.createElement('div');
+      card.style.cssText = 'background:var(--card);border:1px solid '+(isActive?'var(--green)':'var(--border)')+';border-radius:6px;padding:10px;margin-bottom:6px';
+
+      const cardHdr = document.createElement('div');
+      cardHdr.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px';
+      cardHdr.innerHTML = `<b style="color:var(--text)">${u.name}</b>`
+        + `<span style="font-size:10px;color:var(--muted)">${u.email}</span>`
+        + `<span style="font-size:9px;padding:1px 6px;border-radius:3px;border:1px solid var(--border);color:var(--muted)">${u.role}</span>`
+        + (isActive ? '<span style="font-size:10px;color:var(--green);margin-left:auto">● ONLINE</span>' : '<span style="font-size:10px;color:var(--dim);margin-left:auto">○ offline</span>');
+
+      if (isActive) {
+        const kickBtn = document.createElement('button');
+        kickBtn.textContent = '⏏ Force Logout';
+        kickBtn.style.cssText = 'background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:8px';
+        kickBtn.onclick = async () => {
+          if (!confirm('Force-logout ' + u.name + '?')) return;
+          const r = await fetch(API+'/auth/sessions/'+uid, { method:'DELETE', headers:authHeaders() });
+          if (r.ok) { kickBtn.textContent='✓ Kicked'; kickBtn.disabled=true; card.style.borderColor='var(--border)'; }
+          else { const d=await r.json(); alert('Failed: '+d.error); }
+        };
+        cardHdr.appendChild(kickBtn);
+      }
+      card.appendChild(cardHdr);
+
+      userSessions.slice(0,5).forEach(sess => {
+        const time = new Date(sess.loginAt).toLocaleString();
+        const status = sess.isCurrent ? '🟢' : sess.loggedOutAt ? '⚪' : sess.kickedAt ? '🔴' : '⚫';
+        const statusTxt = sess.isCurrent ? 'Active' : sess.loggedOutAt ? 'Signed out' : sess.kickedAt ? 'Kicked' : 'Ended';
+        const row = document.createElement('div');
+        row.style.cssText = 'font-size:10px;color:var(--muted);padding:3px 0;border-top:1px solid var(--border2);display:flex;gap:8px;flex-wrap:wrap';
+        row.innerHTML = `<span>${status} ${statusTxt}</span><span>${time}</span><span style="color:var(--amber)">${sess.ip||'?'}</span><span style="opacity:.6">${(sess.ua||'').slice(0,50)}</span>`;
+        card.appendChild(row);
+      });
+
+      el.appendChild(card);
+    }
+
+    if (!sessions.length) {
+      el.innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">No session history yet. Sessions are recorded after the next login.</div>';
+    }
+  } catch(e) {
+    el.innerHTML = '<div style="color:var(--red);padding:8px">Failed to load sessions: '+e.message+'</div>';
+  }
 }
 
 async function adminAddUser() {

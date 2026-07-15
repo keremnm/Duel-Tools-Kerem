@@ -418,8 +418,8 @@ function hashPassword(pw) {
   return crypto.createHmac('sha256', PW_SALT).update(pw).digest('hex');
 }
 
-function makeToken(userId) {
-  const payload = Buffer.from(JSON.stringify({ userId, ts: Date.now() })).toString('base64');
+function makeToken(userId, sessionId) {
+  const payload = Buffer.from(JSON.stringify({ userId, sessionId, ts: Date.now() })).toString('base64');
   const sig = crypto.createHmac('sha256', JWT_SECRET).update(payload).digest('hex');
   return payload + '.' + sig;
 }
@@ -431,14 +431,36 @@ function verifyToken(token) {
   const expected = crypto.createHmac('sha256', JWT_SECRET).update(payload).digest('hex');
   if (expected !== sig) return null;
   try {
-    const { userId } = JSON.parse(Buffer.from(payload, 'base64').toString());
-    return db.users[userId] || null;
+    const { userId, sessionId } = JSON.parse(Buffer.from(payload, 'base64').toString());
+    const user = db.users[userId];
+    if (!user) return null;
+    // If user has an activeSessionId, the token's sessionId must match.
+    // A mismatch means someone logged in elsewhere and kicked this session.
+    if (user.activeSessionId && sessionId && user.activeSessionId !== sessionId) {
+      return null; // session was superseded — treat as logged out
+    }
+    return user;
   } catch(e) { return null; }
 }
 
-function isAdmin(req) {
+function getRole(req) {
   const user = getUser(req);
-  return user && user.role === 'admin' && user.approved;
+  if (!user || !user.approved) return null;
+  return user.role || 'user';
+}
+function isAdmin(req) {
+  const r = getRole(req);
+  return r === 'admin' || r === 'head_admin';
+}
+function isHeadAdmin(req) {
+  return getRole(req) === 'head_admin';
+}
+function isMiner(req) {
+  const r = getRole(req);
+  return r === 'admin' || r === 'head_admin' || r === 'miner';
+}
+function isAuthenticated(req) {
+  return getRole(req) !== null;
 }
 
 function getUser(req) {
@@ -498,12 +520,79 @@ function findOrCreateBatchForPlayer(playerEntry) {
 function crossLinkReplay(replayData, opponentUsername, originalBatchPlayer) {
   const opponentEntry = findPlayerByUsername(opponentUsername);
   if (!opponentEntry) return null;
+  // Prevent cross-linking back to the original batch player
+  const originalPlayerLower = (originalBatchPlayer||'').toLowerCase();
+  if (originalPlayerLower && opponentEntry.name.toLowerCase() === originalPlayerLower) return null;
+  for (const alias of (opponentEntry.aliases||[])) {
+    if (alias.toLowerCase() === originalPlayerLower) return null;
+  }
+
+  // Check ALL of player B's batches for this replay — not just the most recent
+  const allOppBatches = Object.values(db.batches).filter(b =>
+    b.player && playerNames(opponentEntry).includes(b.player.toLowerCase())
+  );
+  for (const ob of allOppBatches) {
+    const existing = (ob.replays||[]).find(r => r.replayId === replayData.replayId);
+    if (existing) {
+      if (existing.timedOut && !replayData.timedOut) {
+        // Player B has a failed import — upgrade it with the crosslinked parsed data
+        // (their perspective: result/decks are mirrored from Player A's data)
+        const origParsed2 = replayData.parsed || null;
+        const mirrored2 = origParsed2 ? {
+          oppName:  originalBatchPlayer || null,
+          result:   origParsed2.result === 'w' ? 'l' : origParsed2.result === 'l' ? 'w' : origParsed2.result,
+          score:    origParsed2.score ? origParsed2.score.split('-').reverse().join('-') : null,
+          myW: origParsed2.oppW, oppW: origParsed2.myW, draws: origParsed2.draws,
+          myDeck:  origParsed2.oppDeck  || 'Unknown',
+          oppDeck: origParsed2.myDeck   || 'Unknown',
+          games: origParsed2.games, allMine: origParsed2.allOpp||[], allOpp: origParsed2.allMine||[],
+        } : null;
+        Object.assign(existing, {
+          plays: replayData.plays||[], parsed: mirrored2, timedOut: false,
+          oppName: originalBatchPlayer || replayData.oppName || '',
+          myDeckOverride: replayData.oppDeckOverride||null,
+          oppDeckOverride: replayData.myDeckOverride||null,
+          eventLabel: existing.eventLabel || replayData.eventLabel || '',
+          crossLinked: true, updatedAt: Date.now()
+        });
+        return { linked: true, upgraded: true, batchId: ob.id, player: opponentEntry.name };
+      }
+      // Player B already has real data for this replay — don't overwrite
+      return { linked: false, duplicate: true, batchId: ob.id, player: opponentEntry.name };
+    }
+  }
+
   const batch = findOrCreateBatchForPlayer(opponentEntry);
-  const exists = (batch.replays||[]).find(r => r.replayId === replayData.replayId);
-  if (exists) return { linked: false, duplicate: true, batchId: batch.id, player: opponentEntry.name };
+  const batchPlayerLower = (batch.player||'').toLowerCase();
+  if (originalPlayerLower && batchPlayerLower === originalPlayerLower) return null;
   if (!batch.replays) batch.replays = [];
-  const clParsed = replayData.parsed || null;
-  batch.replays.push({ replayId: replayData.replayId, plays: replayData.plays||[], allPlays: clParsed?[]:(replayData.allPlays||[]).map(stripPlay), parsed: clParsed, timedOut: !!replayData.timedOut, eventLabel: replayData.eventLabel||'', oppName: replayData.oppName||'', crossLinked: true, savedAt: Date.now() });
+  // Build a mirrored parsed record for Player B:
+  // their perspective is the opponent's perspective from Player A's replay
+  const origParsed = replayData.parsed || null;
+  const mirroredParsed = origParsed ? {
+    oppName:  origParsed.oppName ? originalBatchPlayer : null, // B's opponent is A
+    result:   origParsed.result === 'w' ? 'l' : origParsed.result === 'l' ? 'w' : origParsed.result,
+    score:    origParsed.score ? origParsed.score.split('-').reverse().join('-') : null,
+    myW:      origParsed.oppW, oppW: origParsed.myW, draws: origParsed.draws,
+    myDeck:   origParsed.oppDeck   || 'Unknown',
+    oppDeck:  origParsed.myDeck    || 'Unknown',
+    games:    origParsed.games,
+    allMine:  origParsed.allOpp  || [],
+    allOpp:   origParsed.allMine || [],
+  } : null;
+  batch.replays.push({
+    replayId:    replayData.replayId,
+    plays:       replayData.plays || [],
+    allPlays:    mirroredParsed ? [] : (replayData.allPlays||[]).map(stripPlay),
+    parsed:      mirroredParsed,
+    timedOut:    !!replayData.timedOut,
+    eventLabel:  replayData.eventLabel || '',
+    oppName:     originalBatchPlayer || replayData.oppName || '',
+    myDeckOverride:  replayData.oppDeckOverride || null,  // A's opp deck = B's my deck
+    oppDeckOverride: replayData.myDeckOverride  || null,
+    crossLinked: true,
+    savedAt:     Date.now()
+  });
   batch.status = 'ready';
   return { linked: true, duplicate: false, batchId: batch.id, player: opponentEntry.name };
 }
@@ -572,6 +661,73 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok:true, merged });
   }
 
+  // ── POST /api/crosslink/scan — retroactively apply crosslinks to existing replays ──
+  // Scans ALL replays in ALL batches and cross-links any where the opponent name
+  // matches a known player profile (by username or alias) that doesn't yet have
+  // that replay in their batch.
+  if (parts[0]==='crosslink' && parts[1]==='scan' && method==='POST') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    let linked = 0, skipped = 0, errors = 0;
+    const batchIds = new Set(); // batches that got new replays — need saving
+
+    for (const batch of Object.values(db.batches)) {
+      for (const replay of (batch.replays||[])) {
+        if (replay.crossLinked) continue; // already a crosslink itself — skip to avoid chains
+        const oppName = replay.oppName || (replay.parsed&&replay.parsed.oppName) || '';
+        if (!oppName) { skipped++; continue; }
+        try {
+          const cl = crossLinkReplay(replay, oppName, batch.player);
+          if (cl && cl.linked) {
+            linked++;
+            batchIds.add(cl.batchId);
+            console.log('[crosslink/scan]', cl.upgraded ? 'Upgraded timedOut' : 'Linked', replay.replayId, 'to', cl.player);
+          } else {
+            skipped++;
+          }
+        } catch(e) {
+          console.error('[crosslink/scan] Error on', replay.replayId, e.message);
+          errors++;
+        }
+      }
+    }
+
+    // Save all batches that received new crosslinks
+    for (const bid of batchIds) {
+      await saveBatchToPostgres(bid).catch(e => console.error('[crosslink/scan] save error:', e.message));
+    }
+
+    console.log('[crosslink/scan] Done:', linked, 'linked,', skipped, 'skipped,', errors, 'errors');
+    return json(res, 200, { ok: true, linked, skipped, errors, batchesUpdated: batchIds.size });
+  }
+
+  // ── GET /api/changelog — head admin audit log ──────────────────────────────
+  if (parts[0]==='changelog' && method==='GET') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    const limit = parseInt(url.searchParams.get('limit')||'100');
+    const log = (db._changeLog||[]).slice(-limit).reverse();
+    return json(res, 200, { log });
+  }
+
+  // ── DELETE /api/changelog/revert/:replayId — head admin revert ───────────
+  if (parts[0]==='changelog' && parts[1]==='revert' && parts[2] && method==='DELETE') {
+    if (!isHeadAdmin(req)) return json(res, 403, { error:'Head Admin only' });
+    const replayId = decodeURIComponent(parts[2]);
+    let reverted = 0;
+    for (const batch of Object.values(db.batches)) {
+      const before = (batch.replays||[]).length;
+      batch.replays = (batch.replays||[]).filter(r => r.replayId !== replayId);
+      if (batch.replays.length < before) {
+        await saveBatchToPostgres(batch.id);
+        reverted++;
+      }
+    }
+    if (reverted > 0) {
+      db._changeLog = (db._changeLog||[]).filter(l => l.replayId !== replayId);
+      console.log('[HeadAdmin] Reverted replay', replayId, 'from', reverted, 'batches');
+    }
+    return json(res, 200, { ok: true, reverted });
+  }
+
   // ── POST /api/save — manual save all data to Postgres immediately ────────────
   if (parts[0]==='save' && method==='POST') {
     try {
@@ -606,9 +762,82 @@ const server = http.createServer(async (req, res) => {
       const user = Object.values(db.users).find(u => u.email === email);
       if (!user || user.password !== hashPassword(pw)) return json(res, 401, { error: 'Invalid email or password' });
       if (!user.approved) return json(res, 403, { error: 'Account pending approval. Contact the admin.' });
-      const token = makeToken(user.id);
+      const sessionId = crypto.randomUUID();
+      const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
+      const ua = (req.headers['user-agent']||'').slice(0,120);
+      // Invalidate any previous session — new login kicks old one
+      const prevSession = user.activeSessionId;
+      user.activeSessionId = sessionId;
+      // Session history for Head Admin audit
+      if (!user.sessionLog) user.sessionLog = [];
+      user.sessionLog.push({ sessionId, ip, ua, loginAt: Date.now(), active: true });
+      // Keep last 20 sessions per user
+      if (user.sessionLog.length > 20) user.sessionLog = user.sessionLog.slice(-20);
+      // Mark previous session as kicked in log
+      if (prevSession) {
+        const prev = user.sessionLog.find(s => s.sessionId === prevSession);
+        if (prev) { prev.active = false; prev.kickedAt = Date.now(); }
+      }
+      await saveDB('users');
+      const token = makeToken(user.id, sessionId);
+      console.log('[Auth] Login:', user.email, 'from', ip, prevSession ? '(kicked previous session)' : '(fresh login)');
       return json(res, 200, { token, role: user.role, email: user.email, name: user.name||email.split('@')[0] });
     });
+  }
+
+  // ── POST /api/auth/logout ──────────────────────────────────────────────────
+  if (parts[0]==='auth' && parts[1]==='logout' && method==='POST') {
+    const user = getUser(req);
+    if (user) {
+      // Mark session as logged out in the log
+      if (user.sessionLog) {
+        const sess = user.sessionLog.find(s => s.sessionId === user.activeSessionId);
+        if (sess) { sess.active = false; sess.loggedOutAt = Date.now(); }
+      }
+      user.activeSessionId = null;
+      await saveDB('users');
+    }
+    return json(res, 200, { ok: true });
+  }
+
+  // ── GET /api/auth/sessions — head admin: view all active sessions ───────────
+  if (parts[0]==='auth' && parts[1]==='sessions' && method==='GET') {
+    if (!isAdmin(req)) return json(res, 403, { error: 'Admin only' });
+    const sessions = [];
+    for (const u of Object.values(db.users)) {
+      if (!u.sessionLog) continue;
+      for (const sess of u.sessionLog) {
+        sessions.push({
+          userId: u.id, name: u.name||u.email, email: u.email, role: u.role,
+          sessionId: sess.sessionId, ip: sess.ip, ua: sess.ua,
+          loginAt: sess.loginAt, active: sess.active,
+          kickedAt: sess.kickedAt||null, loggedOutAt: sess.loggedOutAt||null,
+          isCurrent: u.activeSessionId === sess.sessionId
+        });
+      }
+    }
+    sessions.sort((a,b) => b.loginAt - a.loginAt);
+    return json(res, 200, { sessions });
+  }
+
+  // ── DELETE /api/auth/sessions/:userId — admin: force-logout a user ──────────
+  if (parts[0]==='auth' && parts[1]==='sessions' && parts[2] && method==='DELETE') {
+    if (!isAdmin(req)) return json(res, 403, { error: 'Admin only' });
+    const targetUser = db.users[parts[2]];
+    if (!targetUser) return json(res, 404, { error: 'User not found' });
+    // Head admin can force-logout anyone; admin cannot force-logout other admins/head admins
+    const myRole = getRole(req);
+    if (!isHeadAdmin(req) && isAdminRole(targetUser.role)) {
+      return json(res, 403, { error: 'Only Head Admin can force-logout other admins' });
+    }
+    if (targetUser.sessionLog) {
+      const sess = targetUser.sessionLog.find(s => s.sessionId === targetUser.activeSessionId);
+      if (sess) { sess.active = false; sess.kickedAt = Date.now(); sess.kickedBy = getUser(req)?.name||'admin'; }
+    }
+    targetUser.activeSessionId = null;
+    await saveDB('users');
+    console.log('[Auth] Force-logout:', targetUser.email, 'by', getUser(req)?.email||'admin');
+    return json(res, 200, { ok: true });
   }
 
   // ── POST /api/auth/signup ───────────────────────────────────────────────────
@@ -650,7 +879,7 @@ const server = http.createServer(async (req, res) => {
     return readBody(req, async data => {
       const email = (data.email||'').toLowerCase().trim();
       const pw    = (data.password||'ilovesui').trim();
-      const role  = data.role === 'admin' ? 'admin' : 'user';
+      const role  = ['admin','head_admin','miner','user'].includes(data.role) ? data.role : 'user';
       if (!email) return json(res, 400, { error: 'Email required' });
       if (Object.values(db.users).find(u => u.email === email)) return json(res, 409, { error: 'Already exists' });
       const id = crypto.randomUUID();
@@ -668,7 +897,7 @@ const server = http.createServer(async (req, res) => {
       const u = db.users[parts[2]];
       if (!u) return json(res, 404, { error: 'Not found' });
       if (data.approved  !== undefined) u.approved = !!data.approved;
-      if (data.role      !== undefined) u.role = data.role === 'admin' ? 'admin' : 'user';
+      if (data.role !== undefined) u.role = ['admin','head_admin','miner','user'].includes(data.role) ? data.role : 'user';
       if (data.password  !== undefined) u.password = hashPassword(data.password);
       if (data.name      !== undefined) u.name = data.name;
       await saveDB();
@@ -755,6 +984,7 @@ const server = http.createServer(async (req, res) => {
   }
   // ── POST /api/batches ───────────────────────────────────────────────────────
   if (parts[0]==='batches' && !parts[1] && method==='POST') {
+    if (!isMiner(req)) return json(res, 403, { error: 'Miners and above can create batches' });
     return readBody(req, async data => {
       const id = crypto.randomUUID();
       const batch = { id, name: data.name||data.player||'Batch', player: data.player||'', aliases: data.aliases||[], replays: [], createdAt: Date.now(), status: 'pending' };
@@ -784,6 +1014,18 @@ const server = http.createServer(async (req, res) => {
   // ── DELETE /api/batches/:id ─────────────────────────────────────────────────
   if (parts[0]==='batches' && parts[1] && !parts[2] && method==='DELETE') {
     if (!db.batches[parts[1]]) return json(res, 404, { error:'Not found' });
+    const role = getRole(req);
+    if (!role) return json(res, 403, { error:'Not authenticated' });
+    const batch = db.batches[parts[1]];
+    const ageHours = (Date.now() - (batch.createdAt||0)) / 3600000;
+    // Miners cannot delete batches older than 24 hours
+    if (role === 'miner' && ageHours > 24) {
+      return json(res, 403, { error: 'Miners cannot delete batches older than 24 hours' });
+    }
+    // Users cannot delete any batches
+    if (role === 'user') {
+      return json(res, 403, { error: 'Users cannot delete batches' });
+    }
     delete db.batches[parts[1]];
     await deleteBatchFromPostgres(parts[1]);
     return json(res, 200, { ok:true });
@@ -851,6 +1093,7 @@ const server = http.createServer(async (req, res) => {
 
   // ── POST /api/batches/:id/replay ────────────────────────────────────────────
   if (parts[0]==='batches' && parts[1] && parts[2]==='replay' && method==='POST') {
+    if (!isMiner(req)) return json(res, 403, { error: 'Miners and above can add replays' });
     const b = db.batches[parts[1]];
     if (!b) return json(res, 404, { error:'Not found' });
     return readBody(req, async data => {
@@ -877,6 +1120,10 @@ const server = http.createServer(async (req, res) => {
         const parsedData = data.parsed || null;
         b.replays.push({ replayId:data.replayId, plays:data.plays||[], allPlays:parsedData?[]:strippedPlays, parsed:parsedData, timedOut:!!data.timedOut, eventLabel:data.eventLabel||'', oppName:data.oppName||'', player1:data.player1||null, player2:data.player2||null, savedAt:Date.now() });
         b.status = 'ready';
+        // Log for Head Admin revert
+        if (!db._changeLog) db._changeLog = [];
+        db._changeLog.push({ t:Date.now(), action:'add_replay', batchId:b.id, batchPlayer:b.player, replayId:data.replayId, user:getUser(req)?.name||'unknown' });
+        if (db._changeLog.length > 5000) db._changeLog = db._changeLog.slice(-5000);
         // Only cross-link when explicitly allowed (new batch creation, not manual add-to-batch)
         if (data.oppName && !data.noCrossLink) {
           const cl = crossLinkReplay(data, data.oppName, b.player);
