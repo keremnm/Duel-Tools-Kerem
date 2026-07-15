@@ -1013,9 +1013,6 @@ select{cursor:pointer}
             <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px">
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
                 <div class="slbl" style="margin:0">ALL MATCHES</div>
-                <select id="profile-year-filter" onchange="if(_activeProfile){renderAllMatchesSection(_activeProfile.player,_profileRecords);buildProfileMatchupTable(_profileRecords);refreshProfileDeckChart();}" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;outline:none;margin-left:auto">
-                  <option value="">All Years</option>
-                </select>
               </div>
               <div id="profile-all-matches"></div>
             </div>
@@ -2054,12 +2051,19 @@ function getEventDate(code) {
 // Build year options from a records array — excludes GFWL seasons (S#: WK#)
 // which have their own season dropdown.
 function buildYearOptions(records, currentVal) {
-  const yrs = [...new Set(records.map(r => {
+  // Only include years that have at least one record with a match result (W or L)
+  // This prevents years from appearing when a player has a replay tagged with that
+  // year's event ID but no usable match data was parsed from it.
+  const yrSet = new Set();
+  for (const r of records) {
     const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
-    if (isGFWLSeason(code)) return null; // GFWL seasons excluded
+    if (isGFWLSeason(code)) continue;
+    // Must have an actual match result to count
+    if (!r.matchWon && !r.matchLost) continue;
     const d = getEventDate(code);
-    return d ? d.slice(0,4) : null;
-  }).filter(Boolean))].sort((a,b) => b-a);
+    if (d) yrSet.add(d.slice(0,4));
+  }
+  const yrs = [...yrSet].sort((a,b) => b-a);
   return '<option value="">All Years</option>' +
     yrs.map(y => `<option value="${y}"${y===currentVal?' selected':''}>${y}</option>`).join('');
 }
@@ -5204,6 +5208,7 @@ function renderRPS() {
     const yrs = [...new Set((_allReplays||[]).map(r => {
       const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
       if (isGFWLSeason(code)) return null;
+      if (!(r.plays&&r.plays.length)) return null; // skip if no RPS play data
       const d = getEventDate(code);
       return d ? d.slice(0,4) : null;
     }).filter(Boolean))].sort((a,b) => b-a);
@@ -7474,9 +7479,11 @@ function renderMatchupResults(records, player) {
     const cur = ddYrSel.value;
 
     // Build unified options: All Data, GFWL Only, then years descending
+    // Only include years with at least one record that has a real match result
     const yrs = [...new Set(records.map(r => {
       const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
       if (isGFWLSeason(code)) return null;
+      if (!r.matchWon && !r.matchLost) return null; // skip if no match result
       const d = getEventDate(code);
       return d ? d.slice(0,4) : null;
     }).filter(Boolean))].sort((a,b) => b-a);
@@ -9892,11 +9899,18 @@ function ddRenderMatchups() {
 function buildProfileMatchupTable(records) {
   const el = document.getElementById('profile-matchup-table');
   el.innerHTML = '';
-  // Apply year filter
-  const pyf3 = document.getElementById('profile-year-filter');
-  if (pyf3 && pyf3.value) {
-    const yr3=pyf3.value;
-    records=(records||[]).filter(r=>{const code=(r.eventLabel||'').split(':')[0].trim().toUpperCase();const d=getEventDate(code);return !d||d.startsWith(yr3)||isGFWLSeason(code);});
+  // Apply unified filter from the deckdata-year-filter dropdown
+  const unifiedSel = document.getElementById('deckdata-year-filter');
+  const uVal = unifiedSel ? unifiedSel.value : '';
+  if (uVal === '__gfwl__') {
+    records = (records||[]).filter(r => isGFWLSeason((r.eventLabel||'').split(':')[0].trim().toUpperCase()));
+  } else if (uVal) {
+    records = (records||[]).filter(r => {
+      const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+      if (isGFWLSeason(code)) return false;
+      const d = getEventDate(code);
+      return d && d.startsWith(uVal);
+    });
   }
   const byOpp = {};
   records.forEach(r => {
