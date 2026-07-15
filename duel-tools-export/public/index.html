@@ -12038,19 +12038,19 @@ async function openAdminPanel() {
 }
 
 async function loadCrosslinksSection(el) {
-  el.innerHTML = `
-    <div style="font-size:13px;color:var(--text);margin-bottom:12px">
-      <b>Retroactive Cross-Link Scan</b>
-      <div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5">
-        Scans all existing replays in all batches and links them to any known player profile
-        where the opponent name matches a username or alias. This is safe to run multiple
-        times — duplicates are always detected and skipped.
-      </div>
-    </div>
-    <div id="cl-scan-result" style="font-size:12px;color:var(--muted);min-height:20px"></div>
-    <button id="cl-scan-btn" onclick="runCrosslinkScan()" style="background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:12px;padding:8px 20px;border-radius:6px;cursor:pointer;margin-top:8px">
-      🔗 Scan & Link All Replays
-    </button>`;
+  el.innerHTML =
+    '<div style="font-size:13px;color:var(--text);margin-bottom:12px">' +
+      '<b>Retroactive Cross-Link Scan</b>' +
+      '<div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5">' +
+        'Scans all existing replays in all batches and links them to any known player profile ' +
+        'where the opponent name matches a username or alias. Safe to run multiple times -- ' +
+        'duplicates are always detected and skipped.' +
+      '</div>' +
+    '</div>' +
+    '<div id="cl-scan-result" style="font-size:12px;color:var(--muted);min-height:20px;margin:10px 0"></div>' +
+    '<button id="cl-scan-btn" onclick="runCrosslinkScan()" style="background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:12px;padding:8px 20px;border-radius:6px;cursor:pointer">' +
+      'Scan + Link All Replays' +
+    '</button>';
 }
 
 async function runCrosslinkScan() {
