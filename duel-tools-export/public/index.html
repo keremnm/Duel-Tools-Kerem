@@ -8965,11 +8965,11 @@ function buildDeckWinRateList(elId, records) {
   sorted.forEach(([deck,rec],i)=>{
     const tot=rec.w+rec.l, wp=pct(rec.w,tot), color=getDeckColor(deck,i);
     const row=document.createElement('div'); row.style.cssText='display:flex;align-items:center;gap:8px;margin-bottom:7px';
-    row.innerHTML=`<span style="width:8px;height:8px;border-radius:2px;background:${color};flex-shrink:0"></span>
-      <span style="font-size:12px;color:var(--text);min-width:140px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${deck}</span>
-      <div style="flex:1;height:6px;background:var(--bg);border-radius:3px;overflow:hidden"><div style="height:100%;width:${wp}%;background:${wp>=50?'var(--green)':'var(--red)'};border-radius:3px"></div></div>
-      <span style="font-size:12px;font-weight:bold;color:${wp>=50?'var(--green)':'var(--red)'};min-width:40px;text-align:right">${wp}%</span>
-      <span style="font-size:10px;color:var(--muted)">${rec.w}W-${rec.l}L</span>`;
+    row.innerHTML='<span style="width:8px;height:8px;border-radius:2px;background:'+color+';flex-shrink:0"></span>'
+      + '<span style="font-size:12px;color:var(--text);min-width:140px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+deck+'</span>'
+      + '<div style="flex:1;height:6px;background:var(--bg);border-radius:3px;overflow:hidden"><div style="height:100%;width:'+wp+'%;background:'+(wp>=50?'var(--green)':'var(--red)')+';border-radius:3px"></div></div>'
+      + '<span style="font-size:12px;font-weight:bold;color:'+(wp>=50?'var(--green)':'var(--red)')+';min-width:40px;text-align:right">'+wp+'%</span>'
+      + '<span style="font-size:10px;color:var(--muted)">'+rec.w+'W-'+rec.l+'L</span>';
     el.appendChild(row);
   });
 }
@@ -9406,7 +9406,9 @@ function renderProfileTags(player, tags) {
   for (const tag of tags) {
     const chip = document.createElement('span');
     chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:11px;font-family:monospace;color:var(--amber);border:1px solid var(--amber);padding:2px 8px;border-radius:4px;cursor:default';
-    chip.innerHTML = `${tag} <span onclick="removeProfileTag('${tag.replace(/'/g,"\'")}','${player.replace(/'/g,"\'")}');event.stopPropagation()" style="cursor:pointer;color:var(--muted);font-size:10px" title="Remove">✕</span>`;
+        const safeTag = tag.replace(/'/g, "&#39;");
+    const safePlayer = player.replace(/'/g, "&#39;");
+    chip.innerHTML = '<span>' + tag + '</span> <span onclick="removeProfileTag(\'' + safeTag + '\',\'' + safePlayer + '\');event.stopPropagation()" style="cursor:pointer;color:var(--muted);font-size:10px" title="Remove">&#10005;</span>';
     el.appendChild(chip);
   }
 }
@@ -12064,7 +12066,7 @@ async function runCrosslinkScan() {
     const d = await r.json();
     if (r.ok) {
       res.style.color = 'var(--green)';
-      res.textContent = `✓ Done — ${d.linked} replays cross-linked to ${d.batchesUpdated} batches · ${d.skipped} already linked or no match · ${d.errors} errors`;
+      res.textContent = 'Done: ' + d.linked + ' replays cross-linked to ' + d.batchesUpdated + ' batches. ' + d.skipped + ' skipped. ' + d.errors + ' errors.';
     } else {
       res.style.color = 'var(--red)';
       res.textContent = '✗ Failed: ' + (d.error||'unknown error');
