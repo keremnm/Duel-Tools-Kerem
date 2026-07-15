@@ -11732,8 +11732,9 @@ function applyRoleUI() {
   }
   // Users cannot create new batches (only miners and above can)
   if (!isMinerRole(_userRole)) {
-    document.querySelectorAll('[onclick*="openBatchPanel('new'"]').forEach(el => el.style.display = 'none');
-    document.querySelectorAll('[onclick*="openBatchPanel(\"new\""]').forEach(el => el.style.display = 'none');
+    document.querySelectorAll('[onclick*="openBatchPanel"]').forEach(el => {
+      if ((el.getAttribute('onclick')||'').includes('new')) el.style.display = 'none';
+    });
   }
   // Admins only: show admin panel buttons
   if (!isAdminRole(_userRole)) {
@@ -11790,7 +11791,7 @@ async function adminShowSessions() {
     hdr.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:16px';
     hdr.innerHTML = '<b style="font-size:14px;color:var(--blue)">👁 Active Sessions</b>'
       + '<span style="color:var(--muted);font-size:11px">'+sessions.filter(s=>s.isCurrent).length+' currently active</span>'
-      + '<button onclick="this.closest('[style*=fixed]').remove()" style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--dim);padding:3px 10px;border-radius:4px;cursor:pointer">✕ Close</button>';
+      + '<button onclick="this.closest(\'div\').closest(\'[style*=fixed]\').remove()" style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--dim);padding:3px 10px;border-radius:4px;cursor:pointer">&#10005; Close</button>';
     overlay.appendChild(hdr);
     if (!sessions.length) {
       overlay.innerHTML += '<div style="color:var(--muted);padding:20px">No session history yet.</div>';
@@ -11808,7 +11809,7 @@ async function adminShowSessions() {
         + '<span style="font-size:10px;color:var(--muted)">' + u.email + '</span>'
         + '<span style="font-size:10px;padding:1px 7px;border-radius:3px;border:1px solid;'+(active?'color:var(--green);border-color:var(--green)':'color:var(--dim);border-color:var(--border)')+'">'+u.role+'</span>'
         + (active ? '<span style="font-size:10px;color:var(--green);margin-left:auto">● ACTIVE</span>' : '<span style="font-size:10px;color:var(--muted);margin-left:auto">○ offline</span>')
-        + ((_userRole==='head_admin'||_userRole==='admin') && active ? '<button onclick="adminForceLogout(''+uid+'',this)" style="background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer">⏏ Force Logout</button>' : '')
+        + ((_userRole==='head_admin'||_userRole==='admin') && active ? '<button onclick="adminForceLogout(&quot;'+uid+'&quot;,this)" style="background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer">Force Logout</button>' : '')
         + '</div>';
       userSessions.slice(0,5).forEach(sess => {
         const time = new Date(sess.loginAt).toLocaleString();
