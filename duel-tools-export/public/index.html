@@ -980,7 +980,10 @@ select{cursor:pointer}
                 <div id="profile-matchup-panel">
                   <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
                     <div class="slbl" style="margin:0;font-size:10px">WIN RATE VS OPPONENT DECK TYPE</div>
-                    <select id="deckdata-year-filter" onchange="ddRenderMatchups()" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;outline:none;margin-left:auto">
+                    <select id="deckdata-gfwl-filter" onchange="if(this.value){const y=document.getElementById('deckdata-year-filter');if(y)y.value='';const py=document.getElementById('profile-year-filter');if(py)py.value='';}ddRenderMatchups()" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;outline:none;margin-left:auto" title="Filter by GFWL season">
+                      <option value="">All Seasons</option>
+                    </select>
+                    <select id="deckdata-year-filter" onchange="ddRenderMatchups()" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;outline:none" title="Filter by year (excludes GFWL)">
                       <option value="">All Years</option>
                     </select>
                   </div>
@@ -1013,7 +1016,7 @@ select{cursor:pointer}
             <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px">
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
                 <div class="slbl" style="margin:0">ALL MATCHES</div>
-                <select id="profile-year-filter" onchange="if(_activeProfile){renderAllMatchesSection(_activeProfile.player,_profileRecords);buildProfileMatchupTable(_profileRecords);refreshProfileDeckChart();}" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;outline:none;margin-left:auto">
+                <select id="profile-year-filter" onchange="if(_activeProfile){const _g=document.getElementById('deckdata-gfwl-filter');if(_g&&this.value)_g.value='';renderAllMatchesSection(_activeProfile.player,_profileRecords);buildProfileMatchupTable(_profileRecords);refreshProfileDeckChart();}" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;outline:none;margin-left:auto">
                   <option value="">All Years</option>
                 </select>
               </div>
@@ -2051,6 +2054,32 @@ function getEventDate(code) {
 // Sort event group keys: Seasons first (S9→S1), then by FL date desc, then ACAD/LADDER last
 // Extract week number from a GFWL event label for ascending sort within a season
 // e.g. "S9: WK 1" -> 1, "S9: WK 12" -> 12, "S9" -> 0
+// Build year options from a records array — excludes GFWL seasons (S#: WK#)
+// which have their own season dropdown.
+function buildYearOptions(records, currentVal) {
+  const yrs = [...new Set(records.map(r => {
+    const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+    if (isGFWLSeason(code)) return null; // GFWL seasons excluded
+    const d = getEventDate(code);
+    return d ? d.slice(0,4) : null;
+  }).filter(Boolean))].sort((a,b) => b-a);
+  return '<option value="">All Years</option>' +
+    yrs.map(y => `<option value="${y}"${y===currentVal?' selected':''}>${y}</option>`).join('');
+}
+
+// Build GFWL season options from a records array
+function buildGFWLSeasonOptions(records, currentVal) {
+  const seasons = [...new Set(records.map(r => {
+    const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+    return isGFWLSeason(code) ? code : null;
+  }).filter(Boolean))].sort((a,b) => {
+    const na = parseInt(a.slice(1)), nb = parseInt(b.slice(1));
+    return nb - na; // newest season first
+  });
+  return '<option value="">All Seasons</option>' +
+    seasons.map(s => `<option value="${s}"${s===currentVal?' selected':''}>${s}</option>`).join('');
+}
+
 function gfwlWeekNum(label) {
   if (!label) return 0;
   const u = label.toUpperCase();
@@ -5093,6 +5122,7 @@ function renderRPS() {
   if (_rpsYearFilter) {
     replays = replays.filter(r => {
       const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+      if (isGFWLSeason(code)) return false; // GFWL handled by the GFWL Only toggle
       const d = getEventDate(code);
       return d && d.startsWith(_rpsYearFilter);
     });
@@ -5184,11 +5214,17 @@ function renderRPS() {
       const d = getEventDate(code);
       return d ? d.slice(0,4) : null;
     }).filter(Boolean))].sort((a,b) => b-a);
-    if (allYears.length > 1) {
+    // Build year options excluding GFWL seasons (those use the GFWL Only toggle)
+    const _rpsYrHtml = buildYearOptions(
+      (_allReplays||[]).map(r => ({ eventLabel: r.eventLabel })),
+      _rpsYearFilter
+    );
+    const _rpsYrCount = (_rpsYrHtml.match(/<option/g)||[]).length;
+    if (_rpsYrCount > 2) { // more than just "All Years" + one option
       const yrSel = document.createElement('select');
       yrSel.style.cssText = 'float:right;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:9px;padding:2px 6px;border-radius:4px;cursor:pointer;margin-top:-2px;margin-left:6px;outline:none';
-      yrSel.title = 'Filter by year';
-      yrSel.innerHTML = '<option value="">All Years</option>' + allYears.map(y => `<option value="${y}"${_rpsYearFilter===y?' selected':''}>${y}</option>`).join('');
+      yrSel.title = 'Filter by year (excludes GFWL — use 🏆 button for GFWL)';
+      yrSel.innerHTML = _rpsYrHtml;
       yrSel.onchange = () => { _rpsYearFilter = yrSel.value; renderRPS(); };
       s1.appendChild(yrSel);
     }
@@ -7005,8 +7041,9 @@ function refreshProfileDeckChart() {
   if (yr) {
     recs = recs.filter(r => {
       const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+      if (isGFWLSeason(code)) return false; // GFWL seasons not in year view
       const d = getEventDate(code);
-      return !d || d.startsWith(yr) || isGFWLSeason(code);
+      return d && d.startsWith(yr);
     });
   }
   const du = {};
@@ -7432,10 +7469,27 @@ function renderMatchupResults(records, player) {
   // Apply year filter
   const ddYrSel = document.getElementById('deckdata-year-filter');
   if (ddYrSel) {
-    const allYrs = [...new Set(records.map(r=>{const code=(r.eventLabel||'').split(':')[0].trim().toUpperCase();const d=getEventDate(code);return d?d.slice(0,4):null;}).filter(Boolean))].sort((a,b)=>b-a);
-    const cur=ddYrSel.value;
-    ddYrSel.innerHTML='<option value="">All Years</option>'+allYrs.map(y=>`<option value="${y}"${y===cur?'selected':''}>${y}</option>`).join('');
-    if (cur) records=records.filter(r=>{const code=(r.eventLabel||'').split(':')[0].trim().toUpperCase();const d=getEventDate(code);return !d||d.startsWith(cur)||isGFWLSeason(code);});
+    const cur = ddYrSel.value;
+    ddYrSel.innerHTML = buildYearOptions(records, cur);
+    if (cur) records = records.filter(r => {
+      const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+      if (isGFWLSeason(code)) return false; // GFWL seasons handled separately
+      const d = getEventDate(code);
+      return !d || d.startsWith(cur);
+    });
+  }
+  // GFWL season filter
+  const gfwlSel = document.getElementById('deckdata-gfwl-filter');
+  if (gfwlSel) {
+    const curG = gfwlSel.value;
+    gfwlSel.innerHTML = buildGFWLSeasonOptions(records.concat(
+      // include all records to populate dropdown, not just year-filtered
+      (_activeProfile && _activeProfile.records) ? _activeProfile.records.filter(r => isGFWLSeason((r.eventLabel||'').split(':')[0].trim().toUpperCase())) : []
+    ), curG);
+    if (curG) records = records.filter(r => {
+      const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+      return code === curG || (r.eventLabel||'').toUpperCase().startsWith(curG+':');
+    });
   }
   if (!records.length) {
     out.innerHTML = '<div class="dd-empty">No processable replays in this batch.</div>';
@@ -9665,13 +9719,7 @@ async function openProfile(player, batches, records) {
   const _pyf = document.getElementById('profile-year-filter');
   if (_pyf) {
     const _curYr = _pyf.value;
-    const _yrs = [...new Set(records.map(r => {
-      const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
-      const d = getEventDate(code);
-      return d ? d.slice(0,4) : null;
-    }).filter(Boolean))].sort((a,b) => b-a);
-    _pyf.innerHTML = '<option value="">All Years</option>' +
-      _yrs.map(y => `<option value="${y}"${y===_curYr?' selected':''}>${y}</option>`).join('');
+    _pyf.innerHTML = buildYearOptions(records, _curYr);
   }
 
   buildProfileMatchupTable(records);
