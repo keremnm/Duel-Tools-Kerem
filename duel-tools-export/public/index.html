@@ -9889,11 +9889,58 @@ async function openProfile(player, batches, records) {
 }
 
 // Called when the unified filter dropdown changes in the Deck Matchups tab.
-// Updates both the matchup table AND the deck usage chart.
+// Updates table, chart, and stat chips together.
 function ddRenderMatchups() {
   if (!_activeProfile) return;
   buildProfileMatchupTable(_profileRecords);
   refreshProfileDeckChart();
+  refreshProfileStatChips();
+}
+
+// Re-compute stat chips (Matches, W-L, Win Rate) based on the unified filter selection.
+// Batches and Replays counts stay fixed — they represent the full dataset.
+function refreshProfileStatChips() {
+  if (!_activeProfile) return;
+  const chips = document.getElementById('profile-stat-chips');
+  if (!chips) return;
+
+  const sel = document.getElementById('deckdata-year-filter');
+  const val = sel ? sel.value : '';
+  let recs = _activeProfile.records || [];
+
+  if (val === '__gfwl__') {
+    recs = recs.filter(r => isGFWLSeason((r.eventLabel||'').split(':')[0].trim().toUpperCase()));
+  } else if (val) {
+    recs = recs.filter(r => {
+      const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+      if (isGFWLSeason(code)) return false;
+      const d = getEventDate(code);
+      return d && d.startsWith(val);
+    });
+  }
+
+  const W = recs.filter(r=>r.matchWon).length;
+  const L = recs.filter(r=>r.matchLost).length;
+  const WR = pct(W, recs.length);
+  const allRecs = _activeProfile.records || [];
+  const batches = _activeProfile.batches || [];
+  const totalReplays = batches.reduce((s,b)=>(s+(b.replays||[]).length),0);
+
+  const label = val === '__gfwl__' ? ' (GFWL)' : val ? ` (${val})` : '';
+
+  chips.innerHTML = '';
+  [
+    [recs.length, 'Matches'+label, 'var(--blue)'],
+    [W+'-'+L, 'W — L Record', WR>=50?'var(--green)':'var(--red)'],
+    [WR+'%', 'Win Rate', WR>=50?'var(--green)':'var(--red)'],
+    [batches.length, 'Batches', 'var(--muted)'],
+    [totalReplays, 'Replays', 'var(--muted)'],
+  ].forEach(([v,l,col]) => {
+    const ch = document.createElement('div');
+    ch.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:9px;padding:10px 16px;min-width:90px';
+    ch.innerHTML = `<span style="font-size:20px;font-weight:bold;color:${col};display:block;line-height:1.2;margin-bottom:2px">${v}</span><span style="font-size:11px;color:var(--muted)">${l}</span>`;
+    chips.appendChild(ch);
+  });
 }
 
 function buildProfileMatchupTable(records) {
