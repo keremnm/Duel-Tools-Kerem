@@ -8992,10 +8992,10 @@ function buildTopCardsList(elId, records) {
   sorted.forEach(([card,stat])=>{
     const tot=stat.w+stat.l, wp=pct(stat.w,tot);
     const row=document.createElement('div'); row.style.cssText='display:flex;align-items:center;gap:8px;margin-bottom:7px';
-    row.innerHTML=`<span style="font-size:12px;color:var(--text);min-width:160px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:capitalize">${card}</span>
-      <div style="flex:1;height:6px;background:var(--bg);border-radius:3px;overflow:hidden"><div style="height:100%;width:${wp}%;background:${wp>=50?'var(--green)':'var(--red)'};border-radius:3px"></div></div>
-      <span style="font-size:12px;font-weight:bold;color:${wp>=50?'var(--green)':'var(--red)'};min-width:40px;text-align:right">${wp}%</span>
-      <span style="font-size:10px;color:var(--muted)">×${stat.seen}</span>`;
+        row.innerHTML='<span style="font-size:12px;color:var(--text);min-width:160px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:capitalize">' + card + '</span>'
+      + '<div style="flex:1;height:6px;background:var(--bg);border-radius:3px;overflow:hidden"><div style="height:100%;width:'+wp+'%;background:'+(wp>=50?'var(--green)':'var(--red)')+';border-radius:3px"></div></div>'
+      + '<span style="font-size:12px;font-weight:bold;color:'+(wp>=50?'var(--green)':'var(--red)')+';min-width:40px;text-align:right">'+wp+'%</span>'
+      + '<span style="font-size:10px;color:var(--muted)">×'+stat.seen+'</span>';
     el.appendChild(row);
   });
 }
@@ -9315,10 +9315,10 @@ function renderProfileGrid(batches) {
 
   console.log('[Profiles] byPlayer keys:', Object.keys(byPlayer));
   if (!Object.keys(byPlayer).length) {
-    grid.innerHTML = `<div style="color:var(--muted);font-size:13px;padding:20px">
-      No profiles found. Load or import a batch to see player profiles.
-      ${_activeBatch ? '<br><br>Active batch: <strong style="color:var(--green)">' + _activeBatch.player + '</strong> — ' + (_activeBatch.replays||[]).length + ' replays' : ''}
-    </div>`;
+    grid.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:20px">' +
+      'No profiles found. Load or import a batch to see player profiles.' +
+      (_activeBatch ? '<br><br>Active batch: <strong style="color:var(--green)">' + _activeBatch.player + '</strong> - ' + (_activeBatch.replays||[]).length + ' replays' : '') +
+      '</div>';
     return;
   }
 

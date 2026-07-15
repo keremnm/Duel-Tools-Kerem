@@ -778,7 +778,8 @@ const server = http.createServer(async (req, res) => {
         const prev = user.sessionLog.find(s => s.sessionId === prevSession);
         if (prev) { prev.active = false; prev.kickedAt = Date.now(); }
       }
-      await saveDB('users');
+      // Save session data async — don't block the login response
+      saveDB('users').catch(e => console.error('[Auth] Session save error:', e.message));
       const token = makeToken(user.id, sessionId);
       console.log('[Auth] Login:', user.email, 'from', ip, prevSession ? '(kicked previous session)' : '(fresh login)');
       return json(res, 200, { token, role: user.role, email: user.email, name: user.name||email.split('@')[0] });
