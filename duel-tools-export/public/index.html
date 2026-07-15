@@ -5193,48 +5193,50 @@ function renderRPS() {
   const tp=sv(picks), tat=sv(aft), tfp=sv(fp);
 
   const s1=S(c,'SUMMARY');
-  // GFWL-only toggle button
-  const gfwlHas = (_allReplays||[]).some(r => /^S\d+:/i.test((r.eventLabel||'').trim()));
-  if (gfwlHas) {
-    const gfwlBtn = document.createElement('button');
-    gfwlBtn.textContent = _rpsGFWLOnly ? '🏆 GFWL Only ✓' : '🏆 GFWL Only';
-    gfwlBtn.title = _rpsGFWLOnly ? 'Showing GFWL season replays only — click to show all' : 'Filter to GFWL season replays only (S#: WK#)';
-    gfwlBtn.style.cssText = 'float:right;background:none;border:1px solid '+(_rpsGFWLOnly?'var(--amber)':'var(--border)')+';color:'+(_rpsGFWLOnly?'var(--amber)':'var(--muted)')+';font-family:monospace;font-size:9px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-top:-2px;margin-left:6px';
-    gfwlBtn.onclick = () => { _rpsGFWLOnly = !_rpsGFWLOnly; renderRPS(); };
-    s1.appendChild(gfwlBtn);
-  }
 
-  // Year filter dropdown
+  // ── Single unified filter row ──────────────────────────────────────────────
   {
-    const allYears = [...new Set((_allReplays||[]).map(r => {
+    const filterRow = document.createElement('div');
+    filterRow.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap';
+
+    // Unified dropdown: All Data / GFWL Only / 2026 / 2025...
+    const hasGFWL = (_allReplays||[]).some(r => /^S\d+:/i.test((r.eventLabel||'').trim()));
+    const yrs = [...new Set((_allReplays||[]).map(r => {
       const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+      if (isGFWLSeason(code)) return null;
       const d = getEventDate(code);
       return d ? d.slice(0,4) : null;
     }).filter(Boolean))].sort((a,b) => b-a);
-    // Build year options excluding GFWL seasons (those use the GFWL Only toggle)
-    const _rpsYrHtml = buildYearOptions(
-      (_allReplays||[]).map(r => ({ eventLabel: r.eventLabel })),
-      _rpsYearFilter
-    );
-    const _rpsYrCount = (_rpsYrHtml.match(/<option/g)||[]).length;
-    if (_rpsYrCount > 2) { // more than just "All Years" + one option
-      const yrSel = document.createElement('select');
-      yrSel.style.cssText = 'float:right;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:9px;padding:2px 6px;border-radius:4px;cursor:pointer;margin-top:-2px;margin-left:6px;outline:none';
-      yrSel.title = 'Filter by year (excludes GFWL — use 🏆 button for GFWL)';
-      yrSel.innerHTML = _rpsYrHtml;
-      yrSel.onchange = () => { _rpsYearFilter = yrSel.value; renderRPS(); };
-      s1.appendChild(yrSel);
-    }
-  }
 
-  // Add → Profile button if batch has a real player
-  if (_activeBatch && !_activeBatch.isTemp && _activeBatch.player) {
-    const profBtn = document.createElement('button');
-    profBtn.textContent = '→ Profile';
-    profBtn.title = 'Go to '+_activeBatch.player+"'s profile";
-    profBtn.style.cssText = 'float:right;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:9px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-top:-2px';
-    profBtn.onclick = () => gotoActiveProfile();
-    s1.appendChild(profBtn);
+    // Current value: map old state to unified value
+    let curVal = _rpsYearFilter || (_rpsGFWLOnly ? '__gfwl__' : '');
+
+    const sel = document.createElement('select');
+    sel.style.cssText = 'background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 10px;border-radius:6px;cursor:pointer;outline:none;min-width:140px';
+    sel.innerHTML =
+      '<option value="">All Data</option>' +
+      (hasGFWL ? '<option value="__gfwl__">🏆 GFWL Only</option>' : '') +
+      yrs.map(y => `<option value="${y}">${y}</option>`).join('');
+    sel.value = curVal;
+    sel.onchange = () => {
+      const v = sel.value;
+      if (v === '__gfwl__') { _rpsGFWLOnly = true; _rpsYearFilter = ''; }
+      else { _rpsGFWLOnly = false; _rpsYearFilter = v; }
+      renderRPS();
+    };
+    filterRow.appendChild(sel);
+
+    // → Profile button
+    if (_activeBatch && !_activeBatch.isTemp && _activeBatch.player) {
+      const profBtn = document.createElement('button');
+      profBtn.textContent = '→ Profile';
+      profBtn.title = 'Go to '+_activeBatch.player+"'s profile";
+      profBtn.style.cssText = 'margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:4px 12px;border-radius:6px;cursor:pointer';
+      profBtn.onclick = () => gotoActiveProfile();
+      filterRow.appendChild(profBtn);
+    }
+
+    s1.appendChild(filterRow);
   }
   const ch=mk(s1,'chips');
   [[replays.length,'Replays'],[found,'With '+player],[rounds,'Total rounds'],[tat,'Post-tie picks']].forEach(([v,l])=>{
@@ -7032,23 +7034,26 @@ let _profileRecords = []; // records for currently open profile
 // Rebuild the profile deck usage chart filtered by the currently selected year
 function refreshProfileDeckChart() {
   if (!_activeProfile || typeof buildDonutChart !== 'function') return;
-  const pyf = document.getElementById('profile-year-filter');
-  const yr = pyf ? pyf.value : '';
+  const sel = document.getElementById('deckdata-year-filter');
+  const val = sel ? sel.value : '';
   let recs = _activeProfile.records || [];
-  if (yr) {
+
+  if (val === '__gfwl__') {
+    recs = recs.filter(r => isGFWLSeason((r.eventLabel||'').split(':')[0].trim().toUpperCase()));
+  } else if (val) {
     recs = recs.filter(r => {
       const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
-      if (isGFWLSeason(code)) return false; // GFWL seasons not in year view
+      if (isGFWLSeason(code)) return false;
       const d = getEventDate(code);
-      return d && d.startsWith(yr);
+      return d && d.startsWith(val);
     });
   }
+
   const du = {};
   recs.forEach(r => { const k = r.myDeck||'Unknown'; du[k] = (du[k]||0)+1; });
   const sorted = Object.entries(du).filter(([k])=>k!=='Unknown').sort((a,b)=>b[1]-a[1]).slice(0,10);
-  if (sorted.length) {
-    buildDonutChart('profile-deck-chart', 'profile-deck-legend', sorted, _activeProfile.player+(yr?' — '+yr:' — All Time'));
-  }
+  const label = _activeProfile.player + (val === '__gfwl__' ? ' — GFWL' : val ? ' — '+val : ' — All Time');
+  if (sorted.length) buildDonutChart('profile-deck-chart', 'profile-deck-legend', sorted, label);
 }
 
 function profileSubTab(tab, btn) {
@@ -9874,6 +9879,14 @@ async function openProfile(player, batches, records) {
     row.onclick = () => loadSpecificBatch(b.id);
     batchList.appendChild(row);
   });
+}
+
+// Called when the unified filter dropdown changes in the Deck Matchups tab.
+// Updates both the matchup table AND the deck usage chart.
+function ddRenderMatchups() {
+  if (!_activeProfile) return;
+  buildProfileMatchupTable(_profileRecords);
+  refreshProfileDeckChart();
 }
 
 function buildProfileMatchupTable(records) {
