@@ -7268,6 +7268,29 @@ function renderGFWLHistory() {
       listEl.appendChild(hdr);
       listEl.appendChild(body);
     });
+
+  // Update stat chips to show GFWL-filtered W/L/matches
+  const chips = document.getElementById('profile-stat-chips');
+  if (chips && _activeProfile) {
+    const W = filtered.filter(r=>r.matchWon).length;
+    const L = filtered.filter(r=>r.matchLost).length;
+    const WR = W+L > 0 ? Math.round(W/(W+L)*100) : 0;
+    const seasonLabel = sel.value === 'all' ? 'GFWL' : 'S'+sel.value.replace(/^S/i,'');
+    const batches = _activeProfile.batches || [];
+    const totalReplays = batches.reduce((sum,b)=>(sum+(b.replays||[]).length),0);
+    chips.innerHTML = '';
+    [[filtered.length,'Matches ('+seasonLabel+')','var(--blue)'],
+     [W+'-'+L,'W \u2014 L Record',WR>=50?'var(--green)':'var(--red)'],
+     [WR+'%','Win Rate',WR>=50?'var(--green)':'var(--red)'],
+     [batches.length,'Batches','var(--muted)'],
+     [totalReplays,'Replays','var(--muted)']
+    ].forEach(([v,l,col]) => {
+      const ch = document.createElement('div');
+      ch.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:9px;padding:10px 16px;min-width:90px';
+      ch.innerHTML = '<span style="font-size:20px;font-weight:bold;color:'+col+';display:block;line-height:1.2;margin-bottom:2px">'+v+'</span><span style="font-size:11px;color:var(--muted)">'+l+'</span>';
+      chips.appendChild(ch);
+    });
+  }
 }
 
 // Cards to exclude from quick-picks (too universal to be meaningful)
@@ -9787,14 +9810,19 @@ async function openProfile(player, batches, records) {
     const displayMatches = (filter='') => {
       matchList.innerHTML='';
       const q=filter.toLowerCase();
-      // Apply year filter
-      const pyf = document.getElementById('profile-year-filter');
-      const pyYear = pyf ? pyf.value : '';
+      // Apply unified filter from deckdata-year-filter
+      const _usel = document.getElementById('deckdata-year-filter');
+      const _uval = _usel ? _usel.value : '';
       const allFiltered = [...records].filter(r=>{
-        if (pyYear) {
-          const code = eventGroupKey(r.eventLabel||'').split(':')[0].trim();
-          const d = getEventDate(code);
-          if (d && !d.startsWith(pyYear)) return false;
+        if (_uval) {
+          const _code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+          if (_uval === '__gfwl__') {
+            return isGFWLSeason(_code);
+          } else {
+            if (isGFWLSeason(_code)) return false;
+            const d = getEventDate(_code);
+            if (!d || !d.startsWith(_uval)) return false;
+          }
         }
         return !q||
           (r.oppName||'').toLowerCase().includes(q)||
@@ -9889,9 +9917,17 @@ async function openProfile(player, batches, records) {
 // Updates table, chart, and stat chips together.
 function ddRenderMatchups() {
   if (!_activeProfile) return;
+  // Re-run the all matches section with new filter
+  renderAllMatchesSection(_activeProfile.player, _profileRecords);
   buildProfileMatchupTable(_profileRecords);
   refreshProfileDeckChart();
   refreshProfileStatChips();
+  // Also update GFWL history if visible
+  const sel = document.getElementById('deckdata-year-filter');
+  const val = sel ? sel.value : '';
+  if (val === '__gfwl__') {
+    profileSubTab('gfwl', document.getElementById('profile-tab-gfwl'));
+  }
 }
 
 // Re-compute stat chips (Matches, W-L, Win Rate) based on the unified filter selection.
@@ -11711,13 +11747,13 @@ function authHeaders() {
   return _authToken ? { 'Content-Type':'application/json', 'Authorization':'Bearer '+_authToken } : { 'Content-Type':'application/json' };
 }
 
-function isAdminRole(r) { return r === 'admin' || r === 'head_admin'; }
-function isMinerRole(r) { return r === 'admin' || r === 'head_admin' || r === 'miner'; }
+function isAdminRole(r) { return r === 'admin'; }
+function isMinerRole(r) { return r === 'admin' || r === 'miner'; }
 
 function applyRoleUI() {
   if (_authUser) {
-    const roleLabels = { admin:'ADMIN', head_admin:'HEAD ADMIN', miner:'MINER', user:'USER' };
-    const roleColors = { admin:'var(--amber)', head_admin:'var(--red)', miner:'var(--blue)', user:'var(--muted)' };
+    const roleLabels = { admin:'ADMIN', miner:'MINER', user:'USER' };
+    const roleColors = { admin:'var(--amber)', miner:'var(--blue)', user:'var(--muted)' };
     const roleTag = _userRole && _userRole !== 'user'
       ? ` <span style="color:${roleColors[_userRole]||'var(--muted)'};font-size:10px">${roleLabels[_userRole]||_userRole.toUpperCase()}</span>`
       : '';
@@ -11929,7 +11965,7 @@ async function openAdminPanel() {
     // Role select
     const sel = document.createElement('select');
     sel.style.cssText = 'background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:3px 6px;border-radius:4px;outline:none';
-    [['user','User'],['miner','Miner'],['admin','Admin'],['head_admin','Head Admin']].forEach(([val,label]) => {
+    [['user','User'],['miner','Miner'],['admin','Admin']].forEach(([val,label]) => {
       const opt = document.createElement('option');
       opt.value = val; opt.textContent = label;
       if (u.role === val) opt.selected = true;

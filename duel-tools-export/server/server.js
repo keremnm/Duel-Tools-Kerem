@@ -116,6 +116,17 @@ async function initDB() {
     loadFileDB();
   }
   // Bootstrap admin — always ensure admin account exists and password matches env
+  // Ensure secondary admin exists
+  const SECONDARY_ADMIN = 'arinakkent@gmail.com';
+  if (!Object.values(db.users).find(u => u.email === SECONDARY_ADMIN)) {
+    const sid = crypto.randomUUID();
+    db.users[sid] = { id:sid, email:SECONDARY_ADMIN, name:'Arin', password:hashPassword('changeme'), role:'admin', approved:true, createdAt:Date.now() };
+    console.log('Secondary admin created:', SECONDARY_ADMIN, '(default password: changeme — change immediately)');
+  } else {
+    const sa = Object.values(db.users).find(u => u.email === SECONDARY_ADMIN);
+    if (sa) { sa.role = 'admin'; sa.approved = true; }
+  }
+
   const existingAdmin = Object.values(db.users).find(u => u.email === BOOTSTRAP_EMAIL);
   if (!existingAdmin) {
     const id = crypto.randomUUID();
@@ -446,14 +457,15 @@ function verifyToken(token) {
 function getRole(req) {
   const user = getUser(req);
   if (!user || !user.approved) return null;
-  return user.role || 'user';
+  const r = user.role || 'user';
+  return r === 'head_admin' ? 'admin' : r; // migrate legacy head_admin → admin
 }
 function isAdmin(req) {
   const r = getRole(req);
   return r === 'admin' || r === 'head_admin';
 }
 function isHeadAdmin(req) {
-  return getRole(req) === 'head_admin';
+  return false; // head_admin role removed — use admin instead
 }
 function isMiner(req) {
   const r = getRole(req);
@@ -880,7 +892,7 @@ const server = http.createServer(async (req, res) => {
     return readBody(req, async data => {
       const email = (data.email||'').toLowerCase().trim();
       const pw    = (data.password||'ilovesui').trim();
-      const role  = ['admin','head_admin','miner','user'].includes(data.role) ? data.role : 'user';
+      const role  = ['admin','miner','user'].includes(data.role) ? data.role : 'user';
       if (!email) return json(res, 400, { error: 'Email required' });
       if (Object.values(db.users).find(u => u.email === email)) return json(res, 409, { error: 'Already exists' });
       const id = crypto.randomUUID();
@@ -898,7 +910,7 @@ const server = http.createServer(async (req, res) => {
       const u = db.users[parts[2]];
       if (!u) return json(res, 404, { error: 'Not found' });
       if (data.approved  !== undefined) u.approved = !!data.approved;
-      if (data.role !== undefined) u.role = ['admin','head_admin','miner','user'].includes(data.role) ? data.role : 'user';
+      if (data.role !== undefined) u.role = ['admin','miner','user'].includes(data.role) ? data.role : 'user';
       if (data.password  !== undefined) u.password = hashPassword(data.password);
       if (data.name      !== undefined) u.name = data.name;
       await saveDB();
