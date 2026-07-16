@@ -2370,7 +2370,7 @@ async function deletePlayerBatches(e, batches) {
   const player = batches[0].player || batches[0].name;
   if (!confirm('Delete all batches for ' + player + '?')) return;
   for (const b of batches) {
-    await fetch(API+'/batches/'+b.id, { method:'DELETE' });
+    await fetch(API+'/batches/'+b.id, { method:'DELETE', headers: authHeaders() });
     if (_activeBatch && _activeBatch.id === b.id) _activeBatch = null;
   }
   loadBatches();
@@ -4544,7 +4544,7 @@ function renameBatch(e, id, currentPlayer) {
 async function deleteBatch(e, id) {
   e.stopPropagation();
   if (!confirm('Delete this batch?')) return;
-  await fetch(`${API}/batches/${id}`, { method:'DELETE' });
+  await fetch(`${API}/batches/${id}`, { method:'DELETE', headers: authHeaders() });
   if (_activeBatch && _activeBatch.id === id) {
     _activeBatch = null;
     document.getElementById('rps-empty').style.display='flex';
@@ -4975,8 +4975,10 @@ function openBatchPanel(mode) {
       // Populate batch list
       const batchList = document.getElementById('add-batch-list');
       const searchInp = document.getElementById('add-batch-search');
-      window._addBatchSelected = _activeBatch ? _activeBatch.id : null;
-      const allBatches = Object.values(db && db.batches ? db.batches : {});
+      // Set pre-selected batch from active profile if available
+      if (!window._addBatchSelected && _activeBatch && !_activeBatch.isTemp) {
+        window._addBatchSelected = _activeBatch.id;
+      }
       function renderBatchList(filter) {
         if (!batchList) return;
         // Fetch fresh from server for up-to-date list, fall back to memory
@@ -5023,8 +5025,11 @@ function openBatchPanel(mode) {
         });
       }
       if (searchInp) {
-        // Only clear _addBatchSelected if it wasn't pre-set from an active profile
-        if (!window._addBatchSelected) {
+        if (window._addBatchSelected && _allProfileBatches) {
+          // Pre-fill search with the active player's name
+          const _pre = _allProfileBatches.find(b => b.id === window._addBatchSelected);
+          searchInp.value = _pre ? (_pre.player || _pre.name || '') : '';
+        } else {
           searchInp.value = '';
         }
         searchInp.oninput = () => renderBatchList(searchInp.value);
