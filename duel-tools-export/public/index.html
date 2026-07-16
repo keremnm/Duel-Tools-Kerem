@@ -4909,6 +4909,10 @@ function openBatchPanel(mode) {
   panel.style.display    = 'flex';
   backdrop.style.display = 'block';
 
+  // Always hide dual-parse note when opening any panel mode
+  const _dn = document.getElementById('temp-dual-note');
+  if (_dn) _dn.style.display = 'none';
+
   if (mode === 'new') {
     title.textContent        = 'NEW BATCH';
     playerRow.style.display  = 'block';
