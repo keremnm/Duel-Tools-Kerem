@@ -2134,6 +2134,7 @@ let _activeBatch = null; // current batch object
 let _batchLocalEdits = false; // true if user has made local deletions not yet confirmed by server
 let _matches     = [];   // processed match objects for deck viewer
 let _rpsGFWLOnly = false; // RPS filter: show only GFWL season replays (S#: WK#)
+let _tempRpsPerspective = 'p1'; // For dual-parse temp batches: 'p1' or 'p2'
 let _rpsYearFilter = ''; // RPS filter: show only replays from this year
 let _activeMatch = -1;
 let _showOpp     = false;
@@ -4583,8 +4584,9 @@ async function go() {
 
   if (_batchPanelMode === 'temp') {
     // Temporary batch — in-memory only, never saved to server
+    // No player required: both players in each replay will be parsed
     const tempId = 'temp-' + Date.now();
-    _tempBatch = { id: tempId, name: player || 'Temp', player, aliases, replays: [], createdAt: Date.now(), status: 'pending', isTemp: true };
+    _tempBatch = { id: tempId, name: 'Temp', player: '', aliases: [], replays: [], createdAt: Date.now(), status: 'pending', isTemp: true, dualParse: true };
     _activeBatch = _tempBatch;
     loadBatches(); // refresh list to show temp batch
   } else {
@@ -4629,7 +4631,7 @@ async function go() {
   loadBatches();
   closeBatchPanel();
 
-  _stopping = false; _matches = []; _activeMatch = -1; _rpsGFWLOnly = false; _rpsYearFilter = '';
+  _stopping = false; _matches = []; _activeMatch = -1; _rpsGFWLOnly = false; _rpsYearFilter = ''; _tempRpsPerspective = 'p1';
   const _failedServerSaves = [];
   // Clear any previous mismatch report from a prior import
   const _prevReport = document.getElementById('import-mismatch-report');
@@ -4671,16 +4673,32 @@ async function go() {
       for (const a of regAliases) { if (!seen.has(a.toLowerCase())) { merged.push(a); seen.add(a.toLowerCase()); } }
       return merged;
     })();
-    const _parsed  = parseMatch(result.id, result.allPlays||result.plays||[], _activeBatch.player||'', _aliases, result.player1, result.player2);
-    const _oppName = _parsed ? _parsed.oppName : '';
-    const _rpsPlays = (result.allPlays||result.plays||[]).filter(p=>p.play==='RPS').map(p=>({
+    const _plays = result.allPlays||result.plays||[];
+    const _rpsPlays = _plays.filter(p=>p.play==='RPS').map(p=>({
       game:p.game||null, player1:p.player1||null, player2:p.player2||null,
       player1_choice:p.player1_choice||p.p1pick||null,
       player2_choice:p.player2_choice||p.p2pick||null, pick:p.pick||null
     }));
-    const _parsedStore = _parsed ? { games:_parsed.games, allMine:_parsed.allMine, allOpp:_parsed.allOpp, oppName:_parsed.oppName, myW:_parsed.myW, oppW:_parsed.oppW, draws:_parsed.draws, score:_parsed.score, result:_parsed.result } : null;
     // Per-replay event label: from tab-separated data takes priority, then batch-level label
     const _replayEventLabel = _idEventMap[result.id] || _batchEventLabel || '';
+
+    // Dual-parse for temp batches: parse from both players' perspectives
+    let _parsed, _parsedStore, _oppName;
+    let _parsedP2 = null, _parsedStoreP2 = null;
+    if (_activeBatch.dualParse && result.player1 && result.player2) {
+      // Parse as player1's perspective
+      _parsed = parseMatch(result.id, _plays, result.player1, [], result.player1, result.player2);
+      _parsedStore = _parsed ? { games:_parsed.games, allMine:_parsed.allMine, allOpp:_parsed.allOpp, oppName:_parsed.oppName, myW:_parsed.myW, oppW:_parsed.oppW, draws:_parsed.draws, score:_parsed.score, result:_parsed.result } : null;
+      // Also parse as player2's perspective
+      const _p2 = parseMatch(result.id, _plays, result.player2, [], result.player1, result.player2);
+      _parsedP2 = _p2;
+      _parsedStoreP2 = _p2 ? { games:_p2.games, allMine:_p2.allMine, allOpp:_p2.allOpp, oppName:_p2.oppName, myW:_p2.myW, oppW:_p2.oppW, draws:_p2.draws, score:_p2.score, result:_p2.result } : null;
+      _oppName = result.player2 || '';
+    } else {
+      _parsed = parseMatch(result.id, _plays, _activeBatch.player||'', _aliases, result.player1, result.player2);
+      _parsedStore = _parsed ? { games:_parsed.games, allMine:_parsed.allMine, allOpp:_parsed.allOpp, oppName:_parsed.oppName, myW:_parsed.myW, oppW:_parsed.oppW, draws:_parsed.draws, score:_parsed.score, result:_parsed.result } : null;
+      _oppName = _parsed ? _parsed.oppName : '';
+    }
 
     // Show player names found in replay to help diagnose mismatches
     if (result.timedOut) {
@@ -4689,9 +4707,9 @@ async function go() {
       st(errMsg, 'var(--red)');
     } else {
       const p1 = result.player1||'?', p2 = result.player2||'?';
-      if (_parsed) {
-        qi(`<span style="color:var(--green)">✓ ${result.id}: <b>${p1}</b> vs <b>${p2}</b> → ${_parsed.result==='w'?'W':'L'} ${_parsed.score||''}</span>`);
-      } else if ((result.allPlays||[]).length > 0) {
+      if (_parsed || _activeBatch.dualParse) {
+        qi(`<span style="color:var(--green)">✓ ${result.id}: <b>${p1}</b> vs <b>${p2}</b>${_parsed ? ' → '+(_parsed.result==='w'?'W':'L')+' '+(_parsed.score||'') : ''}</span>`);
+      } else if (_plays.length > 0) {
         qi(`<span style="color:var(--red)">✗ ${result.id}: players in replay = <b>[${p1}]</b> vs <b>[${p2}]</b> — no match for batch player <b>[${_activeBatch.player}]</b>. Skipped.</span>`);
         st('Player mismatch — replay skipped (add alias to fix)', 'var(--red)');
         _skippedMismatch.push({ id: result.id, player1: p1, player2: p2 });
@@ -4701,7 +4719,7 @@ async function go() {
       }
     }
 
-    _activeBatch.replays.push({ replayId:result.id, plays:_rpsPlays, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, parsed:_parsedStore, oppName:_oppName, eventLabel:_replayEventLabel });
+    _activeBatch.replays.push({ replayId:result.id, plays:_rpsPlays, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, parsed:_parsedStore, parsedP2:_parsedStoreP2||undefined, oppName:_oppName, eventLabel:_replayEventLabel });
     // Save to server — server handles duplicate detection + cross-linking
     if (!_activeBatch.isTemp) try {
       const targetBatchId = (_activeBatch._mergedIds && _activeBatch._mergedIds[0]) || _activeBatch.id;
@@ -4897,8 +4915,19 @@ function openBatchPanel(mode) {
     tempBadge.style.display  = 'none';
   } else if (mode === 'temp') {
     title.textContent        = 'TEMPORARY BATCH';
-    playerRow.style.display  = 'block';
+    playerRow.style.display  = 'none'; // no player needed — both players parsed automatically
     tempBadge.style.display  = 'inline-block';
+    // Show dual-parse note
+    let dn = document.getElementById('temp-dual-note');
+    if (!dn) {
+      dn = document.createElement('div');
+      dn.id = 'temp-dual-note';
+      dn.style.cssText = 'font-size:11px;color:var(--amber);padding:4px 0 8px;font-family:monospace';
+      dn.textContent = 'Both players will be parsed. Toggle between them in RPS Analysis.';
+      const urlsInp = document.getElementById('urls-inp');
+      if (urlsInp && urlsInp.parentElement) urlsInp.parentElement.insertBefore(dn, urlsInp);
+    }
+    dn.style.display = 'block';
   } else {
     title.textContent        = 'ADD TO EXISTING BATCH';
     playerRow.style.display  = 'none';
@@ -4990,8 +5019,10 @@ function openBatchPanel(mode) {
         });
       }
       if (searchInp) {
-        searchInp.value = '';
-        window._addBatchSelected = null;
+        // Only clear _addBatchSelected if it wasn't pre-set from an active profile
+        if (!window._addBatchSelected) {
+          searchInp.value = '';
+        }
         searchInp.oninput = () => renderBatchList(searchInp.value);
         searchInp.onfocus = () => renderBatchList(searchInp.value);
         searchInp.onblur = () => setTimeout(() => { if(batchList) batchList.style.display='none'; }, 200);
@@ -5003,6 +5034,10 @@ function openBatchPanel(mode) {
         if (window._addBatchSelected && _allProfileBatches) {
           const preSelected = _allProfileBatches.find(b => b.id === window._addBatchSelected);
           aliasInp.value = preSelected ? (preSelected.aliases||[]).join(', ') : '';
+          // Also pre-fill the search input so user can see which batch is selected
+          if (preSelected && searchInp) {
+            searchInp.value = preSelected.player || preSelected.name || '';
+          }
         } else {
           aliasInp.value = '';
         }
@@ -5113,7 +5148,13 @@ function renderRPS() {
   if (!_activeBatch) return;
   const player  = _activeBatch.player;
   // Apply GFWL-only filter if toggled
-  const _allReplays = _activeBatch.replays || [];
+  const _allReplays = (_activeBatch.replays || []).map(r => {
+    // For dual-parse temp batches, swap parsed perspective when P2 is selected
+    if (_activeBatch.dualParse && _tempRpsPerspective === 'p2' && r.parsedP2) {
+      return { ...r, parsed: r.parsedP2 };
+    }
+    return r;
+  });
   let replays = _rpsGFWLOnly
     ? _allReplays.filter(r => /^S\d+:/i.test((r.eventLabel||'').trim()))
     : _allReplays;
@@ -5227,6 +5268,21 @@ function renderRPS() {
       renderRPS();
     };
     filterRow.appendChild(sel);
+
+    // P1 / P2 perspective toggle for dual-parse temp batches
+    if (_activeBatch && _activeBatch.dualParse) {
+      const p1Name = (_activeBatch.replays||[]).find(r=>r.player1)?.player1 || 'Player 1';
+      const p2Name = (_activeBatch.replays||[]).find(r=>r.player2)?.player2 || 'Player 2';
+      [[p1Name,'p1'],[p2Name,'p2']].forEach(([label, side]) => {
+        const btn = document.createElement('button');
+        const active = _tempRpsPerspective === side;
+        btn.textContent = label;
+        btn.title = 'View RPS from ' + label + "'s perspective";
+        btn.style.cssText = 'background:'+(active?'var(--green)':'none')+';color:'+(active?'#050508':'var(--muted)')+';border:1px solid '+(active?'var(--green)':'var(--border)')+';font-family:monospace;font-size:10px;padding:3px 10px;border-radius:4px;cursor:pointer';
+        btn.onclick = () => { _tempRpsPerspective = side; renderRPS(); };
+        filterRow.appendChild(btn);
+      });
+    }
 
     // → Profile button
     if (_activeBatch && !_activeBatch.isTemp && _activeBatch.player) {
