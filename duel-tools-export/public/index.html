@@ -5416,7 +5416,7 @@ function renderRPS() {
             const entry = { replayId:rid, plays:_rpa, allPlays:[], timedOut:false, player1:result.player1||null, player2:result.player2||null, oppName:_oppName, parsed:_psa, eventLabel:(_activeBatch.replays.find(r=>r.replayId===rid)||{}).eventLabel||'' };
             _activeBatch.replays.push(entry);
             if (_activeBatch.id) {
-              try { await fetch(`${API}/batches/${_activeBatch.id}/replay`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({replayId:rid,plays:_rpa,allPlays:[],timedOut:false,oppName:_oppName,player1:result.player1||null,player2:result.player2||null,parsed:_psa}) }); } catch(e){}
+              try { const _rr = await fetch(`${API}/batches/${_activeBatch.id}/replay`, { method:'POST', headers: authHeaders(), body:JSON.stringify({replayId:rid,plays:_rpa,allPlays:[],timedOut:false,oppName:_oppName,player1:result.player1||null,player2:result.player2||null,parsed:_psa}) }); if(!_rr.ok) console.warn('Retry save failed:', _rr.status); } catch(e){ console.warn('Retry save error:', e.message); }
             }
             st('Retry successful: '+rid, 'var(--green)');
             renderRPS(); buildDeck();
@@ -8238,13 +8238,17 @@ async function addToBatch() {
     _activeBatch.replays.push(replayEntry);
     try {
       const _saveId = (_activeBatch._mergedIds && _activeBatch._mergedIds[0]) || _activeBatch.id;
-      await fetch(API+'/batches/'+_saveId+'/replay', {
-        method:'POST', headers:{'Content-Type':'application/json'},
+      const _saveRes = await fetch(API+'/batches/'+_saveId+'/replay', {
+        method:'POST', headers: authHeaders(),
         body: JSON.stringify({ replayId:result.id, plays:_rpsA, allPlays:[],
           timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null,
           oppName:_oppName, noCrossLink:true, eventLabel:_replayEventLabelA,
           parsed:_psA })
       });
+      if (!_saveRes.ok) {
+        const _errBody = await _saveRes.json().catch(()=>({}));
+        throw new Error(_errBody.error || `HTTP ${_saveRes.status}`);
+      }
     } catch(e) { console.error('Failed to save replay', result.id, e); }
     if (i<newIds.length-1) await sleep(1200);
   }
