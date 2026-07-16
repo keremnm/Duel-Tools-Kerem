@@ -11751,6 +11751,8 @@ function isAdminRole(r) { return r === 'admin'; }
 function isMinerRole(r) { return r === 'admin' || r === 'miner'; }
 
 function applyRoleUI() {
+  // Migrate legacy head_admin role on client side
+  if (_userRole === 'head_admin') _userRole = 'admin';
   if (_authUser) {
     const roleLabels = { admin:'ADMIN', miner:'MINER', user:'USER' };
     const roleColors = { admin:'var(--amber)', miner:'var(--blue)', user:'var(--muted)' };
@@ -11845,7 +11847,7 @@ async function adminShowSessions() {
         + '<span style="font-size:10px;color:var(--muted)">' + u.email + '</span>'
         + '<span style="font-size:10px;padding:1px 7px;border-radius:3px;border:1px solid;'+(active?'color:var(--green);border-color:var(--green)':'color:var(--dim);border-color:var(--border)')+'">'+u.role+'</span>'
         + (active ? '<span style="font-size:10px;color:var(--green);margin-left:auto">● ACTIVE</span>' : '<span style="font-size:10px;color:var(--muted);margin-left:auto">○ offline</span>')
-        + ((_userRole==='head_admin'||_userRole==='admin') && active ? '<button onclick="adminForceLogout(&quot;'+uid+'&quot;,this)" style="background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer">Force Logout</button>' : '')
+        + (_userRole==='admin' && active ? '<button onclick="adminForceLogout(&quot;'+uid+'&quot;,this)" style="background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer">Force Logout</button>' : '')
         + '</div>';
       userSessions.slice(0,5).forEach(sess => {
         const time = new Date(sess.loginAt).toLocaleString();
@@ -11911,7 +11913,7 @@ async function openAdminPanel() {
   // Add user form
   const addRow = document.createElement('div');
   addRow.style.cssText = 'display:flex;gap:7px;flex-wrap:wrap;padding:10px;background:var(--card);border:1px solid var(--border);border-radius:7px';
-  addRow.innerHTML = '<input id="au-name" placeholder="Name" style="flex:1;min-width:90px"/><input id="au-email" placeholder="Email" type="email" style="flex:2;min-width:140px"/><input id="au-pass" placeholder="Password" type="password" style="flex:1;min-width:90px"/><select id="au-role" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px;border-radius:5px;outline:none"><option value="user">User</option><option value="miner">Miner</option><option value="admin">Admin</option><option value="head_admin">Head Admin</option></select><button class="btn-go" onclick="adminAddUser()" style="font-size:12px;padding:6px 12px;white-space:nowrap">+ Add</button>';
+  addRow.innerHTML = '<input id="au-name" placeholder="Name" style="flex:1;min-width:90px"/><input id="au-email" placeholder="Email" type="email" style="flex:2;min-width:140px"/><input id="au-pass" placeholder="Password" type="password" style="flex:1;min-width:90px"/><select id="au-role" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px;border-radius:5px;outline:none"><option value="user">User</option><option value="miner">Miner</option><option value="admin">Admin</option></select><button class="btn-go" onclick="adminAddUser()" style="font-size:12px;padding:6px 12px;white-space:nowrap">+ Add</button>';
 
   // User list
   const usersSection = document.createElement('div');

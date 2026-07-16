@@ -127,6 +127,11 @@ async function initDB() {
     if (sa) { sa.role = 'admin'; sa.approved = true; }
   }
 
+  // Migrate any legacy head_admin roles to admin in the DB
+  for (const u of Object.values(db.users)) {
+    if (u.role === 'head_admin') { u.role = 'admin'; }
+  }
+
   const existingAdmin = Object.values(db.users).find(u => u.email === BOOTSTRAP_EMAIL);
   if (!existingAdmin) {
     const id = crypto.randomUUID();
