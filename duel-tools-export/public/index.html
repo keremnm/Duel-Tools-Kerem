@@ -5307,9 +5307,9 @@ function renderRPS() {
   const s1=S(c,'SUMMARY');
 
   // ── Filter row with checkbox panel + optional P1/P2 + Profile button ─────────
+  const filterRow = document.createElement('div');
+  filterRow.style.cssText = 'display:flex;gap:8px;align-items:flex-start;flex-direction:column;margin-left:auto;position:relative;min-width:160px';
   {
-    const filterRow = document.createElement('div');
-    filterRow.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;position:relative';
 
     // Checkbox filter panel (same pattern as profile page)
     const years = [...new Set((_allReplays||[]).map(r => {
