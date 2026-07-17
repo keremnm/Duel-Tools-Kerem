@@ -978,11 +978,12 @@ select{cursor:pointer}
                 </div>
                 <!-- Matchup table -->
                 <div id="profile-matchup-panel">
-                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;position:relative">
                     <div class="slbl" style="margin:0;font-size:10px">WIN RATE VS OPPONENT DECK TYPE</div>
-                    <select id="deckdata-year-filter" onchange="ddRenderMatchups()" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;outline:none;margin-left:auto;width:100%;max-width:320px">
-                      <option value="">All Data</option>
-                    </select>
+                    <div id="deckdata-filter-panel" style="margin-left:auto;display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+                      <span id="deckdata-filter-label" style="font-size:10px;color:var(--muted);font-family:monospace;cursor:pointer;white-space:nowrap" onclick="toggleFilterPanel()">&#9660; Filter</span>
+                      <div id="deckdata-filter-dropdown" style="display:none;position:absolute;right:0;top:100%;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px 12px;z-index:999;min-width:220px;max-height:300px;overflow-y:auto;box-shadow:0 4px 20px rgba(0,0,0,.5)"></div>
+                    </div>
                   </div>
                   <div id="profile-matchup-table"></div>
                 </div>
@@ -1510,7 +1511,7 @@ const TFIDF_WEIGHTS = {
   'sinister serpent':                  { 'Chaos Turbo': 0.25, 'Chaos Control': 0.28, 'Goat Control': 0.25, 'Chaos Warrior': 0.22 },
   'magician of faith':                 { 'Chaos Turbo': 0.30, 'Chaos Control': 0.30, 'Goat Control': 0.28, 'Chaos Warrior': 0.28 },
   'dekoichi the battlechanted locomotive': { 'Chaos Turbo': 0.65, 'Chaos Control': 0.60, 'Goat Control': 0.55 },
-  "gravekeeper's spy":                 { 'Chaos Turbo': 0.40, 'Chaos Control': 0.38, 'Goat Control': 0.35, 'Gravekeeper': 0.60 },
+  "gravekeeper's spy":                 { 'Chaos Turbo': 0.38, 'Chaos Control': 0.36, 'Goat Control': 0.33, 'Gravekeeper': 0.25 }, // low alone — Necrovalley required to confirm GK
   'card destruction':                  { 'Chaos Turbo': 0.45, 'Chaos Control': 0.35, 'Chaos Warrior': 0.35 },
   'royal decree':                      { 'Chaos Control': 0.55, 'Goat Control': 0.52 },
   'asura priest':                      { 'Chaos Control': 0.55, 'Goat Control': 0.52 },
@@ -2133,9 +2134,10 @@ function banLimit(name){ const n=(name||'').toLowerCase().trim(); if(FORBIDDEN.h
 let _activeBatch = null; // current batch object
 let _batchLocalEdits = false; // true if user has made local deletions not yet confirmed by server
 let _matches     = [];   // processed match objects for deck viewer
-let _rpsGFWLOnly = false; // RPS filter: show only GFWL season replays (S#: WK#)
+let _rpsGFWLOnly = false; // legacy compat
 let _tempRpsPerspective = 'p1'; // For dual-parse temp batches: 'p1' or 'p2'
-let _rpsYearFilter = ''; // RPS filter: show only replays from this year
+let _rpsYearFilter = ''; // legacy compat
+let _rpsFilterSelected = null; // null=all, Set=specific years+seasons selected
 let _activeMatch = -1;
 let _showOpp     = false;
 let _currentCardSize = 'M';
@@ -4631,7 +4633,7 @@ async function go() {
   loadBatches();
   closeBatchPanel();
 
-  _stopping = false; _matches = []; _activeMatch = -1; _rpsGFWLOnly = false; _rpsYearFilter = ''; _tempRpsPerspective = 'p1';
+  _stopping = false; _matches = []; _activeMatch = -1; _rpsGFWLOnly = false; _rpsYearFilter = ''; _rpsFilterSelected = null; _tempRpsPerspective = 'p1';
   const _failedServerSaves = [];
   // Clear any previous mismatch report from a prior import
   const _prevReport = document.getElementById('import-mismatch-report');
@@ -5141,6 +5143,65 @@ const PC  = { Rock:'var(--rock)', Paper:'var(--paper)', Scissors:'var(--scissors
 const OCC = { Win:'bw', Lose:'bl', Tie:'bti' };
 
 
+// ── Card Popup ───────────────────────────────────────────────────────────────
+function showCardPopup(cardName) {
+  const existing = document.getElementById('card-popup-overlay');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'card-popup-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:360px;width:100%;display:flex;flex-direction:column;gap:10px;position:relative;max-height:90vh;overflow-y:auto';
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = 'x';
+  closeBtn.style.cssText = 'position:absolute;top:10px;right:12px;background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;font-family:monospace;padding:0;line-height:1';
+  closeBtn.onclick = () => overlay.remove();
+  box.appendChild(closeBtn);
+  const lbl = document.createElement('div');
+  lbl.style.cssText = 'font-size:11px;color:var(--muted);letter-spacing:.08em;font-family:monospace;text-transform:uppercase';
+  lbl.textContent = 'Card preview';
+  box.appendChild(lbl);
+  const title = document.createElement('div');
+  title.style.cssText = 'font-size:15px;font-weight:bold;color:var(--text);font-family:monospace;padding-right:24px;text-transform:capitalize';
+  title.textContent = cardName;
+  const imgWrap = document.createElement('div');
+  imgWrap.style.cssText = 'display:flex;justify-content:center;min-height:60px';
+  const infoEl = document.createElement('div');
+  infoEl.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace;line-height:1.6';
+  infoEl.textContent = 'Loading...';
+  box.appendChild(imgWrap);
+  box.appendChild(title);
+  box.appendChild(infoEl);
+  fetch('https://db.ygoprodeck.com/api/v7/cardinfo.php?name='+encodeURIComponent(cardName))
+    .then(r=>r.json()).then(data=>{
+      const card = data.data && data.data[0];
+      if (!card) { infoEl.textContent = 'Card not found.'; return; }
+      const imgUrl = card.card_images && card.card_images[0] && card.card_images[0].image_url;
+      if (imgUrl) {
+        const ri = document.createElement('img');
+        ri.src = imgUrl;
+        ri.style.cssText = 'width:200px;height:auto;border-radius:6px;box-shadow:0 4px 20px rgba(0,0,0,.5)';
+        ri.alt = card.name;
+        imgWrap.appendChild(ri);
+      }
+      title.textContent = card.name;
+      const parts = [];
+      if (card.attribute) parts.push(card.attribute);
+      if (card.level) parts.push('Lv '+card.level);
+      else if (card.linkval) parts.push('Link '+card.linkval);
+      if (card.race && card.type) parts.push('[ '+card.race+' / '+card.type.split(' ')[0]+' ]');
+      const statLine = card.atk !== undefined ? ('ATK '+card.atk+' / DEF '+(card.def !== undefined ? card.def : '?')) : '';
+      infoEl.innerHTML =
+        (parts.length ? '<div style="color:var(--amber);margin-bottom:4px">'+parts.join('  ')+'</div>' : '') +
+        (statLine ? '<div style="color:var(--text);margin-bottom:8px;font-size:13px;font-weight:bold">'+statLine+'</div>' : '') +
+        '<div style="color:var(--muted);font-size:11px;line-height:1.6">'+((card.desc||'').replace(/\n/g,'<br>'))+'</div>' +
+        '<div style="margin-top:10px"><a href="https://www.db.yugioh-card.com/yugiohdb/card_search.action?ope=2&cid='+card.id+'" target="_blank" style="color:var(--blue);font-size:10px;text-decoration:none">View full details</a></div>';
+    }).catch(()=>{ infoEl.textContent = 'Could not load card data.'; });
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+}
+
 // ── RPS / DOM utility helpers ─────────────────────────────────────────────
 function z3(){ return {Rock:0,Paper:0,Scissors:0}; }
 function sv(o){ return Object.values(o).reduce((a,b)=>a+b,0); }
@@ -5164,16 +5225,15 @@ function renderRPS() {
     }
     return r;
   });
-  let replays = _rpsGFWLOnly
-    ? _allReplays.filter(r => /^S\d+:/i.test((r.eventLabel||'').trim()))
-    : _allReplays;
-  // Apply year filter
-  if (_rpsYearFilter) {
-    replays = replays.filter(r => {
+  // Apply multi-select filter (null = all)
+  let replays = _allReplays;
+  if (_rpsFilterSelected !== null && _rpsFilterSelected.size > 0) {
+    replays = _allReplays.filter(r => {
       const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
-      if (isGFWLSeason(code)) return false; // GFWL handled by the GFWL Only toggle
+      if (isGFWLSeason(code)) return _rpsFilterSelected.has(code);
       const d = getEventDate(code);
-      return d && d.startsWith(_rpsYearFilter);
+      const yr = d ? d.slice(0,4) : null;
+      return yr ? _rpsFilterSelected.has(yr) : false;
     });
   }
 
@@ -5246,37 +5306,112 @@ function renderRPS() {
 
   const s1=S(c,'SUMMARY');
 
-  // ── Single unified filter row ──────────────────────────────────────────────
+  // ── Filter row with checkbox panel + optional P1/P2 + Profile button ─────────
   {
     const filterRow = document.createElement('div');
-    filterRow.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap';
+    filterRow.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;position:relative';
 
-    // Unified dropdown: All Data / GFWL Only / 2026 / 2025...
-    const hasGFWL = (_allReplays||[]).some(r => /^S\d+:/i.test((r.eventLabel||'').trim()));
-    const yrs = [...new Set((_allReplays||[]).map(r => {
+    // Checkbox filter panel (same pattern as profile page)
+    const years = [...new Set((_allReplays||[]).map(r => {
       const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
       if (isGFWLSeason(code)) return null;
       const d = getEventDate(code);
       return d ? d.slice(0,4) : null;
     }).filter(Boolean))].sort((a,b) => b-a);
+    const gfwlSeasons = [...new Set((_allReplays||[]).map(r => {
+      const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+      return isGFWLSeason(code) ? code : null;
+    }).filter(Boolean))].sort((a,b) => parseInt(b.replace(/\D/g,'')) - parseInt(a.replace(/\D/g,'')));
+    const allRpsKeys = [...years, ...gfwlSeasons];
 
-    // Current value: map old state to unified value
-    let curVal = _rpsYearFilter || (_rpsGFWLOnly ? '__gfwl__' : '');
+    if (allRpsKeys.length > 1) {
+      const filterWrap = document.createElement('div');
+      filterWrap.style.cssText = 'position:relative;display:inline-block';
 
-    const sel = document.createElement('select');
-    sel.style.cssText = 'background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 10px;border-radius:6px;cursor:pointer;outline:none;min-width:140px';
-    sel.innerHTML =
-      '<option value="">All Data</option>' +
-      (hasGFWL ? '<option value="__gfwl__">🏆 GFWL Only</option>' : '') +
-      yrs.map(y => `<option value="${y}">${y}</option>`).join('');
-    sel.value = curVal;
-    sel.onchange = () => {
-      const v = sel.value;
-      if (v === '__gfwl__') { _rpsGFWLOnly = true; _rpsYearFilter = ''; }
-      else { _rpsGFWLOnly = false; _rpsYearFilter = v; }
-      renderRPS();
-    };
-    filterRow.appendChild(sel);
+      const filterLbl = document.createElement('span');
+      filterLbl.id = 'rps-filter-label';
+      const nActive = _rpsFilterSelected ? _rpsFilterSelected.size : allRpsKeys.length;
+      const allActive = _rpsFilterSelected === null;
+      filterLbl.textContent = (allActive ? '\u25bc All Data' : '\u25bc ' + nActive + ' filter' + (nActive===1?'':'s') + ' active');
+      filterLbl.style.cssText = 'font-size:10px;color:'+(allActive?'var(--muted)':'var(--green)')+';font-family:monospace;cursor:pointer;white-space:nowrap;padding:4px 10px;border:1px solid var(--border);border-radius:4px;background:var(--card)';
+      filterLbl.onclick = () => {
+        const dp = filterWrap.querySelector('.rps-filter-dropdown');
+        if (dp) dp.style.display = dp.style.display === 'none' ? 'block' : 'none';
+      };
+      filterWrap.appendChild(filterLbl);
+
+      const dropdown = document.createElement('div');
+      dropdown.className = 'rps-filter-dropdown';
+      dropdown.style.cssText = 'display:none;position:absolute;left:0;top:100%;margin-top:4px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px 12px;z-index:999;min-width:200px;max-height:280px;overflow-y:auto;box-shadow:0 4px 20px rgba(0,0,0,.5)';
+
+      function buildRpsFilterItem(key, label, color) {
+        const isSelected = _rpsFilterSelected === null || _rpsFilterSelected.has(key);
+        const row = document.createElement('label');
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 0;cursor:pointer;font-family:monospace;font-size:11px;color:'+color;
+        const cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.className = 'rps-filter-cb'; cb.dataset.key = key;
+        cb.checked = isSelected;
+        cb.style.cssText = 'cursor:pointer;accent-color:'+color;
+        cb.onchange = () => {
+          const checked = [...dropdown.querySelectorAll('.rps-filter-cb')].filter(c=>c.checked).map(c=>c.dataset.key);
+          const allCb = dropdown.querySelector('.rps-filter-all');
+          if (checked.length === allRpsKeys.length) {
+            _rpsFilterSelected = null;
+            if (allCb) allCb.checked = true;
+          } else {
+            _rpsFilterSelected = new Set(checked);
+            if (allCb) allCb.checked = false;
+          }
+          const n2 = _rpsFilterSelected ? _rpsFilterSelected.size : allRpsKeys.length;
+          const a2 = _rpsFilterSelected === null;
+          filterLbl.textContent = a2 ? '\u25bc All Data' : '\u25bc ' + n2 + ' filter' + (n2===1?'':'s') + ' active';
+          filterLbl.style.color = a2 ? 'var(--muted)' : 'var(--green)';
+          renderRPS();
+        };
+        row.appendChild(cb); row.appendChild(document.createTextNode(label));
+        dropdown.appendChild(row);
+      }
+
+      // All checkbox
+      const allRow = document.createElement('label');
+      allRow.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;border-bottom:1px solid var(--border);margin-bottom:6px;font-family:monospace;font-size:11px;color:var(--text);font-weight:bold';
+      const allCb = document.createElement('input');
+      allCb.type = 'checkbox'; allCb.className = 'rps-filter-all';
+      allCb.checked = _rpsFilterSelected === null;
+      allCb.style.cssText = 'cursor:pointer;accent-color:var(--green)';
+      allCb.onchange = () => {
+        if (allCb.checked) {
+          _rpsFilterSelected = null;
+          dropdown.querySelectorAll('.rps-filter-cb').forEach(cb => cb.checked = true);
+        }
+        filterLbl.textContent = '\u25bc All Data'; filterLbl.style.color = 'var(--muted)';
+        renderRPS();
+      };
+      allRow.appendChild(allCb); allRow.appendChild(document.createTextNode('All Data'));
+      dropdown.appendChild(allRow);
+
+      if (years.length) {
+        const yl = document.createElement('div');
+        yl.style.cssText = 'font-size:9px;color:var(--muted);letter-spacing:.1em;font-family:monospace;margin-bottom:4px';
+        yl.textContent = 'YEARS'; dropdown.appendChild(yl);
+      }
+      years.forEach(y => buildRpsFilterItem(y, y, 'var(--text)'));
+
+      if (gfwlSeasons.length) {
+        const sl = document.createElement('div');
+        sl.style.cssText = 'font-size:9px;color:var(--amber);letter-spacing:.1em;font-family:monospace;margin-bottom:4px;margin-top:8px';
+        sl.textContent = 'GFWL SEASONS'; dropdown.appendChild(sl);
+      }
+      gfwlSeasons.forEach(gs => buildRpsFilterItem(gs, gs, 'var(--amber)'));
+
+      filterWrap.appendChild(dropdown);
+      filterRow.appendChild(filterWrap);
+
+      // Close when clicking outside
+      document.addEventListener('click', function _rpsOutside(e) {
+        if (!filterWrap.contains(e.target)) { dropdown.style.display='none'; }
+      }, true);
+    }
 
     // P1 / P2 perspective toggle for dual-parse temp batches
     if (_activeBatch && _activeBatch.dualParse) {
@@ -5286,7 +5421,6 @@ function renderRPS() {
         const btn = document.createElement('button');
         const active = _tempRpsPerspective === side;
         btn.textContent = label;
-        btn.title = 'View RPS from ' + label + "'s perspective";
         btn.style.cssText = 'background:'+(active?'var(--green)':'none')+';color:'+(active?'#050508':'var(--muted)')+';border:1px solid '+(active?'var(--green)':'var(--border)')+';font-family:monospace;font-size:10px;padding:3px 10px;border-radius:4px;cursor:pointer';
         btn.onclick = () => { _tempRpsPerspective = side; renderRPS(); };
         filterRow.appendChild(btn);
@@ -5296,8 +5430,7 @@ function renderRPS() {
     // → Profile button
     if (_activeBatch && !_activeBatch.isTemp && _activeBatch.player) {
       const profBtn = document.createElement('button');
-      profBtn.textContent = '→ Profile';
-      profBtn.title = 'Go to '+_activeBatch.player+"'s profile";
+      profBtn.textContent = '\u2192 Profile';
       profBtn.style.cssText = 'margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:4px 12px;border-radius:6px;cursor:pointer';
       profBtn.onclick = () => gotoActiveProfile();
       filterRow.appendChild(profBtn);
@@ -5774,7 +5907,14 @@ function classifyFromCards(cards) {
       scores['Chaos Turbo'] = Math.max(0, scores['Chaos Turbo'] * 0.3);
     }
   }
-  if (has('necrovalley')) { scores['Gravekeeper']+=1.50; Object.keys(scores).filter(k=>k!=='Gravekeeper').forEach(k=>scores[k]*=0.1); }
+  // Gravekeeper: Necrovalley is THE defining card — required for classification
+  if (has('necrovalley')) {
+    scores['Gravekeeper'] += 1.80;
+    Object.keys(scores).filter(k=>k!=='Gravekeeper').forEach(k=>{ scores[k]*=0.08; });
+  } else {
+    // No Necrovalley — cannot be Gravekeeper. Suppress any GK score from Spy etc.
+    scores['Gravekeeper'] = 0;
+  }
   if (has('last turn')) { scores['Last Turn']+=1.50; Object.keys(scores).filter(k=>k!=='Last Turn').forEach(k=>scores[k]*=0.1); }
   if (has('royal magical library')) { scores['Library FTK']+=1.50; Object.keys(scores).filter(k=>k!=='Library FTK').forEach(k=>scores[k]*=0.1); }
   const pacmanCards = ['des lacooda','golem sentry','swarm of locusts','swarm of scarabs'].filter(has);
@@ -7101,25 +7241,14 @@ let _profileRecords = []; // records for currently open profile
 // Rebuild the profile deck usage chart filtered by the currently selected year
 function refreshProfileDeckChart() {
   if (!_activeProfile || typeof buildDonutChart !== 'function') return;
-  const sel = document.getElementById('deckdata-year-filter');
-  const val = sel ? sel.value : '';
-  let recs = _activeProfile.records || [];
-
-  if (val === '__gfwl__') {
-    recs = recs.filter(r => isGFWLSeason((r.eventLabel||'').split(':')[0].trim().toUpperCase()));
-  } else if (val) {
-    recs = recs.filter(r => {
-      const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
-      if (isGFWLSeason(code)) return false;
-      const d = getEventDate(code);
-      return d && d.startsWith(val);
-    });
-  }
-
+  const _fPred = getProfileFilterPredicate();
+  const _fActive = _profileFilterSelected !== null;
+  const _fLabel = _fActive ? (' — ' + [..._profileFilterSelected].join(', ')) : ' — All Time';
+  let recs = (_activeProfile.records || []).filter(_fPred);
   const du = {};
   recs.forEach(r => { const k = r.myDeck||'Unknown'; du[k] = (du[k]||0)+1; });
   const sorted = Object.entries(du).filter(([k])=>k!=='Unknown').sort((a,b)=>b[1]-a[1]).slice(0,10);
-  const label = _activeProfile.player + (val === '__gfwl__' ? ' — GFWL' : val ? ' — '+val : ' — All Time');
+  const label = _activeProfile.player + _fLabel;
   if (sorted.length) buildDonutChart('profile-deck-chart', 'profile-deck-legend', sorted, label);
 }
 
@@ -8656,7 +8785,7 @@ async function showDeckViewPopup(deck) {
     for (const p of pList) {
       const name = window._passcodeCache[p] || '';
       const wrap = document.createElement('div');
-      wrap.style.cssText = 'position:relative';
+      wrap.style.cssText = 'position:relative;cursor:pointer';
       const img = document.createElement('img');
       img.style.cssText = 'width:100%;border-radius:3px;display:block;background:var(--card2)';
       img.title = name; img.alt = name; img.loading = 'lazy';
@@ -8664,9 +8793,11 @@ async function showDeckViewPopup(deck) {
       img.onerror = () => {
         img.style.display='none';
         const n = document.createElement('div');
-        n.style.cssText='font-size:7px;color:var(--muted);font-family:monospace;word-break:break-word;padding:2px;background:var(--card2);border-radius:3px;min-height:60px;display:flex;align-items:center;justify-content:center;text-align:center';
+        n.style.cssText='font-size:7px;color:var(--muted);font-family:monospace;word-break:break-word;padding:2px;background:var(--card2);border-radius:3px;min-height:60px;display:flex;align-items:center;justify-content:center;text-align:center;cursor:pointer';
         n.textContent = name; wrap.appendChild(n);
+        n.onclick = () => showCardPopup(name);
       };
+      wrap.onclick = () => showCardPopup(name);
       wrap.appendChild(img);
       grid.appendChild(wrap);
     }
@@ -9737,6 +9868,7 @@ async function openProfile(player, batches, records) {
       }
     }
   }
+  _profileFilterSelected = null; // reset filter for new profile
   _activeProfile = { player, batches, records };
   document.getElementById('profile-browser').style.display = 'none';
   document.getElementById('profile-view').style.display = 'flex';
@@ -9833,6 +9965,7 @@ async function openProfile(player, batches, records) {
     _pyf.innerHTML = buildYearOptions(records, _curYr);
   }
 
+  rebuildProfileYearDropdown(records);
   buildProfileMatchupTable(records);
   // Update matchup header to confirm source
   const matchupHdr = document.getElementById('profile-matchup-header');
@@ -9879,20 +10012,10 @@ async function openProfile(player, batches, records) {
     const displayMatches = (filter='') => {
       matchList.innerHTML='';
       const q=filter.toLowerCase();
-      // Apply unified filter from deckdata-year-filter
-      const _usel = document.getElementById('deckdata-year-filter');
-      const _uval = _usel ? _usel.value : '';
+      // Apply multi-select filter
+      const _dpred = getProfileFilterPredicate();
       const allFiltered = [...records].filter(r=>{
-        if (_uval) {
-          const _code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
-          if (_uval === '__gfwl__') {
-            return isGFWLSeason(_code);
-          } else {
-            if (isGFWLSeason(_code)) return false;
-            const d = getEventDate(_code);
-            if (!d || !d.startsWith(_uval)) return false;
-          }
-        }
+        if (!_dpred(r)) return false;
         return !q||
           (r.oppName||'').toLowerCase().includes(q)||
           (r.eventLabel||'').toLowerCase().includes(q)||
@@ -9986,7 +10109,7 @@ async function openProfile(player, batches, records) {
 // Updates table, chart, and stat chips together.
 function ddRenderMatchups() {
   if (!_activeProfile) return;
-  // Re-run the all matches section with new filter
+  rebuildProfileYearDropdown(_profileRecords);
   renderAllMatchesSection(_activeProfile.player, _profileRecords);
   buildProfileMatchupTable(_profileRecords);
   refreshProfileDeckChart();
@@ -9999,6 +10122,153 @@ function ddRenderMatchups() {
   }
 }
 
+// ── Multi-select filter state ────────────────────────────────────────────────
+// null = all selected (default). Set = specific years/seasons selected.
+let _profileFilterSelected = null; // null means "all", Set means specific selection
+
+function toggleFilterPanel() {
+  const panel = document.getElementById('deckdata-filter-dropdown');
+  if (!panel) return;
+  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+}
+
+// Close filter panel when clicking outside
+document.addEventListener('click', e => {
+  const wrap = document.getElementById('deckdata-filter-panel');
+  if (wrap && !wrap.contains(e.target)) {
+    const panel = document.getElementById('deckdata-filter-dropdown');
+    if (panel) panel.style.display = 'none';
+  }
+}, true);
+
+function rebuildProfileYearDropdown(records) {
+  const panel = document.getElementById('deckdata-filter-dropdown');
+  const label = document.getElementById('deckdata-filter-label');
+  if (!panel) return;
+
+  // Collect unique years and GFWL seasons from this player's records
+  const years = [...new Set((records||[]).map(r => {
+    const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+    if (isGFWLSeason(code)) return null;
+    const d = getEventDate(code);
+    return d ? d.slice(0,4) : null;
+  }).filter(Boolean))].sort((a,b) => b-a);
+
+  const gfwlSeasons = [...new Set((records||[]).map(r => {
+    const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+    return isGFWLSeason(code) ? code : null;
+  }).filter(Boolean))].sort((a,b) => {
+    const na = parseInt(a.replace(/\D/g,'')), nb = parseInt(b.replace(/\D/g,''));
+    return nb - na;
+  });
+
+  const allKeys = [...years, ...gfwlSeasons];
+  if (!allKeys.length) { panel.innerHTML = '<div style="font-size:11px;color:var(--muted)">No data</div>'; return; }
+
+  // If _profileFilterSelected has keys that don't exist for this player, reset
+  if (_profileFilterSelected) {
+    const valid = [..._profileFilterSelected].filter(k => allKeys.includes(k));
+    _profileFilterSelected = valid.length ? new Set(valid) : null;
+  }
+
+  panel.innerHTML = '';
+
+  // "Select All" checkbox
+  const allRow = document.createElement('label');
+  allRow.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;border-bottom:1px solid var(--border);margin-bottom:6px;font-family:monospace;font-size:11px;color:var(--text);font-weight:bold';
+  const allCb = document.createElement('input');
+  allCb.type = 'checkbox';
+  allCb.id = 'filter-cb-all';
+  allCb.checked = _profileFilterSelected === null;
+  allCb.style.cssText = 'cursor:pointer;accent-color:var(--green)';
+  allCb.onchange = () => {
+    if (allCb.checked) {
+      _profileFilterSelected = null;
+      panel.querySelectorAll('.filter-cb-item').forEach(cb => cb.checked = true);
+    }
+    updateFilterLabel(allKeys);
+    ddRenderMatchups();
+  };
+  allRow.appendChild(allCb);
+  allRow.appendChild(document.createTextNode('All Data'));
+  panel.appendChild(allRow);
+
+  // Year checkboxes
+  if (years.length) {
+    const yLbl = document.createElement('div');
+    yLbl.style.cssText = 'font-size:9px;color:var(--muted);letter-spacing:.1em;font-family:monospace;margin-bottom:4px;margin-top:2px';
+    yLbl.textContent = 'YEARS';
+    panel.appendChild(yLbl);
+  }
+  years.forEach(yr => addFilterCheckbox(panel, yr, yr, allKeys));
+
+  // GFWL season checkboxes
+  if (gfwlSeasons.length) {
+    const sLbl = document.createElement('div');
+    sLbl.style.cssText = 'font-size:9px;color:var(--amber);letter-spacing:.1em;font-family:monospace;margin-bottom:4px;margin-top:8px';
+    sLbl.textContent = 'GFWL SEASONS';
+    panel.appendChild(sLbl);
+  }
+  gfwlSeasons.forEach(s => addFilterCheckbox(panel, s, s, allKeys));
+
+  updateFilterLabel(allKeys);
+}
+
+function addFilterCheckbox(panel, key, labelText, allKeys) {
+  const isGFWL = isGFWLSeason(key);
+  const isSelected = _profileFilterSelected === null || _profileFilterSelected.has(key);
+  const row = document.createElement('label');
+  row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 0;cursor:pointer;font-family:monospace;font-size:11px;color:'+(isGFWL?'var(--amber)':'var(--text)');
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.className = 'filter-cb-item';
+  cb.dataset.key = key;
+  cb.checked = isSelected;
+  cb.style.cssText = 'cursor:pointer;accent-color:'+(isGFWL?'var(--amber)':'var(--blue)');
+  cb.onchange = () => {
+    // Collect all checked item boxes
+    const checked = [...panel.querySelectorAll('.filter-cb-item')].filter(c=>c.checked).map(c=>c.dataset.key);
+    const allCb = document.getElementById('filter-cb-all');
+    if (checked.length === allKeys.length) {
+      _profileFilterSelected = null;
+      if (allCb) allCb.checked = true;
+    } else {
+      _profileFilterSelected = new Set(checked);
+      if (allCb) allCb.checked = false;
+    }
+    updateFilterLabel(allKeys);
+    ddRenderMatchups();
+  };
+  row.appendChild(cb);
+  row.appendChild(document.createTextNode(labelText));
+  panel.appendChild(row);
+}
+
+function updateFilterLabel(allKeys) {
+  const label = document.getElementById('deckdata-filter-label');
+  if (!label) return;
+  if (_profileFilterSelected === null || _profileFilterSelected.size === allKeys.length) {
+    label.textContent = '\u25bc All Data';
+    label.style.color = 'var(--muted)';
+  } else {
+    const n = _profileFilterSelected.size;
+    label.textContent = '\u25bc ' + n + ' filter' + (n===1?'':'s') + ' active';
+    label.style.color = 'var(--green)';
+  }
+}
+
+function getProfileFilterPredicate() {
+  // Returns a function that tests a record against the current filter
+  if (_profileFilterSelected === null) return () => true;
+  return r => {
+    const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+    if (isGFWLSeason(code)) return _profileFilterSelected.has(code);
+    const d = getEventDate(code);
+    const yr = d ? d.slice(0,4) : null;
+    return yr ? _profileFilterSelected.has(yr) : false;
+  };
+}
+
 // Re-compute stat chips (Matches, W-L, Win Rate) based on the unified filter selection.
 // Batches and Replays counts stay fixed — they represent the full dataset.
 function refreshProfileStatChips() {
@@ -10006,29 +10276,15 @@ function refreshProfileStatChips() {
   const chips = document.getElementById('profile-stat-chips');
   if (!chips) return;
 
-  const sel = document.getElementById('deckdata-year-filter');
-  const val = sel ? sel.value : '';
-  let recs = _activeProfile.records || [];
-
-  if (val === '__gfwl__') {
-    recs = recs.filter(r => isGFWLSeason((r.eventLabel||'').split(':')[0].trim().toUpperCase()));
-  } else if (val) {
-    recs = recs.filter(r => {
-      const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
-      if (isGFWLSeason(code)) return false;
-      const d = getEventDate(code);
-      return d && d.startsWith(val);
-    });
-  }
-
+  const _cpred = getProfileFilterPredicate();
+  const _cActive = _profileFilterSelected !== null;
+  let recs = (_activeProfile.records || []).filter(_cpred);
   const W = recs.filter(r=>r.matchWon).length;
   const L = recs.filter(r=>r.matchLost).length;
   const WR = pct(W, recs.length);
-  const allRecs = _activeProfile.records || [];
   const batches = _activeProfile.batches || [];
   const totalReplays = batches.reduce((s,b)=>(s+(b.replays||[]).length),0);
-
-  const label = val === '__gfwl__' ? ' (GFWL)' : val ? ` (${val})` : '';
+  const label = _cActive ? ' (' + [..._profileFilterSelected].join(', ') + ')' : '';
 
   chips.innerHTML = '';
   [
@@ -10048,19 +10304,7 @@ function refreshProfileStatChips() {
 function buildProfileMatchupTable(records) {
   const el = document.getElementById('profile-matchup-table');
   el.innerHTML = '';
-  // Apply unified filter from the deckdata-year-filter dropdown
-  const unifiedSel = document.getElementById('deckdata-year-filter');
-  const uVal = unifiedSel ? unifiedSel.value : '';
-  if (uVal === '__gfwl__') {
-    records = (records||[]).filter(r => isGFWLSeason((r.eventLabel||'').split(':')[0].trim().toUpperCase()));
-  } else if (uVal) {
-    records = (records||[]).filter(r => {
-      const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
-      if (isGFWLSeason(code)) return false;
-      const d = getEventDate(code);
-      return d && d.startsWith(uVal);
-    });
-  }
+  records = (records||[]).filter(getProfileFilterPredicate());
   const byOpp = {};
   records.forEach(r => {
     const k = r.oppDeck||'Unknown';
