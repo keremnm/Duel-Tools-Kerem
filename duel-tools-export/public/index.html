@@ -5436,12 +5436,20 @@ function renderRPS() {
       filterRow.appendChild(profBtn);
     }
 
-    s1.appendChild(filterRow);
   }
-  const ch=mk(s1,'chips');
-  [[replays.length,'Replays'],[found,'With '+player],[rounds,'Total rounds'],[tat,'Post-tie picks']].forEach(([v,l])=>{
+  // Chips + filter on same row
+  const chRow = document.createElement('div');
+  chRow.style.cssText = 'display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap';
+  const ch=mk(chRow,'chips');
+  [[replays.length,'Replays'],[found,'With '+(player||'Player')],[rounds,'Total rounds'],[tat,'Post-tie picks']].forEach(([v,l])=>{
     const x=mk(ch,'chip'); E(x,'span',String(v),'chipv'); E(x,'span',l,'chipl');
   });
+  // Append filter panel to the right of chips
+  if (filterRow.children.length) {
+    filterRow.style.cssText = 'display:flex;gap:8px;align-items:flex-start;flex-direction:column;margin-left:auto;position:relative;min-width:160px';
+    chRow.appendChild(filterRow);
+  }
+  s1.appendChild(chRow);
   if(tos){ const w=document.createElement('div'); w.style.cssText='font-size:11px;color:var(--amber);margin-top:8px;padding:5px 9px;background:rgba(245,166,35,.08);border:1px solid rgba(245,166,35,.2);border-radius:6px;display:flex;align-items:center;gap:8px'; w.innerHTML=`⚠ ${tos} replay(s) timed out. &nbsp;<button onclick="manualRetryTimedOut()" style="background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:11px;padding:3px 12px;border-radius:4px;cursor:pointer">↺ Retry Now</button>&nbsp;<button onclick="removeTimedOutReplays()" style="background:var(--red);color:#fff;border:none;font-family:monospace;font-weight:bold;font-size:11px;padding:3px 12px;border-radius:4px;cursor:pointer">✕ Remove Timed Out</button>`; s1.appendChild(w); }
 
   HR(c);
@@ -10109,17 +10117,12 @@ async function openProfile(player, batches, records) {
 // Updates table, chart, and stat chips together.
 function ddRenderMatchups() {
   if (!_activeProfile) return;
-  rebuildProfileYearDropdown(_profileRecords);
+  // Don't rebuild checkboxes — just update the data sections
+  // Rebuilding would close the panel and lose state
   renderAllMatchesSection(_activeProfile.player, _profileRecords);
   buildProfileMatchupTable(_profileRecords);
   refreshProfileDeckChart();
   refreshProfileStatChips();
-  // Also update GFWL history if visible
-  const sel = document.getElementById('deckdata-year-filter');
-  const val = sel ? sel.value : '';
-  if (val === '__gfwl__') {
-    profileSubTab('gfwl', document.getElementById('profile-tab-gfwl'));
-  }
 }
 
 // ── Multi-select filter state ────────────────────────────────────────────────
