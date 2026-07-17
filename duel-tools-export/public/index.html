@@ -5342,7 +5342,7 @@ function renderRPS() {
 
       const dropdown = document.createElement('div');
       dropdown.className = 'rps-filter-dropdown';
-      dropdown.style.cssText = 'display:none;position:absolute;left:0;top:100%;margin-top:4px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px 12px;z-index:999;min-width:200px;max-height:280px;overflow-y:auto;box-shadow:0 4px 20px rgba(0,0,0,.5)';
+      dropdown.style.cssText = 'display:none;position:absolute;right:0;top:100%;margin-top:4px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px 12px;z-index:9999;min-width:200px;max-height:320px;overflow-y:auto;box-shadow:0 4px 20px rgba(0,0,0,.5)';
 
       function buildRpsFilterItem(key, label, color) {
         const isSelected = _rpsFilterSelected === null || _rpsFilterSelected.has(key);
@@ -5373,6 +5373,13 @@ function renderRPS() {
       }
 
       // All checkbox
+      // X close button
+      const _xBtn = document.createElement('button');
+      _xBtn.textContent = 'x';
+      _xBtn.style.cssText = 'float:right;background:none;border:none;color:var(--muted);font-size:13px;cursor:pointer;font-family:monospace;padding:0;line-height:1;margin-bottom:4px';
+      _xBtn.onclick = () => { dropdown.style.display = 'none'; };
+      dropdown.appendChild(_xBtn);
+
       const allRow = document.createElement('label');
       allRow.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;border-bottom:1px solid var(--border);margin-bottom:6px;font-family:monospace;font-size:11px;color:var(--text);font-weight:bold';
       const allCb = document.createElement('input');
@@ -5407,10 +5414,7 @@ function renderRPS() {
       filterWrap.appendChild(dropdown);
       filterRow.appendChild(filterWrap);
 
-      // Close when clicking outside
-      document.addEventListener('click', function _rpsOutside(e) {
-        if (!filterWrap.contains(e.target)) { dropdown.style.display='none'; }
-      }, true);
+      // No outside-click close — user clicks X or the label to close
     }
 
     // P1 / P2 perspective toggle for dual-parse temp batches
@@ -5437,18 +5441,26 @@ function renderRPS() {
     }
 
   }
-  // Chips + filter on same row
+  // Put filter inline in the SUMMARY header bar (lots of empty space there)
+  // filterRow contains the filter wrap (label + dropdown)
+  if (filterRow.children.length) {
+    // Make the s1 label row flex so filter sits at the right
+    const slbl = s1.querySelector('.slbl');
+    if (slbl) {
+      slbl.style.cssText = 'display:flex;align-items:center;width:100%;gap:12px;font-size:10px;letter-spacing:.1em;color:var(--dim)';
+      filterRow.style.cssText = 'margin-left:auto;position:relative;display:inline-block';
+      slbl.appendChild(filterRow);
+    } else {
+      s1.appendChild(filterRow);
+    }
+  }
+  // Chips row
   const chRow = document.createElement('div');
-  chRow.style.cssText = 'display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap';
+  chRow.style.cssText = 'display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-top:8px';
   const ch=mk(chRow,'chips');
   [[replays.length,'Replays'],[found,'With '+(player||'Player')],[rounds,'Total rounds'],[tat,'Post-tie picks']].forEach(([v,l])=>{
     const x=mk(ch,'chip'); E(x,'span',String(v),'chipv'); E(x,'span',l,'chipl');
   });
-  // Append filter panel to the right of chips
-  if (filterRow.children.length) {
-    filterRow.style.cssText = 'display:flex;gap:8px;align-items:flex-start;flex-direction:column;margin-left:auto;position:relative;min-width:160px';
-    chRow.appendChild(filterRow);
-  }
   s1.appendChild(chRow);
   if(tos){ const w=document.createElement('div'); w.style.cssText='font-size:11px;color:var(--amber);margin-top:8px;padding:5px 9px;background:rgba(245,166,35,.08);border:1px solid rgba(245,166,35,.2);border-radius:6px;display:flex;align-items:center;gap:8px'; w.innerHTML=`⚠ ${tos} replay(s) timed out. &nbsp;<button onclick="manualRetryTimedOut()" style="background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:11px;padding:3px 12px;border-radius:4px;cursor:pointer">↺ Retry Now</button>&nbsp;<button onclick="removeTimedOutReplays()" style="background:var(--red);color:#fff;border:none;font-family:monospace;font-weight:bold;font-size:11px;padding:3px 12px;border-radius:4px;cursor:pointer">✕ Remove Timed Out</button>`; s1.appendChild(w); }
 
@@ -5956,6 +5968,10 @@ function classifyFromCards(cards) {
     // Scapegoat without metamorphosis could be many decks
     scores['Goat Control'] += 0.15;
     scores['Chaos Control'] += 0.10;
+  }
+  // Goat Control REQUIRES Scapegoat — without it, suppress the score heavily
+  if (!has('scapegoat')) {
+    scores['Goat Control'] = Math.max(0, scores['Goat Control'] * 0.10);
   }
   if (has('thousand-eyes restrict')) scores['Goat Control']+=0.35;
   if (has('abyss soldier')) scores['Chaos Control']+=0.45;
@@ -6579,7 +6595,10 @@ async function renderMatchDisplay(m) {
     for (const game of m.games) {
       const gameCards = _showOpp ? game.opp : game.mine;
       if (!gameCards||!gameCards.length) continue;
-      const gc = classifyFromCards(gameCards);
+      // Use event decklist override for game label if available
+      const _gcRaw = classifyFromCards(gameCards);
+      const _gcOverride = !_showOpp ? (m.myDeckOverride || null) : (m.oppDeckOverride || null);
+      const gc = _gcOverride ? { dc: _gcOverride } : _gcRaw;
       const gBlock=document.createElement('div'); gBlock.className='game-block';
       const gHdr=document.createElement('div'); gHdr.className='game-hdr';
       const gNum=document.createElement('span'); gNum.className='game-num';
@@ -10017,6 +10036,7 @@ async function openProfile(player, batches, records) {
 
     const _openGroups = new Set();
 
+    window._displayProfileMatches = null; // reset
     const displayMatches = (filter='') => {
       matchList.innerHTML='';
       const q=filter.toLowerCase();
@@ -10084,6 +10104,7 @@ async function openProfile(player, batches, records) {
         matchList.appendChild(body);
       });
     };
+    window._displayProfileMatches = displayMatches; // expose for filter updates
     searchInput.oninput=()=>displayMatches(searchInput.value);
     displayMatches();
     matchesSec.appendChild(searchInput);
@@ -10119,7 +10140,7 @@ function ddRenderMatchups() {
   if (!_activeProfile) return;
   // Don't rebuild checkboxes — just update the data sections
   // Rebuilding would close the panel and lose state
-  renderAllMatchesSection(_activeProfile.player, _profileRecords);
+  if (window._displayProfileMatches) window._displayProfileMatches();
   buildProfileMatchupTable(_profileRecords);
   refreshProfileDeckChart();
   refreshProfileStatChips();
@@ -10134,15 +10155,7 @@ function toggleFilterPanel() {
   if (!panel) return;
   panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
 }
-
-// Close filter panel when clicking outside
-document.addEventListener('click', e => {
-  const wrap = document.getElementById('deckdata-filter-panel');
-  if (wrap && !wrap.contains(e.target)) {
-    const panel = document.getElementById('deckdata-filter-dropdown');
-    if (panel) panel.style.display = 'none';
-  }
-}, true);
+// No outside-click close — user must click X or the label to close
 
 function rebuildProfileYearDropdown(records) {
   const panel = document.getElementById('deckdata-filter-dropdown');
@@ -10175,6 +10188,13 @@ function rebuildProfileYearDropdown(records) {
   }
 
   panel.innerHTML = '';
+
+  // Close button
+  const _closeBtn = document.createElement('button');
+  _closeBtn.textContent = 'x';
+  _closeBtn.style.cssText = 'float:right;background:none;border:none;color:var(--muted);font-size:13px;cursor:pointer;font-family:monospace;padding:0;line-height:1;margin-bottom:4px';
+  _closeBtn.onclick = () => { panel.style.display = 'none'; };
+  panel.appendChild(_closeBtn);
 
   // "Select All" checkbox
   const allRow = document.createElement('label');
