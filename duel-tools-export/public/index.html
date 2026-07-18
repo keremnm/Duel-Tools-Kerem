@@ -4634,6 +4634,8 @@ async function go() {
   closeBatchPanel();
 
   _stopping = false; _matches = []; _activeMatch = -1; _rpsGFWLOnly = false; _rpsYearFilter = ''; _rpsFilterSelected = null; _tempRpsPerspective = 'p1';
+  // Clear RPS output so filter panel rebuilds fresh for new batch
+  const _rpsOut = document.getElementById('rps-out'); if (_rpsOut) _rpsOut.innerHTML = '';
   const _failedServerSaves = [];
   // Clear any previous mismatch report from a prior import
   const _prevReport = document.getElementById('import-mismatch-report');
@@ -5237,6 +5239,7 @@ function renderRPS() {
     });
   }
 
+
   const picks=z3(), aft=z3(), fp=z3();
   const abp={ Rock:z3(), Paper:z3(), Scissors:z3() };
   const log=[]; let rounds=0, miss=0, tos=0;
@@ -5300,16 +5303,35 @@ function renderRPS() {
   pb(100);
 
   const c=document.getElementById('rps-out');
-  c.innerHTML=''; c.style.display='block';
+  c.style.display='block';
   document.getElementById('rps-empty').style.display='none';
   const tp=sv(picks), tat=sv(aft), tfp=sv(fp);
 
-  const s1=S(c,'SUMMARY');
+  // Preserve the filter panel across re-renders — only clear the data sections
+  const _existingFilter = document.getElementById('rps-filter-row');
+  const _existingLabel = document.getElementById('rps-summary-label');
+  // Clear only data sections (everything after the summary header)
+  const _dataStart = document.getElementById('rps-data-sections');
+  if (_dataStart) _dataStart.innerHTML = '';
+
+  let s1;
+  if (_existingLabel) {
+    s1 = _existingLabel.closest('.section') || c.querySelector('.section');
+  } else {
+    c.innerHTML = '';
+    s1 = S(c, 'SUMMARY');
+    s1.querySelector('.slbl') && (s1.querySelector('.slbl').id = 'rps-summary-label');
+  }
 
   // ── Filter row with checkbox panel + optional P1/P2 + Profile button ─────────
-  const filterRow = document.createElement('div');
-  filterRow.style.cssText = 'display:flex;gap:8px;align-items:flex-start;flex-direction:column;margin-left:auto;position:relative;min-width:160px';
-  {
+  // Only build filter panel if it doesn't already exist
+  const _filterExists = !!document.getElementById('rps-filter-row');
+  const filterRow = _filterExists
+    ? document.getElementById('rps-filter-row')
+    : document.createElement('div');
+  if (!_filterExists) {
+    filterRow.id = 'rps-filter-row';
+    filterRow.style.cssText = 'display:flex;gap:8px;align-items:flex-start;flex-direction:column;margin-left:auto;position:relative;min-width:160px';
 
     // Checkbox filter panel (same pattern as profile page)
     const years = [...new Set((_allReplays||[]).map(r => {
@@ -5416,8 +5438,9 @@ function renderRPS() {
 
       // No outside-click close — user clicks X or the label to close
     }
+  } // end if (!_filterExists)
 
-    // P1 / P2 perspective toggle for dual-parse temp batches
+  // P1 / P2 perspective toggle for dual-parse temp batches
     if (_activeBatch && _activeBatch.dualParse) {
       const p1Name = (_activeBatch.replays||[]).find(r=>r.player1)?.player1 || 'Player 1';
       const p2Name = (_activeBatch.replays||[]).find(r=>r.player2)?.player2 || 'Player 2';
@@ -5440,7 +5463,6 @@ function renderRPS() {
       filterRow.appendChild(profBtn);
     }
 
-  }
   // Put filter inline in the SUMMARY header bar (lots of empty space there)
   // filterRow contains the filter wrap (label + dropdown)
   if (filterRow.children.length) {
@@ -5462,10 +5484,75 @@ function renderRPS() {
     const x=mk(ch,'chip'); E(x,'span',String(v),'chipv'); E(x,'span',l,'chipl');
   });
   s1.appendChild(chRow);
-  if(tos){ const w=document.createElement('div'); w.style.cssText='font-size:11px;color:var(--amber);margin-top:8px;padding:5px 9px;background:rgba(245,166,35,.08);border:1px solid rgba(245,166,35,.2);border-radius:6px;display:flex;align-items:center;gap:8px'; w.innerHTML=`⚠ ${tos} replay(s) timed out. &nbsp;<button onclick="manualRetryTimedOut()" style="background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:11px;padding:3px 12px;border-radius:4px;cursor:pointer">↺ Retry Now</button>&nbsp;<button onclick="removeTimedOutReplays()" style="background:var(--red);color:#fff;border:none;font-family:monospace;font-weight:bold;font-size:11px;padding:3px 12px;border-radius:4px;cursor:pointer">✕ Remove Timed Out</button>`; s1.appendChild(w); }
+  if(tos){ const w=document.createElement('div'); w.style.cssText='font-size:11px;color:var(--amber);margin-top:8px;padding:5px 9px;background:rgba(245,166,35,.08);border:1px solid rgba(245,166,35,.2);border-radius:6px;display:flex;align-items:center;gap:8px'; w.innerHTML='&#9888; '+tos+' replay(s) timed out. &nbsp;<button onclick="manualRetryTimedOut()" style="background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:11px;padding:3px 12px;border-radius:4px;cursor:pointer">&#8635; Retry Now</button>&nbsp;<button onclick="removeTimedOutReplays()" style="background:var(--red);color:#fff;border:none;font-family:monospace;font-weight:bold;font-size:11px;padding:3px 12px;border-radius:4px;cursor:pointer">&#10005; Remove Timed Out</button>'; s1.appendChild(w); }
 
-  HR(c);
-  const s2=S(c,'OVERALL PICK DISTRIBUTION  ('+rounds+' rounds)');
+  // Data sections container — cleared on each re-render, filter panel is not in here
+  let _dataSec = document.getElementById('rps-data-sections');
+  if (!_dataSec) { _dataSec = document.createElement('div'); _dataSec.id = 'rps-data-sections'; c.appendChild(_dataSec); }
+  _dataSec.innerHTML = '';
+  const _c = _dataSec; // use _c as alias for remaining S() and HR() calls
+
+  // ── Deck type filter + RPS win stats ─────────────────────────────────────────
+  {
+    const statsRow = document.createElement('div');
+    statsRow.style.cssText = 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;margin-top:4px';
+
+    // RPS Win % stats
+    // 1. RPS Isolated W% — of all RPS rounds, how many did the player win outright (not tie)
+    let rpsWins=0, rpsTotal=0, rpsLosses=0;
+    // 2. RPS → Game W% — of replays where player won RPS game 1, how many Game 1s did they win
+    let rpsWonThenGameWin=0, rpsWonCount=0;
+    // 3. RPS → Match W% — of replays where player won RPS, how many matches did they win
+    let rpsWonThenMatchWin=0;
+
+    for (const r of replays) {
+      const plys = r.plays||[];
+      if (!plys.length) continue;
+      // Find the first game's RPS plays
+      const g1plays = plys.filter(p => (p.game||1) === 1);
+      let playerWonRPS = false, playerLostRPS = false;
+      for (const p of g1plays) {
+        const myPick   = player ? (p.player1===player||p.player1===(player||'').toLowerCase() ? p.player1_choice : p.player2_choice) : p.player1_choice;
+        const oppPick  = player ? (p.player1===player||p.player1===(player||'').toLowerCase() ? p.player2_choice : p.player1_choice) : p.player2_choice;
+        if (!myPick || !oppPick || myPick===oppPick) continue; // tie, skip
+        rpsTotal++;
+        const beats = {Rock:'Scissors',Paper:'Rock',Scissors:'Paper'};
+        if (beats[myPick]===oppPick) { rpsWins++; playerWonRPS=true; }
+        else { rpsLosses++; playerLostRPS=true; }
+        break; // only first decisive pick
+      }
+      if (playerWonRPS) {
+        rpsWonCount++;
+        // Did they win game 1?
+        const g1 = r.parsed && r.parsed.games && r.parsed.games.find(g=>g.gameNum===1);
+        if (g1 && g1.myWon) rpsWonThenGameWin++;
+        // Did they win the match?
+        if (r.parsed && r.parsed.result === 'w') rpsWonThenMatchWin++;
+      }
+    }
+
+    if (rpsTotal > 0) {
+      const rpsIsoWR   = Math.round(rpsWins/rpsTotal*100);
+      const rpsGameWR  = rpsWonCount > 0 ? Math.round(rpsWonThenGameWin/rpsWonCount*100) : 0;
+      const rpsMatchWR = rpsWonCount > 0 ? Math.round(rpsWonThenMatchWin/rpsWonCount*100) : 0;
+      [
+        ['RPS W%', rpsIsoWR+'%', 'Win rate in decisive RPS picks ('+rpsWins+'/'+rpsTotal+')'],
+        ['RPS+Game W%', rpsGameWR+'%', 'When won RPS — Game 1 win rate ('+rpsWonThenGameWin+'/'+rpsWonCount+')'],
+        ['RPS+Match W%', rpsMatchWR+'%', 'When won RPS — Match win rate ('+rpsWonThenMatchWin+'/'+rpsWonCount+')'],
+      ].forEach(([label, val, tip]) => {
+        const chip = document.createElement('div');
+        chip.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:8px;padding:6px 12px;min-width:80px;cursor:default';
+        chip.title = tip;
+        chip.innerHTML = '<div style="font-size:16px;font-weight:bold;color:var(--green);line-height:1.2">'+val+'</div><div style="font-size:9px;color:var(--muted);font-family:monospace;letter-spacing:.06em">'+label+'</div>';
+        statsRow.appendChild(chip);
+      });
+    }
+
+    _c.appendChild(statsRow);
+  }
+
+  HR(_c);
+  const s2=S(_c,'OVERALL PICK DISTRIBUTION  ('+rounds+' rounds)');
   const pg=mk(s2,'pgrid');
   ['Rock','Paper','Scissors'].forEach(pick=>{
     const n=picks[pick],p=pct(n,tp);
@@ -5477,8 +5564,8 @@ function renderRPS() {
     ['Rock','Paper','Scissors'].forEach(k=>{ const ac=mk(ar,'ac'); ac.textContent=IC[k]+' '+(abp[pick][k]||0)+'x'; });
   });
 
-  HR(c);
-  const s3=S(c,'FIRST PICK — WHAT DID THEY OPEN WITH?  ('+tfp+' matches)');
+  HR(_c);
+  const s3=S(_c,'FIRST PICK — WHAT DID THEY OPEN WITH?  ('+tfp+' matches)');
   const fg=mk(s3,'pgrid');
   ['Rock','Paper','Scissors'].forEach(pick=>{
     const n=fp[pick],p=pct(n,tfp);
@@ -5489,7 +5576,7 @@ function renderRPS() {
   });
 
   if(tat>0){
-    HR(c); const s4=S(c,'AFTER A TIE — 2ND PICK  ('+tat+' instances)');
+    HR(_c); const s4=S(_c,'AFTER A TIE — 2ND PICK  ('+tat+' instances)');
     ['Rock','Paper','Scissors'].forEach(pick=>{
       const n=aft[pick],p=pct(n,tat);
       const row=mk(s4,'tr2'); const nm=mk(row,'tn'); nm.textContent=IC[pick]+' '+pick;
@@ -5498,7 +5585,7 @@ function renderRPS() {
     });
   }
 
-  HR(c); 
+  HR(_c); 
   const s5hdr = document.createElement('div');
   s5hdr.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:10px';
   const s5lbl = document.createElement('span');
@@ -5539,10 +5626,10 @@ function renderRPS() {
     s5hdr.appendChild(rmAllBtn);
   }
 
-  c.appendChild(s5hdr);
+  _c.appendChild(s5hdr);
   const s5 = document.createElement('div');
   s5.className = 'sec';
-  c.appendChild(s5);
+  _c.appendChild(s5);
   const ll=mk(s5,'ll');
   log.forEach(item=>{
     const row=mk(ll,'lr'); E(row,'span','…'+item.id.slice(-10),'lid');
