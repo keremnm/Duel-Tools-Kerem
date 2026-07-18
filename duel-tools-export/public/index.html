@@ -1535,7 +1535,7 @@ const TFIDF_WEIGHTS = {
   'zombyra the dark':                  { 'Chaos Warrior': 0.30, 'Warrior': 0.20 }, // zombyra alone is not a reliable CW indicator
   // Gearfried weights now handled above
   'jurai gumo':                        { 'Aggro Lockdown': 0.95 },
-  'skill drain':                       { 'Aggro Lockdown': 0.72, 'Drain Burn': 0.40 },
+  'skill drain':                       { 'Aggro Lockdown': 0.40, 'Drain Burn': 0.70 },
   'time seal':                         { 'Aggro Lockdown': 0.85 },
   'drop off':                          { 'Aggro Lockdown': 0.82 },
   'final attack orders':               { 'Aggro Lockdown': 0.78 },
@@ -6097,6 +6097,28 @@ function classifyFromCards(cards) {
   }
   if (has('jurai gumo')||has('gumo')) scores['Aggro Lockdown']+=0.70;
   if (has('time seal')) scores['Aggro Lockdown']+=0.45;
+
+  // ── Drain Burn — Skill Drain + burn damage cards = Drain Burn, not Aggro Lockdown ──
+  // Burn damage cards that confirm Drain Burn archetype
+  const _burnDamageCards = [
+    'just desserts','nightmare wheel','secret barrel',
+    'magic cylinder','ring of destruction','solar flare dragon',
+    'lava golem','stealth bird','bowganian',
+    // ceasefire excluded — too common across all deck types to be a strong burn signal
+  ];
+  const _burnCardCount = _burnDamageCards.filter(c => has(c)).length;
+  if (has('skill drain') && _burnCardCount >= 1) {
+    // Skill Drain + any burn damage card = very likely Drain Burn
+    scores['Drain Burn'] += 1.20 + (_burnCardCount * 0.30);
+    // Suppress Aggro Lockdown — Skill Drain here is for protection, not lockdown
+    scores['Aggro Lockdown'] = Math.max(0, scores['Aggro Lockdown'] * 0.15);
+  } else if (_burnCardCount >= 2 && !has('skill drain')) {
+    // Multiple burn cards without Skill Drain still lean Drain Burn / Panda Burn
+    scores['Drain Burn'] += 0.40 * _burnCardCount;
+  }
+  // Ceasefire: common side-deck card across many decks — only a light lean toward burn
+  if (has('ceasefire')) { scores['Drain Burn'] += 0.18; scores['Panda Burn'] += 0.15; }
+
   if (hasc('reasoning','monster gate')) { scores['Reasoning Gate Turbo']+=0.65; scores['Reasoning Gate Machine']+=0.60; scores['Chaos Turbo']=Math.max(0,scores['Chaos Turbo']-0.30); }
   if (has('blowback dragon')&&has('reasoning')) scores['Reasoning Gate Machine']+=0.40;
   // ── Stein OTK / SWAG — all merged into Stein OTK ───────────────────────────
