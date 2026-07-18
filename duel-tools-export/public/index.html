@@ -980,6 +980,9 @@ select{cursor:pointer}
                 <div id="profile-matchup-panel">
                   <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;position:relative">
                     <div class="slbl" style="margin:0;font-size:10px">WIN RATE VS OPPONENT DECK TYPE</div>
+                    <select id="profile-mydeck-filter" onchange="ddRenderMatchups()" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;outline:none" title="Filter by my deck type">
+                      <option value="">My Deck: All</option>
+                    </select>
                     <div id="deckdata-filter-panel" style="margin-left:auto;display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end">
                       <span id="deckdata-filter-label" style="font-size:10px;color:var(--muted);font-family:monospace;cursor:pointer;white-space:nowrap" onclick="toggleFilterPanel()">&#9660; Filter</span>
                       <div id="deckdata-filter-dropdown" style="display:none;position:absolute;right:0;top:100%;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px 12px;z-index:999;min-width:220px;max-height:300px;overflow-y:auto;box-shadow:0 4px 20px rgba(0,0,0,.5)"></div>
@@ -5491,11 +5494,10 @@ function renderRPS() {
       const plys = r.plays||[];
       if (!plys.length) continue;
 
-      // Find the decisive RPS result for game 1 (first non-tie pick)
-      // Ties count as played but not decisive — we still record that RPS was played
+      // Count ALL decisive picks across ALL games (including picks after ties)
+      // Every non-tie RPS pick is a real competitive choice that should count
       const g1plays = plys.filter(p => (p.game||1) === 1);
-      let playerWonRPS = false;
-      let hadDecisive = false;
+      let playerWonRPS = false; // did player win the FINAL decisive G1 pick?
 
       for (const p of g1plays) {
         const isP1 = player ? (
@@ -5505,19 +5507,36 @@ function renderRPS() {
         const myPick  = isP1 ? p.player1_choice : p.player2_choice;
         const oppPick = isP1 ? p.player2_choice : p.player1_choice;
         if (!myPick || !oppPick) continue;
-        if (myPick === oppPick) continue; // tie — keep looking for decisive pick
-        // Decisive pick found
-        hadDecisive = true;
+        if (myPick === oppPick) continue; // tie — skip but keep iterating (more picks follow)
+        // Decisive pick — count every one, including post-tie picks
         rpsDecisiveTotal++;
-        if (beats[myPick] === oppPick) { rpsDecisiveWins++; playerWonRPS = true; }
-        break;
+        if (beats[myPick] === oppPick) {
+          rpsDecisiveWins++;
+          playerWonRPS = true;  // last decisive result
+        } else {
+          playerWonRPS = false; // last decisive result
+        }
+        // Don't break — count ALL decisive picks (there may be more after ties resolved)
       }
 
       if (playerWonRPS) {
         rpsWonCount++;
-        // Game 1 win: check parsed games
+        // Game 1 win: use stored game records with fallback to score inference
+        let wonGame1 = false;
         const g1 = r.parsed && r.parsed.games && r.parsed.games.find(g => g.gameNum === 1);
-        if (g1 && g1.myWon) rpsWonThenGameWin++;
+        if (g1 && typeof g1.myWon === 'boolean') {
+          wonGame1 = g1.myWon;
+        } else if (r.parsed && r.parsed.score) {
+          // Infer from score: if player won 2-0, they won game 1
+          // If they lost 0-2, they lost game 1. 2-1/1-2 is ambiguous — exclude from count
+          const sc = r.parsed.score;
+          if ((sc === '2-0' && r.parsed.result === 'w') || (sc === '0-2' && r.parsed.result === 'l')) {
+            wonGame1 = r.parsed.result === 'w';
+            rpsWonThenGameWin += wonGame1 ? 1 : 0;
+          }
+          // 2-1 or 1-2: skip (ambiguous)
+        }
+        if (g1 && typeof g1.myWon === 'boolean' && wonGame1) rpsWonThenGameWin++;
         // Match win
         if (r.parsed && r.parsed.result === 'w') rpsWonThenMatchWin++;
       }
@@ -9975,6 +9994,8 @@ async function openProfile(player, batches, records) {
     }
   }
   _profileFilterSelected = null; // reset filter for new profile
+  const _mdSel = document.getElementById('profile-mydeck-filter');
+  if (_mdSel) _mdSel.value = '';
   _activeProfile = { player, batches, records };
   document.getElementById('profile-browser').style.display = 'none';
   document.getElementById('profile-view').style.display = 'flex';
@@ -10121,8 +10142,11 @@ async function openProfile(player, batches, records) {
       const q=filter.toLowerCase();
       // Apply multi-select filter
       const _dpred = getProfileFilterPredicate();
+      const _ddkSel = document.getElementById('profile-mydeck-filter');
+      const _ddk = _ddkSel ? _ddkSel.value : '';
       const allFiltered = [...records].filter(r=>{
         if (!_dpred(r)) return false;
+        if (_ddk && r.myDeck !== _ddk) return false;
         return !q||
           (r.oppName||'').toLowerCase().includes(q)||
           (r.eventLabel||'').toLowerCase().includes(q)||
@@ -10240,6 +10264,16 @@ function rebuildProfileYearDropdown(records) {
   const panel = document.getElementById('deckdata-filter-dropdown');
   const label = document.getElementById('deckdata-filter-label');
   if (!panel) return;
+
+  // Populate my-deck filter dropdown
+  const myDeckSel = document.getElementById('profile-mydeck-filter');
+  if (myDeckSel) {
+    const cur = myDeckSel.value;
+    const myDecks = [...new Set((records||[]).map(r => r.myDeck).filter(d => d && d !== 'Unknown'))].sort();
+    myDeckSel.innerHTML = '<option value="">My Deck: All</option>' +
+      myDecks.map(d => '<option value="'+d+'"'+(d===cur?' selected':'')+'>'+d+'</option>').join('');
+    if (cur && myDeckSel.querySelector('option[value="'+cur+'"]')) myDeckSel.value = cur;
+  }
 
   // Collect unique years and GFWL seasons from this player's records
   const years = [...new Set((records||[]).map(r => {
@@ -10381,6 +10415,9 @@ function refreshProfileStatChips() {
   const _cpred = getProfileFilterPredicate();
   const _cActive = _profileFilterSelected !== null;
   let recs = (_activeProfile.records || []).filter(_cpred);
+  const _chipsDkSel = document.getElementById('profile-mydeck-filter');
+  const _chipsDk = _chipsDkSel ? _chipsDkSel.value : '';
+  if (_chipsDk) recs = recs.filter(r => r.myDeck === _chipsDk);
   const W = recs.filter(r=>r.matchWon).length;
   const L = recs.filter(r=>r.matchLost).length;
   const WR = pct(W, recs.length);
@@ -10407,6 +10444,10 @@ function buildProfileMatchupTable(records) {
   const el = document.getElementById('profile-matchup-table');
   el.innerHTML = '';
   records = (records||[]).filter(getProfileFilterPredicate());
+  // Apply my-deck filter
+  const _myDkSel = document.getElementById('profile-mydeck-filter');
+  const _myDk = _myDkSel ? _myDkSel.value : '';
+  if (_myDk) records = records.filter(r => r.myDeck === _myDk);
   const byOpp = {};
   records.forEach(r => {
     const k = r.oppDeck||'Unknown';
