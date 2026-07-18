@@ -5521,22 +5521,18 @@ function renderRPS() {
 
       if (playerWonRPS) {
         rpsWonCount++;
-        // Game 1 win: use stored game records with fallback to score inference
-        let wonGame1 = false;
+        // Game 1 win: use stored game records, fall back to score inference
         const g1 = r.parsed && r.parsed.games && r.parsed.games.find(g => g.gameNum === 1);
         if (g1 && typeof g1.myWon === 'boolean') {
-          wonGame1 = g1.myWon;
+          // Primary: use stored myWon flag
+          if (g1.myWon) rpsWonThenGameWin++;
         } else if (r.parsed && r.parsed.score) {
-          // Infer from score: if player won 2-0, they won game 1
-          // If they lost 0-2, they lost game 1. 2-1/1-2 is ambiguous — exclude from count
+          // Fallback: infer from score only when stored data unavailable
+          // 2-0 win = won game 1, 0-2 loss = lost game 1, 2-1/1-2 = ambiguous (skip)
           const sc = r.parsed.score;
-          if ((sc === '2-0' && r.parsed.result === 'w') || (sc === '0-2' && r.parsed.result === 'l')) {
-            wonGame1 = r.parsed.result === 'w';
-            rpsWonThenGameWin += wonGame1 ? 1 : 0;
-          }
-          // 2-1 or 1-2: skip (ambiguous)
+          if (sc === '2-0' && r.parsed.result === 'w') rpsWonThenGameWin++;
+          // 0-2, 2-1, 1-2: don't count (either lost or ambiguous)
         }
-        if (g1 && typeof g1.myWon === 'boolean' && wonGame1) rpsWonThenGameWin++;
         // Match win
         if (r.parsed && r.parsed.result === 'w') rpsWonThenMatchWin++;
       }
