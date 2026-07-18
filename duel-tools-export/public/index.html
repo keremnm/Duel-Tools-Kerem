@@ -5303,35 +5303,16 @@ function renderRPS() {
   pb(100);
 
   const c=document.getElementById('rps-out');
-  c.style.display='block';
+  c.innerHTML=''; c.style.display='block';
   document.getElementById('rps-empty').style.display='none';
   const tp=sv(picks), tat=sv(aft), tfp=sv(fp);
 
-  // Preserve the filter panel across re-renders — only clear the data sections
-  const _existingFilter = document.getElementById('rps-filter-row');
-  const _existingLabel = document.getElementById('rps-summary-label');
-  // Clear only data sections (everything after the summary header)
-  const _dataStart = document.getElementById('rps-data-sections');
-  if (_dataStart) _dataStart.innerHTML = '';
+  const s1=S(c,'SUMMARY');
 
-  let s1;
-  if (_existingLabel) {
-    s1 = _existingLabel.closest('.section') || c.querySelector('.section');
-  } else {
-    c.innerHTML = '';
-    s1 = S(c, 'SUMMARY');
-    s1.querySelector('.slbl') && (s1.querySelector('.slbl').id = 'rps-summary-label');
-  }
-
-  // ── Filter row with checkbox panel + optional P1/P2 + Profile button ─────────
-  // Only build filter panel if it doesn't already exist
-  const _filterExists = !!document.getElementById('rps-filter-row');
-  const filterRow = _filterExists
-    ? document.getElementById('rps-filter-row')
-    : document.createElement('div');
-  if (!_filterExists) {
-    filterRow.id = 'rps-filter-row';
-    filterRow.style.cssText = 'display:flex;gap:8px;align-items:flex-start;flex-direction:column;margin-left:auto;position:relative;min-width:160px';
+  // ── Filter row ─────────────────────────────────────────────────────────────
+  const filterRow = document.createElement('div');
+  filterRow.style.cssText = 'display:flex;gap:8px;align-items:flex-start;flex-direction:column;margin-left:auto;position:relative;min-width:160px';
+  if (true) { // always build filter panel
 
     // Checkbox filter panel (same pattern as profile page)
     const years = [...new Set((_allReplays||[]).map(r => {
@@ -5388,7 +5369,10 @@ function renderRPS() {
           const a2 = _rpsFilterSelected === null;
           filterLbl.textContent = a2 ? '\u25bc All Data' : '\u25bc ' + n2 + ' filter' + (n2===1?'':'s') + ' active';
           filterLbl.style.color = a2 ? 'var(--muted)' : 'var(--green)';
+          // Keep dropdown open — re-render then reopen
           renderRPS();
+          const newDropdown = document.querySelector('.rps-filter-dropdown');
+          if (newDropdown) newDropdown.style.display = 'block';
         };
         row.appendChild(cb); row.appendChild(document.createTextNode(label));
         dropdown.appendChild(row);
@@ -5415,6 +5399,8 @@ function renderRPS() {
         }
         filterLbl.textContent = '\u25bc All Data'; filterLbl.style.color = 'var(--muted)';
         renderRPS();
+        const newDropdown = document.querySelector('.rps-filter-dropdown');
+        if (newDropdown) newDropdown.style.display = 'block';
       };
       allRow.appendChild(allCb); allRow.appendChild(document.createTextNode('All Data'));
       dropdown.appendChild(allRow);
@@ -5438,7 +5424,7 @@ function renderRPS() {
 
       // No outside-click close — user clicks X or the label to close
     }
-  } // end if (!_filterExists)
+  } // end filter panel
 
   // P1 / P2 perspective toggle for dual-parse temp batches
     if (_activeBatch && _activeBatch.dualParse) {
@@ -5486,11 +5472,7 @@ function renderRPS() {
   s1.appendChild(chRow);
   if(tos){ const w=document.createElement('div'); w.style.cssText='font-size:11px;color:var(--amber);margin-top:8px;padding:5px 9px;background:rgba(245,166,35,.08);border:1px solid rgba(245,166,35,.2);border-radius:6px;display:flex;align-items:center;gap:8px'; w.innerHTML='&#9888; '+tos+' replay(s) timed out. &nbsp;<button onclick="manualRetryTimedOut()" style="background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:11px;padding:3px 12px;border-radius:4px;cursor:pointer">&#8635; Retry Now</button>&nbsp;<button onclick="removeTimedOutReplays()" style="background:var(--red);color:#fff;border:none;font-family:monospace;font-weight:bold;font-size:11px;padding:3px 12px;border-radius:4px;cursor:pointer">&#10005; Remove Timed Out</button>'; s1.appendChild(w); }
 
-  // Data sections container — cleared on each re-render, filter panel is not in here
-  let _dataSec = document.getElementById('rps-data-sections');
-  if (!_dataSec) { _dataSec = document.createElement('div'); _dataSec.id = 'rps-data-sections'; c.appendChild(_dataSec); }
-  _dataSec.innerHTML = '';
-  const _c = _dataSec; // use _c as alias for remaining S() and HR() calls
+  const _c = c; // data goes directly into rps-out
 
   // ── Deck type filter + RPS win stats ─────────────────────────────────────────
   {
@@ -5498,45 +5480,55 @@ function renderRPS() {
     statsRow.style.cssText = 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;margin-top:4px';
 
     // RPS Win % stats
-    // 1. RPS Isolated W% — of all RPS rounds, how many did the player win outright (not tie)
-    let rpsWins=0, rpsTotal=0, rpsLosses=0;
-    // 2. RPS → Game W% — of replays where player won RPS game 1, how many Game 1s did they win
-    let rpsWonThenGameWin=0, rpsWonCount=0;
-    // 3. RPS → Match W% — of replays where player won RPS, how many matches did they win
-    let rpsWonThenMatchWin=0;
+    // Counts across all replays
+    let rpsDecisiveWins=0, rpsDecisiveTotal=0; // decisive = not tie
+    let rpsWonThenGameWin=0, rpsWonCount=0;    // won RPS → won Game 1
+    let rpsWonThenMatchWin=0;                  // won RPS → won Match
+
+    const beats = {Rock:'Scissors',Paper:'Rock',Scissors:'Paper'};
 
     for (const r of replays) {
       const plys = r.plays||[];
       if (!plys.length) continue;
-      // Find the first game's RPS plays
+
+      // Find the decisive RPS result for game 1 (first non-tie pick)
+      // Ties count as played but not decisive — we still record that RPS was played
       const g1plays = plys.filter(p => (p.game||1) === 1);
-      let playerWonRPS = false, playerLostRPS = false;
+      let playerWonRPS = false;
+      let hadDecisive = false;
+
       for (const p of g1plays) {
-        const myPick   = player ? (p.player1===player||p.player1===(player||'').toLowerCase() ? p.player1_choice : p.player2_choice) : p.player1_choice;
-        const oppPick  = player ? (p.player1===player||p.player1===(player||'').toLowerCase() ? p.player2_choice : p.player1_choice) : p.player2_choice;
-        if (!myPick || !oppPick || myPick===oppPick) continue; // tie, skip
-        rpsTotal++;
-        const beats = {Rock:'Scissors',Paper:'Rock',Scissors:'Paper'};
-        if (beats[myPick]===oppPick) { rpsWins++; playerWonRPS=true; }
-        else { rpsLosses++; playerLostRPS=true; }
-        break; // only first decisive pick
+        const isP1 = player ? (
+          (p.player1||'').toLowerCase() === (player||'').toLowerCase() ||
+          (r.parsed && (r.parsed.oppName||'').toLowerCase() !== (p.player1||'').toLowerCase())
+        ) : true;
+        const myPick  = isP1 ? p.player1_choice : p.player2_choice;
+        const oppPick = isP1 ? p.player2_choice : p.player1_choice;
+        if (!myPick || !oppPick) continue;
+        if (myPick === oppPick) continue; // tie — keep looking for decisive pick
+        // Decisive pick found
+        hadDecisive = true;
+        rpsDecisiveTotal++;
+        if (beats[myPick] === oppPick) { rpsDecisiveWins++; playerWonRPS = true; }
+        break;
       }
+
       if (playerWonRPS) {
         rpsWonCount++;
-        // Did they win game 1?
-        const g1 = r.parsed && r.parsed.games && r.parsed.games.find(g=>g.gameNum===1);
+        // Game 1 win: check parsed games
+        const g1 = r.parsed && r.parsed.games && r.parsed.games.find(g => g.gameNum === 1);
         if (g1 && g1.myWon) rpsWonThenGameWin++;
-        // Did they win the match?
+        // Match win
         if (r.parsed && r.parsed.result === 'w') rpsWonThenMatchWin++;
       }
     }
 
-    if (rpsTotal > 0) {
-      const rpsIsoWR   = Math.round(rpsWins/rpsTotal*100);
+    if (rpsDecisiveTotal > 0) {
+      const rpsIsoWR   = Math.round(rpsDecisiveWins/rpsDecisiveTotal*100);
       const rpsGameWR  = rpsWonCount > 0 ? Math.round(rpsWonThenGameWin/rpsWonCount*100) : 0;
       const rpsMatchWR = rpsWonCount > 0 ? Math.round(rpsWonThenMatchWin/rpsWonCount*100) : 0;
       [
-        ['RPS W%', rpsIsoWR+'%', 'Win rate in decisive RPS picks ('+rpsWins+'/'+rpsTotal+')'],
+        ['RPS W%', rpsIsoWR+'%', 'Decisive RPS win rate, excluding ties ('+rpsDecisiveWins+'/'+rpsDecisiveTotal+')'],
         ['RPS+Game W%', rpsGameWR+'%', 'When won RPS — Game 1 win rate ('+rpsWonThenGameWin+'/'+rpsWonCount+')'],
         ['RPS+Match W%', rpsMatchWR+'%', 'When won RPS — Match win rate ('+rpsWonThenMatchWin+'/'+rpsWonCount+')'],
       ].forEach(([label, val, tip]) => {
