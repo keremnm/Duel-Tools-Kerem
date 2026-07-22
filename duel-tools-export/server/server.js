@@ -263,31 +263,60 @@ function markDirty(key) {
 
 // Save a single batch as its own row — used for per-replay immediate saves.
 // This avoids ever needing to serialize the entire batches collection.
-async function saveBatchToPostgres(batchId) {
-  if (!pgClient) { _pendingFlushKeys.add('batches:'+batchId); scheduleFlushRetry(); return; }
-  const batch = db.batches[batchId];
-  if (!batch) return;
+// Debounce queue — collects batch IDs to save and flushes them together
+const _batchSaveQueue = new Set();
+let _batchSaveTimer = null;
+const BATCH_SAVE_DEBOUNCE_MS = 1500; // flush after 1.5s of inactivity
+
+async function _flushBatchSaveQueue() {
+  _batchSaveTimer = null;
+  if (!_batchSaveQueue.size) return;
+  const ids = [..._batchSaveQueue];
+  _batchSaveQueue.clear();
+  if (!pgClient) {
+    ids.forEach(id => _pendingFlushKeys.add('batches:'+id));
+    scheduleFlushRetry();
+    return;
+  }
+  // Write all pending batches in a single transaction
   try {
-    const serialized = JSON.stringify(batch);
-    if (serialized.length > 50*1024*1024) {
-      console.error('[saveBatch] Batch', batchId, 'is', Math.round(serialized.length/1024/1024)+'MB — exceeds safe limit, NOT saved!');
-      return;
+    await pgClient.query('BEGIN');
+    for (const batchId of ids) {
+      const batch = db.batches[batchId];
+      if (!batch) continue;
+      const serialized = JSON.stringify(batch);
+      if (serialized.length > 50*1024*1024) {
+        console.error('[saveBatch] Batch', batchId, 'exceeds 50MB — skipped');
+        continue;
+      }
+      await pgClient.query(
+        'INSERT INTO duel_tools_batches (id, value, updated_at) VALUES ($1,$2,NOW()) ON CONFLICT (id) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()',
+        [batchId, serialized]
+      );
+      _pendingFlushKeys.delete('batches:'+batchId);
     }
-    await pgClient.query(
-      'INSERT INTO duel_tools_batches (id, value, updated_at) VALUES ($1,$2,NOW()) ON CONFLICT (id) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()',
-      [batchId, serialized]
-    );
-    _pendingFlushKeys.delete('batches:'+batchId);
+    await pgClient.query('COMMIT');
+    if (ids.length > 1) console.log('[saveBatch] Flushed', ids.length, 'batches in one transaction');
   } catch(e) {
-    console.error('[saveBatch] Failed for', batchId, ':', e.message);
-    _pendingFlushKeys.add('batches:'+batchId);
+    await pgClient.query('ROLLBACK').catch(()=>{});
+    console.error('[saveBatch] Flush failed:', e.message);
+    ids.forEach(id => _pendingFlushKeys.add('batches:'+id));
     if (e.message.includes('connect') || e.message.includes('Connection') || e.code === 'ECONNRESET') {
       pgClient = null;
       setTimeout(async () => { try { await connectPostgres(); } catch(e2) {} }, 2000);
     }
     scheduleFlushRetry();
-    throw e; // let the caller (e.g. the HTTP handler) know the save failed
   }
+}
+
+async function saveBatchToPostgres(batchId) {
+  if (!pgClient) { _pendingFlushKeys.add('batches:'+batchId); scheduleFlushRetry(); return; }
+  const batch = db.batches[batchId];
+  if (!batch) return;
+  // Add to debounce queue — if multiple saves arrive within the window, flush together
+  _batchSaveQueue.add(batchId);
+  if (_batchSaveTimer) clearTimeout(_batchSaveTimer);
+  _batchSaveTimer = setTimeout(_flushBatchSaveQueue, BATCH_SAVE_DEBOUNCE_MS);
 }
 
 // Save every batch currently in memory — used by manual Save button and migration.
@@ -1023,6 +1052,7 @@ const server = http.createServer(async (req, res) => {
       const b = db.batches[parts[1]];
       if (!b) return json(res, 404, { error:'Not found' });
       if (data.name           !== undefined) b.name           = data.name;
+      if (data.player         !== undefined) b.player         = data.player;
       if (data.aliases        !== undefined) b.aliases        = data.aliases;
       if (data.eventDecklists !== undefined) b.eventDecklists = data.eventDecklists;
       await saveBatchToPostgres(b.id);
