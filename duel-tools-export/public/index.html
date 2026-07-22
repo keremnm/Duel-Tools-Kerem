@@ -621,7 +621,7 @@ select{cursor:pointer}
         <button onclick="fetch(API+'/auth/logout',{method:'POST',headers:authHeaders()}).finally(()=>{localStorage.removeItem('dt_token');location.reload()})" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer">Sign out</button>
       </div>
       <div class="tpill" id="pill" style="font-size:12px">Ready — create or select a batch</div>
-      <button class="tbtn" onclick="screenshot()">📷</button>
+      
     </div>
   </header>
 
@@ -1367,7 +1367,8 @@ select{cursor:pointer}
               <div id="igt-pr-list" style="display:flex;flex-direction:column;gap:3px;margin-bottom:8px;min-height:0"></div>
               <div style="display:flex;gap:6px">
                 <button class="btn-go" onclick="igtPrPick()" style="flex:1;font-size:12px">🎲 Pick</button>
-                <button class="dd-btn-sec" onclick="igtPrClear()" style="font-size:11px;padding:6px 10px">↺</button>
+                <button class="dd-btn-sec" onclick="igtPrResetOrder()" style="font-size:11px;padding:6px 10px" title="Reset order (keep players)">↺</button>
+                <button class="dd-btn-sec" onclick="igtPrClear()" style="font-size:11px;padding:6px 10px" title="Clear all players">✕</button>
               </div>
               <div id="igt-pr-result" style="font-size:14px;font-weight:bold;color:var(--green);text-align:center;margin-top:8px;min-height:18px"></div>
             </div>
@@ -3448,21 +3449,30 @@ async function gfwlOpenTeam(season, teamName, team) {
   const seasonReplays = [];
   function collectSeasonReplays() {
     seasonReplays.length = 0;
-    const allGFWLBatches = Object.values(gfwlBatchCache); // fresh read each time
+    // Build roster map for addedWeek/droppedWeek checks
+    const rosterMap = {};
+    for (const re of roster) rosterMap[re.player.toLowerCase()] = re;
+    const allGFWLBatches = Object.values(gfwlBatchCache);
     for (const b of allGFWLBatches) {
-      if (!rosterNames.includes((b.player||'').toLowerCase())) continue;
+      const pLower = (b.player||'').toLowerCase();
+      const rEntry = rosterMap[pLower];
+      if (!rEntry) continue;
       for (const r of (b.replays||[])) {
         const lbl = (r.eventLabel||'').toUpperCase().trim();
-        // Match "S9: WK1", "S9:WK1", "S9 WK1", "S9: WK 1" etc
         const sKey = seasonKey.toUpperCase();
         const matches = lbl.startsWith(sKey+':') || lbl.startsWith(sKey+' ') || lbl === sKey;
         if (!matches) continue;
+        // Only count weeks the player was on this team
+        const replayWk = parseInt((lbl.split(':')[1]||'').replace(/\D/g,'')) || 0;
+        if (replayWk > 0) {
+          if (rEntry.addedWeek && replayWk < rEntry.addedWeek) continue;
+          if (rEntry.droppedWeek && replayWk > rEntry.droppedWeek) continue;
+        }
         seasonReplays.push({ player:b.player, replay:r, label:lbl });
       }
     }
-    console.log('[GFWL] collectSeasonReplays:', seasonReplays.length, 'for', seasonKey, '| sample labels:', seasonReplays.slice(0,3).map(x=>x.label));
-  }
-  collectSeasonReplays();
+    console.log('[GFWL] collectSeasonReplays:', seasonReplays.length, 'for', seasonKey);
+  }  collectSeasonReplays();
 
   // ── Roster table ──────────────────────────────────────────────────────────
   const rosterSec = gfwlMakeSection('ROSTER');
@@ -4250,17 +4260,30 @@ async function gfwlOpenWeekReport(season, teamName, wk, oppTeamName, seasonRepla
   // parameter passed from the schedule button is captured at render time and may
   // be empty if batches hadn't loaded yet when the schedule was first drawn)
   const team2 = _gfwlData[season]?.teams[teamName];
-  const roster2 = (team2?.roster||[]).map(r=>r.player.toLowerCase());
+  // Build a map of player → roster entry so we can check addedWeek/droppedWeek
+  const roster2entries = (team2?.roster||[]);
+  const roster2map = {};
+  for (const re of roster2entries) roster2map[re.player.toLowerCase()] = re;
+
   const freshSeasonReplays = [];
   const batchSrc = Object.values(window._gfwlBatchCache||{});
   for (const b of batchSrc) {
-    if (!roster2.includes((b.player||'').toLowerCase())) continue;
+    const pLower = (b.player||'').toLowerCase();
+    const rEntry = roster2map[pLower];
+    if (!rEntry) continue; // not on this team
     for (const r of (b.replays||[])) {
       const lbl=(r.eventLabel||'').toUpperCase().trim();
       const sk=season.toUpperCase();
-      if (lbl.startsWith(sk+':') || lbl.startsWith(sk+' ') || lbl===sk) {
-        freshSeasonReplays.push({player:b.player,replay:r,label:lbl});
+      if (!lbl.startsWith(sk+':') && !lbl.startsWith(sk+' ') && lbl!==sk) continue;
+      // Check week against addedWeek / droppedWeek
+      const replayWk = parseInt((lbl.split(':')[1]||'').replace(/\D/g,'')) || 0;
+      if (replayWk > 0) {
+        // If player was added mid-season, only count from their addedWeek
+        if (rEntry.addedWeek && replayWk < rEntry.addedWeek) continue;
+        // If player was dropped, only count up to their droppedWeek (inclusive)
+        if (rEntry.droppedWeek && replayWk > rEntry.droppedWeek) continue;
       }
+      freshSeasonReplays.push({player:b.player,replay:r,label:lbl});
     }
   }
   const effectiveSeasonReplays = freshSeasonReplays.length ? freshSeasonReplays : (seasonReplays||[]);
@@ -4528,22 +4551,22 @@ function renameBatch(e, id, currentPlayer) {
   const name   = player; // name always mirrors player
 
   fetch(API+'/batches/'+id, {
-    method:'PATCH', headers:{'Content-Type':'application/json'},
+    method:'PATCH', headers: authHeaders(),
     body: JSON.stringify({ name, player })
-  }).then(() => {
+  }).then(async r => {
+    if (!r.ok) { const e=await r.json().catch(()=>{}); st('Rename failed: '+(e&&e.error||r.status),'var(--red)'); return; }
     if (_activeBatch && _activeBatch.id === id) {
       _activeBatch.name   = name;
       _activeBatch.player = player;
+    }
+    // Also update _allProfileBatches so profile search reflects new name
+    if (window._allProfileBatches) {
+      const pb = _allProfileBatches.find(b => b.id === id);
+      if (pb) { pb.name = name; pb.player = player; }
     }
     loadBatches();
     st('Player updated to: '+player, 'var(--green)');
-  }).catch(() => {
-    if (_activeBatch && _activeBatch.id === id) {
-      _activeBatch.name   = name;
-      _activeBatch.player = player;
-    }
-    loadBatches();
-  });
+  }).catch(e => { st('Rename failed: '+e.message,'var(--red)'); });
 }
 
 async function deleteBatch(e, id) {
@@ -8846,10 +8869,7 @@ async function showDeckViewPopup(deck) {
   const title = document.createElement('div');
   title.style.cssText = 'font-size:15px;font-weight:bold;color:var(--amber);font-family:monospace;flex:1';
   title.textContent = '🏆 ' + deck.code + (deck.deckTypeOverride ? ' — '+deck.deckTypeOverride : '');
-  const screenshotBtn = document.createElement('button');
-  screenshotBtn.textContent = '📷 Screenshot';
-  screenshotBtn.style.cssText = 'background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:5px 12px;border-radius:5px;cursor:pointer';
-  screenshotBtn.onclick = () => screenshotDeckView(deck.code);
+  // Screenshot button removed
   const dlBtn2 = document.createElement('button');
   dlBtn2.textContent = '⬇ YDK';
   dlBtn2.style.cssText = 'background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:5px 12px;border-radius:5px;cursor:pointer';
@@ -8858,7 +8878,7 @@ async function showDeckViewPopup(deck) {
   closeBtn.textContent = '✕';
   closeBtn.style.cssText = 'background:none;border:none;color:var(--dim);font-size:18px;cursor:pointer;padding:0 4px;font-family:monospace';
   closeBtn.onclick = () => overlay.remove();
-  hdr.appendChild(title); hdr.appendChild(screenshotBtn); hdr.appendChild(dlBtn2); hdr.appendChild(closeBtn);
+  hdr.appendChild(title); hdr.appendChild(dlBtn2); hdr.appendChild(closeBtn);
   popup.appendChild(hdr);
 
   // Loading state
@@ -11419,13 +11439,18 @@ function igtDecodeYdke(code) {
 async function igtFetchCardsByIds(ids) {
   if (!ids.length) return {};
   const unique = [...new Set(ids)];
-  try {
-    const res = await fetch('https://db.ygoprodeck.com/api/v7/cardinfo.php?id='+unique.join(','));
-    const data = await res.json();
-    const map = {};
-    (data.data||[]).forEach(c => map[c.id] = c);
-    return map;
-  } catch(e) { return {}; }
+  const map = {};
+  // Batch requests in groups of 50 to avoid URL length limits
+  for (let i = 0; i < unique.length; i += 50) {
+    const batch = unique.slice(i, i + 50);
+    try {
+      const res = await fetch('https://db.ygoprodeck.com/api/v7/cardinfo.php?id='+batch.join(','));
+      if (!res.ok) continue;
+      const data = await res.json();
+      (data.data||[]).forEach(c => { map[c.id] = c; });
+    } catch(e) { console.warn('[YDKe] fetch batch failed:', e.message); }
+  }
+  return map;
 }
 
 async function igtImportFromIds(idGroups, target) {
@@ -12100,6 +12125,7 @@ let _igtPrPlayers=[],_igtPrOrder=[];
 function igtPrAdd(){const inp=document.getElementById('igt-pr-inp');const name=(inp.value||'').trim();if(!name)return;_igtPrPlayers.push(name);inp.value='';igtPrRenderList();}
 function igtPrRenderList(){const el=document.getElementById('igt-pr-list');el.innerHTML='';_igtPrPlayers.forEach((p,i)=>{const row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center;padding:2px 6px;background:var(--card2);border:1px solid var(--border);border-radius:4px;font-size:11px';const n=document.createElement('span');n.style.flex='1';n.textContent=p;const del=document.createElement('button');del.textContent='✕';del.style.cssText='background:none;border:none;color:var(--dim);cursor:pointer;font-size:11px;padding:0';del.onclick=()=>{_igtPrPlayers.splice(i,1);igtPrRenderList();};row.appendChild(n);row.appendChild(del);el.appendChild(row);});}
 function igtPrPick(){const avail=_igtPrPlayers.filter(p=>!_igtPrOrder.includes(p));if(!avail.length){st('All picked — reset','var(--amber)');return;}const pick=avail[Math.floor(Math.random()*avail.length)];_igtPrOrder.push(pick);document.getElementById('igt-pr-result').textContent='#'+_igtPrOrder.length+': '+pick;const orderEl=document.getElementById('igt-pr-order');const row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center;padding:2px 6px;background:var(--card2);border:1px solid var(--border);border-radius:4px;font-size:11px';const num=document.createElement('span');num.style.cssText='color:var(--muted);min-width:18px';num.textContent='#'+_igtPrOrder.length;const nm=document.createElement('span');nm.textContent=pick;row.appendChild(num);row.appendChild(nm);orderEl.insertBefore(row,orderEl.firstChild);}
+function igtPrResetOrder(){_igtPrOrder=[];document.getElementById('igt-pr-order').innerHTML='';document.getElementById('igt-pr-result').textContent='';}
 function igtPrClear(){_igtPrPlayers=[];_igtPrOrder=[];igtPrRenderList();document.getElementById('igt-pr-order').innerHTML='';document.getElementById('igt-pr-result').textContent='';}
 
 // ══════════════════════════════════════════════════════════════════════
