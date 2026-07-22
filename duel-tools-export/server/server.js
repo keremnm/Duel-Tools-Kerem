@@ -268,6 +268,10 @@ const _batchSaveQueue = new Set();
 let _batchSaveTimer = null;
 const BATCH_SAVE_DEBOUNCE_MS = 1500; // flush after 1.5s of inactivity
 
+// Dirty tracking — which batches have been modified since last full save
+const _dirtyBatches = new Set();
+function markBatchDirty(batchId) { _dirtyBatches.add(batchId); }
+
 async function _flushBatchSaveQueue() {
   _batchSaveTimer = null;
   if (!_batchSaveQueue.size) return;
@@ -296,6 +300,7 @@ async function _flushBatchSaveQueue() {
       _pendingFlushKeys.delete('batches:'+batchId);
     }
     await pgClient.query('COMMIT');
+    ids.forEach(id => _dirtyBatches.delete(id));
     if (ids.length > 1) console.log('[saveBatch] Flushed', ids.length, 'batches in one transaction');
   } catch(e) {
     await pgClient.query('ROLLBACK').catch(()=>{});
@@ -313,6 +318,7 @@ async function saveBatchToPostgres(batchId) {
   if (!pgClient) { _pendingFlushKeys.add('batches:'+batchId); scheduleFlushRetry(); return; }
   const batch = db.batches[batchId];
   if (!batch) return;
+  markBatchDirty(batchId);
   // Add to debounce queue — if multiple saves arrive within the window, flush together
   _batchSaveQueue.add(batchId);
   if (_batchSaveTimer) clearTimeout(_batchSaveTimer);
@@ -320,9 +326,14 @@ async function saveBatchToPostgres(batchId) {
 }
 
 // Save every batch currently in memory — used by manual Save button and migration.
-async function saveAllBatchesToPostgres() {
+async function saveAllBatchesToPostgres(forceAll = false) {
   if (!pgClient) { Object.keys(db.batches).forEach(id => _pendingFlushKeys.add('batches:'+id)); scheduleFlushRetry(); return; }
-  const ids = Object.keys(db.batches);
+  // Only write dirty batches unless forceAll is set (used for migration/manual save)
+  const ids = forceAll
+    ? Object.keys(db.batches)
+    : [..._dirtyBatches].filter(id => db.batches[id]);
+  if (!ids.length) { console.log('[saveAllBatches] No dirty batches — skipping'); return { saved:0, failed:0 }; }
+  console.log('[saveAllBatches] Writing', ids.length, forceAll ? '(forced)' : '(dirty only)', 'batches');
   let failed = 0;
   for (const id of ids) {
     try { await saveBatchToPostgres(id); } catch(e) { failed++; }
@@ -777,7 +788,7 @@ const server = http.createServer(async (req, res) => {
   // ── POST /api/save — manual save all data to Postgres immediately ────────────
   if (parts[0]==='save' && method==='POST') {
     try {
-      const batchResult = await saveAllBatchesToPostgres();
+      const batchResult = await saveAllBatchesToPostgres(true); // force full save on manual
       await saveDB(); // saves players/users/gfwl/eventDates
       // Also flush any pending buffered keys
       if (_pendingFlushKeys && _pendingFlushKeys.size > 0) {
@@ -1168,6 +1179,7 @@ const server = http.createServer(async (req, res) => {
         const parsedData = data.parsed || null;
         b.replays.push({ replayId:data.replayId, plays:data.plays||[], allPlays:parsedData?[]:strippedPlays, parsed:parsedData, timedOut:!!data.timedOut, eventLabel:data.eventLabel||'', oppName:data.oppName||'', player1:data.player1||null, player2:data.player2||null, savedAt:Date.now() });
         b.status = 'ready';
+        markBatchDirty(b.id);
         // Log for Head Admin revert
         if (!db._changeLog) db._changeLog = [];
         db._changeLog.push({ t:Date.now(), action:'add_replay', batchId:b.id, batchPlayer:b.player, replayId:data.replayId, user:getUser(req)?.name||'unknown' });
