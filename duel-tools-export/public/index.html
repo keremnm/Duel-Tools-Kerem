@@ -5303,13 +5303,16 @@ function renderRPS() {
   const abp={ Rock:z3(), Paper:z3(), Scissors:z3() };
   const log=[]; let rounds=0, miss=0, tos=0;
 
-  // For dual-parse temp batches, determine the active player from replay data
+  // For dual-parse temp batches: derive player name from replay data per perspective
   let _rpsPlayerName = player;
-  if (_activeBatch.dualParse && !_rpsPlayerName) {
-    // Pick from the first replay based on perspective
-    const _fr = replays[0];
-    if (_fr) {
-      _rpsPlayerName = _tempRpsPerspective === 'p2' ? (_fr.player2||'') : (_fr.player1||'');
+  if (_activeBatch.dualParse) {
+    // Use the player name from _activeBatch.player if set by button click
+    // otherwise derive from the first replay's perspective slot
+    if (!_rpsPlayerName) {
+      const _fr = replays[0];
+      if (_fr) {
+        _rpsPlayerName = _tempRpsPerspective === 'p2' ? (_fr.player2||'') : (_fr.player1||'');
+      }
     }
   }
   const _rpsAliases = (_activeBatch.aliases||[]).map(a=>a.toLowerCase());
@@ -5518,29 +5521,7 @@ function renderRPS() {
       // Collect all unique players across replays
       const _allTempP1s = [...new Set((_activeBatch.replays||[]).map(r=>r.player1).filter(Boolean))];
       const _allTempP2s = [...new Set((_activeBatch.replays||[]).map(r=>r.player2).filter(Boolean))];
-      // Primary = most frequent across all replays
-      const _pCnt = {};
-      (_activeBatch.replays||[]).forEach(r => {
-        if (r.player1) _pCnt[r.player1] = (_pCnt[r.player1]||0)+1;
-        if (r.player2) _pCnt[r.player2] = (_pCnt[r.player2]||0)+1;
-      });
-      const _sortedPlayers = Object.entries(_pCnt).sort((a,b)=>b[1]-a[1]).map(e=>e[0]);
-      const _primaryP = _sortedPlayers[0] || _allTempP1s[0] || 'Player 1';
       const _allUnique = [...new Set([..._allTempP1s,..._allTempP2s])];
-      const _opponents = _allUnique.filter(n=>n.toLowerCase()!==_primaryP.toLowerCase());
-
-      // Update batch name and player
-      if (!_activeBatch.player) {
-        _activeBatch.player = _primaryP;
-        _activeBatch.name = _primaryP + ' Temp';
-      }
-
-      // Determine correct perspective for primary player
-      const _firstR = (_activeBatch.replays||[])[0];
-      if (_firstR && !_activeBatch._perspectiveSet) {
-        _tempRpsPerspective = (_firstR.player1||'').toLowerCase() === _primaryP.toLowerCase() ? 'p1' : 'p2';
-        _activeBatch._perspectiveSet = true;
-      }
 
       // Create a button per unique player
       _allUnique.forEach(pName => {
@@ -5591,7 +5572,8 @@ function renderRPS() {
   const chRow = document.createElement('div');
   chRow.style.cssText = 'display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-top:8px';
   const ch=mk(chRow,'chips');
-  [[replays.length,'Replays'],[found,'With '+(player||'Player')],[rounds,'Total rounds'],[tat,'Post-tie picks']].forEach(([v,l])=>{
+  const _chipWith = _activeBatch.dualParse ? (_rpsPlayerName || 'Both Players') : (player||'Player');
+  [[replays.length,'Replays'],[found,'With '+_chipWith],[rounds,'Total rounds'],[tat,'Post-tie picks']].forEach(([v,l])=>{
     const x=mk(ch,'chip'); E(x,'span',String(v),'chipv'); E(x,'span',l,'chipl');
   });
   s1.appendChild(chRow);
@@ -5842,26 +5824,18 @@ function buildDeck() {
   for (const r of replays) {
     let m = null;
 
-    // For dualParse temp batches: determine which player is "mine" per replay
-    // Use the player who appears in all (or most) replays as "mine"
+    // For dualParse temp batches: use per-replay player names from duelingbook
     let _replayPlayer = player;
     let _replayParsed = r.parsed;
     if (_activeBatch.dualParse && r.player1 && r.player2) {
-      // The default player (most frequent) is "mine" — check which slot they're in
       const _pLow = (player||'').toLowerCase();
-      const _isP1 = (r.player1||'').toLowerCase() === _pLow;
-      const _isP2 = (r.player2||'').toLowerCase() === _pLow;
-      if (_isP1) {
-        // player is player1 — use parsed (p1 perspective)
-        _replayPlayer = r.player1;
-        _replayParsed = r.parsed;
-      } else if (_isP2 && r.parsedP2) {
-        // player is player2 — use parsedP2
+      if (_pLow && (r.player2||'').toLowerCase() === _pLow && r.parsedP2) {
+        // Selected player is player2 of this replay — use P2 perspective
         _replayPlayer = r.player2;
         _replayParsed = r.parsedP2;
-      } else if (!_isP1 && !_isP2) {
-        // default player not in this replay — use player1 perspective
-        _replayPlayer = r.player1;
+      } else {
+        // Default: player1 perspective (or selected player is player1)
+        _replayPlayer = r.player1 || player;
         _replayParsed = r.parsed;
       }
     }
@@ -8751,23 +8725,6 @@ async function addToBatch() {
   clearForm();
   closeBatchPanel();
   btn.disabled = false; btn.textContent = '▶ Analyze';
-
-  // For temp batches: detect most frequent player AFTER import completes
-  if (_activeBatch && _activeBatch.dualParse) {
-    const _pCntFinal = {};
-    for (const r of (_activeBatch.replays||[])) {
-      if (r.player1) _pCntFinal[r.player1] = (_pCntFinal[r.player1]||0) + 1;
-      if (r.player2) _pCntFinal[r.player2] = (_pCntFinal[r.player2]||0) + 1;
-    }
-    const _sortedFinal = Object.entries(_pCntFinal).sort((a,b)=>b[1]-a[1]);
-    if (_sortedFinal.length) {
-      const _topP = _sortedFinal[0][0];
-      _activeBatch.player = _topP;
-      _activeBatch.name = _topP + ' Temp';
-      const _fr = (_activeBatch.replays||[])[0];
-      if (_fr) _tempRpsPerspective = (_fr.player1||'').toLowerCase() === _topP.toLowerCase() ? 'p1' : 'p2';
-    }
-  }
 
   st((_activeBatch.name||_activeBatch.player)+' — '+_activeBatch.replays.length+' replays total', 'var(--green)');
   loadBatches();
