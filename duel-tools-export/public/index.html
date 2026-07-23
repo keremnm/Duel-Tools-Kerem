@@ -5323,11 +5323,19 @@ function renderRPS() {
   const abp={ Rock:z3(), Paper:z3(), Scissors:z3() };
   const log=[]; let rounds=0, miss=0, tos=0;
 
+  // For dual-parse temp batches, determine the active player from replay data
+  let _rpsPlayerName = player;
+  if (_activeBatch.dualParse && !_rpsPlayerName) {
+    // Pick from the first replay based on perspective
+    const _fr = replays[0];
+    if (_fr) {
+      _rpsPlayerName = _tempRpsPerspective === 'p2' ? (_fr.player2||'') : (_fr.player1||'');
+    }
+  }
   const _rpsAliases = (_activeBatch.aliases||[]).map(a=>a.toLowerCase());
-  // Also pull from player registry in case batch aliases are stale
-  const _regEntry = window._playerRegistry && window._playerRegistry[player.toLowerCase()];
+  const _regEntry = window._playerRegistry && window._playerRegistry[(_rpsPlayerName||'').toLowerCase()];
   const _regAliases = _regEntry ? (_regEntry.aliases||[]).map(a=>a.toLowerCase()) : [];
-  const _rpsNames = new Set([player.toLowerCase(), ..._rpsAliases, ..._regAliases]);
+  const _rpsNames = new Set([(_rpsPlayerName||'').toLowerCase(), ..._rpsAliases, ..._regAliases].filter(Boolean));
   const _rpsIsPlayer = u => {
     if (!u) return false;
     const ul = String(u).toLowerCase().trim();
@@ -5507,14 +5515,52 @@ function renderRPS() {
 
   // P1 / P2 perspective toggle for dual-parse temp batches
     if (_activeBatch && _activeBatch.dualParse) {
-      const p1Name = (_activeBatch.replays||[]).find(r=>r.player1)?.player1 || 'Player 1';
-      const p2Name = (_activeBatch.replays||[]).find(r=>r.player2)?.player2 || 'Player 2';
-      [[p1Name,'p1'],[p2Name,'p2']].forEach(([label, side]) => {
+      // Collect all unique players across replays
+      const _allTempP1s = [...new Set((_activeBatch.replays||[]).map(r=>r.player1).filter(Boolean))];
+      const _allTempP2s = [...new Set((_activeBatch.replays||[]).map(r=>r.player2).filter(Boolean))];
+      // Primary = most frequent across all replays
+      const _pCnt = {};
+      (_activeBatch.replays||[]).forEach(r => {
+        if (r.player1) _pCnt[r.player1] = (_pCnt[r.player1]||0)+1;
+        if (r.player2) _pCnt[r.player2] = (_pCnt[r.player2]||0)+1;
+      });
+      const _sortedPlayers = Object.entries(_pCnt).sort((a,b)=>b[1]-a[1]).map(e=>e[0]);
+      const _primaryP = _sortedPlayers[0] || _allTempP1s[0] || 'Player 1';
+      const _allUnique = [...new Set([..._allTempP1s,..._allTempP2s])];
+      const _opponents = _allUnique.filter(n=>n.toLowerCase()!==_primaryP.toLowerCase());
+
+      // Update batch name and player
+      if (!_activeBatch.player) {
+        _activeBatch.player = _primaryP;
+        _activeBatch.name = _primaryP + ' Temp';
+      }
+
+      // Determine correct perspective for primary player
+      const _firstR = (_activeBatch.replays||[])[0];
+      if (_firstR && !_activeBatch._perspectiveSet) {
+        _tempRpsPerspective = (_firstR.player1||'').toLowerCase() === _primaryP.toLowerCase() ? 'p1' : 'p2';
+        _activeBatch._perspectiveSet = true;
+      }
+
+      // Create a button per unique player
+      _allUnique.forEach(pName => {
+        const side = (_activeBatch.replays||[]).find(r => (r.player1||'').toLowerCase()===pName.toLowerCase()) ? 'p1' : 'p2';
+        // For players who appear on both sides, check majority
+        const asP1 = (_activeBatch.replays||[]).filter(r=>(r.player1||'').toLowerCase()===pName.toLowerCase()).length;
+        const asP2 = (_activeBatch.replays||[]).filter(r=>(r.player2||'').toLowerCase()===pName.toLowerCase()).length;
+        const majorSide = asP1 >= asP2 ? 'p1' : 'p2';
+        const active = (_tempRpsPerspective === majorSide && pName.toLowerCase() === (_rpsPlayerName||'').toLowerCase())
+          || (_allUnique.length === 1);
         const btn = document.createElement('button');
-        const active = _tempRpsPerspective === side;
-        btn.textContent = label;
+        btn.textContent = pName;
         btn.style.cssText = 'background:'+(active?'var(--green)':'none')+';color:'+(active?'#050508':'var(--muted)')+';border:1px solid '+(active?'var(--green)':'var(--border)')+';font-family:monospace;font-size:10px;padding:3px 10px;border-radius:4px;cursor:pointer';
-        btn.onclick = () => { _tempRpsPerspective = side; renderRPS(); };
+        btn.onclick = () => {
+          _activeBatch.player = pName;
+          _tempRpsPerspective = majorSide;
+          renderRPS();
+          const newDd = document.querySelector('.rps-filter-dropdown');
+          if (newDd) newDd.style.display = 'block';
+        };
         filterRow.appendChild(btn);
       });
     }
