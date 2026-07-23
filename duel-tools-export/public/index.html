@@ -4616,7 +4616,7 @@ async function go() {
   const rawText = (document.getElementById('urls-inp').value||'').trim();
   const _batchEventLabel = (document.getElementById('batch-event-label-inp')?.value||'').trim().toUpperCase();
 
-  if (!player) { st('Enter a player username.', 'var(--red)'); return; }
+  if (!player && _batchPanelMode !== 'temp') { st('Enter a player username.', 'var(--red)'); return; }
   if (!rawText) { st('Paste replay URLs.', 'var(--red)'); return; }
   const idEvents = extractIdsWithEvents(rawText);
   const ids = idEvents.map(x => x.id);
@@ -4963,6 +4963,11 @@ function openBatchPanel(mode) {
   // Always hide dual-parse note when opening any panel mode
   const _dn = document.getElementById('temp-dual-note');
   if (_dn) _dn.style.display = 'none';
+  // Restore event label and aliases rows (may have been hidden by temp mode)
+  const _evtRowR = document.getElementById('batch-event-label-inp')?.closest('div[style]');
+  if (_evtRowR) _evtRowR.style.display = '';
+  const _aliRowR = document.getElementById('aliases-inp')?.closest('div[style]');
+  if (_aliRowR) _aliRowR.style.display = '';
 
   if (mode === 'new') {
     title.textContent        = 'NEW BATCH';
@@ -4972,6 +4977,11 @@ function openBatchPanel(mode) {
     title.textContent        = 'TEMPORARY BATCH';
     playerRow.style.display  = 'none'; // no player needed — both players parsed automatically
     tempBadge.style.display  = 'inline-block';
+    // Also hide event label and aliases — not needed for temp batches
+    const _evtRow = document.getElementById('batch-event-label-inp')?.closest('div[style]');
+    if (_evtRow) _evtRow.style.display = 'none';
+    const _aliRow = document.getElementById('aliases-inp')?.closest('div[style]');
+    if (_aliRow) _aliRow.style.display = 'none';
     // Show dual-parse note
     let dn = document.getElementById('temp-dual-note');
     if (!dn) {
