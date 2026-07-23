@@ -1458,12 +1458,32 @@ const server = http.createServer(async (req, res) => {
           break;
         }
         if (resultRes.errorId) {
-          if ((resultRes.errorDescription||'').includes('600010') && pollErrors < 3) {
-            // Bot flag during poll — wait longer and retry
+          if ((resultRes.errorDescription||'').includes('600010')) {
             pollErrors++;
-            console.warn(`[proxy/replay] CapSolver 600010 during poll for ${replayId} (attempt ${pollErrors}) — waiting 5s`);
-            await new Promise(r => setTimeout(r, 5000));
-            continue;
+            if (pollErrors <= 3) {
+              console.warn(`[proxy/replay] CapSolver 600010 during poll for ${replayId} (attempt ${pollErrors}) — waiting 5s`);
+              await new Promise(r => setTimeout(r, 5000));
+              continue;
+            }
+            // After 3 retries, abandon this task and create a fresh one with longer wait
+            console.warn(`[proxy/replay] 600010 persisting for ${replayId} — creating new task after 10s wait`);
+            await new Promise(r => setTimeout(r, 10000));
+            const retryTaskRes = await httpsPost('api.capsolver.com', '/createTask', {
+              clientKey: CAPSOLVER_API_KEY,
+              task: { type: 'AntiTurnstileTaskProxyLess', websiteURL: DUELINGBOOK_URL, websiteKey: TURNSTILE_SITE_KEY }
+            });
+            if (!retryTaskRes.errorId) {
+              // Reset and poll new task
+              token = null; pollErrors = 0;
+              const newTaskId = retryTaskRes.taskId;
+              for (let j = 0; j < 60; j++) {
+                await new Promise(r => setTimeout(r, 1500));
+                const nr = await httpsPost('api.capsolver.com', '/getTaskResult', { clientKey: CAPSOLVER_API_KEY, taskId: newTaskId });
+                if (nr.status === 'ready') { token = nr.solution?.token; userAgent = nr.solution?.userAgent; break; }
+                if (nr.errorId) break;
+              }
+              if (token) break;
+            }
           }
           throw new Error('CapSolver poll error: ' + resultRes.errorDescription);
         }
