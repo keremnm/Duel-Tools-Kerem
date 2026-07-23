@@ -1417,8 +1417,12 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
+      // Stagger concurrent requests to avoid CapSolver bot detection (error 600010)
+      const _jitter = Math.floor(Math.random() * 2000);
+      if (_jitter > 0) await new Promise(r => setTimeout(r, _jitter));
+
       // Create task
-      const taskRes = await httpsPost('api.capsolver.com', '/createTask', {
+      let taskRes = await httpsPost('api.capsolver.com', '/createTask', {
         clientKey: CAPSOLVER_API_KEY,
         task: {
           type: 'AntiTurnstileTaskProxyLess',
@@ -1427,6 +1431,16 @@ const server = http.createServer(async (req, res) => {
         }
       });
 
+      // Retry once if flagged
+      if (taskRes.errorId && (taskRes.errorDescription||'').includes('600010')) {
+        console.warn(`[proxy/replay] CapSolver 600010 on createTask for ${replayId} — waiting 5s and retrying`);
+        await new Promise(r => setTimeout(r, 5000));
+        taskRes = await httpsPost('api.capsolver.com', '/createTask', {
+          clientKey: CAPSOLVER_API_KEY,
+          task: { type: 'AntiTurnstileTaskProxyLess', websiteURL: DUELINGBOOK_URL, websiteKey: TURNSTILE_SITE_KEY }
+        });
+      }
+
       if (taskRes.errorId) throw new Error('CapSolver createTask error: ' + taskRes.errorDescription);
       const taskId = taskRes.taskId;
       console.log(`[proxy/replay] CapSolver taskId=${taskId} for replay ${replayId}`);
@@ -1434,6 +1448,7 @@ const server = http.createServer(async (req, res) => {
       // Poll for solution (max 90s — Turnstile solves can take 40-60s+ under load)
       let token = null;
       let userAgent = null;
+      let pollErrors = 0;
       for (let i = 0; i < 60; i++) {
         await new Promise(r => setTimeout(r, 1500));
         const resultRes = await httpsPost('api.capsolver.com', '/getTaskResult', { clientKey: CAPSOLVER_API_KEY, taskId });
@@ -1442,7 +1457,16 @@ const server = http.createServer(async (req, res) => {
           userAgent = resultRes.solution?.userAgent;
           break;
         }
-        if (resultRes.errorId) throw new Error('CapSolver poll error: ' + resultRes.errorDescription);
+        if (resultRes.errorId) {
+          if ((resultRes.errorDescription||'').includes('600010') && pollErrors < 3) {
+            // Bot flag during poll — wait longer and retry
+            pollErrors++;
+            console.warn(`[proxy/replay] CapSolver 600010 during poll for ${replayId} (attempt ${pollErrors}) — waiting 5s`);
+            await new Promise(r => setTimeout(r, 5000));
+            continue;
+          }
+          throw new Error('CapSolver poll error: ' + resultRes.errorDescription);
+        }
       }
       if (!token) throw new Error('CapSolver timed out waiting for token (90s)');
       console.log(`[proxy/replay] Got Turnstile token for ${replayId}`);
@@ -1561,8 +1585,9 @@ ${value}
       return json(res, 200, { ok: true, replay: replayData });
 
     } catch(e) {
-      console.error(`[proxy/replay] Failed for ${replayId}:`, e.message);
-      return json(res, 502, { error: e.message });
+      const is600010 = e.message && e.message.includes('600010');
+      console.error(`[proxy/replay] Failed for ${replayId}:`, e.message, is600010 ? '— CapSolver bot flag, try again in a moment' : '');
+      return json(res, 502, { error: is600010 ? 'CapSolver flagged as bot (error 600010). Wait a moment and retry — or check your CapSolver balance/account.' : e.message });
     }
   }
 
