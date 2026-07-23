@@ -1417,10 +1417,6 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
-      // Stagger concurrent requests to avoid CapSolver bot detection (error 600010)
-      const _jitter = Math.floor(Math.random() * 2000);
-      if (_jitter > 0) await new Promise(r => setTimeout(r, _jitter));
-
       // Create task
       let taskRes = await httpsPost('api.capsolver.com', '/createTask', {
         clientKey: CAPSOLVER_API_KEY,

@@ -3523,7 +3523,10 @@ async function gfwlOpenTeam(season, teamName, team) {
       <td style="padding:7px 8px;font-size:10px;color:${isDropped?'var(--red)':'var(--green)'}">
         ${isDropped?'Dropped'+(p.droppedWeek?' Wk'+p.droppedWeek:''):'Active'+(p.addedWeek?' (Added Wk'+p.addedWeek+')':'')}
       </td>
-      ${_userRole==='admin'?`<td style="padding:4px"><button onclick="gfwlEditRosterPlayer('${season}','${teamName}','${p.player}')" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:11px">✎</button></td>`:''}
+      ${_userRole==='admin'?`<td style="padding:4px;display:flex;gap:4px;align-items:center">
+        <button onclick="gfwlEditRosterPlayer('${season}','${teamName}','${p.player}')" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:11px" title="Edit player">✎</button>
+        <button onclick="gfwlRemoveRosterPlayer('${season}','${teamName}','${p.player}')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:11px;opacity:.6" title="Remove from roster">✕</button>
+      </td>`:''}
     `;
     // View button → open GFWL player profile
     if (_userRole === 'admin' || true) {
@@ -4451,6 +4454,24 @@ async function gfwlAddRosterPlayer(season, teamName, team) {
 }
 
 // ── Admin: edit roster player status ─────────────────────────────────────────
+async function gfwlRemoveRosterPlayer(season, teamName, playerName) {
+  if (!confirm('Remove ' + playerName + ' from ' + teamName + ' roster? This cannot be undone.')) return;
+  const team = _gfwlData[season]?.teams[teamName];
+  if (!team) return;
+  team.roster = (team.roster||[]).filter(p => p.player.toLowerCase() !== playerName.toLowerCase());
+  try {
+    await fetch(API+'/gfwl/'+season+'/team/'+encodeURIComponent(teamName), {
+      method:'PATCH', headers: authHeaders(),
+      body: JSON.stringify({ roster: team.roster })
+    });
+    st(playerName+' removed from roster', 'var(--green)');
+    // Re-open the team page to refresh
+    gfwlOpenTeam(season, teamName, team);
+  } catch(e) {
+    st('Failed to remove player: '+e.message, 'var(--red)');
+  }
+}
+
 async function gfwlEditRosterPlayer(season, teamName, playerName) {
   const team = _gfwlData[season]?.teams[teamName];
   if (!team) return;
@@ -5938,6 +5959,69 @@ async function fetchCardImageUrl(serial, name) {
   _imgCache[key] = null; return null;
 }
 
+// ── Re-parse a replay with current aliases ───────────────────────────────────
+// Used when a replay has no card data because player name didn't match at import time.
+// Fetches the stored allPlays from the server, re-runs parseMatch, saves result.
+async function reparseReplay(replayId) {
+  if (!_activeBatch || _activeBatch.isTemp) return false;
+  try {
+    // Get the batch to find stored allPlays
+    const batchRes = await fetch(API+'/batches/'+_activeBatch.id, { headers: authHeaders() });
+    const batch = await batchRes.json();
+    const replay = (batch.replays||[]).find(r => r.replayId === replayId);
+    if (!replay) { st('Replay not found in batch', 'var(--red)'); return false; }
+
+    // Get plays — stored allPlays on the replay, or re-fetch from proxy
+    let plays = replay.allPlays && replay.allPlays.length ? replay.allPlays : null;
+    if (!plays) {
+      st('Re-fetching replay data...', 'var(--muted)');
+      const proxyRes = await fetch(API+'/proxy/replay?id='+encodeURIComponent(replayId));
+      if (!proxyRes.ok) { st('Failed to fetch replay', 'var(--red)'); return false; }
+      const proxyData = await proxyRes.json();
+      plays = (proxyData.replay && proxyData.replay.plays) || [];
+    }
+    if (!plays.length) { st('No play data available for this replay', 'var(--red)'); return false; }
+
+    // Re-run parseMatch with current aliases
+    const player = _activeBatch.player || '';
+    const _reAliases = (() => {
+      const batchAliases = _activeBatch.aliases || [];
+      const regKey = player.toLowerCase();
+      const regAliases = (window._playerRegistry && window._playerRegistry[regKey])
+        ? (window._playerRegistry[regKey].aliases || []) : [];
+      const seen = new Set(batchAliases.map(a=>a.toLowerCase()));
+      const merged = [...batchAliases];
+      for (const a of regAliases) { if (!seen.has(a.toLowerCase())) { merged.push(a); seen.add(a.toLowerCase()); } }
+      return merged;
+    })();
+
+    const p1 = replay.player1 || '';
+    const p2 = replay.player2 || '';
+    const parsed = parseMatch(replayId, plays, player, _reAliases, p1, p2);
+    if (!parsed) { st('Still no match — check aliases include: '+p1+' and '+p2, 'var(--red)'); return false; }
+
+    // Save parsed result to server
+    const parsedStore = { games:parsed.games, allMine:parsed.allMine, allOpp:parsed.allOpp,
+      oppName:parsed.oppName, myW:parsed.myW, oppW:parsed.oppW, draws:parsed.draws,
+      score:parsed.score, result:parsed.result };
+    const saveRes = await fetch(API+'/batches/'+_activeBatch.id+'/replay/'+encodeURIComponent(replayId)+'/parsed', {
+      method:'PATCH', headers: authHeaders(),
+      body: JSON.stringify({ parsed: parsedStore })
+    });
+    if (!saveRes.ok) { st('Re-parse succeeded but save failed', 'var(--red)'); return false; }
+
+    // Update local _activeBatch so deck viewer reflects change without reload
+    const localReplay = (_activeBatch.replays||[]).find(r => r.replayId === replayId);
+    if (localReplay) { localReplay.parsed = parsedStore; }
+
+    st('Re-parsed successfully — reopen match to see cards', 'var(--green)');
+    return true;
+  } catch(e) {
+    st('Re-parse error: '+e.message, 'var(--red)');
+    return false;
+  }
+}
+
 // ── Ban limit helper ─────────────────────────────────────────────────────────
 // banLimit defined above
 
@@ -6722,6 +6806,19 @@ async function renderMatchDisplay(m) {
     const entYdk=document.createElement('button'); entYdk.className='ddl'; entYdk.textContent='↓ YDK';
     entYdk.style.marginLeft='auto';
     entYdk.onclick=()=>dlYDK(showCards,`${_showOpp?m.oppName:player}_match_${m.replayId}.ydk`);
+    // Re-parse button when no cards detected (player name mismatch / missing alias)
+    if (!showCards.length && m.replayId && _activeBatch && !_activeBatch.isTemp) {
+      const reparseBtn = document.createElement('button');
+      reparseBtn.textContent = '↺ Re-parse with current aliases';
+      reparseBtn.style.cssText = 'margin-left:8px;background:var(--amber);color:#050508;border:none;font-family:monospace;font-size:10px;padding:2px 10px;border-radius:4px;cursor:pointer';
+      reparseBtn.onclick = async () => {
+        reparseBtn.disabled = true; reparseBtn.textContent = '...re-parsing...';
+        const ok = await reparseReplay(m.replayId);
+        if (ok) { reparseBtn.textContent = '✓ Done — reopen to see cards'; reparseBtn.style.background='var(--green)'; }
+        else { reparseBtn.disabled = false; reparseBtn.textContent = '↺ Re-parse with current aliases'; }
+      };
+      entHdr.appendChild(reparseBtn);
+    }
     entHdr.appendChild(entYdk);
     const entBlock=document.createElement('div'); entBlock.className='entire-block';
     entBlock.appendChild(entHdr);
