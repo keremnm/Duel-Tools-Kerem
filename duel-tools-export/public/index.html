@@ -4679,26 +4679,6 @@ async function go() {
       return;
     }
   }
-  // For temp batches: detect most frequent player and name the batch after them
-  if (_activeBatch && _activeBatch.dualParse) {
-    const _pCount = {};
-    for (const r of (_activeBatch.replays||[])) {
-      if (r.player1) _pCount[r.player1] = (_pCount[r.player1]||0) + 1;
-      if (r.player2) _pCount[r.player2] = (_pCount[r.player2]||0) + 1;
-    }
-    const _mostFreq = Object.entries(_pCount).sort((a,b)=>b[1]-a[1])[0];
-    if (_mostFreq) {
-      const _topPlayer = _mostFreq[0];
-      _activeBatch.name = _topPlayer + ' Temp';
-      _activeBatch.player = _topPlayer;
-      // Set perspective so RPS shows the most frequent player by default
-      const _firstReplay = _activeBatch.replays[0];
-      if (_firstReplay) {
-        _tempRpsPerspective = (_firstReplay.player1||'').toLowerCase() === _topPlayer.toLowerCase() ? 'p1' : 'p2';
-      }
-    }
-  }
-
   loadBatches();
   closeBatchPanel();
 
@@ -5336,11 +5316,31 @@ function renderRPS() {
   const _regEntry = window._playerRegistry && window._playerRegistry[(_rpsPlayerName||'').toLowerCase()];
   const _regAliases = _regEntry ? (_regEntry.aliases||[]).map(a=>a.toLowerCase()) : [];
   const _rpsNames = new Set([(_rpsPlayerName||'').toLowerCase(), ..._rpsAliases, ..._regAliases].filter(Boolean));
-  const _rpsIsPlayer = u => {
+  // For temp dualParse: also collect all known names for this player from replays
+  if (_activeBatch.dualParse && _rpsPlayerName) {
+    const _pl = _rpsPlayerName.toLowerCase();
+    // Add any variant spellings found in the actual replay player1/player2 fields
+    (_activeBatch.replays||[]).forEach(r => {
+      if ((r.player1||'').toLowerCase() === _pl) _rpsNames.add(_pl);
+      if ((r.player2||'').toLowerCase() === _pl) _rpsNames.add(_pl);
+    });
+  }
+  const _rpsIsPlayer = (u, replay) => {
     if (!u) return false;
     const ul = String(u).toLowerCase().trim();
+    // For dualParse temp batches: match based on which slot the selected player is in
+    if (_activeBatch.dualParse && replay && _rpsPlayerName) {
+      const pn = _rpsPlayerName.toLowerCase();
+      const r1 = (replay.player1||'').toLowerCase();
+      const r2 = (replay.player2||'').toLowerCase();
+      // If selected player is player1 of this replay, match player1
+      if (r1 === pn) return ul === r1;
+      // If selected player is player2 of this replay, match player2
+      if (r2 === pn) return ul === r2;
+      // Player not in this replay at all
+      return false;
+    }
     if (_rpsNames.has(ul)) return true;
-    // Only do partial match if both sides are at least 4 chars to avoid false prefix matches
     for (const n of _rpsNames) {
       if (n.length >= 4 && ul.length >= 4) {
         if (ul.startsWith(n + ' ') || ul.startsWith(n + '_') || n.startsWith(ul + ' ') || n.startsWith(ul + '_')) return true;
@@ -5363,8 +5363,8 @@ function renderRPS() {
     }
     let found=false, fd=false, pp=null, po=null;
     for (const p of rps) {
-      const is1=_rpsIsPlayer(p.player1);
-      const is2=_rpsIsPlayer(p.player2);
+      const is1=_rpsIsPlayer(p.player1, r);
+      const is2=_rpsIsPlayer(p.player2, r);
       if(!is1&&!is2) continue;
       found=true;
       const my=rpsLbl(is1?p.player1_choice:p.player2_choice);
@@ -5841,14 +5841,39 @@ function buildDeck() {
 
   for (const r of replays) {
     let m = null;
-    if (r.parsed && r.parsed.games && r.parsed.games.length) {
+
+    // For dualParse temp batches: determine which player is "mine" per replay
+    // Use the player who appears in all (or most) replays as "mine"
+    let _replayPlayer = player;
+    let _replayParsed = r.parsed;
+    if (_activeBatch.dualParse && r.player1 && r.player2) {
+      // The default player (most frequent) is "mine" — check which slot they're in
+      const _pLow = (player||'').toLowerCase();
+      const _isP1 = (r.player1||'').toLowerCase() === _pLow;
+      const _isP2 = (r.player2||'').toLowerCase() === _pLow;
+      if (_isP1) {
+        // player is player1 — use parsed (p1 perspective)
+        _replayPlayer = r.player1;
+        _replayParsed = r.parsed;
+      } else if (_isP2 && r.parsedP2) {
+        // player is player2 — use parsedP2
+        _replayPlayer = r.player2;
+        _replayParsed = r.parsedP2;
+      } else if (!_isP1 && !_isP2) {
+        // default player not in this replay — use player1 perspective
+        _replayPlayer = r.player1;
+        _replayParsed = r.parsed;
+      }
+    }
+
+    if (_replayParsed && _replayParsed.games && _replayParsed.games.length) {
       // Fast path: use pre-parsed data
-      m = { replayId:r.replayId, player, oppName:r.parsed.oppName||r.oppName||'', games:r.parsed.games, allMine:r.parsed.allMine||[], allOpp:r.parsed.allOpp||[], myW:r.parsed.myW, oppW:r.parsed.oppW, draws:r.parsed.draws, score:r.parsed.score, result:r.parsed.result };
+      m = { replayId:r.replayId, player:_replayPlayer, oppName:_replayParsed.oppName||r.oppName||'', games:_replayParsed.games, allMine:_replayParsed.allMine||[], allOpp:_replayParsed.allOpp||[], myW:_replayParsed.myW, oppW:_replayParsed.oppW, draws:_replayParsed.draws, score:_replayParsed.score, result:_replayParsed.result };
     } else {
       // Legacy: parse from raw allPlays and migrate in background
       const plays = (r.allPlays&&r.allPlays.length) ? r.allPlays : r.plays;
       if (!plays||!plays.length) continue;
-      m = parseMatch(r.replayId, plays, player, _buildDeckAliases, r.player1||null, r.player2||null);
+      m = parseMatch(r.replayId, plays, _replayPlayer, _buildDeckAliases, r.player1||null, r.player2||null);
       if (m) migrateReplayToParseFormat(r, m, _activeBatch);
     }
     if (m) {
@@ -6829,7 +6854,7 @@ async function renderMatchDisplay(m) {
   toolbar.className = 'deck-toolbar';
   // Player toggle
   const ptg = document.createElement('div'); ptg.className='dtg';
-  const mineBtn = document.createElement('button'); mineBtn.className='dtb on'; mineBtn.textContent=player;
+  const mineBtn = document.createElement('button'); mineBtn.className='dtb on'; mineBtn.textContent=m.player||player;
   const oppBtn  = document.createElement('button'); oppBtn.className='dtb'; oppBtn.textContent=m.oppName||'Opponent';
   mineBtn.onclick=()=>{ _showOpp=false; mineBtn.classList.add('on'); oppBtn.classList.remove('on'); refreshCards(); };
   oppBtn.onclick =()=>{ _showOpp=true;  oppBtn.classList.add('on');  mineBtn.classList.remove('on'); refreshCards(); };
@@ -6864,7 +6889,7 @@ async function renderMatchDisplay(m) {
     const entHdr = document.createElement('div');
     entHdr.className='entire-hdr';
     const entTitle = document.createElement('span'); entTitle.className='entire-title';
-    entTitle.textContent=`ENTIRE MATCH — ${_showOpp?(m.oppName||'Opponent'):player}`;
+    entTitle.textContent=`ENTIRE MATCH — ${_showOpp?(m.oppName||'Opponent'):(m.player||player)}`;
     entHdr.appendChild(entTitle);
     if (currentDeck) {
       const badge=document.createElement('span');
@@ -8726,6 +8751,24 @@ async function addToBatch() {
   clearForm();
   closeBatchPanel();
   btn.disabled = false; btn.textContent = '▶ Analyze';
+
+  // For temp batches: detect most frequent player AFTER import completes
+  if (_activeBatch && _activeBatch.dualParse) {
+    const _pCntFinal = {};
+    for (const r of (_activeBatch.replays||[])) {
+      if (r.player1) _pCntFinal[r.player1] = (_pCntFinal[r.player1]||0) + 1;
+      if (r.player2) _pCntFinal[r.player2] = (_pCntFinal[r.player2]||0) + 1;
+    }
+    const _sortedFinal = Object.entries(_pCntFinal).sort((a,b)=>b[1]-a[1]);
+    if (_sortedFinal.length) {
+      const _topP = _sortedFinal[0][0];
+      _activeBatch.player = _topP;
+      _activeBatch.name = _topP + ' Temp';
+      const _fr = (_activeBatch.replays||[])[0];
+      if (_fr) _tempRpsPerspective = (_fr.player1||'').toLowerCase() === _topP.toLowerCase() ? 'p1' : 'p2';
+    }
+  }
+
   st((_activeBatch.name||_activeBatch.player)+' — '+_activeBatch.replays.length+' replays total', 'var(--green)');
   loadBatches();
   renderRPS();
