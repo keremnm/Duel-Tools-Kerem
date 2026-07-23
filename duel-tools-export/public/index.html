@@ -4679,10 +4679,30 @@ async function go() {
       return;
     }
   }
+  // For temp batches: detect most frequent player and name the batch after them
+  if (_activeBatch && _activeBatch.dualParse) {
+    const _pCount = {};
+    for (const r of (_activeBatch.replays||[])) {
+      if (r.player1) _pCount[r.player1] = (_pCount[r.player1]||0) + 1;
+      if (r.player2) _pCount[r.player2] = (_pCount[r.player2]||0) + 1;
+    }
+    const _mostFreq = Object.entries(_pCount).sort((a,b)=>b[1]-a[1])[0];
+    if (_mostFreq) {
+      const _topPlayer = _mostFreq[0];
+      _activeBatch.name = _topPlayer + ' Temp';
+      _activeBatch.player = _topPlayer;
+      // Set perspective so RPS shows the most frequent player by default
+      const _firstReplay = _activeBatch.replays[0];
+      if (_firstReplay) {
+        _tempRpsPerspective = (_firstReplay.player1||'').toLowerCase() === _topPlayer.toLowerCase() ? 'p1' : 'p2';
+      }
+    }
+  }
+
   loadBatches();
   closeBatchPanel();
 
-  _stopping = false; _matches = []; _activeMatch = -1; _rpsGFWLOnly = false; _rpsYearFilter = ''; _rpsFilterSelected = null; _tempRpsPerspective = 'p1';
+  _stopping = false; _matches = []; _activeMatch = -1; _rpsGFWLOnly = false; _rpsYearFilter = ''; _rpsFilterSelected = null; _tempRpsPerspective = _tempRpsPerspective || 'p1';
   // Clear RPS output so filter panel rebuilds fresh for new batch
   const _rpsOut = document.getElementById('rps-out'); if (_rpsOut) _rpsOut.innerHTML = '';
   const _failedServerSaves = [];
