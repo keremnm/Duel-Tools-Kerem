@@ -9128,7 +9128,26 @@ async function showDeckViewPopup(deck) {
       img.style.cssText = 'width:100%;border-radius:3px;display:block;background:var(--card2)';
       img.title = name; img.alt = name; img.loading = 'lazy';
       if (p) img.src = `https://images.ygoprodeck.com/images/cards/${p}.jpg`;
-      img.onerror = () => {
+      img.onerror = async () => {
+        // Alternate art passcode — try looking up the correct image by card name
+        if (name) {
+          try {
+            const _r = await fetch(`https://db.ygoprodeck.com/api/v7/cardinfo.php?name=${encodeURIComponent(name)}&misc=yes`);
+            const _d = await _r.json();
+            const _baseId = _d?.data?.[0]?.id;
+            if (_baseId && String(_baseId) !== String(p)) {
+              img.onerror = () => {
+                img.style.display='none';
+                const n = document.createElement('div');
+                n.style.cssText='font-size:7px;color:var(--muted);font-family:monospace;word-break:break-word;padding:2px;background:var(--card2);border-radius:3px;min-height:60px;display:flex;align-items:center;justify-content:center;text-align:center;cursor:pointer';
+                n.textContent = name; wrap.appendChild(n);
+                n.onclick = () => showCardPopup(name);
+              };
+              img.src = `https://images.ygoprodeck.com/images/cards/${_baseId}.jpg`;
+              return;
+            }
+          } catch(e) {}
+        }
         img.style.display='none';
         const n = document.createElement('div');
         n.style.cssText='font-size:7px;color:var(--muted);font-family:monospace;word-break:break-word;padding:2px;background:var(--card2);border-radius:3px;min-height:60px;display:flex;align-items:center;justify-content:center;text-align:center;cursor:pointer';
