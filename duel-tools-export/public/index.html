@@ -8923,25 +8923,40 @@ async function lookupPasscodeNames(passcodes) {
         const data = await res.json();
         if (data && data.data) {
           data.data.forEach(c => {
-            // Store by both the canonical id AND by each passcode in misc_info
-            window._cardDataCache[c.id] = { name: c.name, card_type: c.type || '' };
+            // c.id is ygoprodeck's INTERNAL id used for image URLs
+            // The passcode we searched by may differ (alternate arts)
+            // We need to map passcode → imageId so we can build the correct URL
+            window._cardDataCache[c.id] = { name: c.name, card_type: c.type || '', imageId: c.id };
             window._passcodeCache[c.id] = c.name;
-            // Also store alternate art passcodes if present
-            if (c.card_sets) {
-              // misc_info passcodes not available this way — use name lookup in onerror instead
+          });
+        }
+        // Map each requested passcode to the card data that came back
+        // The API matches by passcode but returns c.id as the image id
+        // We must store by the ORIGINAL passcode so renderCardGrid can find it
+        if (data && data.data) {
+          chunk.forEach(p => {
+            if (window._cardDataCache[p]) return; // already stored by id match
+            // Find which card this passcode matched (API sorts by relevance)
+            // Use misc_info.passcode if available, otherwise store by the api id too
+            const matched = data.data.find(c => 
+              String(c.id) === String(p) || 
+              (c.misc_info && c.misc_info[0] && String(c.misc_info[0].passcode) === String(p))
+            );
+            if (matched) {
+              window._cardDataCache[p] = { name: matched.name, card_type: matched.type || '', imageId: matched.id };
+              window._passcodeCache[p] = matched.name;
             }
           });
         }
-        // For any passcodes still not resolved (alternate arts), look up by passcode individually
+        // For any passcodes still not resolved, look up by passcode individually  
         const unresolved = chunk.filter(p => !window._cardDataCache[p]);
         for (const p of unresolved) {
           try {
-            const r2 = await fetch('https://db.ygoprodeck.com/api/v7/cardinfo.php?passcode='+p);
+            const r2 = await fetch('https://db.ygoprodeck.com/api/v7/cardinfo.php?id='+p+'&misc=yes');
             const d2 = await r2.json();
             if (d2?.data?.[0]) {
               const c = d2.data[0];
-              // Store by the alternate art passcode so future lookups work
-              window._cardDataCache[p] = { name: c.name, card_type: c.type || '', baseId: c.id };
+              window._cardDataCache[p] = { name: c.name, card_type: c.type || '', imageId: c.id };
               window._passcodeCache[p] = c.name;
             }
           } catch(e) {}
@@ -9163,8 +9178,8 @@ async function showDeckViewPopup(deck) {
       img.style.cssText = 'width:100%;border-radius:3px;display:block;background:var(--card2)';
       img.title = name; img.alt = name; img.loading = 'lazy';
       if (p) {
-        // Use baseId if available (alternate art passcode maps to different base card id)
-        const _imgId = window._cardDataCache[p]?.baseId || p;
+        // Use imageId from cache (ygoprodeck internal id, may differ from passcode)
+        const _imgId = window._cardDataCache[p]?.imageId || p;
         img.src = `https://images.ygoprodeck.com/images/cards/${_imgId}.jpg`;
       }
       img.onerror = async () => {
