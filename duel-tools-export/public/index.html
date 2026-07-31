@@ -5301,6 +5301,7 @@ function renderRPS() {
 
   const picks=z3(), aft=z3(), fp=z3();
   const abp={ Rock:z3(), Paper:z3(), Scissors:z3() };
+  const aftW=z3(), aftL=z3(), aftT=z3(); // W/L/T after a tie per pick
   const log=[]; let rounds=0, miss=0, tos=0;
 
   // For dual-parse temp batches: derive player name from replay data per perspective
@@ -5377,6 +5378,13 @@ function renderRPS() {
       const oc=calcOc(my,their);
       if(!fd){ fd=true; fp[my]++; log.push({id:r.replayId,my,their,oc}); }
       if(po==='Tie'&&pp){ aft[my]++; abp[pp][my]++; }
+      // Track W/L/T outcome for after-tie picks
+      if(po==='Tie'&&pp&&my&&their){
+        const _oc=calcOc(my,their);
+        if(_oc==='Win')       aftW[my]++;
+        else if(_oc==='Loss') aftL[my]++;
+        else                  aftT[my]++;
+      }
       pp=my; po=oc;
     }
     if(!found){
@@ -5587,10 +5595,11 @@ function renderRPS() {
     statsRow.style.cssText = 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;margin-top:4px';
 
     // RPS Win % stats
-    // Counts across all replays
-    let rpsDecisiveWins=0, rpsDecisiveTotal=0; // decisive = not tie
-    let rpsWonThenGameWin=0, rpsWonCount=0;    // won RPS → won Game 1
-    let rpsWonThenMatchWin=0;                  // won RPS → won Match
+    // Each game's RPS sequence = one outcome (Win/Loss/Tie if all picks tied)
+    // Ties within a sequence are part of the sequence — we count the final outcome
+    let rpsSeqWins=0, rpsSeqLosses=0, rpsSeqTies=0, rpsSeqTotal=0;
+    let rpsWonThenGameWin=0, rpsWonCount=0;
+    let rpsWonThenMatchWin=0;
 
     const beats = {Rock:'Scissors',Paper:'Rock',Scissors:'Paper'};
 
@@ -5598,10 +5607,8 @@ function renderRPS() {
       const plys = r.plays||[];
       if (!plys.length) continue;
 
-      // Count ALL decisive picks across ALL games (including picks after ties)
-      // Every non-tie RPS pick is a real competitive choice that should count
       const g1plays = plys.filter(p => (p.game||1) === 1);
-      let playerWonRPS = false; // did player win the FINAL decisive G1 pick?
+      let seqResult = null; // 'win'/'loss'/'tie' for this whole sequence
 
       for (const p of g1plays) {
         const isP1 = player ? (
@@ -5611,43 +5618,41 @@ function renderRPS() {
         const myPick  = isP1 ? p.player1_choice : p.player2_choice;
         const oppPick = isP1 ? p.player2_choice : p.player1_choice;
         if (!myPick || !oppPick) continue;
-        if (myPick === oppPick) continue; // tie — skip but keep iterating (more picks follow)
-        // Decisive pick — count every one, including post-tie picks
-        rpsDecisiveTotal++;
-        if (beats[myPick] === oppPick) {
-          rpsDecisiveWins++;
-          playerWonRPS = true;  // last decisive result
-        } else {
-          playerWonRPS = false; // last decisive result
+        if (myPick === oppPick) {
+          seqResult = 'tie'; // tied so far — keep going
+          continue;
         }
-        // Don't break — count ALL decisive picks (there may be more after ties resolved)
+        // Decisive pick — this decides the sequence
+        seqResult = beats[myPick] === oppPick ? 'win' : 'loss';
+        break; // sequence decided
       }
 
+      if (seqResult === null) continue; // no picks at all
+      rpsSeqTotal++;
+      if (seqResult === 'win')       { rpsSeqWins++; }
+      else if (seqResult === 'loss') { rpsSeqLosses++; }
+      else                           { rpsSeqTies++; }
+
+      const playerWonRPS = seqResult === 'win';
       if (playerWonRPS) {
         rpsWonCount++;
-        // Game 1 win: use stored game records, fall back to score inference
         const g1 = r.parsed && r.parsed.games && r.parsed.games.find(g => g.gameNum === 1);
         if (g1 && typeof g1.myWon === 'boolean') {
-          // Primary: use stored myWon flag
           if (g1.myWon) rpsWonThenGameWin++;
         } else if (r.parsed && r.parsed.score) {
-          // Fallback: infer from score only when stored data unavailable
-          // 2-0 win = won game 1, 0-2 loss = lost game 1, 2-1/1-2 = ambiguous (skip)
           const sc = r.parsed.score;
           if (sc === '2-0' && r.parsed.result === 'w') rpsWonThenGameWin++;
-          // 0-2, 2-1, 1-2: don't count (either lost or ambiguous)
         }
-        // Match win
         if (r.parsed && r.parsed.result === 'w') rpsWonThenMatchWin++;
       }
     }
 
-    if (rpsDecisiveTotal > 0) {
-      const rpsIsoWR   = Math.round(rpsDecisiveWins/rpsDecisiveTotal*100);
+    if (rpsSeqTotal > 0) {
+      const rpsIsoWR   = Math.round(rpsSeqWins/rpsSeqTotal*100);
       const rpsGameWR  = rpsWonCount > 0 ? Math.round(rpsWonThenGameWin/rpsWonCount*100) : 0;
       const rpsMatchWR = rpsWonCount > 0 ? Math.round(rpsWonThenMatchWin/rpsWonCount*100) : 0;
       [
-        ['RPS W%', rpsIsoWR+'%', 'Decisive RPS win rate, excluding ties ('+rpsDecisiveWins+'/'+rpsDecisiveTotal+')'],
+        ['RPS W%', rpsIsoWR+'%', 'RPS win rate per sequence — '+rpsSeqWins+'W / '+rpsSeqLosses+'L / '+rpsSeqTies+' Tie ('+rpsSeqTotal+' total)'],
         ['RPS+Game W%', rpsGameWR+'%', 'When won RPS — Game 1 win rate ('+rpsWonThenGameWin+'/'+rpsWonCount+')'],
         ['RPS+Match W%', rpsMatchWR+'%', 'When won RPS — Match win rate ('+rpsWonThenMatchWin+'/'+rpsWonCount+')'],
       ].forEach(([label, val, tip]) => {
@@ -5690,9 +5695,18 @@ function renderRPS() {
     HR(_c); const s4=S(_c,'AFTER A TIE — 2ND PICK  ('+tat+' instances)');
     ['Rock','Paper','Scissors'].forEach(pick=>{
       const n=aft[pick],p=pct(n,tat);
+      const w=aftW[pick]||0, l=aftL[pick]||0, t=aftT[pick]||0;
+      const wPct = n>0 ? Math.round(w/n*100) : 0;
       const row=mk(s4,'tr2'); const nm=mk(row,'tn'); nm.textContent=IC[pick]+' '+pick;
       const tb2=mk(row,'tb'); const f=mk(tb2,'tfi'); f.style.width=p+'%'; f.style.background=PC[pick];
-      E(row,'span',n+'x  '+p+'%','ts');
+      const ts=E(row,'span',n+'x  '+p+'%','ts');
+      // W/L/T outcome breakdown
+      if(n>0){
+        const ol=document.createElement('span');
+        ol.style.cssText='font-size:10px;margin-left:12px;color:var(--muted);font-family:monospace';
+        ol.innerHTML='<span style="color:var(--green)">'+w+'W</span> <span style="color:var(--red)">'+l+'L</span>'+(t?' <span style="color:var(--dim)">'+t+'T</span>':'')+' <span style="color:var(--muted)">('+wPct+'% win)</span>';
+        row.appendChild(ol);
+      }
     });
   }
 
