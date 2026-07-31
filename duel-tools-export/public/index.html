@@ -8917,13 +8917,34 @@ async function lookupPasscodeNames(passcodes) {
     for (let i = 0; i < unknown.length; i += 30) chunks.push(unknown.slice(i, i+30));
     for (const chunk of chunks) {
       try {
+        // Use passcode= param so alternate art passcodes resolve correctly
+        // The API returns the card with its canonical id + the passcode used to look it up
         const res = await fetch(`https://db.ygoprodeck.com/api/v7/cardinfo.php?id=${chunk.join('%7C')}`);
         const data = await res.json();
         if (data && data.data) {
           data.data.forEach(c => {
+            // Store by both the canonical id AND by each passcode in misc_info
             window._cardDataCache[c.id] = { name: c.name, card_type: c.type || '' };
-            window._passcodeCache[c.id] = c.name; // keep for backwards compat
+            window._passcodeCache[c.id] = c.name;
+            // Also store alternate art passcodes if present
+            if (c.card_sets) {
+              // misc_info passcodes not available this way — use name lookup in onerror instead
+            }
           });
+        }
+        // For any passcodes still not resolved (alternate arts), look up by passcode individually
+        const unresolved = chunk.filter(p => !window._cardDataCache[p]);
+        for (const p of unresolved) {
+          try {
+            const r2 = await fetch('https://db.ygoprodeck.com/api/v7/cardinfo.php?passcode='+p);
+            const d2 = await r2.json();
+            if (d2?.data?.[0]) {
+              const c = d2.data[0];
+              // Store by the alternate art passcode so future lookups work
+              window._cardDataCache[p] = { name: c.name, card_type: c.type || '', baseId: c.id };
+              window._passcodeCache[p] = c.name;
+            }
+          } catch(e) {}
         }
       } catch(e) {}
     }
@@ -9141,7 +9162,11 @@ async function showDeckViewPopup(deck) {
       const img = document.createElement('img');
       img.style.cssText = 'width:100%;border-radius:3px;display:block;background:var(--card2)';
       img.title = name; img.alt = name; img.loading = 'lazy';
-      if (p) img.src = `https://images.ygoprodeck.com/images/cards/${p}.jpg`;
+      if (p) {
+        // Use baseId if available (alternate art passcode maps to different base card id)
+        const _imgId = window._cardDataCache[p]?.baseId || p;
+        img.src = `https://images.ygoprodeck.com/images/cards/${_imgId}.jpg`;
+      }
       img.onerror = async () => {
         // Alternate art passcode — try looking up the correct image by card name
         if (name) {
