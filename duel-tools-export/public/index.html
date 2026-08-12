@@ -2391,7 +2391,7 @@ async function deletePlayerBatches(e, batches) {
 function igtBuildBatchItem(b, list, indented) {
   const isTemp = !!b.isTemp;
   const reg = window._playerRegistry && window._playerRegistry[(b.player||'').toLowerCase()];
-  const aliasNames = reg ? new Set([b.player.toLowerCase(), ...(reg.aliases||[]).map(a=>a.toLowerCase())]) : new Set([(b.player||'').toLowerCase()]);
+  const aliasNames = reg ? new Set([String(b.player||'').toLowerCase(), ...(reg.aliases||[]).filter(a=>a&&typeof a==='string').map(a=>a.toLowerCase())]) : new Set([String(b.player||'').toLowerCase()]);
   const totalCount = isTemp ? (b.replays||[]).length : (list||[]).filter(x => aliasNames.has((x.player||'').toLowerCase())).reduce((sum,x)=>sum+(x.replayCount||0),0);
   const ownCount = b.replayCount || (b.replays||[]).length || 0;
   const displayCount = Math.max(totalCount, ownCount);
@@ -6265,7 +6265,7 @@ async function processEventXLSX(arrayBuf, filename) {
           player2_choice:p.player2_choice||p.p2pick||null, pick:p.pick||null
         }));
 
-        const parsed = plays.length ? parseMatch(rep.replayId, plays, batchPlayer, batchAliases, p1, p2) : null;
+        const parsed = plays.length ? parseMatch(rep.replayId, plays, String(batchPlayer||''), (batchAliases||[]).map(String), String(p1||''), String(p2||'')) : null;
         const parsedStore = parsed ? {
           games:parsed.games, allMine:parsed.allMine, allOpp:parsed.allOpp,
           oppName:parsed.oppName, myW:parsed.myW, oppW:parsed.oppW,
@@ -6333,8 +6333,8 @@ async function findOrPromptPlayer(playerName) {
   // Check _allProfileBatches first
   const batches = _allProfileBatches || [];
   const match = batches.find(b => {
-    if ((b.player||'').toLowerCase() === nameLow) return true;
-    if ((b.aliases||[]).some(a => a.toLowerCase() === nameLow)) return true;
+    if ((b.player && typeof b.player === 'string' ? b.player : '').toLowerCase() === nameLow) return true;
+    if ((b.aliases||[]).some(a => a && typeof a === 'string' && a.toLowerCase() === nameLow)) return true;
     return false;
   });
 
@@ -7328,7 +7328,7 @@ async function renderMatchDisplay(m) {
 function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlayer2) {
   if (!plays || !plays.length) return null;
   // Build set of all names this player goes by (lowercase)
-  const _playerNames = new Set([player.toLowerCase(), ...(aliases||[]).map(a=>a.toLowerCase())]);
+  const _playerNames = new Set([String(player||'').toLowerCase(), ...(aliases||[]).filter(a=>a&&typeof a==='string').map(a=>a.toLowerCase())].filter(Boolean));
   const _isPlayer = u => {
     if (!u) return false;
     const ul = String(u).toLowerCase().trim();
@@ -11237,7 +11237,7 @@ async function cleanBatchFromDeck() {
   // Also pull from player registry
   const _regEntry = window._playerRegistry && window._playerRegistry[player.toLowerCase()];
   const _regAliases = _regEntry ? (_regEntry.aliases||[]) : [];
-  const allNames = new Set([player, ...aliases, ..._regAliases].map(n => n.toLowerCase()).filter(Boolean));
+  const allNames = new Set([player, ...aliases, ..._regAliases].filter(n=>n&&typeof n==='string').map(n => n.toLowerCase()));
 
   const msg = `Remove replays from "${_activeBatch.name}" where "${player}"${aliases.length?' (or '+aliases.join(', ')+')':''} is not one of the players?\n\nThis fixes wrong cross-links and mis-imported replays.`;
   if (!confirm(msg)) return;
