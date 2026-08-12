@@ -6152,6 +6152,9 @@ async function processEventXLSX(arrayBuf, filename) {
 
   st('Processing '+playerSheets.length+' player sheets...', 'var(--muted)');
 
+  // Clear replay proxy cache for this import run
+  window._eventImportCache = {};
+
   // Extract event ID from xlsx filename (e.g. "FLC41.xlsx" → "FLC41")
   const _xlsxEventId = filename.replace(/\.xlsx?$/i,'').toUpperCase().trim();
 
@@ -6216,7 +6219,7 @@ async function processEventXLSX(arrayBuf, filename) {
       continue;
     }
 
-    results.push({ player: sheetName, status: 'pending', replays, batchId: matchResult.batchId, dbName: matchResult.dbName||null, hasDupes });
+    results.push({ player: sheetName, status: 'pending', replays, batchId: matchResult.batchId, dbName: matchResult.dbName||null, hasDupes, replayIds: replays.map(r=>r.replayId) });
   }
 
   // Now import replays for each matched player
@@ -6240,10 +6243,16 @@ async function processEventXLSX(arrayBuf, filename) {
           continue;
         }
 
-        // Fetch replay via proxy
-        const proxyRes = await fetch(API+'/proxy/replay?id='+encodeURIComponent(rep.replayId), { headers: authHeaders() });
-        if (!proxyRes.ok) throw new Error('Proxy fetch failed: HTTP '+proxyRes.status);
-        const proxyData = await proxyRes.json();
+        // Fetch replay via proxy (use cached data if available from detection phase)
+        const _cacheKey = rep.replayId;
+        let proxyData = window._eventImportCache && window._eventImportCache[_cacheKey];
+        if (!proxyData) {
+          const proxyRes = await fetch(API+'/proxy/replay?id='+encodeURIComponent(rep.replayId), { headers: authHeaders() });
+          if (!proxyRes.ok) throw new Error('Proxy fetch failed: HTTP '+proxyRes.status);
+          proxyData = await proxyRes.json();
+          if (!window._eventImportCache) window._eventImportCache = {};
+          window._eventImportCache[_cacheKey] = proxyData;
+        }
 
         if (proxyData.error || proxyData.timedOut) {
           throw new Error(proxyData.error || 'Replay timed out');
@@ -6254,12 +6263,43 @@ async function processEventXLSX(arrayBuf, filename) {
         const plays = (_replayObj.allPlays && _replayObj.allPlays.length ? _replayObj.allPlays : null)
           || (_replayObj.plays && _replayObj.plays.length ? _replayObj.plays : null)
           || [];
-        const p1 = _replayObj.player1 || '';
-        const p2 = _replayObj.player2 || '';
+        const p1 = String(_replayObj.player1 || '');
+        const p2 = String(_replayObj.player2 || '');
 
-        // Get batch player name + aliases for parsing
-        const batchPlayer = pr.dbName || batch.player || '';
-        const batchAliases = [...(batch.aliases||[]), ...(pr.dbName && pr.dbName !== (batch.player||'') ? [pr.dbName] : [])];
+        // Determine the correct player name to parse as:
+        // Use dbName if it matches p1 or p2 exactly, otherwise pick the one that matches best
+        let batchPlayer = pr.dbName || batch.player || '';
+        if (batchPlayer) {
+          const bpLow = batchPlayer.toLowerCase();
+          if (p1.toLowerCase() !== bpLow && p2.toLowerCase() !== bpLow) {
+            // Neither matches exactly — try fuzzy: pick p1 or p2 that's more similar
+            const s1 = fuzzyMatchScore(batchPlayer, p1);
+            const s2 = fuzzyMatchScore(batchPlayer, p2);
+            if (s1 >= 0.65 || s2 >= 0.65) {
+              batchPlayer = s1 >= s2 ? p1 : p2;
+            }
+          }
+        } else if (!batchPlayer) {
+          // No dbName yet — count p1/p2 across all replays we've processed so far
+          // Use the most frequent player seen in this batch's replays
+          const _allP = (pr.replays||[]).reduce((acc, r) => {
+            const _rd = window._eventImportCache && window._eventImportCache[r.replayId];
+            if (_rd) {
+              const _ro = _rd.replay || _rd;
+              if (_ro.player1) acc[_ro.player1] = (acc[_ro.player1]||0)+1;
+              if (_ro.player2) acc[_ro.player2] = (acc[_ro.player2]||0)+1;
+            }
+            return acc;
+          }, {});
+          const _sortedP = Object.entries(_allP).sort((a,b)=>b[1]-a[1]);
+          batchPlayer = _sortedP.length ? _sortedP[0][0] : p1;
+        }
+
+        const batchAliases = [...new Set([
+          ...(batch.aliases||[]),
+          ...(pr.dbName ? [pr.dbName] : []),
+          batchPlayer
+        ].filter(Boolean))];
 
         // Parse match
         const rpsPlays = (plays||[]).filter(p=>p && p.play==='RPS').map(p=>({
@@ -6268,7 +6308,7 @@ async function processEventXLSX(arrayBuf, filename) {
           player2_choice:p.player2_choice||p.p2pick||null, pick:p.pick||null
         }));
 
-        const parsed = plays.length ? parseMatch(rep.replayId, plays, String(batchPlayer||''), (batchAliases||[]).map(String), String(p1||''), String(p2||'')) : null;
+        const parsed = plays.length ? parseMatch(rep.replayId, plays, String(batchPlayer||''), batchAliases.map(String), p1, p2) : null;
         const parsedStore = parsed ? {
           games:parsed.games, allMine:parsed.allMine, allOpp:parsed.allOpp,
           oppName:parsed.oppName, myW:parsed.myW, oppW:parsed.oppW,
@@ -6369,11 +6409,16 @@ async function findOrPromptPlayer(playerName, replayIds) {
     try {
       const nameCounts = {};
       // Sample first 3 replays
-      for (const rid of replayIds.slice(0,3)) {
+      for (const rid of replayIds) { // sample ALL replays to find the consistent player
         try {
-          const pr = await fetch(API+'/proxy/replay?id='+encodeURIComponent(rid), { headers: authHeaders() });
-          if (!pr.ok) continue;
-          const pd = await pr.json();
+          let pd = window._eventImportCache && window._eventImportCache[rid];
+          if (!pd) {
+            const pr = await fetch(API+'/proxy/replay?id='+encodeURIComponent(rid), { headers: authHeaders() });
+            if (!pr.ok) continue;
+            pd = await pr.json();
+            if (!window._eventImportCache) window._eventImportCache = {};
+            window._eventImportCache[rid] = pd;
+          }
           const rObj = pd.replay || pd;
           if (rObj.player1) nameCounts[rObj.player1] = (nameCounts[rObj.player1]||0)+1;
           if (rObj.player2) nameCounts[rObj.player2] = (nameCounts[rObj.player2]||0)+1;
