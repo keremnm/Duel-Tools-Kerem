@@ -5333,7 +5333,7 @@ function renderRPS() {
     });
   }
   const _rpsIsPlayer = (u, replay) => {
-    if (!u) return false;
+    if (!u || typeof u !== 'string') return false;
     const ul = String(u).toLowerCase().trim();
     // For dualParse temp batches: match based on which slot the selected player is in
     if (_activeBatch.dualParse && replay && _rpsPlayerName) {
@@ -6246,22 +6246,26 @@ async function processEventXLSX(arrayBuf, filename) {
           throw new Error(proxyData.error || 'Replay timed out');
         }
 
-        const plays = proxyData.replay?.plays || proxyData.allPlays || proxyData.plays || [];
-        const p1 = proxyData.replay?.player1 || proxyData.player1 || '';
-        const p2 = proxyData.replay?.player2 || proxyData.player2 || '';
+        // Handle various proxy response formats
+        const _replayObj = proxyData.replay || proxyData;
+        const plays = (_replayObj.allPlays && _replayObj.allPlays.length ? _replayObj.allPlays : null)
+          || (_replayObj.plays && _replayObj.plays.length ? _replayObj.plays : null)
+          || [];
+        const p1 = _replayObj.player1 || '';
+        const p2 = _replayObj.player2 || '';
 
         // Get batch player name + aliases for parsing
         const batchPlayer = batch.player || '';
         const batchAliases = batch.aliases || [];
 
         // Parse match
-        const rpsPlays = plays.filter(p=>p.play==='RPS').map(p=>({
+        const rpsPlays = (plays||[]).filter(p=>p && p.play==='RPS').map(p=>({
           game:p.game||null, player1:p.player1||null, player2:p.player2||null,
           player1_choice:p.player1_choice||p.p1pick||null,
           player2_choice:p.player2_choice||p.p2pick||null, pick:p.pick||null
         }));
 
-        const parsed = parseMatch(rep.replayId, plays, batchPlayer, batchAliases, p1, p2);
+        const parsed = plays.length ? parseMatch(rep.replayId, plays, batchPlayer, batchAliases, p1, p2) : null;
         const parsedStore = parsed ? {
           games:parsed.games, allMine:parsed.allMine, allOpp:parsed.allOpp,
           oppName:parsed.oppName, myW:parsed.myW, oppW:parsed.oppW,
@@ -6304,7 +6308,19 @@ async function processEventXLSX(arrayBuf, filename) {
     exportFailureXLSX(failRows, filename.replace('.xlsx','')+'_failures.xlsx');
   }
 
-  st('Event import complete — '+totalImported+' replays imported, '+totalFailed+' failed'+(failRows.length?' (failures exported)':''), totalFailed > 0 ? 'var(--amber)' : 'var(--green)');
+  // Run crosslink scan automatically after bulk import
+  if (totalImported > 0) {
+    st('Running crosslink scan...', 'var(--muted)');
+    try {
+      const clRes = await fetch(API+'/crosslink/scan', { method:'POST', headers: authHeaders() });
+      const clData = await clRes.json();
+      st('Event import complete — '+totalImported+' replays imported, '+totalFailed+' failed. Crosslinked: '+clData.linked+' replays.'+(failRows.length?' (failures exported)':''), totalFailed > 0 ? 'var(--amber)' : 'var(--green)');
+    } catch(e) {
+      st('Event import complete — '+totalImported+' replays imported, '+totalFailed+' failed. (Crosslink scan failed: '+e.message+')'+(failRows.length?' (failures exported)':''), 'var(--amber)');
+    }
+  } else {
+    st('Event import complete — '+totalImported+' replays imported, '+totalFailed+' failed'+(failRows.length?' (failures exported)':''), totalFailed > 0 ? 'var(--amber)' : 'var(--green)');
+  }
   loadBatches();
 }
 
