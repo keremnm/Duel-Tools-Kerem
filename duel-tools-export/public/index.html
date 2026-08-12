@@ -6152,6 +6152,9 @@ async function processEventXLSX(arrayBuf, filename) {
 
   st('Processing '+playerSheets.length+' player sheets...', 'var(--muted)');
 
+  // Extract event ID from xlsx filename (e.g. "FLC41.xlsx" → "FLC41")
+  const _xlsxEventId = filename.replace(/\.xlsx?$/i,'').toUpperCase().trim();
+
   const results = []; // { player, status, replays, errors }
   const failRows = []; // for output xlsx
 
@@ -6189,7 +6192,7 @@ async function processEventXLSX(arrayBuf, filename) {
     for (let i = headerIdx + 1; i < rows.length; i++) {
       const row = rows[i];
       const url = String(row[replayLinkCol]||'').trim();
-      const eventId = eventIdCol >= 0 ? String(row[eventIdCol]||'').trim() : '';
+      const eventId = eventIdCol >= 0 ? String(row[eventIdCol]||'').trim() : _xlsxEventId;
       const round = roundCol >= 0 ? String(row[roundCol]||'').trim() : '';
       if (!url || !url.includes('duelingbook.com')) continue;
       if (seenUrls.has(url)) { hasDupes = true; continue; }
@@ -6206,7 +6209,7 @@ async function processEventXLSX(arrayBuf, filename) {
     }
 
     // Find or ask about player match
-    const matchResult = await findOrPromptPlayer(sheetName);
+    const matchResult = await findOrPromptPlayer(sheetName, replays.map(r=>r.replayId));
     if (!matchResult) {
       failRows.push({ Player: sheetName, ReplayURL: replays.map(r=>r.url).join('\n'), Reason: 'Player skipped by user' });
       results.push({ player: sheetName, status: 'skipped' });
@@ -6255,8 +6258,8 @@ async function processEventXLSX(arrayBuf, filename) {
         const p2 = _replayObj.player2 || '';
 
         // Get batch player name + aliases for parsing
-        const batchPlayer = batch.player || '';
-        const batchAliases = batch.aliases || [];
+        const batchPlayer = matchResult.dbName || batch.player || '';
+        const batchAliases = [...(batch.aliases||[]), ...(matchResult.dbName && matchResult.dbName !== (batch.player||'') ? [matchResult.dbName] : [])];
 
         // Parse match
         const rpsPlays = (plays||[]).filter(p=>p && p.play==='RPS').map(p=>({
@@ -6324,64 +6327,144 @@ async function processEventXLSX(arrayBuf, filename) {
   loadBatches();
 }
 
-// Prompt user whether to create a new profile for an unmatched player
-const _pendingPlayerPrompts = {};
-async function findOrPromptPlayer(playerName) {
-  // Check db.batches (loaded in memory via _allProfileBatches)
-  const nameLow = playerName.toLowerCase();
+// ── Smart player finder: fuzzy match + DB username detection ─────────────────
+function fuzzyMatchScore(a, b) {
+  // Returns 0-1 similarity. Strips leading dots/underscores, case insensitive.
+  const clean = s => s.toLowerCase().replace(/^[._]+/, '').replace(/[._]+$/, '').replace(/[._]/g,' ').trim();
+  const ca = clean(a), cb = clean(b);
+  if (ca === cb) return 1.0;
+  if (ca.includes(cb) || cb.includes(ca)) return 0.85;
+  // Levenshtein-lite: count matching chars
+  let matches = 0;
+  const shorter = ca.length < cb.length ? ca : cb;
+  const longer  = ca.length < cb.length ? cb : ca;
+  for (let i = 0; i < shorter.length; i++) { if (longer.includes(shorter[i])) matches++; }
+  return matches / longer.length;
+}
 
-  // Check _allProfileBatches first
+async function findOrPromptPlayer(playerName, replayIds) {
+  const nameLow = (playerName||'').toLowerCase().trim();
   const batches = _allProfileBatches || [];
-  const match = batches.find(b => {
-    if ((b.player && typeof b.player === 'string' ? b.player : '').toLowerCase() === nameLow) return true;
-    if ((b.aliases||[]).some(a => a && typeof a === 'string' && a.toLowerCase() === nameLow)) return true;
+
+  // 1. Exact match (name or alias)
+  const exact = batches.find(b => {
+    if ((typeof b.player==='string' ? b.player : '').toLowerCase() === nameLow) return true;
+    if ((b.aliases||[]).some(a => typeof a==='string' && a.toLowerCase() === nameLow)) return true;
     return false;
   });
+  if (exact) return { batchId: exact.id, player: exact.player, existing: true, dbName: null };
 
-  if (match) return { batchId: match.id, player: match.player, existing: true };
+  // 2. Fuzzy match — find batches with score > 0.75
+  const fuzzy = batches.map(b => ({
+    batch: b,
+    score: Math.max(
+      fuzzyMatchScore(playerName, b.player||''),
+      ...(b.aliases||[]).filter(a=>typeof a==='string').map(a => fuzzyMatchScore(playerName, a))
+    )
+  })).filter(x => x.score >= 0.75).sort((a,b) => b.score - a.score);
 
-  // No match — ask user
+  // 3. Fetch replays to detect the most frequent DB username
+  let detectedDbName = null;
+  if (replayIds && replayIds.length) {
+    try {
+      const nameCounts = {};
+      // Sample first 3 replays
+      for (const rid of replayIds.slice(0,3)) {
+        try {
+          const pr = await fetch(API+'/proxy/replay?id='+encodeURIComponent(rid), { headers: authHeaders() });
+          if (!pr.ok) continue;
+          const pd = await pr.json();
+          const rObj = pd.replay || pd;
+          if (rObj.player1) nameCounts[rObj.player1] = (nameCounts[rObj.player1]||0)+1;
+          if (rObj.player2) nameCounts[rObj.player2] = (nameCounts[rObj.player2]||0)+1;
+        } catch(e) {}
+      }
+      // Most frequent name that is similar to playerName
+      const sorted = Object.entries(nameCounts).sort((a,b)=>b[1]-a[1]);
+      for (const [name] of sorted) {
+        if (fuzzyMatchScore(playerName, name) >= 0.70) { detectedDbName = name; break; }
+      }
+      // Fallback: just take the most frequent name overall
+      if (!detectedDbName && sorted.length) detectedDbName = sorted[0][0];
+    } catch(e) {}
+  }
+
+  // Show prompt with all info
   return new Promise(resolve => {
     const existing = document.getElementById('event-import-prompt');
     if (existing) existing.remove();
 
     const overlay = document.createElement('div');
     overlay.id = 'event-import-prompt';
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
 
     const box = document.createElement('div');
-    box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:420px;width:100%;font-family:monospace';
+    box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:480px;width:100%;font-family:monospace;display:flex;flex-direction:column;gap:12px';
 
-    box.innerHTML = '<div style="font-size:13px;color:var(--text);margin-bottom:12px">No existing batch found for <b style="color:var(--amber)">'+playerName+'</b>.</div>'+
-      '<div style="font-size:11px;color:var(--muted);margin-bottom:16px">Create a new profile for this player?</div>'+
-      '<div style="display:flex;gap:10px">'+
-      '<button id="eip-create" style="flex:1;background:var(--green);color:#050508;border:none;padding:8px;border-radius:6px;font-family:monospace;font-weight:bold;cursor:pointer">✓ Create Profile</button>'+
-      '<button id="eip-skip" style="flex:1;background:none;color:var(--red);border:1px solid var(--red);padding:8px;border-radius:6px;font-family:monospace;cursor:pointer">✕ Skip Player</button>'+
+    let html = '<div style="font-size:13px;color:var(--text)">Player lookup: <b style="color:var(--amber)">'+playerName+'</b></div>';
+
+    if (fuzzy.length) {
+      html += '<div style="font-size:11px;color:var(--muted)">Possible matches found:</div>';
+      html += '<div style="display:flex;flex-direction:column;gap:6px" id="eip-fuzzy-list">';
+      fuzzy.slice(0,4).forEach((f,i) => {
+        html += '<button class="eip-fuzzy-btn" data-idx="'+i+'" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;cursor:pointer;text-align:left;font-family:monospace;font-size:11px">'+
+          '✓ Use existing: <b>'+f.batch.player+'</b> <span style="color:var(--muted)">('+Math.round(f.score*100)+'% match)</span></button>';
+      });
+      html += '</div>';
+    }
+
+    if (detectedDbName) {
+      html += '<div style="font-size:11px;color:var(--muted)">DuelingBook username detected in replays: <b style="color:var(--green)">'+detectedDbName+'</b></div>';
+    }
+
+    html += '<input id="eip-name-inp" value="'+(detectedDbName||playerName)+'" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:4px;outline:none" placeholder="Player name" />';
+    html += '<div style="display:flex;gap:8px">'+
+      '<button id="eip-create" style="flex:1;background:var(--green);color:#050508;border:none;padding:8px;border-radius:6px;font-family:monospace;font-weight:bold;cursor:pointer">✓ Create New Profile</button>'+
+      '<button id="eip-skip" style="flex:1;background:none;color:var(--red);border:1px solid var(--red);padding:8px;border-radius:6px;font-family:monospace;cursor:pointer">✕ Skip</button>'+
       '</div>';
 
+    box.innerHTML = html;
     overlay.appendChild(box);
     document.body.appendChild(overlay);
 
+    // Fuzzy match buttons — use existing batch
+    box.querySelectorAll('.eip-fuzzy-btn').forEach((btn, i) => {
+      btn.onclick = async () => {
+        overlay.remove();
+        const f = fuzzy[i];
+        // Auto-add playerName as alias if not already there
+        const aliasToAdd = detectedDbName || playerName;
+        const currentAliases = f.batch.aliases || [];
+        if (aliasToAdd && !currentAliases.some(a => a.toLowerCase() === aliasToAdd.toLowerCase())) {
+          const newAliases = [...currentAliases, aliasToAdd];
+          await fetch(API+'/batches/'+f.batch.id, {
+            method:'PATCH', headers: authHeaders(),
+            body: JSON.stringify({ aliases: newAliases })
+          }).catch(()=>{});
+          f.batch.aliases = newAliases;
+        }
+        resolve({ batchId: f.batch.id, player: f.batch.player, existing: true, dbName: detectedDbName||playerName });
+      };
+    });
+
     box.querySelector('#eip-create').onclick = async () => {
       overlay.remove();
-      // Create new batch for player
+      const nameToUse = box.querySelector('#eip-name-inp').value.trim() || playerName;
+      const aliasToAdd = detectedDbName && detectedDbName !== nameToUse ? detectedDbName : null;
       try {
         const res = await fetch(API+'/batches', {
           method:'POST', headers: authHeaders(),
-          body: JSON.stringify({ player: playerName, name: playerName, aliases: [] })
+          body: JSON.stringify({ player: nameToUse, name: nameToUse, aliases: aliasToAdd ? [aliasToAdd] : [] })
         });
         if (!res.ok) throw new Error('HTTP '+res.status);
         const newBatch = await res.json();
-        resolve({ batchId: newBatch.id, player: playerName, existing: false });
-      } catch(e) {
-        resolve(null);
-      }
+        // Also refresh _allProfileBatches
+        if (window._allProfileBatches) _allProfileBatches.push({ id: newBatch.id, player: nameToUse, aliases: aliasToAdd ? [aliasToAdd] : [] });
+        resolve({ batchId: newBatch.id, player: nameToUse, existing: false, dbName: detectedDbName });
+      } catch(e) { resolve(null); }
     };
 
-    box.querySelector('#eip-skip').onclick = () => {
-      overlay.remove();
-      resolve(null);
-    };
+    box.querySelector('#eip-skip').onclick = () => { overlay.remove(); resolve(null); };
   });
 }
 
@@ -6406,12 +6489,21 @@ function importEventDecks() {
     const failRows = [];
     let imported = 0;
 
+    // Derive event ID from first file's name as fallback
+    const _xlsxEventId = files.length > 0 ? (() => {
+      const bn = files[0].name.replace(/\.ydk$/i,'');
+      const ld = bn.lastIndexOf('-');
+      return ld >= 0 ? bn.slice(ld+1).toUpperCase() : '';
+    })() : '';
+
     for (const file of files) {
       // Filename format: playerName-EVENTID.ydk  e.g. zainoman-FLC41.ydk
-      const baseName = file.name.replace('.ydk','');
-      const parts = baseName.split('-');
-      const eventId = parts.length > 1 ? parts[parts.length-1].toUpperCase() : '';
-      const playerName = parts.slice(0, parts.length > 1 ? -1 : parts.length).join('-');
+      // Filename format: playerName-EVENTID.ydk
+      // Event ID is the LAST segment after the last hyphen
+      const baseName = file.name.replace(/\.ydk$/i,'');
+      const lastDash = baseName.lastIndexOf('-');
+      const eventId = lastDash >= 0 ? baseName.slice(lastDash+1).toUpperCase().trim() : _xlsxEventId||'';
+      const playerName = lastDash >= 0 ? baseName.slice(0, lastDash).trim() : baseName.trim();
 
       try {
         const text = await file.text();
