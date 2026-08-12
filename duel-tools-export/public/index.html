@@ -6216,7 +6216,7 @@ async function processEventXLSX(arrayBuf, filename) {
       continue;
     }
 
-    results.push({ player: sheetName, status: 'pending', replays, batchId: matchResult.batchId, hasDupes });
+    results.push({ player: sheetName, status: 'pending', replays, batchId: matchResult.batchId, dbName: matchResult.dbName||null, hasDupes });
   }
 
   // Now import replays for each matched player
@@ -6258,8 +6258,8 @@ async function processEventXLSX(arrayBuf, filename) {
         const p2 = _replayObj.player2 || '';
 
         // Get batch player name + aliases for parsing
-        const batchPlayer = matchResult.dbName || batch.player || '';
-        const batchAliases = [...(batch.aliases||[]), ...(matchResult.dbName && matchResult.dbName !== (batch.player||'') ? [matchResult.dbName] : [])];
+        const batchPlayer = pr.dbName || batch.player || '';
+        const batchAliases = [...(batch.aliases||[]), ...(pr.dbName && pr.dbName !== (batch.player||'') ? [pr.dbName] : [])];
 
         // Parse match
         const rpsPlays = (plays||[]).filter(p=>p && p.play==='RPS').map(p=>({
