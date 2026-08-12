@@ -557,10 +557,25 @@ function playerNames(entry) {
 }
 function findPlayerByUsername(username) {
   const ul = username.toLowerCase().trim();
+  if (!ul) return null;
+  // First: check db.players (has full aliases from registry)
   for (const entry of Object.values(db.players)) {
     const names = playerNames(entry);
-    // Exact match only — no substring fuzzy matching to avoid false cross-links
     if (names.includes(ul)) return entry;
+  }
+  // Second: check db.batches directly — player may have a batch but no registry entry
+  // Collect all aliases from ALL batches for this player
+  for (const batch of Object.values(db.batches)) {
+    const batchNameLower = (batch.player||'').toLowerCase();
+    const batchAliases = (batch.aliases||[]).map(a=>a.toLowerCase());
+    if (batchNameLower === ul || batchAliases.includes(ul)) {
+      // Merge aliases from ALL batches for this player
+      const allBatchAliases = Object.values(db.batches)
+        .filter(b => (b.player||'').toLowerCase() === batchNameLower)
+        .flatMap(b => b.aliases||[]);
+      const mergedAliases = [...new Set(allBatchAliases)];
+      return { name: batch.player, aliases: mergedAliases, _fromBatch: true };
+    }
   }
   return null;
 }
@@ -813,6 +828,7 @@ const server = http.createServer(async (req, res) => {
   // ── POST /api/auth/login ────────────────────────────────────────────────────
   if (parts[0]==='auth' && parts[1]==='login' && method==='POST') {
     return readBody(req, async data => {
+      try {
       const email = (data.email||'').toLowerCase().trim();
       const pw    = (data.password||'').trim();
       if (!email || !pw) return json(res, 400, { error: 'Email and password required' });
@@ -822,24 +838,23 @@ const server = http.createServer(async (req, res) => {
       const sessionId = crypto.randomUUID();
       const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
       const ua = (req.headers['user-agent']||'').slice(0,120);
-      // Invalidate any previous session — new login kicks old one
       const prevSession = user.activeSessionId;
       user.activeSessionId = sessionId;
-      // Session history for Head Admin audit
       if (!user.sessionLog) user.sessionLog = [];
       user.sessionLog.push({ sessionId, ip, ua, loginAt: Date.now(), active: true });
-      // Keep last 20 sessions per user
       if (user.sessionLog.length > 20) user.sessionLog = user.sessionLog.slice(-20);
-      // Mark previous session as kicked in log
       if (prevSession) {
         const prev = user.sessionLog.find(s => s.sessionId === prevSession);
         if (prev) { prev.active = false; prev.kickedAt = Date.now(); }
       }
-      // Save session data async — don't block the login response
       saveDB('users').catch(e => console.error('[Auth] Session save error:', e.message));
       const token = makeToken(user.id, sessionId);
-      console.log('[Auth] Login:', user.email, 'from', ip, prevSession ? '(kicked previous session)' : '(fresh login)');
+      console.log('[Auth] Login:', user.email, '('+user.role+')', 'from', ip);
       return json(res, 200, { token, role: user.role, email: user.email, name: user.name||email.split('@')[0] });
+      } catch(e) {
+        console.error('[Auth] Login error:', e.message, e.stack);
+        return json(res, 500, { error: 'Login error: ' + e.message });
+      }
     });
   }
 
@@ -1177,7 +1192,7 @@ const server = http.createServer(async (req, res) => {
         // Store parsed result if provided; strip allPlays either way
         const strippedPlays = (minPlays||[]).map(stripPlay);
         const parsedData = data.parsed || null;
-        b.replays.push({ replayId:data.replayId, plays:data.plays||[], allPlays:parsedData?[]:strippedPlays, parsed:parsedData, timedOut:!!data.timedOut, eventLabel:data.eventLabel||'', oppName:data.oppName||'', player1:data.player1||null, player2:data.player2||null, savedAt:Date.now() });
+        b.replays.push({ replayId:data.replayId, plays:data.plays||[], allPlays:parsedData?[]:strippedPlays, parsed:parsedData, timedOut:!!data.timedOut, eventLabel:data.eventLabel||'', round:data.round||'', oppName:data.oppName||'', player1:data.player1||null, player2:data.player2||null, savedAt:Date.now() });
         b.status = 'ready';
         markBatchDirty(b.id);
         // Log for Head Admin revert

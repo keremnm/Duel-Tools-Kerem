@@ -6,6 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <title>Duel Tools</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
@@ -676,6 +677,8 @@ select{cursor:pointer}
       <button onclick="openBatchPanel('temp')" style="width:100%;background:var(--card);color:var(--amber);border:1px solid var(--amber);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">⚡ Temporary Batch</button>
       <button onclick="openBatchPanel('new')" style="width:100%;background:var(--green);color:#050508;border:none;border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:9px;cursor:pointer;text-align:left">＋ New Batch</button>
       <button id="add-to-batch-btn" onclick="openBatchPanel('add')" style="display:block;width:100%;background:var(--card);color:var(--blue);border:1px solid var(--blue);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">➕ Add to Existing Batch</button>
+      <button onclick="importEventData()" style="display:none;width:100%;background:var(--card);color:var(--purple,#a78bfa);border:1px solid var(--purple,#a78bfa);border-radius:6px;font-family:monospace;font-weight:bold;font-size:11px;padding:7px;cursor:pointer;text-align:left" id="import-event-data-btn">📥 Add Full Event Data</button>
+      <button onclick="importEventDecks()" style="display:none;width:100%;background:var(--card);color:var(--purple,#a78bfa);border:1px solid var(--purple,#a78bfa);border-radius:6px;font-family:monospace;font-weight:bold;font-size:11px;padding:7px;cursor:pointer;text-align:left" id="import-event-decks-btn">📥 Add Full Event Decks</button>
       <button id="clean-batch-btn" onclick="cleanBatch()" style="display:none;width:100%;background:var(--card);color:var(--red);border:1px solid var(--red);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">🧹 Clean Invalid Replays</button>
       <div style="display:flex;gap:5px">
         <button class="btn-sec" onclick="exportBatch()" style="flex:1;font-size:11px;padding:5px">⬇ Export</button>
@@ -6113,6 +6116,335 @@ async function reparseReplay(replayId) {
   }
 }
 
+// ── Import Full Event Data (xlsx) ────────────────────────────────────────────
+function importEventData() {
+  if (!isMinerRole(_userRole)) { st('Miners and above only', 'var(--red)'); return; }
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = '.xlsx,.xls';
+  inp.onchange = async () => {
+    const file = inp.files[0];
+    if (!file) return;
+    st('Reading xlsx...', 'var(--muted)');
+    try {
+      const buf = await file.arrayBuffer();
+      // Use SheetJS
+      const XLSX = await import('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js').catch(() => window.XLSX);
+      if (!XLSX) { st('SheetJS not available', 'var(--red)'); return; }
+      await processEventXLSX(buf, file.name);
+    } catch(e) {
+      st('Failed to read xlsx: '+e.message, 'var(--red)');
+      console.error('[EventImport]', e);
+    }
+  };
+  inp.click();
+}
+
+async function processEventXLSX(arrayBuf, filename) {
+  // SheetJS loaded via CDN script tag at top of page or dynamic import
+  const XLSX = window.XLSX;
+  if (!XLSX) { st('SheetJS (XLSX) not loaded', 'var(--red)'); return; }
+
+  const wb = XLSX.read(arrayBuf, { type: 'array' });
+  const sheetNames = wb.SheetNames;
+
+  // Sheet 0 = summary/TOC, skip it. Sheet 1+ = one per player
+  const playerSheets = sheetNames.slice(1);
+
+  st('Processing '+playerSheets.length+' player sheets...', 'var(--muted)');
+
+  const results = []; // { player, status, replays, errors }
+  const failRows = []; // for output xlsx
+
+  for (const sheetName of playerSheets) {
+    const ws = wb.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+
+    // Find header row — look for "Event ID" and "Replay Link"
+    let headerIdx = -1;
+    for (let i = 0; i < Math.min(rows.length, 5); i++) {
+      const r = rows[i].map(c => String(c||'').toLowerCase());
+      if (r.includes('event id') && r.includes('replay link')) { headerIdx = i; break; }
+    }
+    if (headerIdx === -1) {
+      failRows.push({ Player: sheetName, ReplayURL: '', Reason: 'Could not find header row (Event ID / Replay Link)' });
+      results.push({ player: sheetName, status: 'error', error: 'No header row' });
+      continue;
+    }
+
+    const headers = rows[headerIdx].map(c => String(c||'').toLowerCase().trim());
+    const eventIdCol = headers.indexOf('event id');
+    const replayLinkCol = headers.indexOf('replay link');
+    const roundCol = headers.findIndex(h => h.includes('round'));
+
+    if (replayLinkCol === -1) {
+      failRows.push({ Player: sheetName, ReplayURL: '', Reason: 'No Replay Link column found' });
+      continue;
+    }
+
+    // Collect unique replay URLs for this player
+    const seenUrls = new Set();
+    const replays = [];
+    let hasDupes = false;
+
+    for (let i = headerIdx + 1; i < rows.length; i++) {
+      const row = rows[i];
+      const url = String(row[replayLinkCol]||'').trim();
+      const eventId = eventIdCol >= 0 ? String(row[eventIdCol]||'').trim() : '';
+      const round = roundCol >= 0 ? String(row[roundCol]||'').trim() : '';
+      if (!url || !url.includes('duelingbook.com')) continue;
+      if (seenUrls.has(url)) { hasDupes = true; continue; }
+      seenUrls.add(url);
+      // Extract replay ID from URL
+      const idMatch = url.match(/id=([^&]+)/);
+      if (!idMatch) { failRows.push({ Player: sheetName, ReplayURL: url, Reason: 'Could not parse replay ID from URL' }); continue; }
+      replays.push({ url, replayId: idMatch[1], eventId, round });
+    }
+
+    if (!replays.length) {
+      failRows.push({ Player: sheetName, ReplayURL: '', Reason: 'No valid replay URLs found' });
+      continue;
+    }
+
+    // Find or ask about player match
+    const matchResult = await findOrPromptPlayer(sheetName);
+    if (!matchResult) {
+      failRows.push({ Player: sheetName, ReplayURL: replays.map(r=>r.url).join('\n'), Reason: 'Player skipped by user' });
+      results.push({ player: sheetName, status: 'skipped' });
+      continue;
+    }
+
+    results.push({ player: sheetName, status: 'pending', replays, batchId: matchResult.batchId, hasDupes });
+  }
+
+  // Now import replays for each matched player
+  const importResults = [];
+  let totalImported = 0, totalFailed = 0;
+
+  for (const pr of results) {
+    if (pr.status !== 'pending') continue;
+    st('Importing replays for '+pr.player+'...', 'var(--muted)');
+
+    for (const rep of pr.replays) {
+      const eventLabel = rep.eventId || 'FLC41';
+      // sublabel: store round as a property but label stays as eventId
+      try {
+        // Check if already exists in this batch
+        const batchRes = await fetch(API+'/batches/'+pr.batchId, { headers: authHeaders() });
+        const batch = await batchRes.json();
+        const exists = (batch.replays||[]).some(r => r.replayId === rep.replayId);
+        if (exists) {
+          importResults.push({ player: pr.player, url: rep.url, status: 'duplicate' });
+          continue;
+        }
+
+        // Fetch replay via proxy
+        const proxyRes = await fetch(API+'/proxy/replay?id='+encodeURIComponent(rep.replayId), { headers: authHeaders() });
+        if (!proxyRes.ok) throw new Error('Proxy fetch failed: HTTP '+proxyRes.status);
+        const proxyData = await proxyRes.json();
+
+        if (proxyData.error || proxyData.timedOut) {
+          throw new Error(proxyData.error || 'Replay timed out');
+        }
+
+        const plays = proxyData.replay?.plays || proxyData.allPlays || proxyData.plays || [];
+        const p1 = proxyData.replay?.player1 || proxyData.player1 || '';
+        const p2 = proxyData.replay?.player2 || proxyData.player2 || '';
+
+        // Get batch player name + aliases for parsing
+        const batchPlayer = batch.player || '';
+        const batchAliases = batch.aliases || [];
+
+        // Parse match
+        const rpsPlays = plays.filter(p=>p.play==='RPS').map(p=>({
+          game:p.game||null, player1:p.player1||null, player2:p.player2||null,
+          player1_choice:p.player1_choice||p.p1pick||null,
+          player2_choice:p.player2_choice||p.p2pick||null, pick:p.pick||null
+        }));
+
+        const parsed = parseMatch(rep.replayId, plays, batchPlayer, batchAliases, p1, p2);
+        const parsedStore = parsed ? {
+          games:parsed.games, allMine:parsed.allMine, allOpp:parsed.allOpp,
+          oppName:parsed.oppName, myW:parsed.myW, oppW:parsed.oppW,
+          draws:parsed.draws, score:parsed.score, result:parsed.result
+        } : null;
+
+        // Save to server
+        const saveRes = await fetch(API+'/batches/'+pr.batchId+'/replay', {
+          method:'POST', headers: authHeaders(),
+          body: JSON.stringify({
+            replayId: rep.replayId,
+            plays: rpsPlays, allPlays: [],
+            timedOut: false,
+            oppName: parsed?.oppName || '',
+            player1: p1, player2: p2,
+            parsed: parsedStore,
+            eventLabel: eventLabel,
+            round: rep.round || ''
+          })
+        });
+
+        if (!saveRes.ok) throw new Error('Save failed: HTTP '+saveRes.status);
+        totalImported++;
+        importResults.push({ player: pr.player, url: rep.url, status: 'ok', round: rep.round });
+
+        // Small delay between replays
+        await new Promise(r => setTimeout(r, 800));
+
+      } catch(e) {
+        totalFailed++;
+        failRows.push({ Player: pr.player, ReplayURL: rep.url, Reason: e.message });
+        importResults.push({ player: pr.player, url: rep.url, status: 'failed', error: e.message });
+        console.error('[EventImport] Failed:', pr.player, rep.replayId, e.message);
+      }
+    }
+  }
+
+  // Export failure xlsx if any
+  if (failRows.length) {
+    exportFailureXLSX(failRows, filename.replace('.xlsx','')+'_failures.xlsx');
+  }
+
+  st('Event import complete — '+totalImported+' replays imported, '+totalFailed+' failed'+(failRows.length?' (failures exported)':''), totalFailed > 0 ? 'var(--amber)' : 'var(--green)');
+  loadBatches();
+}
+
+// Prompt user whether to create a new profile for an unmatched player
+const _pendingPlayerPrompts = {};
+async function findOrPromptPlayer(playerName) {
+  // Check db.batches (loaded in memory via _allProfileBatches)
+  const nameLow = playerName.toLowerCase();
+
+  // Check _allProfileBatches first
+  const batches = _allProfileBatches || [];
+  const match = batches.find(b => {
+    if ((b.player||'').toLowerCase() === nameLow) return true;
+    if ((b.aliases||[]).some(a => a.toLowerCase() === nameLow)) return true;
+    return false;
+  });
+
+  if (match) return { batchId: match.id, player: match.player, existing: true };
+
+  // No match — ask user
+  return new Promise(resolve => {
+    const existing = document.getElementById('event-import-prompt');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'event-import-prompt';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+
+    const box = document.createElement('div');
+    box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:420px;width:100%;font-family:monospace';
+
+    box.innerHTML = '<div style="font-size:13px;color:var(--text);margin-bottom:12px">No existing batch found for <b style="color:var(--amber)">'+playerName+'</b>.</div>'+
+      '<div style="font-size:11px;color:var(--muted);margin-bottom:16px">Create a new profile for this player?</div>'+
+      '<div style="display:flex;gap:10px">'+
+      '<button id="eip-create" style="flex:1;background:var(--green);color:#050508;border:none;padding:8px;border-radius:6px;font-family:monospace;font-weight:bold;cursor:pointer">✓ Create Profile</button>'+
+      '<button id="eip-skip" style="flex:1;background:none;color:var(--red);border:1px solid var(--red);padding:8px;border-radius:6px;font-family:monospace;cursor:pointer">✕ Skip Player</button>'+
+      '</div>';
+
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    box.querySelector('#eip-create').onclick = async () => {
+      overlay.remove();
+      // Create new batch for player
+      try {
+        const res = await fetch(API+'/batches', {
+          method:'POST', headers: authHeaders(),
+          body: JSON.stringify({ player: playerName, name: playerName, aliases: [] })
+        });
+        if (!res.ok) throw new Error('HTTP '+res.status);
+        const newBatch = await res.json();
+        resolve({ batchId: newBatch.id, player: playerName, existing: false });
+      } catch(e) {
+        resolve(null);
+      }
+    };
+
+    box.querySelector('#eip-skip').onclick = () => {
+      overlay.remove();
+      resolve(null);
+    };
+  });
+}
+
+function exportFailureXLSX(rows, filename) {
+  const XLSX = window.XLSX;
+  if (!XLSX) { console.warn('XLSX not available for failure export'); return; }
+  const ws = XLSX.utils.json_to_sheet(rows);
+  // Color header red
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Failures');
+  XLSX.writeFile(wb, filename);
+}
+
+// ── Import Full Event Decks (multiple YDK files) ───────────────────────────────
+function importEventDecks() {
+  if (!isMinerRole(_userRole)) { st('Miners and above only', 'var(--red)'); return; }
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = '.ydk'; inp.multiple = true;
+  inp.onchange = async () => {
+    const files = [...inp.files];
+    if (!files.length) return;
+    const failRows = [];
+    let imported = 0;
+
+    for (const file of files) {
+      // Filename format: playerName-EVENTID.ydk  e.g. zainoman-FLC41.ydk
+      const baseName = file.name.replace('.ydk','');
+      const parts = baseName.split('-');
+      const eventId = parts.length > 1 ? parts[parts.length-1].toUpperCase() : '';
+      const playerName = parts.slice(0, parts.length > 1 ? -1 : parts.length).join('-');
+
+      try {
+        const text = await file.text();
+        // Find or prompt for player
+        const matchResult = await findOrPromptPlayer(playerName);
+        if (!matchResult) {
+          failRows.push({ File: file.name, Player: playerName, Reason: 'Player skipped by user' });
+          continue;
+        }
+
+        // Get batch to add decklist to
+        const batchRes = await fetch(API+'/batches/'+matchResult.batchId, { headers: authHeaders() });
+        const batch = await batchRes.json();
+
+        // Save YDK to player's event decklists
+        const existingDecklists = batch.eventDecklists || [];
+        // Check if already has a decklist for this event
+        const dupIdx = existingDecklists.findIndex(d => (d.eventId||'').toUpperCase() === eventId.toUpperCase());
+
+        const deckEntry = {
+          eventId: eventId,
+          ydkData: btoa(text),
+          importedAt: Date.now(),
+          filename: file.name
+        };
+
+        if (dupIdx >= 0) existingDecklists[dupIdx] = deckEntry;
+        else existingDecklists.push(deckEntry);
+
+        const saveRes = await fetch(API+'/batches/'+matchResult.batchId, {
+          method:'PATCH', headers: authHeaders(),
+          body: JSON.stringify({ eventDecklists: existingDecklists })
+        });
+        if (!saveRes.ok) throw new Error('Save failed: HTTP '+saveRes.status);
+        imported++;
+        st('Saved deck for '+playerName+' ('+eventId+')', 'var(--green)');
+      } catch(e) {
+        failRows.push({ File: file.name, Player: playerName, Reason: e.message });
+        console.error('[EventDecks]', file.name, e.message);
+      }
+    }
+
+    if (failRows.length) exportFailureXLSX(failRows, 'deck_import_failures.xlsx');
+    st('Deck import complete — '+imported+'/'+files.length+' decks saved'+(failRows.length?' ('+failRows.length+' failed)':''), imported < files.length ? 'var(--amber)' : 'var(--green)');
+    loadBatches();
+  };
+  inp.click();
+}
+
 // ── Ban limit helper ─────────────────────────────────────────────────────────
 // banLimit defined above
 
@@ -10298,6 +10630,10 @@ async function openProfile(player, batches, records) {
     const addBtn = document.getElementById('add-to-batch-btn');
     if (addBtn) addBtn.style.display = 'block';
     const _cb = document.getElementById('clean-batch-btn'); if (_cb) _cb.style.display = 'block';
+    if (isMinerRole()) {
+      const _ied = document.getElementById('import-event-data-btn'); if (_ied) _ied.style.display = 'block';
+      const _idk = document.getElementById('import-event-decks-btn'); if (_idk) _idk.style.display = 'block';
+    }
     loadBatches();
   }
 
@@ -12521,6 +12857,10 @@ function applyRoleUI() {
     document.querySelectorAll('[onclick*="openBatchPanel"]').forEach(el => {
       if ((el.getAttribute('onclick')||'').includes('new')) el.style.display = 'none';
     });
+  } else {
+    // Show import event buttons for miners+
+    const _ied = document.getElementById('import-event-data-btn'); if (_ied) _ied.style.display = 'block';
+    const _idk = document.getElementById('import-event-decks-btn'); if (_idk) _idk.style.display = 'block';
   }
   // Admins only: show admin panel buttons
   if (!isAdminRole(_userRole)) {
