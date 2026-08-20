@@ -729,7 +729,6 @@ select{cursor:pointer}
             <select id="deck-year-filter" onchange="buildDeck()" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 6px;border-radius:4px;outline:none;width:68px">
               <option value="">All</option>
             </select>
-          </div>
         </div>
         <div class="match-list" id="match-list"><div class="dno">Select a batch first.</div></div>
         <div id="failed-replays-list" style="flex-shrink:0;border-top:1px solid var(--border);padding:4px 6px;display:none"></div>
@@ -1422,14 +1421,13 @@ select{cursor:pointer}
       </div>
 
           <!-- SLOW PLAY ANALYZER -->
-      <div id="igt-slowplay" class="igt-panel" style="padding:16px;display:flex;flex-direction:column;gap:12px;overflow-y:auto">
+      <div id="igt-slowplay" class="igt-panel" style="padding:16px;flex-direction:column;gap:12px;overflow-y:auto">
         <div class="slbl">⏱ SLOW PLAY ANALYZER</div>
         <div style="font-size:11px;color:var(--muted);font-family:monospace">Paste a replay URL and enter the player name to monitor. Gaps over the threshold with no meaningful action are flagged as potential slow play.</div>
         <div style="display:flex;flex-direction:column;gap:8px">
           <input id="sp-replay-url" type="text" placeholder="https://www.duelingbook.com/replay?id=..." style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:7px 10px;border-radius:6px;outline:none"/>
-          <div style="display:flex;gap:8px">
-            <input id="sp-player-name" type="text" placeholder="Player name (as shown on DuelingBook)" style="flex:1;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:7px 10px;border-radius:6px;outline:none"/>
-            <select id="sp-threshold" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:7px;border-radius:6px;outline:none">
+          <input id="sp-player-name" type="text" placeholder="Player name exactly as shown on DuelingBook (optional — leave blank to analyze all)" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:7px 10px;border-radius:6px;outline:none"/>
+          <select id="sp-threshold" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:7px;border-radius:6px;outline:none;width:fit-content">
               <option value="60">60s threshold</option>
               <option value="45">45s threshold</option>
               <option value="90">90s threshold</option>
@@ -6679,8 +6677,9 @@ async function analyzeSlowPlay() {
 
     const replayObj = data.replay || data;
     const plays = replayObj.allPlays || replayObj.plays || [];
-    const p1 = replayObj.player1 || '';
-    const p2 = replayObj.player2 || '';
+    // player1/player2 can be objects {id, name} or plain strings
+    const p1 = typeof replayObj.player1 === 'object' ? (replayObj.player1?.name || replayObj.player1?.username || '') : (replayObj.player1 || '');
+    const p2 = typeof replayObj.player2 === 'object' ? (replayObj.player2?.name || replayObj.player2?.username || '') : (replayObj.player2 || '');
 
     if (!plays.length) throw new Error('No play data returned');
 
@@ -6709,7 +6708,8 @@ async function analyzeSlowPlay() {
         const ts = tsMatch ? tsMatch[1] : null;
         const timeSec = ts ? spParseTime(ts) : null;
         const text = playPub.replace(/^\[\d+:\d+(?::\d+)?\]\s*/, '');
-        const owner = play.owner || play.username || '';
+        const _pOwnerRaw = play.owner || play.username || '';
+        const owner = typeof _pOwnerRaw === 'object' ? (_pOwnerRaw?.name || _pOwnerRaw?.username || '') : String(_pOwnerRaw || '');
         allEntries.push({ time: ts, timeSec, player: owner, text, isAction: !spIsNonAction(text), game: currentGame });
       }
 
@@ -6720,7 +6720,8 @@ async function analyzeSlowPlay() {
         const ts = tsMatch ? tsMatch[1] : null;
         const timeSec = ts ? spParseTime(ts) : null;
         const text = pub.replace(/^\[\d+:\d+(?::\d+)?\]\s*/, '');
-        const owner = log.owner || log.username || play.owner || play.username || '';
+        const _ownerRaw = log.owner || log.username || play.owner || play.username || '';
+        const owner = typeof _ownerRaw === 'object' ? (_ownerRaw?.name || _ownerRaw?.username || '') : String(_ownerRaw || '');
         allEntries.push({ time: ts, timeSec, player: owner, text, isAction: !spIsNonAction(text), game: currentGame });
       }
     }
