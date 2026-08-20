@@ -6618,29 +6618,38 @@ function importEventDecks() {
 }
 
 // ── Slow Play Analyzer ───────────────────────────────────────────────────────
-const SP_NON_ACTIONS = [
-  'viewed', 'stopped viewing', 'shuffled hand', 'thinking', 'shuffled deck',
-  'entered draw phase', 'entered standby phase', 'entered main phase',
-  'entered battle phase', 'entered end phase', 'drew', 'passed turn',
-  'pointed at', 'looked at', 'scrolled', 'chat', 'disconnected', 'reconnected'
+const SP_REAL_ACTIONS = [
+  'flip summoned','normal summoned','special summoned','tribute summoned',
+  'drew ','set ','sent ','activated','returned','attacked',
+  'placed','showed','declared','banished','moved','destroyed',
+  'discarded','added','searched','equipped','revealed','tossed',
+  'lost ','gained','paid','selected','excavated','detached','flipped'
 ];
 
-function spIsNonAction(logText) {
-  if (!logText) return true;
-  const lower = logText.toLowerCase();
-  return SP_NON_ACTIONS.some(na => lower.includes(na));
+function spIsRealAction(text) {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  return SP_REAL_ACTIONS.some(a => lower.includes(a));
 }
 
 function spParseTime(ts) {
-  const m = ts.match(/\[(\d+):(\d+)(?::(\d+))?\]/);
+  const m = ts && ts.match(/\[(\d+):(\d+)(?::(\d+))?\]/);
   if (!m) return null;
   return parseInt(m[1]||0)*3600 + parseInt(m[2]||0)*60 + parseInt(m[3]||0);
 }
 
 function spExtractName(val) {
   if (!val) return '';
-  if (typeof val === 'object') return val.name || val.username || '';
+  if (typeof val === 'object') return val.name || val.username || String(val.id||'');
   return String(val);
+}
+
+function spFmt(timeSec) {
+  const h = Math.floor(timeSec/3600);
+  const m = Math.floor((timeSec%3600)/60);
+  const s2 = timeSec%60;
+  if (h > 0) return '['+String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s2).padStart(2,'0')+']';
+  return '['+String(m).padStart(2,'0')+':'+String(s2).padStart(2,'0')+']';
 }
 
 async function analyzeSlowPlay() {
@@ -6665,138 +6674,114 @@ async function analyzeSlowPlay() {
 
     const replayObj = data.replay || data;
     const plays = replayObj.allPlays || replayObj.plays || [];
-    const p1 = spExtractName(replayObj.player1); // top/blue player
-    const p2 = spExtractName(replayObj.player2); // bottom/red player
+    const p1 = spExtractName(replayObj.player1);
+    const p2 = spExtractName(replayObj.player2);
 
     if (!plays.length) throw new Error('No play data returned');
 
-    // Debug: show structure of first few plays to understand the data format
-    const debugEl = document.createElement('div');
-    debugEl.style.cssText = 'font-size:9px;color:var(--dim);font-family:monospace;padding:6px;background:var(--card2);border-radius:4px;max-height:200px;overflow-y:auto;margin-bottom:8px;white-space:pre-wrap';
-    const sample = plays.slice(0,3).map((p,i) => {
-      const logs = Array.isArray(p.log) ? p.log : (p.log ? [p.log] : []);
-      return 'Play '+i+': play='+p.play+' owner='+JSON.stringify(p.owner)+' pub='+JSON.stringify(p.public_log||'')?.slice(0,60)+
-        '\n  Logs('+logs.length+'): '+logs.slice(0,2).map(l=>'type='+l.type+' owner='+JSON.stringify(l.owner)+' pub='+JSON.stringify(l.public_log||'')?.slice(0,50)).join(' | ');
-    }).join('\n');
-    debugEl.textContent = 'RAW STRUCTURE:\np1='+JSON.stringify(replayObj.player1)+' p2='+JSON.stringify(replayObj.player2)+'\n'+sample;
-    resultsEl.appendChild(debugEl);
+    // Build flat timeline from ALL log entries
+    // Each play and sub-log entry has a public_log string like "[MM:SS] Action text"
+    // owner field tells us which player: 0/p1name = player1(blue), 1/p2name = player2(red)
+    const timeline = []; // {timeSec, text, isP1, game}
+    let currentGame = 1;
 
-    // Determine target player slot: p1=blue(top), p2=red(bottom)
-    // "type" on log entries: duelingbook uses owner/type to indicate which player
-    // Without usernames enabled, we use the play-level owner field (0 or 1 index, or p1/p2 name)
-    // and log.type which may be "me"/"them" or a color indicator
-    const targetIsP1 = playerName ? p1.toLowerCase() === playerName.toLowerCase() : null;
-    const targetIsP2 = playerName ? p2.toLowerCase() === playerName.toLowerCase() : null;
-
-    // Helper: determine if a log entry belongs to the target player
-    // Uses owner (player index or name), type field, and play-level player
-    function entryBelongsToTarget(log, play) {
-      if (!playerName) return true; // no filter
-
-      const owner = spExtractName(log.owner || log.username || play.owner || play.username);
-      const logType = String(log.type || '').toLowerCase();
-      const playType = String(play.play || '').toLowerCase();
-
-      // Owner is a username string
-      if (owner && owner.toLowerCase() === playerName.toLowerCase()) return true;
-
-      // Owner is a number: 0=p1, 1=p2
-      const ownerNum = parseInt(owner);
-      if (!isNaN(ownerNum)) {
-        if (ownerNum === 0 && targetIsP1) return true;
-        if (ownerNum === 1 && targetIsP2) return true;
-      }
-
-      // type field: "me" means the play owner, "them" means opponent
-      // The play.owner indicates whose play this is
-      const playOwner = spExtractName(play.owner || play.username);
-      const playOwnerIsP1 = !playOwner || playOwner === p1 || parseInt(playOwner) === 0;
-      if (logType === 'me') return playOwnerIsP1 ? targetIsP1 : targetIsP2;
-      if (logType === 'them') return playOwnerIsP1 ? targetIsP2 : targetIsP1;
-
-      return false;
+    function ownerIsP1(owner) {
+      if (owner === null || owner === undefined || owner === '') return null;
+      const o = spExtractName(owner);
+      if (o === '0' || o.toLowerCase() === p1.toLowerCase()) return true;
+      if (o === '1' || o.toLowerCase() === p2.toLowerCase()) return false;
+      const n = parseInt(o);
+      if (!isNaN(n)) return n === 0;
+      return null;
     }
 
-    // Build flat list of all log entries with timestamps
-    const allEntries = [];
-    let currentGame = 1;
+    function addEntry(pub, owner, game) {
+      if (!pub) return;
+      const tsMatch = pub.match(/^\[(\d+:\d+(?::\d+)?)\]/);
+      if (!tsMatch) return;
+      const timeSec = spParseTime('['+tsMatch[1]+']');
+      if (timeSec === null) return;
+      const text = pub.replace(/^\[\d+:\d+(?::\d+)?\]\s*/, '').trim();
+      if (!text) return;
+      timeline.push({ timeSec, text, isP1: ownerIsP1(owner), game });
+    }
 
     for (const play of plays) {
       if (play.winner || play.loser) currentGame++;
-      const playOwner = spExtractName(play.owner || play.username);
-
-      const playPub = play.public_log || '';
-      if (playPub) {
-        const tsMatch = playPub.match(/^(\[\d+:\d+(?::\d+)?\])/);
-        const ts = tsMatch ? tsMatch[1] : null;
-        const text = playPub.replace(/^\[\d+:\d+(?::\d+)?\]\s*/, '');
-        const belongsToTarget = !playerName || entryBelongsToTarget({owner: play.owner, type: 'me'}, play);
-        allEntries.push({ time: ts, timeSec: ts ? spParseTime(ts) : null, player: playOwner, belongsToTarget, text, isAction: !spIsNonAction(text), game: currentGame });
-      }
-
+      if (play.public_log) addEntry(play.public_log, play.owner, currentGame);
       const logList = Array.isArray(play.log) ? play.log :
         (play.log && typeof play.log === 'object' ? [play.log] : []);
-
       for (const log of logList) {
-        const pub = log.public_log || '';
-        if (!pub) continue;
-        const tsMatch = pub.match(/^(\[\d+:\d+(?::\d+)?\])/);
-        const ts = tsMatch ? tsMatch[1] : null;
-        const text = pub.replace(/^\[\d+:\d+(?::\d+)?\]\s*/, '');
-        const owner = spExtractName(log.owner || log.username) || playOwner;
-        const belongsToTarget = !playerName || entryBelongsToTarget(log, play);
-        allEntries.push({ time: ts, timeSec: ts ? spParseTime(ts) : null, player: owner, belongsToTarget, text, isAction: !spIsNonAction(text), game: currentGame });
+        const o = (log.owner !== undefined && log.owner !== null) ? log.owner : play.owner;
+        if (log.public_log) addEntry(log.public_log, o, currentGame);
       }
     }
 
-    // Filter to target player entries
-    const playerEntries = allEntries.filter(e => e.time && e.timeSec !== null && e.belongsToTarget);
+    timeline.sort((a,b) => a.timeSec - b.timeSec);
 
-    if (playerName && !playerEntries.length) {
-      throw new Error('No log entries found for "'+playerName+'". Players in this replay: '+p1+' (blue/top) and '+p2+' (red/bottom)');
+    const hasOwnerInfo = timeline.some(e => e.isP1 !== null);
+
+    // Determine which actions to track per player
+    let playerGroups = [];
+    if (!playerName) {
+      if (hasOwnerInfo) {
+        playerGroups = [
+          { label: p1+' (blue)', color: '#5b9cf6', actions: timeline.filter(e => e.isP1 === true  && spIsRealAction(e.text)) },
+          { label: p2+' (red)',  color: '#f87171', actions: timeline.filter(e => e.isP1 === false && spIsRealAction(e.text)) },
+        ];
+      } else {
+        playerGroups = [{ label: 'All players', color: 'var(--amber)', actions: timeline.filter(e => spIsRealAction(e.text)) }];
+      }
+    } else {
+      const isP1Target = p1.toLowerCase() === playerName.toLowerCase();
+      const actions = hasOwnerInfo
+        ? timeline.filter(e => e.isP1 === (isP1Target ? true : false) && spIsRealAction(e.text))
+        : timeline.filter(e => spIsRealAction(e.text));
+      playerGroups = [{ label: playerName+(hasOwnerInfo ? (isP1Target?' (blue)':' (red)') : ''), color: isP1Target ? '#5b9cf6' : '#f87171', actions }];
     }
 
-    const useEntries = playerEntries.length ? playerEntries : allEntries.filter(e => e.time && e.timeSec !== null);
-    const targetActions = useEntries.filter(e => e.isAction).sort((a,b) => a.timeSec - b.timeSec);
-    const allTimedEntries = allEntries.filter(e => e.time && e.timeSec !== null).sort((a,b) => a.timeSec - b.timeSec);
-
-    const slowPlayInstances = [];
-    for (let i = 0; i < targetActions.length - 1; i++) {
-      const curr = targetActions[i];
-      const next = targetActions[i+1];
-      let gap = next.timeSec - curr.timeSec;
-      if (gap < 0) gap += 86400;
-      if (gap >= threshold) {
-        const gapEntries = allTimedEntries.filter(e => e.timeSec >= curr.timeSec && e.timeSec <= next.timeSec);
-        slowPlayInstances.push({ game: curr.game, startTime: curr.time, endTime: next.time, gapSec: gap, lastAction: curr.text, nextAction: next.text, gapEntries });
+    // Find gaps
+    const allInstances = [];
+    for (const { label, color, actions } of playerGroups) {
+      for (let i = 0; i < actions.length - 1; i++) {
+        const curr = actions[i], next = actions[i+1];
+        let gap = next.timeSec - curr.timeSec;
+        if (gap < 0) gap += 86400;
+        if (gap >= threshold) {
+          const gapEntries = timeline.filter(e => e.timeSec >= curr.timeSec && e.timeSec <= next.timeSec);
+          allInstances.push({ label, color, game: curr.game, gapSec: gap, startSec: curr.timeSec, endSec: next.timeSec, lastAction: curr.text, nextAction: next.text, gapEntries });
+        }
       }
     }
+    allInstances.sort((a,b) => a.startSec - b.startSec);
 
-    const targetLabel = playerName || 'All players';
-    const targetColor = targetIsP1 ? '#5b9cf6' : targetIsP2 ? '#f87171' : 'var(--amber)';
+    const totalActions = playerGroups.reduce((s,g)=>s+g.actions.length,0);
     let html = '<div style="font-family:monospace;font-size:12px">';
     html += '<div style="margin-bottom:12px;padding:8px 12px;background:var(--card);border-radius:6px;border:1px solid var(--border)">';
     html += '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;margin-bottom:4px">REPLAY ANALYSIS</div>';
     html += '<div><span style="color:#5b9cf6">'+p1+'</span> (blue/top) vs <span style="color:#f87171">'+p2+'</span> (red/bottom)</div>';
-    html += '<div style="margin-top:4px">Monitoring: <b style="color:'+targetColor+'">'+targetLabel+'</b></div>';
-    html += '<div style="color:var(--muted);font-size:11px">Threshold: '+threshold+'s | Actions found: '+targetActions.length+'</div></div>';
+    html += '<div style="margin-top:3px">Monitoring: <b style="color:var(--amber)">'+(playerName||'Both players')+'</b></div>';
+    html += '<div style="color:var(--muted);font-size:11px;margin-top:2px">Threshold: '+threshold+'s | Real actions: '+totalActions+' | Total log entries: '+timeline.length+(hasOwnerInfo?' | Owner info: yes':' | Owner info: no (analyzing all together)')+'</div></div>';
 
-    if (!slowPlayInstances.length) {
+    if (!allInstances.length) {
       html += '<div style="color:var(--green);padding:12px;background:rgba(52,211,153,.08);border:1px solid var(--green);border-radius:6px">No slow play instances detected above '+threshold+'s threshold.</div>';
     } else {
-      html += '<div style="color:var(--amber);font-size:11px;margin-bottom:8px">'+slowPlayInstances.length+' slow play instance'+(slowPlayInstances.length>1?'s':'')+' detected</div>';
-      slowPlayInstances.forEach((sp, idx) => {
+      html += '<div style="color:var(--amber);font-size:11px;margin-bottom:8px">'+allInstances.length+' slow play instance'+(allInstances.length>1?'s':'')+' detected</div>';
+      allInstances.forEach((sp, idx) => {
         const mins = Math.floor(sp.gapSec/60), secs = sp.gapSec%60;
         html += '<div style="margin-bottom:12px;padding:10px 12px;background:rgba(245,166,35,.06);border:1px solid rgba(245,166,35,.3);border-radius:8px">';
-        html += '<div style="display:flex;justify-content:space-between;margin-bottom:6px"><span style="color:var(--amber);font-weight:bold">Instance #'+(idx+1)+' — Game '+sp.game+'</span><span style="color:var(--red);font-weight:bold">'+(mins>0?mins+'m ':'')+secs+'s</span></div>';
-        html += '<div style="color:var(--muted);font-size:10px;margin-bottom:6px">'+sp.startTime+' → '+sp.endTime+'</div>';
-        html += '<div style="font-size:11px;margin-bottom:4px">Last action: <span style="color:'+targetColor+'">'+sp.lastAction+'</span></div>';
-        html += '<div style="font-size:11px;margin-bottom:8px">Next action: <span style="color:'+targetColor+'">'+sp.nextAction+'</span></div>';
+        html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px">';
+        html += '<span style="color:var(--amber);font-weight:bold">Instance #'+(idx+1)+' — Game '+sp.game+' &mdash; <span style="color:'+sp.color+'">'+sp.label+'</span></span>';
+        html += '<span style="color:var(--red);font-weight:bold">'+(mins>0?mins+'m ':'')+secs+'s gap</span></div>';
+        html += '<div style="color:var(--muted);font-size:10px;margin-bottom:6px">'+spFmt(sp.startSec)+' &rarr; '+spFmt(sp.endSec)+'</div>';
+        html += '<div style="font-size:11px;margin-bottom:3px">Last action: <span style="color:'+sp.color+'">'+sp.lastAction+'</span></div>';
+        html += '<div style="font-size:11px;margin-bottom:8px">Next action: <span style="color:'+sp.color+'">'+sp.nextAction+'</span></div>';
         if (sp.gapEntries.length) {
-          html += '<div style="font-size:10px;color:var(--dim);margin-bottom:4px">Activity during gap:</div>';
-          html += '<div style="font-size:10px;line-height:1.7;padding:6px 8px;background:var(--card2);border-radius:4px;max-height:150px;overflow-y:auto">';
+          html += '<div style="font-size:10px;color:var(--dim);margin-bottom:3px">All entries during gap:</div>';
+          html += '<div style="font-size:10px;line-height:1.8;padding:6px 8px;background:var(--card2);border-radius:4px;max-height:160px;overflow-y:auto">';
           sp.gapEntries.forEach(e => {
-            html += '<span style="color:var(--dim)">'+(e.time||'')+'</span> <span style="color:var(--muted)">'+(e.text||'')+'</span><br>';
+            const ec = e.isP1 === true ? '#5b9cf6' : e.isP1 === false ? '#f87171' : 'var(--muted)';
+            html += '<span style="color:var(--dim)">'+spFmt(e.timeSec)+'</span> <span style="color:'+ec+'">'+e.text+'</span><br>';
           });
           html += '</div>';
         }
