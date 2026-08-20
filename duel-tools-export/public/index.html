@@ -1155,6 +1155,7 @@ select{cursor:pointer}
       <button class="dd-tab"    id="igt-tab-mytrack"  onclick="igtTab('mytrack',this)">📊 My Tracker</button>
       <button class="dd-tab"    id="igt-tab-opptrack" onclick="igtTab('opptrack',this)">👁 Opp Tracker</button>
       <button class="dd-tab"    id="igt-tab-tools"    onclick="igtTab('tools',this)">🛠 Tools</button>
+      <button class="dd-tab"    id="igt-tab-slowplay" onclick="igtTab('slowplay',this)">⏱ Slow Play</button>
       <!-- Timer in top bar -->
       <div style="margin-left:auto;display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:5px 12px">
         <div id="igt-timer-display" style="font-size:20px;font-weight:bold;color:var(--green);font-family:monospace;letter-spacing:.05em;min-width:58px">50:00</div>
@@ -1420,7 +1421,27 @@ select{cursor:pointer}
         </div>
       </div>
 
-    </div>
+          <!-- SLOW PLAY ANALYZER -->
+      <div id="igt-slowplay" class="igt-panel" style="padding:16px;display:flex;flex-direction:column;gap:12px;overflow-y:auto">
+        <div class="slbl">⏱ SLOW PLAY ANALYZER</div>
+        <div style="font-size:11px;color:var(--muted);font-family:monospace">Paste a replay URL and enter the player name to monitor. Gaps over the threshold with no meaningful action are flagged as potential slow play.</div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <input id="sp-replay-url" type="text" placeholder="https://www.duelingbook.com/replay?id=..." style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:7px 10px;border-radius:6px;outline:none"/>
+          <div style="display:flex;gap:8px">
+            <input id="sp-player-name" type="text" placeholder="Player name (as shown on DuelingBook)" style="flex:1;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:7px 10px;border-radius:6px;outline:none"/>
+            <select id="sp-threshold" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:7px;border-radius:6px;outline:none">
+              <option value="60">60s threshold</option>
+              <option value="45">45s threshold</option>
+              <option value="90">90s threshold</option>
+              <option value="120">120s threshold</option>
+            </select>
+          </div>
+          <button onclick="analyzeSlowPlay()" style="background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:12px;padding:9px;border-radius:6px;cursor:pointer">⏱ Analyze for Slow Play</button>
+        </div>
+        <div id="sp-results" style="display:none"></div>
+      </div>
+
+</div>
   </div>
 
 
@@ -6596,6 +6617,217 @@ function importEventDecks() {
     loadBatches();
   };
   inp.click();
+}
+
+// ── Slow Play Analyzer ───────────────────────────────────────────────────────
+// Non-actions that don't count as meaningful gameplay
+const SP_NON_ACTIONS = [
+  'viewed', 'stopped viewing', 'shuffled hand', 'thinking', 'shuffled deck',
+  'entered draw phase', 'entered standby phase', 'entered main phase',
+  'entered battle phase', 'entered end phase', 'drew', 'passed turn',
+  'pointed at', 'looked at', 'scrolled', 'chat', 'disconnected', 'reconnected'
+];
+
+function spIsNonAction(logText) {
+  if (!logText) return true;
+  const lower = logText.toLowerCase();
+  return SP_NON_ACTIONS.some(na => lower.includes(na));
+}
+
+function spParseTime(ts) {
+  // Parse "[HH:MM]" or "[HH:MM:SS]" to total seconds
+  const m = ts.match(/\[(\d+):(\d+)(?::(\d+))?\]/);
+  if (!m) return null;
+  const h = parseInt(m[1]||0);
+  const min = parseInt(m[2]||0);
+  const sec = parseInt(m[3]||0);
+  return h * 3600 + min * 60 + sec;
+}
+
+function spFormatTime(totalSec) {
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return '['+String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')+']';
+  return '['+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')+']';
+}
+
+async function analyzeSlowPlay() {
+  const urlInp = document.getElementById('sp-replay-url');
+  const playerInp = document.getElementById('sp-player-name');
+  const threshSel = document.getElementById('sp-threshold');
+  const resultsEl = document.getElementById('sp-results');
+
+  const replayUrl = (urlInp.value||'').trim();
+  const playerName = (playerInp.value||'').trim();
+  const threshold = parseInt(threshSel.value||'60');
+
+  if (!replayUrl) { alert('Please paste a replay URL'); return; }
+
+  const idMatch = replayUrl.match(/id=([^&]+)/);
+  if (!idMatch) { alert('Could not parse replay ID from URL'); return; }
+  const replayId = idMatch[1];
+
+  resultsEl.style.display = 'block';
+  resultsEl.innerHTML = '<div style="color:var(--muted);font-family:monospace;font-size:12px">⏳ Fetching replay...</div>';
+
+  try {
+    const res = await fetch(API+'/proxy/replay?id='+encodeURIComponent(replayId), { headers: authHeaders() });
+    if (!res.ok) throw new Error('Fetch failed: HTTP '+res.status);
+    const data = await res.json();
+    if (data.error || data.timedOut) throw new Error(data.error || 'Replay timed out');
+
+    const replayObj = data.replay || data;
+    const plays = replayObj.allPlays || replayObj.plays || [];
+    const p1 = replayObj.player1 || '';
+    const p2 = replayObj.player2 || '';
+
+    if (!plays.length) throw new Error('No play data returned');
+
+    // Determine which player to monitor
+    // If playerName given, match to p1 or p2
+    let targetPlayer = playerName;
+    if (!targetPlayer) {
+      resultsEl.innerHTML += '<div style="color:var(--amber);font-family:monospace;font-size:11px">No player name given — analyzing both players</div>';
+    }
+
+    // Build flat list of all log entries with timestamps, player attribution, and action text
+    const allEntries = []; // { time, timeSec, player, text, isAction, game }
+    let currentGame = 1;
+
+    for (const play of plays) {
+      // Track game number
+      if (play.winner || play.loser) currentGame++;
+
+      const logList = Array.isArray(play.log) ? play.log :
+        (play.log && typeof play.log === 'object' ? [play.log] : []);
+
+      // Also check play-level public_log
+      const playPub = play.public_log || '';
+      if (playPub) {
+        const tsMatch = playPub.match(/^(\[\d+:\d+(?::\d+)?\])/);
+        const ts = tsMatch ? tsMatch[1] : null;
+        const timeSec = ts ? spParseTime(ts) : null;
+        const text = playPub.replace(/^\[\d+:\d+(?::\d+)?\]\s*/, '');
+        const owner = play.owner || play.username || '';
+        allEntries.push({ time: ts, timeSec, player: owner, text, isAction: !spIsNonAction(text), game: currentGame });
+      }
+
+      for (const log of logList) {
+        const pub = log.public_log || '';
+        if (!pub) continue;
+        const tsMatch = pub.match(/^(\[\d+:\d+(?::\d+)?\])/);
+        const ts = tsMatch ? tsMatch[1] : null;
+        const timeSec = ts ? spParseTime(ts) : null;
+        const text = pub.replace(/^\[\d+:\d+(?::\d+)?\]\s*/, '');
+        const owner = log.owner || log.username || play.owner || play.username || '';
+        allEntries.push({ time: ts, timeSec, player: owner, text, isAction: !spIsNonAction(text), game: currentGame });
+      }
+    }
+
+    // Filter to target player entries only
+    const playerEntries = allEntries.filter(e => {
+      if (!e.time || e.timeSec === null) return false;
+      if (!targetPlayer) return true; // all players if no target specified
+      return (e.player||'').toLowerCase() === targetPlayer.toLowerCase();
+    });
+
+    if (!playerEntries.length) {
+      throw new Error('No log entries found for player "'+targetPlayer+'". Check spelling — player names are case-sensitive on DuelingBook. Players in this replay: '+p1+' and '+p2);
+    }
+
+    // Find slow play instances: gaps >threshold seconds where target had no meaningful action
+    const slowPlayInstances = [];
+
+    // Find all entries (all players) sorted by time to detect gaps in target's actions
+    const targetActions = playerEntries.filter(e => e.isAction && e.timeSec !== null)
+      .sort((a,b) => a.timeSec - b.timeSec);
+
+    // Also get all entries for context during gaps
+    const allTimedEntries = allEntries.filter(e => e.time && e.timeSec !== null)
+      .sort((a,b) => a.timeSec - b.timeSec);
+
+    // Find gaps between consecutive target actions
+    for (let i = 0; i < targetActions.length - 1; i++) {
+      const curr = targetActions[i];
+      const next = targetActions[i+1];
+      const gap = next.timeSec - curr.timeSec;
+
+      // Handle midnight rollover
+      const adjustedGap = gap < 0 ? gap + 86400 : gap;
+
+      if (adjustedGap >= threshold) {
+        // Get all log entries during this gap for context
+        const gapEntries = allTimedEntries.filter(e =>
+          e.timeSec >= curr.timeSec && e.timeSec <= next.timeSec
+        );
+        slowPlayInstances.push({
+          game: curr.game,
+          startTime: curr.time,
+          startTimeSec: curr.timeSec,
+          endTime: next.time,
+          endTimeSec: next.timeSec,
+          gapSec: adjustedGap,
+          lastAction: curr.text,
+          nextAction: next.text,
+          gapEntries
+        });
+      }
+    }
+
+    // Render results
+    const color = (p1||'').toLowerCase() === targetPlayer.toLowerCase() ? '#5b9cf6' :
+                  (p2||'').toLowerCase() === targetPlayer.toLowerCase() ? '#f87171' : 'var(--amber)';
+    const playerLabel = targetPlayer || 'All players';
+
+    let html = '<div style="font-family:monospace;font-size:12px">';
+    html += '<div style="margin-bottom:12px;padding:8px 12px;background:var(--card);border-radius:6px;border:1px solid var(--border)">';
+    html += '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;margin-bottom:4px">REPLAY ANALYSIS</div>';
+    html += '<div><b style="color:'+color+'">'+playerLabel+'</b> vs '+(targetPlayer.toLowerCase()===p1.toLowerCase()?p2:p1)+'</div>';
+    html += '<div style="color:var(--muted);font-size:11px">Threshold: '+threshold+'s | Total log entries: '+playerEntries.length+' | Meaningful actions: '+targetActions.length+'</div>';
+    html += '</div>';
+
+    if (!slowPlayInstances.length) {
+      html += '<div style="color:var(--green);padding:12px;background:rgba(52,211,153,.08);border:1px solid var(--green);border-radius:6px">✓ No slow play instances detected above the '+threshold+'s threshold.</div>';
+    } else {
+      html += '<div style="color:var(--amber);font-size:11px;margin-bottom:8px">⚠ '+slowPlayInstances.length+' slow play instance'+(slowPlayInstances.length>1?'s':'')+' detected</div>';
+
+      slowPlayInstances.forEach((sp, idx) => {
+        const mins = Math.floor(sp.gapSec/60);
+        const secs = sp.gapSec % 60;
+        const gapStr = (mins>0?mins+'m ':'')+secs+'s';
+
+        html += '<div style="margin-bottom:12px;padding:10px 12px;background:rgba(245,166,35,.06);border:1px solid rgba(245,166,35,.3);border-radius:8px">';
+        html += '<div style="display:flex;justify-content:space-between;margin-bottom:6px">';
+        html += '<span style="color:var(--amber);font-weight:bold">Instance #'+(idx+1)+' — Game '+sp.game+'</span>';
+        html += '<span style="color:var(--red);font-weight:bold">'+gapStr+' gap</span>';
+        html += '</div>';
+        html += '<div style="color:var(--muted);font-size:10px;margin-bottom:6px">'+sp.startTime+' → '+sp.endTime+'</div>';
+
+        html += '<div style="font-size:11px;margin-bottom:4px">Last action: <span style="color:'+color+'">'+sp.lastAction+'</span></div>';
+        html += '<div style="font-size:11px;margin-bottom:8px">Next action: <span style="color:'+color+'">'+sp.nextAction+'</span></div>';
+
+        // Show all entries during the gap
+        if (sp.gapEntries.length) {
+          html += '<div style="font-size:10px;color:var(--dim);margin-bottom:4px">Activity during gap:</div>';
+          html += '<div style="font-size:10px;line-height:1.7;padding:6px 8px;background:var(--card2);border-radius:4px;max-height:120px;overflow-y:auto">';
+          sp.gapEntries.forEach(e => {
+            const ec = (e.player||'').toLowerCase() === targetPlayer.toLowerCase() ? color : 'var(--muted)';
+            html += '<span style="color:var(--dim)">' + (e.time||'') + '</span> ';
+            html += '<span style="color:'+ec+'">' + (e.text||'') + '</span><br>';
+          });
+          html += '</div>';
+        }
+        html += '</div>';
+      });
+    }
+
+    html += '</div>';
+    resultsEl.innerHTML = html;
+
+  } catch(e) {
+    resultsEl.innerHTML = '<div style="color:var(--red);font-family:monospace;font-size:12px">Error: '+e.message+'</div>';
+  }
 }
 
 // ── Ban limit helper ─────────────────────────────────────────────────────────
