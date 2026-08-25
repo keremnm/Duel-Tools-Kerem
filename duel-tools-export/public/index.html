@@ -6679,6 +6679,12 @@ async function analyzeSlowPlay() {
 
     if (!plays.length) throw new Error('No play data returned');
 
+    // Debug: log raw structure to console
+    console.log('[SlowPlay] plays count:', plays.length);
+    console.log('[SlowPlay] play[0] keys:', Object.keys(plays[0]||{}));
+    console.log('[SlowPlay] play[0] sample:', JSON.stringify(plays[0]).slice(0,300));
+    if (plays[0]?.log) console.log('[SlowPlay] play[0].log sample:', JSON.stringify(plays[0].log).slice(0,300));
+
     // Build flat timeline from ALL log entries
     // Each play and sub-log entry has a public_log string like "[MM:SS] Action text"
     // owner field tells us which player: 0/p1name = player1(blue), 1/p2name = player2(red)
@@ -7488,7 +7494,11 @@ async function renderMatchDisplay(m) {
   mh.style.cssText = 'padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0';
   const mhd = document.createElement('div');
   mhd.className = 'match-heading';
-  mhd.textContent = `${player} vs ${m.oppName} (${m.result==='w'?'W':m.result==='l'?'L':'D'} ${m.draws>0?m.score:`${m.myW}-${m.oppW}`})`;
+  // Show override indicator if result was manually overridden
+  const _resultOverride = m.resultOverride || null;
+  const _displayResult = _resultOverride || m.result;
+  mhd.textContent = `${player} vs ${m.oppName} (${_displayResult==='w'?'W':_displayResult==='l'?'L':'D'} ${m.draws>0?m.score:`${m.myW}-${m.oppW}`})${_resultOverride?' ⚠ overridden':''}`;
+  if (_resultOverride) mhd.title = 'Result manually overridden (original: '+(m.result==='w'?'W':'L')+')';
   const mlr = document.createElement('div');
   mlr.style.cssText = 'display:flex;align-items:center;gap:8px';
   const ml = document.createElement('a');
@@ -7499,6 +7509,41 @@ async function renderMatchDisplay(m) {
   const mtb = document.createElement('div');
   mtb.appendChild(mhd); mtb.appendChild(mlr);
   mh.appendChild(mtb);
+
+  // Result override button — miners/admins only
+  if (isMinerRole(_userRole) && _activeBatch && !_activeBatch.isTemp) {
+    const overrideBar = document.createElement('div');
+    overrideBar.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap';
+    const overrideLbl = document.createElement('span');
+    overrideLbl.style.cssText = 'font-size:10px;color:var(--muted);font-family:monospace';
+    overrideLbl.textContent = 'Override result:';
+    overrideBar.appendChild(overrideLbl);
+    [['W','w','var(--green)'],['L','l','var(--red)'],['Clear','clear','var(--muted)']].forEach(([label, val, col]) => {
+      const btn = document.createElement('button');
+      const isActive = val === 'clear' ? !!_resultOverride===false : _resultOverride === val;
+      btn.textContent = label;
+      btn.style.cssText = 'background:'+(isActive?col:'none')+';color:'+(isActive?'#050508':col)+';border:1px solid '+col+';font-family:monospace;font-size:9px;padding:1px 8px;border-radius:3px;cursor:pointer';
+      btn.onclick = async () => {
+        const newOverride = val === 'clear' ? null : val;
+        try {
+          const saveRes = await fetch(API+'/batches/'+_activeBatch.id+'/replay/'+encodeURIComponent(m.replayId)+'/override', {
+            method:'PATCH', headers: authHeaders(),
+            body: JSON.stringify({ resultOverride: newOverride })
+          });
+          if (!saveRes.ok) throw new Error('HTTP '+saveRes.status);
+          // Update local data
+          m.resultOverride = newOverride;
+          const localR = (_activeBatch.replays||[]).find(r=>r.replayId===m.replayId);
+          if (localR && localR.parsed) localR.parsed.resultOverride = newOverride;
+          // Refresh deck viewer
+          buildDeck();
+          st('Result override '+(newOverride?'set to '+newOverride.toUpperCase():'cleared'), 'var(--green)');
+        } catch(e) { st('Override failed: '+e.message, 'var(--red)'); }
+      };
+      overrideBar.appendChild(btn);
+    });
+    mtb.appendChild(overrideBar);
+  }
 
   // Event label bar
   const evtBar=document.createElement('div'); evtBar.className='event-label-bar';
@@ -8024,7 +8069,7 @@ function buildMatchRecord(replayResult, player, aliases) {
       oppDeckConf: replayResult.oppDeckOverride ? 'Override' : (oppClass ? oppClass.conf : 'Low'),
       matchWon:  p.result === 'w',
       matchLost: p.result === 'l',
-      result:    p.result,
+      result:    p.resultOverride || p.result,
       score:     p.score,
       myW:       p.myW,
       oppW:      p.oppW,
