@@ -113,7 +113,7 @@ select{cursor:pointer}
 
 /* ── Deck page ── */
 #pg-deck{flex-direction:row}
-.deck-sb{width:230px;flex-shrink:0;background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+.deck-sb{width:280px;flex-shrink:0;background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
 .dsb-hdr{padding:10px 12px;border-bottom:1px solid var(--border);flex-shrink:0}
 .dsb-hl{font-size:10px;color:var(--muted);letter-spacing:.15em;text-transform:uppercase;margin-bottom:7px}
 .dsearch{width:100%;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:12px;padding:5px 8px;outline:none}
@@ -5303,6 +5303,14 @@ function bar(par,p,color,h,mb){ const t=document.createElement('div'); t.style.c
 
 function renderRPS() {
   if (!_activeBatch) return;
+  // Temp batches skip RPS — deck viewer only
+  if (_activeBatch.isTemp) {
+    const c = document.getElementById('rps-out');
+    c.style.display = 'block';
+    c.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:120px;font-family:monospace;font-size:13px;color:var(--muted)">RPS Analysis is not available for Temporary Batches.</div>';
+    document.getElementById('rps-empty').style.display = 'none';
+    return;
+  }
   const player  = _activeBatch.player;
   // Apply GFWL-only filter if toggled
   const _allReplays = (_activeBatch.replays || []).map(r => {
@@ -7383,10 +7391,14 @@ function renderMatchSidebar(query) {
     wl.innerHTML = `<span style="color:var(--green)">${w}W</span> <span style="color:var(--dim)">—</span> <span style="color:var(--red)">${l}L</span> <span style="color:var(--dim)">· ${items.length}</span>`;
     hdr.appendChild(arrow); hdr.appendChild(lbl); hdr.appendChild(wl);
 
-    // Build Event YDK button — only for real event IDs with no saved decklist
-    if (isMinerRole(_userRole) && key !== 'Untagged' && !_showOpp) {
-      const _existingDeck = (_activeBatch && (_activeBatch.eventDecklists||[]))
-        .find(d => (d.eventId||'').toUpperCase() === key.toUpperCase());
+    // Build Event YDK button — only for real non-GFWL event IDs with no saved decklist
+    const _isGFWLGroup = typeof isGFWLSeason === 'function' && isGFWLSeason(key);
+    if (isMinerRole(_userRole) && key !== 'Untagged' && !_showOpp && !_isGFWLGroup) {
+      // Check both batch eventDecklists AND active profile decklists
+      const _batchDecks = (_activeBatch && (_activeBatch.eventDecklists||[]));
+      const _profileDecks = (_activeProfile && (_activeProfile.batches||[]).flatMap(b=>b.eventDecklists||[])) || [];
+      const _allDecks = [..._batchDecks, ..._profileDecks];
+      const _existingDeck = _allDecks.find(d => (d.eventId||'').toUpperCase() === key.toUpperCase());
       if (!_existingDeck) {
         const ydkBtn = document.createElement('button');
         ydkBtn.textContent = '↓ YDK';
@@ -9638,8 +9650,19 @@ async function addToBatch() {
 
   st((_activeBatch.name||_activeBatch.player)+' — '+_activeBatch.replays.length+' replays total', 'var(--green)');
   loadBatches();
-  renderRPS();
-  buildDeck();
+  // Temp batches: skip RPS entirely, only show deck viewer for both players
+  if (_activeBatch.isTemp) {
+    // Hide RPS output, show deck viewer
+    document.getElementById('rps-out').style.display = 'none';
+    document.getElementById('rps-empty').style.display = 'none';
+    buildDeck();
+    // Switch to Deck Viewer tab automatically
+    const dvTab = document.querySelector('.ntab[onclick*="deckviewer"]');
+    if (dvTab) switchTab('deckviewer', dvTab);
+  } else {
+    renderRPS();
+    buildDeck();
+  }
 }
 
 
