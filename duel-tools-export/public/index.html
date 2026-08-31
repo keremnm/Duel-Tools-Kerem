@@ -596,10 +596,15 @@ select{cursor:pointer}
       <button class="ntab on" onclick="switchTab('profiles',this)">Profiles</button>
       <button class="ntab" onclick="switchTab('deck',this)">Deck Viewer</button>
       <button class="ntab" onclick="switchTab('rps',this)">RPS Analysis</button>
-      <button class="ntab" onclick="switchTab('deckdata',this)">Deck Data</button>
-      <button class="ntab" onclick="switchTab('stats',this)">Stats</button>
+      <div style="position:relative;display:inline-block" id="deckdata-nav-wrap">
+        <button class="ntab" onclick="toggleDeckDataMenu(this)" id="deckdata-nav-btn">Deck Data ▾</button>
+        <div id="deckdata-dropdown" style="display:none;position:absolute;top:100%;left:0;background:var(--panel);border:1px solid var(--border);border-radius:6px;z-index:999;min-width:140px;box-shadow:0 4px 16px rgba(0,0,0,.5)">
+          <button onclick="switchTab('deckdata',document.getElementById('deckdata-nav-btn'));toggleDeckDataMenu()" style="display:block;width:100%;background:none;border:none;color:var(--text);font-family:monospace;font-size:12px;padding:8px 16px;cursor:pointer;text-align:left">Deck Data</button>
+          <button onclick="switchTab('stats',document.getElementById('deckdata-nav-btn'));toggleDeckDataMenu()" style="display:block;width:100%;background:none;border:none;color:var(--text);font-family:monospace;font-size:12px;padding:8px 16px;cursor:pointer;text-align:left">Stats</button>
+        </div>
+      </div>
       <button class="ntab" onclick="switchTab('ingame',this)">In-Game Tools</button>
-      <button class="ntab" id="gfwl-prep-tab" onclick="switchTab('gfwl',this)">GFWL Prep</button>
+      <button class="ntab" id="gfwl-prep-tab" onclick="switchTab('gfwl',this)">GFWL Archive</button>
     </div>
     <!-- Mobile nav dropdown — replaces tab row on small screens -->
     <div id="nav-mobile-wrap" style="display:none;padding:0 10px;flex-shrink:0;align-items:center;border-bottom:1px solid var(--border);background:var(--panel)">
@@ -610,7 +615,7 @@ select{cursor:pointer}
         <option value="rps">RPS Analysis</option>
         <option value="deckdata">Deck Data</option>
         <option value="stats">Stats</option>
-        <option value="gfwl">GFWL Prep</option>
+        <option value="gfwl">GFWL Archive</option>
       </select>
     </div>
     <div class="topbar-right">
@@ -1155,7 +1160,6 @@ select{cursor:pointer}
       <button class="dd-tab"    id="igt-tab-mytrack"  onclick="igtTab('mytrack',this)">📊 My Tracker</button>
       <button class="dd-tab"    id="igt-tab-opptrack" onclick="igtTab('opptrack',this)">👁 Opp Tracker</button>
       <button class="dd-tab"    id="igt-tab-tools"    onclick="igtTab('tools',this)">🛠 Tools</button>
-      <button class="dd-tab"    id="igt-tab-slowplay" onclick="igtTab('slowplay',this)">⏱ Slow Play</button>
       <!-- Timer in top bar -->
       <div style="margin-left:auto;display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:5px 12px">
         <div id="igt-timer-display" style="font-size:20px;font-weight:bold;color:var(--green);font-family:monospace;letter-spacing:.05em;min-width:58px">50:00</div>
@@ -6802,6 +6806,52 @@ async function analyzeSlowPlay() {
   }
 }
 
+// ── Deck Data nav dropdown ────────────────────────────────────────────────────
+function toggleDeckDataMenu() {
+  const dd = document.getElementById('deckdata-dropdown');
+  if (dd) dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+}
+document.addEventListener('click', e => {
+  const wrap = document.getElementById('deckdata-nav-wrap');
+  if (wrap && !wrap.contains(e.target)) {
+    const dd = document.getElementById('deckdata-dropdown');
+    if (dd) dd.style.display = 'none';
+  }
+});
+
+// ── Build YDK from Event ──────────────────────────────────────────────────────
+async function buildEventYDK() {
+  if (!_activeBatch || !_matches || !_matches.length) { st('No replays loaded', 'var(--red)'); return; }
+  const yrSel = document.getElementById('deck-year-filter');
+  const eventId = (yrSel && yrSel.value && yrSel.value !== '__all__') ? yrSel.value : null;
+  const cardSet = {};
+  for (const {m} of _matches) {
+    if (eventId && (m.eventLabel||'').toUpperCase() !== eventId.toUpperCase()) continue;
+    const cards = _showOpp ? (m.allOpp||[]) : (m.allMine||[]);
+    for (const c of cards) {
+      const name = (c.name||'').toLowerCase();
+      if (!name) continue;
+      if (!cardSet[name]) cardSet[name] = { name: c.name, id: c.id||null };
+    }
+  }
+  const uniqueCards = Object.values(cardSet);
+  if (!uniqueCards.length) { st('No cards found', 'var(--red)'); return; }
+  st('Building YDK...', 'var(--muted)');
+  const NL = String.fromCharCode(10);
+  let lines = ['#created by Duel Tools', '#main'];
+  for (const c of uniqueCards) { if (c.id) lines.push(String(c.id)); }
+  lines.push('#extra', '!side');
+  const ydkText = lines.join(NL) + NL;
+  const label = eventId || 'event';
+  const fname = (_activeBatch.player||'player') + '-' + label + '.ydk';
+  const blob = new Blob([ydkText], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = fname; a.click();
+  URL.revokeObjectURL(url);
+  st('Downloaded: ' + fname, 'var(--green)');
+}
+
 // ── Ban limit helper ─────────────────────────────────────────────────────────
 // banLimit defined above
 
@@ -7586,6 +7636,19 @@ async function renderMatchDisplay(m) {
   const ydkAllBtn=document.createElement('button'); ydkAllBtn.className='ddl'; ydkAllBtn.textContent='↓ All YDK';
   ydkAllBtn.onclick=()=>dlYDK(_showOpp?m.allOpp:m.allMine,`${_showOpp?m.oppName:player}_match_${m.replayId}.ydk`);
   toolbar.appendChild(ptg); toolbar.appendChild(stg); toolbar.appendChild(ydkAllBtn);
+  if (isMinerRole(_userRole) && !_showOpp) {
+    const yrSel2=document.getElementById('deck-year-filter');
+    const _aeid=yrSel2&&yrSel2.value&&yrSel2.value!=='__all__'?yrSel2.value.toUpperCase():null;
+    if (_aeid) {
+      const _exd=(_activeBatch&&(_activeBatch.eventDecklists||[])).find(d=>(d.eventId||'').toUpperCase()===_aeid);
+      if (!_exd) {
+        const evtBtn=document.createElement('button');evtBtn.className='ddl';
+        evtBtn.textContent='\u2193 '+_aeid+' YDK';evtBtn.style.color='var(--amber)';
+        evtBtn.title='Build YDK from '+_aeid+' replays (no decklist saved)';
+        evtBtn.onclick=()=>buildEventYDK();toolbar.appendChild(evtBtn);
+      }
+    }
+  }
   ddisplay.appendChild(toolbar);
 
   // Content area
@@ -12995,7 +13058,14 @@ function calcInput(key) {
     disp.textContent = _calcExpr;
     return;
   }
-  if (_calcResult && /[\d.]/.test(key)) { _calcExpr = ''; _calcResult = false; }
+  // After =: operator chains, digit starts fresh
+  if (_calcResult) {
+    if (key === '+' || key === '-' || key === '*' || key === '/') {
+      _calcResult = false;
+    } else if (/[0-9.]/.test(key)) {
+      _calcExpr = ''; _calcResult = false;
+    }
+  }
   _calcExpr += key;
   disp.textContent = _calcExpr || '0';
 }
@@ -13104,7 +13174,22 @@ function igtProbCalc() {
 let _igtPrPlayers=[],_igtPrOrder=[];
 function igtPrAdd(){const inp=document.getElementById('igt-pr-inp');const name=(inp.value||'').trim();if(!name)return;_igtPrPlayers.push(name);inp.value='';igtPrRenderList();}
 function igtPrRenderList(){const el=document.getElementById('igt-pr-list');el.innerHTML='';_igtPrPlayers.forEach((p,i)=>{const row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center;padding:2px 6px;background:var(--card2);border:1px solid var(--border);border-radius:4px;font-size:11px';const n=document.createElement('span');n.style.flex='1';n.textContent=p;const del=document.createElement('button');del.textContent='✕';del.style.cssText='background:none;border:none;color:var(--dim);cursor:pointer;font-size:11px;padding:0';del.onclick=()=>{_igtPrPlayers.splice(i,1);igtPrRenderList();};row.appendChild(n);row.appendChild(del);el.appendChild(row);});}
-function igtPrPick(){const avail=_igtPrPlayers.filter(p=>!_igtPrOrder.includes(p));if(!avail.length){st('All picked — reset','var(--amber)');return;}const pick=avail[Math.floor(Math.random()*avail.length)];_igtPrOrder.push(pick);document.getElementById('igt-pr-result').textContent='#'+_igtPrOrder.length+': '+pick;const orderEl=document.getElementById('igt-pr-order');const row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center;padding:2px 6px;background:var(--card2);border:1px solid var(--border);border-radius:4px;font-size:11px';const num=document.createElement('span');num.style.cssText='color:var(--muted);min-width:18px';num.textContent='#'+_igtPrOrder.length;const nm=document.createElement('span');nm.textContent=pick;row.appendChild(num);row.appendChild(nm);orderEl.insertBefore(row,orderEl.firstChild);}
+function igtPrPick(){
+  if(!_igtPrPlayers.length){st('Add players first','var(--amber)');return;}
+  const shuffled=[..._igtPrPlayers];
+  for(let i=shuffled.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[shuffled[i],shuffled[j]]=[shuffled[j],shuffled[i]];}
+  _igtPrOrder=shuffled;
+  const orderEl=document.getElementById('igt-pr-order');
+  orderEl.innerHTML='';
+  shuffled.forEach((p,i)=>{
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;gap:6px;align-items:center;padding:3px 6px;background:var(--card2);border:1px solid var(--border);border-radius:4px;font-size:12px;margin-bottom:2px';
+    const num=document.createElement('span');num.style.cssText='color:var(--amber);font-weight:bold;min-width:22px;font-family:monospace';num.textContent='#'+(i+1);
+    const nm=document.createElement('span');nm.textContent=p;
+    row.appendChild(num);row.appendChild(nm);orderEl.appendChild(row);
+  });
+  document.getElementById('igt-pr-result').textContent='';
+}
 function igtPrResetOrder(){_igtPrOrder=[];document.getElementById('igt-pr-order').innerHTML='';document.getElementById('igt-pr-result').textContent='';}
 function igtPrClear(){_igtPrPlayers=[];_igtPrOrder=[];igtPrRenderList();document.getElementById('igt-pr-order').innerHTML='';document.getElementById('igt-pr-result').textContent='';}
 
@@ -13251,10 +13336,11 @@ function applyRoleUI() {
   // Users cannot create new batches (only miners and above can)
   if (!isMinerRole(_userRole)) {
     document.querySelectorAll('[onclick*="openBatchPanel"]').forEach(el => {
-      if ((el.getAttribute('onclick')||'').includes('new')) el.style.display = 'none';
+      if ((el.getAttribute('onclick')||'').includes('new') || (el.getAttribute('onclick')||'').includes('temp')) el.style.display = 'none';
     });
   } else {
-    // Show import event buttons for miners+
+    // Miners: show all batch buttons + import buttons
+    document.querySelectorAll('[onclick*="openBatchPanel"]').forEach(el => { el.style.display = 'block'; });
     const _ied = document.getElementById('import-event-data-btn'); if (_ied) _ied.style.display = 'block';
     const _idk = document.getElementById('import-event-decks-btn'); if (_idk) _idk.style.display = 'block';
   }
