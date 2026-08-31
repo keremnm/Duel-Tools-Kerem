@@ -6819,15 +6819,100 @@ document.addEventListener('click', e => {
   }
 });
 
-// ── Build YDK from Event ──────────────────────────────────────────────────────
-async function buildEventYDK() {
-  if (!_activeBatch || !_matches || !_matches.length) { st('No replays loaded', 'var(--red)'); return; }
-  const yrSel = document.getElementById('deck-year-filter');
-  const eventId = (yrSel && yrSel.value && yrSel.value !== '__all__') ? yrSel.value : null;
+// ── Build YDK from Event (with replay selection) ─────────────────────────────
+function showBuildEventYDKModal(eventId, matches) {
+  const existing = document.getElementById('build-ydk-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'build-ydk-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:460px;width:100%;display:flex;flex-direction:column;gap:10px;max-height:80vh;overflow:hidden';
+
+  // Header
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;gap:8px;flex-shrink:0';
+  hdr.innerHTML = '<span style="font-family:monospace;font-weight:bold;font-size:13px;color:var(--amber)">Build YDK — '+eventId+'</span>';
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = 'margin-left:auto;background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer';
+  closeBtn.onclick = () => overlay.remove();
+  hdr.appendChild(closeBtn);
+  box.appendChild(hdr);
+
+  const desc = document.createElement('div');
+  desc.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace;flex-shrink:0';
+  desc.textContent = 'Select replays to include. Cards seen across all selected replays will be combined into one YDK.';
+  box.appendChild(desc);
+
+  // Select all row
+  const selAllRow = document.createElement('div');
+  selAllRow.style.cssText = 'display:flex;align-items:center;gap:8px;flex-shrink:0;padding-bottom:6px;border-bottom:1px solid var(--border)';
+  const selAllCb = document.createElement('input');
+  selAllCb.type = 'checkbox'; selAllCb.checked = true;
+  selAllCb.style.cssText = 'cursor:pointer;accent-color:var(--amber)';
+  const selAllLbl = document.createElement('label');
+  selAllLbl.style.cssText = 'font-size:11px;color:var(--text);font-family:monospace;cursor:pointer';
+  selAllLbl.textContent = 'Select all ('+matches.length+' replays)';
+  selAllRow.appendChild(selAllCb); selAllRow.appendChild(selAllLbl);
+  box.appendChild(selAllRow);
+
+  // Replay list
+  const listEl = document.createElement('div');
+  listEl.style.cssText = 'display:flex;flex-direction:column;gap:4px;overflow-y:auto;flex:1';
+
+  const checkboxes = [];
+  matches.forEach((m, i) => {
+    const row = document.createElement('label');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:5px 8px;background:var(--card);border:1px solid var(--border);border-radius:5px;cursor:pointer;font-family:monospace;font-size:11px';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = true;
+    cb.style.cssText = 'cursor:pointer;accent-color:var(--amber)';
+    cb.onchange = () => {
+      const allChecked = checkboxes.every(c => c.checked);
+      const noneChecked = checkboxes.every(c => !c.checked);
+      selAllCb.indeterminate = !allChecked && !noneChecked;
+      selAllCb.checked = allChecked;
+    };
+    checkboxes.push(cb);
+    const resultCol = m.result === 'w' ? 'var(--green)' : 'var(--red)';
+    const txt = document.createElement('span');
+    txt.innerHTML = '<span style="color:'+resultCol+'">'+(m.result==='w'?'W':'L')+'</span> vs <b>'+m.oppName+'</b>'+(m.myDeck?' <span style="color:var(--muted)">· '+m.myDeck+'</span>':'');
+    row.appendChild(cb); row.appendChild(txt);
+    // Click row selects checkbox
+    row.onclick = e => { if (e.target !== cb) cb.checked = !cb.checked; cb.onchange(); };
+    listEl.appendChild(row);
+  });
+  box.appendChild(listEl);
+
+  selAllCb.onchange = () => {
+    checkboxes.forEach(cb => { cb.checked = selAllCb.checked; });
+  };
+
+  // Build button
+  const buildBtn = document.createElement('button');
+  buildBtn.textContent = '↓ Download YDK';
+  buildBtn.style.cssText = 'background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:13px;padding:10px;border-radius:6px;cursor:pointer;flex-shrink:0;margin-top:4px';
+  buildBtn.onclick = async () => {
+    const selected = matches.filter((m, i) => checkboxes[i].checked);
+    if (!selected.length) { alert('Select at least one replay'); return; }
+    buildBtn.textContent = 'Building...'; buildBtn.disabled = true;
+    await buildEventYDKFromMatches(eventId, selected);
+    overlay.remove();
+  };
+  box.appendChild(buildBtn);
+
+  overlay.appendChild(box);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+}
+
+async function buildEventYDKFromMatches(eventId, matches) {
   const cardSet = {};
-  for (const {m} of _matches) {
-    if (eventId && (m.eventLabel||'').toUpperCase() !== eventId.toUpperCase()) continue;
-    const cards = _showOpp ? (m.allOpp||[]) : (m.allMine||[]);
+  for (const m of matches) {
+    const cards = m.allMine || [];
     for (const c of cards) {
       const name = (c.name||'').toLowerCase();
       if (!name) continue;
@@ -6835,22 +6920,38 @@ async function buildEventYDK() {
     }
   }
   const uniqueCards = Object.values(cardSet);
-  if (!uniqueCards.length) { st('No cards found', 'var(--red)'); return; }
-  st('Building YDK...', 'var(--muted)');
+  if (!uniqueCards.length) { st('No cards found in selected replays', 'var(--red)'); return; }
+
+  // Look up missing IDs
+  const needIds = uniqueCards.filter(c => !c.id);
+  if (needIds.length) {
+    try {
+      const r = await fetch('https://db.ygoprodeck.com/api/v7/cardinfo.php?name='+needIds.slice(0,50).map(c=>encodeURIComponent(c.name)).join('%7C'));
+      const d = await r.json();
+      (d.data||[]).forEach(c => {
+        const entry = uniqueCards.find(x => x.name.toLowerCase() === c.name.toLowerCase());
+        if (entry) entry.id = c.id;
+      });
+    } catch(e) {}
+  }
+
   const NL = String.fromCharCode(10);
-  let lines = ['#created by Duel Tools', '#main'];
+  const lines = ['#created by Duel Tools - '+eventId, '#main'];
   for (const c of uniqueCards) { if (c.id) lines.push(String(c.id)); }
   lines.push('#extra', '!side');
   const ydkText = lines.join(NL) + NL;
-  const label = eventId || 'event';
-  const fname = (_activeBatch.player||'player') + '-' + label + '.ydk';
+
+  const fname = (_activeBatch&&_activeBatch.player||'player') + '-' + eventId + '.ydk';
   const blob = new Blob([ydkText], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = fname; a.click();
   URL.revokeObjectURL(url);
-  st('Downloaded: ' + fname, 'var(--green)');
+  st('Downloaded: ' + fname + ' (' + uniqueCards.filter(c=>c.id).length + ' unique cards)', 'var(--green)');
 }
+
+// Legacy alias
+async function buildEventYDK() { st('Use the YDK button on an event group in the sidebar', 'var(--muted)'); }
 
 // ── Ban limit helper ─────────────────────────────────────────────────────────
 // banLimit defined above
@@ -7282,6 +7383,23 @@ function renderMatchSidebar(query) {
     wl.innerHTML = `<span style="color:var(--green)">${w}W</span> <span style="color:var(--dim)">—</span> <span style="color:var(--red)">${l}L</span> <span style="color:var(--dim)">· ${items.length}</span>`;
     hdr.appendChild(arrow); hdr.appendChild(lbl); hdr.appendChild(wl);
 
+    // Build Event YDK button — only for real event IDs with no saved decklist
+    if (isMinerRole(_userRole) && key !== 'Untagged' && !_showOpp) {
+      const _existingDeck = (_activeBatch && (_activeBatch.eventDecklists||[]))
+        .find(d => (d.eventId||'').toUpperCase() === key.toUpperCase());
+      if (!_existingDeck) {
+        const ydkBtn = document.createElement('button');
+        ydkBtn.textContent = '↓ YDK';
+        ydkBtn.title = 'Build YDK from ' + key + ' replays (no decklist saved yet)';
+        ydkBtn.style.cssText = 'background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-size:9px;padding:1px 6px;border-radius:3px;cursor:pointer;flex-shrink:0;margin-left:4px';
+        ydkBtn.onclick = e => {
+          e.stopPropagation();
+          showBuildEventYDKModal(key, items.map(x => x.m));
+        };
+        hdr.appendChild(ydkBtn);
+      }
+    }
+
     // Group body
     const body = document.createElement('div');
     body.style.cssText = 'display:flex;flex-direction:column;gap:2px;margin-bottom:4px;padding-left:4px';
@@ -7636,19 +7754,6 @@ async function renderMatchDisplay(m) {
   const ydkAllBtn=document.createElement('button'); ydkAllBtn.className='ddl'; ydkAllBtn.textContent='↓ All YDK';
   ydkAllBtn.onclick=()=>dlYDK(_showOpp?m.allOpp:m.allMine,`${_showOpp?m.oppName:player}_match_${m.replayId}.ydk`);
   toolbar.appendChild(ptg); toolbar.appendChild(stg); toolbar.appendChild(ydkAllBtn);
-  if (isMinerRole(_userRole) && !_showOpp) {
-    const yrSel2=document.getElementById('deck-year-filter');
-    const _aeid=yrSel2&&yrSel2.value&&yrSel2.value!=='__all__'?yrSel2.value.toUpperCase():null;
-    if (_aeid) {
-      const _exd=(_activeBatch&&(_activeBatch.eventDecklists||[])).find(d=>(d.eventId||'').toUpperCase()===_aeid);
-      if (!_exd) {
-        const evtBtn=document.createElement('button');evtBtn.className='ddl';
-        evtBtn.textContent='\u2193 '+_aeid+' YDK';evtBtn.style.color='var(--amber)';
-        evtBtn.title='Build YDK from '+_aeid+' replays (no decklist saved)';
-        evtBtn.onclick=()=>buildEventYDK();toolbar.appendChild(evtBtn);
-      }
-    }
-  }
   ddisplay.appendChild(toolbar);
 
   // Content area
