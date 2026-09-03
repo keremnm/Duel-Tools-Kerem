@@ -4,7 +4,8 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
-<title>Duel Tools</title>
+<title>Kerem's Duel Tools</title>
+<link rel="icon" type="image/png" href="/logo.png"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -26,6 +27,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Courie
 .topbar{grid-column:1/-1;background:var(--panel);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 18px;gap:14px;z-index:20}
 .logo{color:var(--green);font-weight:bold;font-size:16px;letter-spacing:.12em;display:flex;align-items:center;gap:8px}
 .logo-icon{font-size:20px}
+.logo-img{height:28px;width:28px;object-fit:contain;flex-shrink:0}
 .nav-tabs{display:flex;gap:2px;margin-left:16px}
 .ntab{background:none;border:none;color:var(--muted);font-family:monospace;font-size:13px;padding:7px 16px;cursor:pointer;border-radius:6px;letter-spacing:.05em;transition:all .15s}
 .ntab:hover{color:var(--text);background:var(--card)}
@@ -272,6 +274,7 @@ select{cursor:pointer}
     gap: 6px; flex-shrink: 0;
   }
   .logo { font-size: 12px; letter-spacing: .06em; flex-shrink: 0; }
+  .logo-img { height: 20px; width: 20px; }
   #pill { display: none !important; }
   .topbar-right { margin-left: auto; display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
   /* Shrink topbar buttons on mobile */
@@ -556,7 +559,8 @@ select{cursor:pointer}
 <div id="auth-gate" style="position:fixed;inset:0;background:#06060c;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;font-family:monospace">
   <div style="background:#0e0e1a;border:1px solid #252538;border-radius:12px;padding:32px 36px;width:340px;max-width:95vw;display:flex;flex-direction:column;gap:14px">
     <div style="text-align:center;margin-bottom:6px">
-      <div style="font-size:24px;font-weight:bold;color:#00e596;letter-spacing:.1em">🃏 DUEL TOOLS</div>
+      <img src="/logo.png" alt="Kerem's Duel Tools" style="height:64px;width:64px;object-fit:contain;margin-bottom:6px"/>
+      <div style="font-size:24px;font-weight:bold;color:#00e596;letter-spacing:.1em">KEREM'S DUEL TOOLS</div>
       <div style="font-size:12px;color:#8888bb;margin-top:4px">Goat Format Analytics</div>
     </div>
     <!-- Tabs -->
@@ -591,7 +595,7 @@ select{cursor:pointer}
 </div>
 <div class="app">
   <header class="topbar">
-    <div class="logo"><span class="logo-icon">🃏</span>DUEL TOOLS</div>
+    <div class="logo"><img class="logo-img" src="/logo.png" alt="Kerem's Duel Tools"/>KEREM'S DUEL TOOLS</div>
     <div class="nav-tabs" id="nav-tabs-desktop">
       <button class="ntab on" onclick="switchTab('profiles',this)">Profiles</button>
       <button class="ntab" onclick="switchTab('deck',this)">Deck Viewer</button>
@@ -984,7 +988,7 @@ select{cursor:pointer}
                 <div style="display:flex;gap:2px;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:8px">
                   <button class="dd-tab on" id="profile-tab-matchups" onclick="profileSubTab('matchups',this)">Deck Matchups</button>
                   <button class="dd-tab" id="profile-tab-gfwl" onclick="profileSubTab('gfwl',this)">GFWL History</button>
-                  <button class="dd-tab" id="profile-tab-cardwr" onclick="profileSubTab('cardwr',this)">Card Win Rate</button>
+                  <button class="dd-tab" id="profile-tab-cardwr" onclick="profileSubTab('cardwr',this)" style="display:none">Card Win Rate</button>
                 </div>
                 <!-- Matchup table -->
                 <div id="profile-matchup-panel">
@@ -6944,7 +6948,7 @@ async function buildEventYDKFromMatches(eventId, matches) {
   }
 
   const NL = String.fromCharCode(10);
-  const lines = ['#created by Duel Tools - '+eventId, '#main'];
+  const lines = ["#created by Kerem's Duel Tools - "+eventId, '#main'];
   for (const c of uniqueCards) { if (c.id) lines.push(String(c.id)); }
   lines.push('#extra', '!side');
   const ydkText = lines.join(NL) + NL;
