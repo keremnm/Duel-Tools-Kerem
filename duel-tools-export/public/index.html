@@ -2667,7 +2667,7 @@ async function gotoActiveProfile() {
 let _gfwlData = {};
 
 // Embedded S9 schedule data
-const _S9_SCHEDULE = {"season":"S9","numWeeks":9,"teams":{"Big Koala":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Otherworld"},{"week":2,"opponent":"Graceful Delinquents"},{"week":3,"opponent":"M.M.G."},{"week":4,"opponent":"Goat Gang Switzerland"},{"week":5,"opponent":"The Worst Generation"},{"week":6,"opponent":"Valedictory"},{"week":7,"opponent":"Kaiba Corp"},{"week":8,"opponent":"Warrior Solution"},{"week":9,"opponent":"D-Generation X"}],"notes":""},"D-Generation X":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Graceful Delinquents"},{"week":2,"opponent":"M.M.G."},{"week":3,"opponent":"Goat Gang Switzerland"},{"week":4,"opponent":"The Worst Generation"},{"week":5,"opponent":"Valedictory"},{"week":6,"opponent":"Kaiba Corp"},{"week":7,"opponent":"Warrior Solution"},{"week":8,"opponent":"Otherworld"},{"week":9,"opponent":"Big Koala"}],"notes":""},"Goat Gang Switzerland":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Kaiba Corp"},{"week":2,"opponent":"Warrior Solution"},{"week":3,"opponent":"D-Generation X"},{"week":4,"opponent":"Big Koala"},{"week":5,"opponent":"Graceful Delinquents"},{"week":6,"opponent":"M.M.G."},{"week":7,"opponent":"Otherworld"},{"week":8,"opponent":"The Worst Generation"},{"week":9,"opponent":"Valedictory"}],"notes":""},"Graceful Delinquents":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"D-Generation X"},{"week":2,"opponent":"Big Koala"},{"week":3,"opponent":"Otherworld"},{"week":4,"opponent":"M.M.G."},{"week":5,"opponent":"Goat Gang Switzerland"},{"week":6,"opponent":"The Worst Generation"},{"week":7,"opponent":"Valedictory"},{"week":8,"opponent":"Kaiba Corp"},{"week":9,"opponent":"Warrior Solution"}],"notes":""},"Kaiba Corp":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Goat Gang Switzerland"},{"week":2,"opponent":"The Worst Generation"},{"week":3,"opponent":"Valedictory"},{"week":4,"opponent":"Otherworld"},{"week":5,"opponent":"Warrior Solution"},{"week":6,"opponent":"D-Generation X"},{"week":7,"opponent":"Big Koala"},{"week":8,"opponent":"Graceful Delinquents"},{"week":9,"opponent":"M.M.G."}],"notes":""},"M.M.G.":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Warrior Solution"},{"week":2,"opponent":"D-Generation X"},{"week":3,"opponent":"Big Koala"},{"week":4,"opponent":"Graceful Delinquents"},{"week":5,"opponent":"Otherworld"},{"week":6,"opponent":"Goat Gang Switzerland"},{"week":7,"opponent":"The Worst Generation"},{"week":8,"opponent":"Valedictory"},{"week":9,"opponent":"Kaiba Corp"}],"notes":""},"Otherworld":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Big Koala"},{"week":2,"opponent":"Valedictory"},{"week":3,"opponent":"Graceful Delinquents"},{"week":4,"opponent":"Kaiba Corp"},{"week":5,"opponent":"M.M.G."},{"week":6,"opponent":"Warrior Solution"},{"week":7,"opponent":"Goat Gang Switzerland"},{"week":8,"opponent":"D-Generation X"},{"week":9,"opponent":"The Worst Generation"}],"notes":""},"The Worst Generation":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Valedictory"},{"week":2,"opponent":"Kaiba Corp"},{"week":3,"opponent":"Warrior Solution"},{"week":4,"opponent":"D-Generation X"},{"week":5,"opponent":"Big Koala"},{"week":6,"opponent":"Graceful Delinquents"},{"week":7,"opponent":"M.M.G."},{"week":8,"opponent":"Goat Gang Switzerland"},{"week":9,"opponent":"Otherworld"}],"notes":""},"Valedictory":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"The Worst Generation"},{"week":2,"opponent":"Otherworld"},{"week":3,"opponent":"Kaiba Corp"},{"week":4,"opponent":"Warrior Solution"},{"week":5,"opponent":"D-Generation X"},{"week":6,"opponent":"Big Koala"},{"week":7,"opponent":"Graceful Delinquents"},{"week":8,"opponent":"M.M.G."},{"week":9,"opponent":"Goat Gang Switzerland"}],"notes":""},"Warrior Solution":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"M.M.G."},{"week":2,"opponent":"Goat Gang Switzerland"},{"week":3,"opponent":"The Worst Generation"},{"week":4,"opponent":"Valedictory"},{"week":5,"opponent":"Kaiba Corp"},{"week":6,"opponent":"Otherworld"},{"week":7,"opponent":"D-Generation X"},{"week":8,"opponent":"Big Koala"},{"week":9,"opponent":"Graceful Delinquents"}],"notes":""},"Birdcage":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Iron Bucks"},{"week":2,"opponent":"Laus Nova"},{"week":3,"opponent":"W.O.R.S.E."},{"week":4,"opponent":"Heaven's Door Berlin"},{"week":5,"opponent":"Virtue"},{"week":6,"opponent":"Des Kangaroo"},{"week":7,"opponent":"Super Team Buddy Force"},{"week":8,"opponent":"Pandemonium"},{"week":9,"opponent":"Regulators"}],"notes":""},"Des Kangaroo":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Virtue"},{"week":2,"opponent":"Super Team Buddy Force"},{"week":3,"opponent":"Regulators"},{"week":4,"opponent":"Laus Nova"},{"week":5,"opponent":"Heaven's Door Berlin"},{"week":6,"opponent":"Birdcage"},{"week":7,"opponent":"Pandemonium"},{"week":8,"opponent":"Iron Bucks"},{"week":9,"opponent":"W.O.R.S.E."}],"notes":""},"Heaven's Door Berlin":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Super Team Buddy Force"},{"week":2,"opponent":"Regulators"},{"week":3,"opponent":"Laus Nova"},{"week":4,"opponent":"Birdcage"},{"week":5,"opponent":"Des Kangaroo"},{"week":6,"opponent":"Pandemonium"},{"week":7,"opponent":"Iron Bucks"},{"week":8,"opponent":"W.O.R.S.E."},{"week":9,"opponent":"Virtue"}],"notes":""},"Iron Bucks":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Birdcage"},{"week":2,"opponent":"W.O.R.S.E."},{"week":3,"opponent":"Virtue"},{"week":4,"opponent":"Super Team Buddy Force"},{"week":5,"opponent":"Regulators"},{"week":6,"opponent":"Laus Nova"},{"week":7,"opponent":"Heaven's Door Berlin"},{"week":8,"opponent":"Des Kangaroo"},{"week":9,"opponent":"Pandemonium"}],"notes":""},"Laus Nova":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Regulators"},{"week":2,"opponent":"Birdcage"},{"week":3,"opponent":"Heaven's Door Berlin"},{"week":4,"opponent":"Des Kangaroo"},{"week":5,"opponent":"Pandemonium"},{"week":6,"opponent":"Iron Bucks"},{"week":7,"opponent":"W.O.R.S.E."},{"week":8,"opponent":"Virtue"},{"week":9,"opponent":"Super Team Buddy Force"}],"notes":""},"Pandemonium":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"W.O.R.S.E."},{"week":2,"opponent":"Virtue"},{"week":3,"opponent":"Super Team Buddy Force"},{"week":4,"opponent":"Regulators"},{"week":5,"opponent":"Laus Nova"},{"week":6,"opponent":"Heaven's Door Berlin"},{"week":7,"opponent":"Des Kangaroo"},{"week":8,"opponent":"Birdcage"},{"week":9,"opponent":"Iron Bucks"}],"notes":""},"Regulators":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Laus Nova"},{"week":2,"opponent":"Heaven's Door Berlin"},{"week":3,"opponent":"Des Kangaroo"},{"week":4,"opponent":"Pandemonium"},{"week":5,"opponent":"Iron Bucks"},{"week":6,"opponent":"W.O.R.S.E."},{"week":7,"opponent":"Virtue"},{"week":8,"opponent":"Super Team Buddy Force"},{"week":9,"opponent":"Birdcage"}],"notes":""},"Super Team Buddy Force":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Heaven's Door Berlin"},{"week":2,"opponent":"Des Kangaroo"},{"week":3,"opponent":"Pandemonium"},{"week":4,"opponent":"Iron Bucks"},{"week":5,"opponent":"W.O.R.S.E."},{"week":6,"opponent":"Virtue"},{"week":7,"opponent":"Birdcage"},{"week":8,"opponent":"Regulators"},{"week":9,"opponent":"Laus Nova"}],"notes":""},"Virtue":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Des Kangaroo"},{"week":2,"opponent":"Pandemonium"},{"week":3,"opponent":"Iron Bucks"},{"week":4,"opponent":"W.O.R.S.E."},{"week":5,"opponent":"Birdcage"},{"week":6,"opponent":"Super Team Buddy Force"},{"week":7,"opponent":"Regulators"},{"week":8,"opponent":"Laus Nova"},{"week":9,"opponent":"Heaven's Door Berlin"}],"notes":""},"W.O.R.S.E.":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Pandemonium"},{"week":2,"opponent":"Iron Bucks"},{"week":3,"opponent":"Birdcage"},{"week":4,"opponent":"Virtue"},{"week":5,"opponent":"Super Team Buddy Force"},{"week":6,"opponent":"Regulators"},{"week":7,"opponent":"Laus Nova"},{"week":8,"opponent":"Heaven's Door Berlin"},{"week":9,"opponent":"Des Kangaroo"}],"notes":""},"1A_Alpengoats":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"RWYAWB"},{"week":2,"opponent":"Back to the Goat"},{"week":3,"opponent":"Shuffle & Cut"},{"week":4,"opponent":"Hell's Kitchen"},{"week":5,"opponent":"Iron Goats"},{"week":6,"opponent":"Skull Servants"},{"week":7,"opponent":"Tisis"},{"week":8,"opponent":"Ameur Shot"},{"week":9,"opponent":"Cowpokes"}],"notes":""},"Ameur Shot":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Skull Servants"},{"week":2,"opponent":"Cowpokes"},{"week":3,"opponent":"RWYAWB"},{"week":4,"opponent":"Back to the Goat"},{"week":5,"opponent":"Shuffle & Cut"},{"week":6,"opponent":"Hell's Kitchen"},{"week":7,"opponent":"Iron Goats"},{"week":8,"opponent":"1A_Alpengoats"},{"week":9,"opponent":"Tisis"}],"notes":""},"Back to the Goat":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Iron Goats"},{"week":2,"opponent":"1A_Alpengoats"},{"week":3,"opponent":"Tisis"},{"week":4,"opponent":"Ameur Shot"},{"week":5,"opponent":"Cowpokes"},{"week":6,"opponent":"RWYAWB"},{"week":7,"opponent":"Skull Servants"},{"week":8,"opponent":"Shuffle & Cut"},{"week":9,"opponent":"Hell's Kitchen"}],"notes":""},"Cowpokes":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Tisis"},{"week":2,"opponent":"Ameur Shot"},{"week":3,"opponent":"Skull Servants"},{"week":4,"opponent":"RWYAWB"},{"week":5,"opponent":"Back to the Goat"},{"week":6,"opponent":"Shuffle & Cut"},{"week":7,"opponent":"Hell's Kitchen"},{"week":8,"opponent":"Iron Goats"},{"week":9,"opponent":"1A_Alpengoats"}],"notes":""},"Hell's Kitchen":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Shuffle & Cut"},{"week":2,"opponent":"Skull Servants"},{"week":3,"opponent":"Iron Goats"},{"week":4,"opponent":"1A_Alpengoats"},{"week":5,"opponent":"Tisis"},{"week":6,"opponent":"Ameur Shot"},{"week":7,"opponent":"Cowpokes"},{"week":8,"opponent":"RWYAWB"},{"week":9,"opponent":"Back to the Goat"}],"notes":""},"Iron Goats":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Back to the Goat"},{"week":2,"opponent":"Shuffle & Cut"},{"week":3,"opponent":"Hell's Kitchen"},{"week":4,"opponent":"Skull Servants"},{"week":5,"opponent":"1A_Alpengoats"},{"week":6,"opponent":"Tisis"},{"week":7,"opponent":"Ameur Shot"},{"week":8,"opponent":"Cowpokes"},{"week":9,"opponent":"RWYAWB"}],"notes":""},"RWYAWB":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"1A_Alpengoats"},{"week":2,"opponent":"Tisis"},{"week":3,"opponent":"Ameur Shot"},{"week":4,"opponent":"Cowpokes"},{"week":5,"opponent":"Skull Servants"},{"week":6,"opponent":"Back to the Goat"},{"week":7,"opponent":"Shuffle & Cut"},{"week":8,"opponent":"Hell's Kitchen"},{"week":9,"opponent":"Iron Goats"}],"notes":""},"Shuffle & Cut":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Hell's Kitchen"},{"week":2,"opponent":"Iron Goats"},{"week":3,"opponent":"1A_Alpengoats"},{"week":4,"opponent":"Tisis"},{"week":5,"opponent":"Ameur Shot"},{"week":6,"opponent":"Cowpokes"},{"week":7,"opponent":"RWYAWB"},{"week":8,"opponent":"Back to the Goat"},{"week":9,"opponent":"Skull Servants"}],"notes":""},"Skull Servants":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Ameur Shot"},{"week":2,"opponent":"Hell's Kitchen"},{"week":3,"opponent":"Cowpokes"},{"week":4,"opponent":"Iron Goats"},{"week":5,"opponent":"RWYAWB"},{"week":6,"opponent":"1A_Alpengoats"},{"week":7,"opponent":"Back to the Goat"},{"week":8,"opponent":"Tisis"},{"week":9,"opponent":"Shuffle & Cut"}],"notes":""},"Tisis":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Cowpokes"},{"week":2,"opponent":"RWYAWB"},{"week":3,"opponent":"Back to the Goat"},{"week":4,"opponent":"Shuffle & Cut"},{"week":5,"opponent":"Hell's Kitchen"},{"week":6,"opponent":"Iron Goats"},{"week":7,"opponent":"1A_Alpengoats"},{"week":8,"opponent":"Skull Servants"},{"week":9,"opponent":"Ameur Shot"}],"notes":""}}};
+const _S9_SCHEDULE = {"season":"S9","numWeeks":9,"teams":{"Big Koala":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Otherworld"},{"week":2,"opponent":"Graceful Delinquents"},{"week":3,"opponent":"M.M.G."},{"week":4,"opponent":"Goat Gang Switzerland"},{"week":5,"opponent":"The Worst Generation"},{"week":6,"opponent":"Valedictory"},{"week":7,"opponent":"Kaiba Corp"},{"week":8,"opponent":"Warrior Solution"},{"week":9,"opponent":"D-Generation X"}],"notes":""},"D-Generation X":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Graceful Delinquents"},{"week":2,"opponent":"M.M.G."},{"week":3,"opponent":"Goat Gang Switzerland"},{"week":4,"opponent":"The Worst Generation"},{"week":5,"opponent":"Valedictory"},{"week":6,"opponent":"Kaiba Corp"},{"week":7,"opponent":"Warrior Solution"},{"week":8,"opponent":"Otherworld"},{"week":9,"opponent":"Big Koala"},{"week":"Wildcard","opponent":"Birdcage"}],"notes":""},"Goat Gang Switzerland":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Kaiba Corp"},{"week":2,"opponent":"Warrior Solution"},{"week":3,"opponent":"D-Generation X"},{"week":4,"opponent":"Big Koala"},{"week":5,"opponent":"Graceful Delinquents"},{"week":6,"opponent":"M.M.G."},{"week":7,"opponent":"Otherworld"},{"week":8,"opponent":"The Worst Generation"},{"week":9,"opponent":"Valedictory"}],"notes":""},"Graceful Delinquents":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"D-Generation X"},{"week":2,"opponent":"Big Koala"},{"week":3,"opponent":"Otherworld"},{"week":4,"opponent":"M.M.G."},{"week":5,"opponent":"Goat Gang Switzerland"},{"week":6,"opponent":"The Worst Generation"},{"week":7,"opponent":"Valedictory"},{"week":8,"opponent":"Kaiba Corp"},{"week":9,"opponent":"Warrior Solution"}],"notes":""},"Kaiba Corp":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Goat Gang Switzerland"},{"week":2,"opponent":"The Worst Generation"},{"week":3,"opponent":"Valedictory"},{"week":4,"opponent":"Otherworld"},{"week":5,"opponent":"Warrior Solution"},{"week":6,"opponent":"D-Generation X"},{"week":7,"opponent":"Big Koala"},{"week":8,"opponent":"Graceful Delinquents"},{"week":9,"opponent":"M.M.G."}],"notes":""},"M.M.G.":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Warrior Solution"},{"week":2,"opponent":"D-Generation X"},{"week":3,"opponent":"Big Koala"},{"week":4,"opponent":"Graceful Delinquents"},{"week":5,"opponent":"Otherworld"},{"week":6,"opponent":"Goat Gang Switzerland"},{"week":7,"opponent":"The Worst Generation"},{"week":8,"opponent":"Valedictory"},{"week":9,"opponent":"Kaiba Corp"}],"notes":""},"Otherworld":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Big Koala"},{"week":2,"opponent":"Valedictory"},{"week":3,"opponent":"Graceful Delinquents"},{"week":4,"opponent":"Kaiba Corp"},{"week":5,"opponent":"M.M.G."},{"week":6,"opponent":"Warrior Solution"},{"week":7,"opponent":"Goat Gang Switzerland"},{"week":8,"opponent":"D-Generation X"},{"week":9,"opponent":"The Worst Generation"}],"notes":""},"The Worst Generation":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Valedictory"},{"week":2,"opponent":"Kaiba Corp"},{"week":3,"opponent":"Warrior Solution"},{"week":4,"opponent":"D-Generation X"},{"week":5,"opponent":"Big Koala"},{"week":6,"opponent":"Graceful Delinquents"},{"week":7,"opponent":"M.M.G."},{"week":8,"opponent":"Goat Gang Switzerland"},{"week":9,"opponent":"Otherworld"},{"week":"Wildcard","opponent":"Virtue"},{"week":"Top 8","opponent":"Iron Bucks"}],"notes":""},"Valedictory":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"The Worst Generation"},{"week":2,"opponent":"Otherworld"},{"week":3,"opponent":"Kaiba Corp"},{"week":4,"opponent":"Warrior Solution"},{"week":5,"opponent":"D-Generation X"},{"week":6,"opponent":"Big Koala"},{"week":7,"opponent":"Graceful Delinquents"},{"week":8,"opponent":"M.M.G."},{"week":9,"opponent":"Goat Gang Switzerland"},{"week":"Top 8","opponent":"Skull Servants"}],"notes":""},"Warrior Solution":{"conference":"Blue","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"M.M.G."},{"week":2,"opponent":"Goat Gang Switzerland"},{"week":3,"opponent":"The Worst Generation"},{"week":4,"opponent":"Valedictory"},{"week":5,"opponent":"Kaiba Corp"},{"week":6,"opponent":"Otherworld"},{"week":7,"opponent":"D-Generation X"},{"week":8,"opponent":"Big Koala"},{"week":9,"opponent":"Graceful Delinquents"},{"week":"Wildcard","opponent":"W.O.R.S.E."},{"week":"Top 8","opponent":"Hell's Kitchen"}],"notes":""},"Birdcage":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Iron Bucks"},{"week":2,"opponent":"Laus Nova"},{"week":3,"opponent":"W.O.R.S.E."},{"week":4,"opponent":"Heaven's Door Berlin"},{"week":5,"opponent":"Virtue"},{"week":6,"opponent":"Des Kangaroo"},{"week":7,"opponent":"Super Team Buddy Force"},{"week":8,"opponent":"Pandemonium"},{"week":9,"opponent":"Regulators"},{"week":"Wildcard","opponent":"D-Generation X"},{"week":"Top 8","opponent":"Iron Goats"}],"notes":""},"Des Kangaroo":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Virtue"},{"week":2,"opponent":"Super Team Buddy Force"},{"week":3,"opponent":"Regulators"},{"week":4,"opponent":"Laus Nova"},{"week":5,"opponent":"Heaven's Door Berlin"},{"week":6,"opponent":"Birdcage"},{"week":7,"opponent":"Pandemonium"},{"week":8,"opponent":"Iron Bucks"},{"week":9,"opponent":"W.O.R.S.E."}],"notes":""},"Heaven's Door Berlin":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Super Team Buddy Force"},{"week":2,"opponent":"Regulators"},{"week":3,"opponent":"Laus Nova"},{"week":4,"opponent":"Birdcage"},{"week":5,"opponent":"Des Kangaroo"},{"week":6,"opponent":"Pandemonium"},{"week":7,"opponent":"Iron Bucks"},{"week":8,"opponent":"W.O.R.S.E."},{"week":9,"opponent":"Virtue"}],"notes":""},"Iron Bucks":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Birdcage"},{"week":2,"opponent":"W.O.R.S.E."},{"week":3,"opponent":"Virtue"},{"week":4,"opponent":"Super Team Buddy Force"},{"week":5,"opponent":"Regulators"},{"week":6,"opponent":"Laus Nova"},{"week":7,"opponent":"Heaven's Door Berlin"},{"week":8,"opponent":"Des Kangaroo"},{"week":9,"opponent":"Pandemonium"},{"week":"Top 8","opponent":"The Worst Generation"}],"notes":""},"Laus Nova":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Regulators"},{"week":2,"opponent":"Birdcage"},{"week":3,"opponent":"Heaven's Door Berlin"},{"week":4,"opponent":"Des Kangaroo"},{"week":5,"opponent":"Pandemonium"},{"week":6,"opponent":"Iron Bucks"},{"week":7,"opponent":"W.O.R.S.E."},{"week":8,"opponent":"Virtue"},{"week":9,"opponent":"Super Team Buddy Force"}],"notes":""},"Pandemonium":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"W.O.R.S.E."},{"week":2,"opponent":"Virtue"},{"week":3,"opponent":"Super Team Buddy Force"},{"week":4,"opponent":"Regulators"},{"week":5,"opponent":"Laus Nova"},{"week":6,"opponent":"Heaven's Door Berlin"},{"week":7,"opponent":"Des Kangaroo"},{"week":8,"opponent":"Birdcage"},{"week":9,"opponent":"Iron Bucks"}],"notes":""},"Regulators":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Laus Nova"},{"week":2,"opponent":"Heaven's Door Berlin"},{"week":3,"opponent":"Des Kangaroo"},{"week":4,"opponent":"Pandemonium"},{"week":5,"opponent":"Iron Bucks"},{"week":6,"opponent":"W.O.R.S.E."},{"week":7,"opponent":"Virtue"},{"week":8,"opponent":"Super Team Buddy Force"},{"week":9,"opponent":"Birdcage"},{"week":"Wildcard","opponent":"Iron Goats"}],"notes":""},"Super Team Buddy Force":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Heaven's Door Berlin"},{"week":2,"opponent":"Des Kangaroo"},{"week":3,"opponent":"Pandemonium"},{"week":4,"opponent":"Iron Bucks"},{"week":5,"opponent":"W.O.R.S.E."},{"week":6,"opponent":"Virtue"},{"week":7,"opponent":"Birdcage"},{"week":8,"opponent":"Regulators"},{"week":9,"opponent":"Laus Nova"}],"notes":""},"Virtue":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Des Kangaroo"},{"week":2,"opponent":"Pandemonium"},{"week":3,"opponent":"Iron Bucks"},{"week":4,"opponent":"W.O.R.S.E."},{"week":5,"opponent":"Birdcage"},{"week":6,"opponent":"Super Team Buddy Force"},{"week":7,"opponent":"Regulators"},{"week":8,"opponent":"Laus Nova"},{"week":9,"opponent":"Heaven's Door Berlin"},{"week":"Wildcard","opponent":"The Worst Generation"}],"notes":""},"W.O.R.S.E.":{"conference":"Red","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Pandemonium"},{"week":2,"opponent":"Iron Bucks"},{"week":3,"opponent":"Birdcage"},{"week":4,"opponent":"Virtue"},{"week":5,"opponent":"Super Team Buddy Force"},{"week":6,"opponent":"Regulators"},{"week":7,"opponent":"Laus Nova"},{"week":8,"opponent":"Heaven's Door Berlin"},{"week":9,"opponent":"Des Kangaroo"},{"week":"Wildcard","opponent":"Warrior Solution"}],"notes":""},"1A_Alpengoats":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"RWYAWB"},{"week":2,"opponent":"Back to the Goat"},{"week":3,"opponent":"Shuffle & Cut"},{"week":4,"opponent":"Hell's Kitchen"},{"week":5,"opponent":"Iron Goats"},{"week":6,"opponent":"Skull Servants"},{"week":7,"opponent":"Tisis"},{"week":8,"opponent":"Ameur Shot"},{"week":9,"opponent":"Cowpokes"}],"notes":""},"Ameur Shot":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Skull Servants"},{"week":2,"opponent":"Cowpokes"},{"week":3,"opponent":"RWYAWB"},{"week":4,"opponent":"Back to the Goat"},{"week":5,"opponent":"Shuffle & Cut"},{"week":6,"opponent":"Hell's Kitchen"},{"week":7,"opponent":"Iron Goats"},{"week":8,"opponent":"1A_Alpengoats"},{"week":9,"opponent":"Tisis"}],"notes":""},"Back to the Goat":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Iron Goats"},{"week":2,"opponent":"1A_Alpengoats"},{"week":3,"opponent":"Tisis"},{"week":4,"opponent":"Ameur Shot"},{"week":5,"opponent":"Cowpokes"},{"week":6,"opponent":"RWYAWB"},{"week":7,"opponent":"Skull Servants"},{"week":8,"opponent":"Shuffle & Cut"},{"week":9,"opponent":"Hell's Kitchen"}],"notes":""},"Cowpokes":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Tisis"},{"week":2,"opponent":"Ameur Shot"},{"week":3,"opponent":"Skull Servants"},{"week":4,"opponent":"RWYAWB"},{"week":5,"opponent":"Back to the Goat"},{"week":6,"opponent":"Shuffle & Cut"},{"week":7,"opponent":"Hell's Kitchen"},{"week":8,"opponent":"Iron Goats"},{"week":9,"opponent":"1A_Alpengoats"}],"notes":""},"Hell's Kitchen":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Shuffle & Cut"},{"week":2,"opponent":"Skull Servants"},{"week":3,"opponent":"Iron Goats"},{"week":4,"opponent":"1A_Alpengoats"},{"week":5,"opponent":"Tisis"},{"week":6,"opponent":"Ameur Shot"},{"week":7,"opponent":"Cowpokes"},{"week":8,"opponent":"RWYAWB"},{"week":9,"opponent":"Back to the Goat"},{"week":"Top 8","opponent":"Warrior Solution"}],"notes":""},"Iron Goats":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Back to the Goat"},{"week":2,"opponent":"Shuffle & Cut"},{"week":3,"opponent":"Hell's Kitchen"},{"week":4,"opponent":"Skull Servants"},{"week":5,"opponent":"1A_Alpengoats"},{"week":6,"opponent":"Tisis"},{"week":7,"opponent":"Ameur Shot"},{"week":8,"opponent":"Cowpokes"},{"week":9,"opponent":"RWYAWB"},{"week":"Wildcard","opponent":"Regulators"},{"week":"Top 8","opponent":"Birdcage"}],"notes":""},"RWYAWB":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"1A_Alpengoats"},{"week":2,"opponent":"Tisis"},{"week":3,"opponent":"Ameur Shot"},{"week":4,"opponent":"Cowpokes"},{"week":5,"opponent":"Skull Servants"},{"week":6,"opponent":"Back to the Goat"},{"week":7,"opponent":"Shuffle & Cut"},{"week":8,"opponent":"Hell's Kitchen"},{"week":9,"opponent":"Iron Goats"}],"notes":""},"Shuffle & Cut":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Hell's Kitchen"},{"week":2,"opponent":"Iron Goats"},{"week":3,"opponent":"1A_Alpengoats"},{"week":4,"opponent":"Tisis"},{"week":5,"opponent":"Ameur Shot"},{"week":6,"opponent":"Cowpokes"},{"week":7,"opponent":"RWYAWB"},{"week":8,"opponent":"Back to the Goat"},{"week":9,"opponent":"Skull Servants"}],"notes":""},"Skull Servants":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Ameur Shot"},{"week":2,"opponent":"Hell's Kitchen"},{"week":3,"opponent":"Cowpokes"},{"week":4,"opponent":"Iron Goats"},{"week":5,"opponent":"RWYAWB"},{"week":6,"opponent":"1A_Alpengoats"},{"week":7,"opponent":"Back to the Goat"},{"week":8,"opponent":"Tisis"},{"week":9,"opponent":"Shuffle & Cut"},{"week":"Wildcard","opponent":"Tisis"},{"week":"Top 8","opponent":"Valedictory"}],"notes":""},"Tisis":{"conference":"Yellow","aliases":[],"roster":[],"addDrops":[],"schedule":[{"week":1,"opponent":"Cowpokes"},{"week":2,"opponent":"RWYAWB"},{"week":3,"opponent":"Back to the Goat"},{"week":4,"opponent":"Shuffle & Cut"},{"week":5,"opponent":"Hell's Kitchen"},{"week":6,"opponent":"Iron Goats"},{"week":7,"opponent":"1A_Alpengoats"},{"week":8,"opponent":"Skull Servants"},{"week":9,"opponent":"Ameur Shot"},{"week":"Wildcard","opponent":"Skull Servants"}],"notes":""}}};
 
 async function gfwlAutoImportSchedule(season, scheduleData, force) {
   const existing = _gfwlData[season];
@@ -3470,6 +3470,8 @@ async function gfwlOpenTeam(season, teamName, team) {
     if (window._gfwlRerenderRoster) window._gfwlRerenderRoster();
     // Re-render schedule so week scores populate
     if (window._gfwlRerenderSchedule) window._gfwlRerenderSchedule();
+    // Re-render playoffs so round scores populate
+    if (window._gfwlRerenderPlayoffs) window._gfwlRerenderPlayoffs();
     // Re-render pies
     if (window._gfwlRenderPies) window._gfwlRenderPies();
   }
@@ -3629,6 +3631,35 @@ async function gfwlOpenTeam(season, teamName, team) {
     return { teamW, teamL, matchW, matchL, hasData: wkReplays.length > 0 };
   }
 
+  // Same as getWeekScore, but for playoff rounds ("S9: Wildcard", "S9: Top 8", ...).
+  // Matches the label text after the colon against the round name directly —
+  // NOT by extracting digits, since "Top 8" would otherwise collide with
+  // regular-season "Week 8" (both strip down to the digit "8").
+  function getRoundScore(roundName) {
+    const target = roundName.toLowerCase().replace(/\s+/g,' ').trim();
+    const roundReplays = seasonReplays.filter(x => {
+      const lbl = x.label;
+      if (!lbl.includes(':')) return false;
+      const part = lbl.split(':').slice(1).join(':').toLowerCase().replace(/\s+/g,' ').trim();
+      return part === target;
+    });
+    const playerResults = {};
+    roundReplays.forEach(x => {
+      const p = x.player.toLowerCase();
+      if (!playerResults[p]) playerResults[p] = { w:0, l:0 };
+      if (x.replay.parsed?.result==='w') playerResults[p].w++;
+      else if (x.replay.parsed?.result==='l') playerResults[p].l++;
+    });
+    let teamW=0, teamL=0;
+    Object.values(playerResults).forEach(r => {
+      if (r.w > r.l) teamW++;
+      else if (r.l > r.w) teamL++;
+    });
+    const matchW = roundReplays.filter(x=>x.replay.parsed?.result==='w').length;
+    const matchL = roundReplays.filter(x=>x.replay.parsed?.result==='l').length;
+    return { teamW, teamL, matchW, matchL, hasData: roundReplays.length > 0 };
+  }
+
   // Compute season week record
   let seasonWkW=0, seasonWkL=0;
   for (let wk=1; wk<=numWeeks; wk++) {
@@ -3721,6 +3752,84 @@ async function gfwlOpenTeam(season, teamName, team) {
   }
   renderScheduleBody();
   window._gfwlRerenderSchedule = renderScheduleBody;
+
+  // ── Playoffs table — Wildcard / Top 8 / Top 4 / Finals ─────────────────────
+  // Only rendered once at least one playoff round has a matchup on record for
+  // this team (so it stays out of the way for seasons/teams still in the
+  // regular season), and always shows every round so later rounds ("more to
+  // be added") just fill in as their schedule entries get imported.
+  const PLAYOFF_ROUNDS = ['Wildcard','Top 8','Top 4','Finals'];
+  const hasAnyPlayoffEntry = PLAYOFF_ROUNDS.some(rd => schedule.some(s => String(s.week).toLowerCase() === rd.toLowerCase()));
+  if (hasAnyPlayoffEntry) {
+    const poSec = gfwlMakeSection('PLAYOFFS');
+    left.appendChild(poSec);
+
+    const poTable = document.createElement('table');
+    poTable.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
+    const poHdrRow = document.createElement('tr');
+    poHdrRow.style.cssText = 'border-bottom:1px solid var(--border)';
+    poHdrRow.innerHTML = `
+      <th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em;width:80px">ROUND</th>
+      <th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">OPPONENT</th>
+      <th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">SCORE</th>
+      <th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">MATCH W/L</th>
+      <th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em">MATCH W%</th>
+      <th style="padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.1em"></th>
+    `;
+    const poHead = document.createElement('thead');
+    poHead.appendChild(poHdrRow);
+    poTable.appendChild(poHead);
+    poSec.appendChild(poTable);
+
+    const poBody = document.createElement('tbody');
+    poTable.appendChild(poBody);
+
+    function renderPlayoffsBody() {
+      poBody.innerHTML = '';
+      PLAYOFF_ROUNDS.forEach(round => {
+        const schEntry = schedule.find(s => String(s.week).toLowerCase() === round.toLowerCase());
+        const opp = schEntry?.opponent || '—';
+        const sc = getRoundScore(round);
+        const matchPct = (sc.matchW+sc.matchL) ? Math.round(sc.matchW/(sc.matchW+sc.matchL)*100) : null;
+        const rdWon = sc.hasData && sc.teamW > sc.teamL;
+
+        const tr = document.createElement('tr');
+        tr.style.cssText = 'border-bottom:1px solid var(--border2)';
+
+        const rdTd = document.createElement('td');
+        rdTd.style.cssText='padding:5px 8px;font-family:monospace;color:var(--amber);font-weight:bold';
+        rdTd.textContent = round;
+        const oppTd = document.createElement('td');
+        oppTd.style.cssText='padding:5px 8px;color:var(--text)';
+        oppTd.textContent = opp;
+        const scoreTd = document.createElement('td');
+        scoreTd.style.cssText='padding:5px 8px;text-align:center;font-family:monospace;font-weight:bold;color:'+(sc.hasData?(rdWon?'var(--green)':'var(--red)'):'var(--dim)');
+        scoreTd.textContent = sc.hasData?sc.teamW+'-'+sc.teamL:'—';
+        const matchTd = document.createElement('td');
+        matchTd.style.cssText='padding:5px 8px;text-align:center;font-family:monospace;font-size:11px';
+        matchTd.innerHTML = sc.hasData?'<span style="color:var(--green)">'+sc.matchW+'W</span> <span style="color:var(--dim)">-</span> <span style="color:var(--red)">'+sc.matchL+'L</span>':'<span style="color:var(--dim)">—</span>';
+        const pctTd = document.createElement('td');
+        pctTd.style.cssText='padding:5px 8px;text-align:center;font-family:monospace;color:'+(matchPct===null?'var(--dim)':matchPct>=50?'var(--green)':'var(--red)');
+        pctTd.textContent=matchPct===null?'—':matchPct+'%';
+        const rptTd = document.createElement('td');
+        rptTd.style.cssText='padding:5px 8px';
+        if (opp !== '—') {
+          const rptBtn = document.createElement('button');
+          rptBtn.textContent='Round Report';
+          rptBtn.style.cssText='background:var(--amber);color:#050508;border:none;font-family:monospace;font-size:10px;font-weight:bold;padding:2px 8px;border-radius:3px;cursor:pointer;white-space:nowrap';
+          rptBtn.onclick = () => gfwlOpenRoundReport(season, teamName, round, opp, seasonReplays);
+          rptTd.appendChild(rptBtn);
+        }
+        tr.appendChild(rdTd); tr.appendChild(oppTd); tr.appendChild(scoreTd);
+        tr.appendChild(matchTd); tr.appendChild(pctTd); tr.appendChild(rptTd);
+        poBody.appendChild(tr);
+      });
+    }
+    renderPlayoffsBody();
+    window._gfwlRerenderPlayoffs = renderPlayoffsBody;
+  } else {
+    window._gfwlRerenderPlayoffs = null;
+  }
 
   // ── Add/Drop log ──────────────────────────────────────────────────────────
   if (addDrops.length || _userRole === 'admin') {
@@ -4459,6 +4568,187 @@ async function gfwlOpenWeekReport(season, teamName, wk, oppTeamName, seasonRepla
   });
   const deckEntries = Object.entries(deckCounts).sort((a,b)=>b[1]-a[1]);
   if (deckEntries.length) buildDonutChart('gfwl-week-chart','gfwl-week-legend', deckEntries, 'Week '+wk+' Decks');
+}
+
+// ── Round Report — same as gfwlOpenWeekReport but for a playoff round
+// ("Wildcard", "Top 8", "Top 4", "Finals") instead of a numeric week. Matches
+// replay labels by comparing the text after the colon to the round name
+// directly, never by extracting digits (so "S9: Top 8" is never confused
+// with regular-season "S9: WK 8"). ──────────────────────────────────────────
+async function gfwlOpenRoundReport(season, teamName, round, oppTeamName, seasonReplays) {
+  const roundKey = round.toLowerCase().replace(/\s+/g,' ').trim();
+  const labelMatchesRound = lbl => {
+    if (!lbl.includes(':')) return false;
+    const part = lbl.split(':').slice(1).join(':').toLowerCase().replace(/\s+/g,' ').trim();
+    return part === roundKey;
+  };
+
+  const main = document.getElementById('gfwl-main');
+  main.innerHTML = '';
+  const team = _gfwlData[season]?.teams[teamName];
+  const colors = CONF_COLORS[(team?.conference)||''] || { text:'var(--muted)', border:'var(--border)', bg:'transparent' };
+
+  // Header
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap';
+  const back = document.createElement('button');
+  back.textContent = '← '+teamName;
+  back.style.cssText = 'background:none;border:none;color:var(--muted);font-family:monospace;font-size:12px;cursor:pointer;padding:0';
+  back.onclick = () => gfwlOpenTeam(season, teamName, team);
+  hdr.appendChild(back);
+  const title = document.createElement('div');
+  title.style.cssText = 'font-size:18px;font-weight:bold;color:'+colors.text+';font-family:monospace;flex:1';
+  title.textContent = season+' — '+round+' Report';
+  hdr.appendChild(title);
+  const subTitle = document.createElement('div');
+  subTitle.style.cssText = 'font-size:12px;color:var(--muted);font-family:monospace';
+  subTitle.textContent = teamName + ' vs ' + (oppTeamName||'TBD');
+  hdr.appendChild(subTitle);
+  main.appendChild(hdr);
+
+  // Re-collect this team's replays fresh from the batch cache
+  const team2 = _gfwlData[season]?.teams[teamName];
+  const roster2entries = (team2?.roster||[]);
+  const roster2map = {};
+  for (const re of roster2entries) roster2map[re.player.toLowerCase()] = re;
+
+  const freshSeasonReplays = [];
+  const batchSrc = Object.values(window._gfwlBatchCache||{});
+  for (const b of batchSrc) {
+    const pLower = (b.player||'').toLowerCase();
+    const rEntry = roster2map[pLower];
+    if (!rEntry) continue; // not on this team
+    for (const r of (b.replays||[])) {
+      const lbl=(r.eventLabel||'').toUpperCase().trim();
+      const sk=season.toUpperCase();
+      if (!lbl.startsWith(sk+':') && !lbl.startsWith(sk+' ') && lbl!==sk) continue;
+      freshSeasonReplays.push({player:b.player,replay:r,label:lbl});
+    }
+  }
+  const effectiveSeasonReplays = freshSeasonReplays.length ? freshSeasonReplays : (seasonReplays||[]);
+
+  // Get this team's replays for this round
+  const rdReplays = effectiveSeasonReplays.filter(x => labelMatchesRound(x.label));
+
+  // Get opponent team's replays for this round.
+  const oppTeam = oppTeamName ? (_gfwlData[season]?.teams[gfwlResolveTeam(season, oppTeamName)||oppTeamName]) : null;
+  const oppRoster = oppTeam ? (oppTeam.roster||[]).map(r=>r.player.toLowerCase()) : [];
+  const oppRdReplays = [];
+
+  if (oppRoster.length) {
+    try {
+      const bList = await fetch(API+'/batches').then(r=>r.json()).catch(()=>[]);
+      const oppFetches = [];
+      for (const pName of oppRoster) {
+        const pBatches = bList.filter(b=>(b.player||'').toLowerCase()===pName);
+        for (const pb of pBatches) {
+          if (!window._gfwlBatchCache[pb.id]) {
+            oppFetches.push(
+              fetch(API+'/batches/'+pb.id).then(r=>r.json())
+                .then(full=>{ if(full&&full.replays) window._gfwlBatchCache[pb.id]=full; })
+                .catch(()=>{})
+            );
+          }
+        }
+      }
+      if (oppFetches.length) await Promise.all(oppFetches);
+    } catch(e) { console.warn('[RoundReport] opp batch fetch failed:', e.message); }
+
+    for (const b of Object.values(window._gfwlBatchCache||{})) {
+      if (!oppRoster.includes((b.player||'').toLowerCase())) continue;
+      for (const r of (b.replays||[])) {
+        const lbl=(r.eventLabel||'').toUpperCase().trim();
+        const sk=season.toUpperCase();
+        if (!lbl.startsWith(sk+':')&&!lbl.startsWith(sk+' ')) continue;
+        if (labelMatchesRound(lbl)) oppRdReplays.push({player:b.player,replay:r,label:lbl});
+      }
+    }
+  }
+
+  // Two column layout
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px';
+  main.appendChild(grid);
+
+  function makeTeamLineup(container, tName, tColor, replays) {
+    const sec = gfwlMakeSection(tName.toUpperCase()+' — STARTING 5');
+    container.appendChild(sec);
+    if (!replays.length) {
+      sec.appendChild(Object.assign(document.createElement('div'),{style:'color:var(--dim);font-size:12px',textContent:'No replays tagged for this round.'}));
+      return;
+    }
+    const byPlayer = {};
+    replays.forEach(x => {
+      const p = x.player;
+      if (!byPlayer[p]) byPlayer[p] = [];
+      byPlayer[p].push(x.replay);
+    });
+    const tbl = document.createElement('table');
+    tbl.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
+    tbl.innerHTML = '<thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">PLAYER</th><th style="text-align:center;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">RESULT</th><th style="text-align:left;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">DECK</th><th style="text-align:left;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">VS (OPP DECK)</th><th style="padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">REPLAY</th></tr></thead>';
+    const tbody = document.createElement('tbody');
+    Object.entries(byPlayer).forEach(([player, reps]) => {
+      const r = reps[0];
+      const result = r.parsed?.result||r.result;
+      const rec = buildMatchRecord(r, player, []);
+      const myDeck = r.myDeckOverride || (rec&&rec.myDeck) || (r.parsed&&r.parsed.myDeck) || '—';
+      const oppDeck = r.oppDeckOverride || (rec&&rec.oppDeck) || (r.parsed&&r.parsed.oppDeck) || '—';
+      const oppName = (r.parsed&&r.parsed.oppName)||r.oppName||'—';
+      const score = (r.parsed&&r.parsed.score)||'';
+      const tr = document.createElement('tr');
+      tr.style.cssText='border-bottom:1px solid var(--border2)';
+      const won = result==='w';
+      const replayUrl = 'https://www.duelingbook.com/replay?id='+r.replayId;
+      tr.innerHTML=`<td style="padding:4px 6px;font-weight:bold;color:${tColor}">${player}</td><td style="padding:4px 6px;text-align:center;font-family:monospace;font-weight:bold;color:${won?'var(--green)':'var(--red)'}">${won?'W':'L'}${score?' '+score:''}</td><td style="padding:4px 6px;font-size:10px;color:var(--muted)">${myDeck}</td><td style="padding:4px 6px;font-size:10px;color:var(--dim)">${oppName} (${oppDeck})</td><td style="padding:4px 6px"><a href="${replayUrl}" target="_blank" style="color:var(--blue);font-size:10px;font-family:monospace">▶</a></td>`;
+      tbody.appendChild(tr);
+    });
+    tbl.appendChild(tbody);
+    sec.appendChild(tbl);
+  }
+
+  const leftCol = document.createElement('div');
+  const rightCol = document.createElement('div');
+  grid.appendChild(leftCol); grid.appendChild(rightCol);
+  makeTeamLineup(leftCol, teamName, colors.text, rdReplays);
+  const oppColors = oppTeam ? (CONF_COLORS[oppTeam.conference||'']||{text:'var(--muted)'}) : {text:'var(--muted)'};
+  makeTeamLineup(rightCol, oppTeamName||'Opponent', oppColors.text, oppRdReplays);
+
+  // Round score summary
+  const tally = replays => {
+    const byP = [...new Set(replays.map(x=>x.player))].map(p=>{
+      const reps=replays.filter(x=>x.player===p);
+      const w=reps.filter(x=>x.replay.parsed?.result==='w').length;
+      const l=reps.filter(x=>x.replay.parsed?.result==='l').length;
+      return w>l?'w':l>w?'l':'d';
+    });
+    return { w: byP.filter(v=>v==='w').length, l: byP.filter(v=>v==='l').length };
+  };
+  const { w: myW, l: myL } = tally(rdReplays);
+
+  const scoreBanner = document.createElement('div');
+  scoreBanner.style.cssText='text-align:center;padding:16px;background:var(--card);border:1px solid var(--border);border-radius:10px;margin-bottom:16px;font-family:monospace';
+  scoreBanner.innerHTML=`<div style="font-size:24px;font-weight:bold"><span style="color:${myW>myL?'var(--green)':'var(--red)'}">${myW}</span> <span style="color:var(--dim)">—</span> <span style="color:${myL>myW?'var(--red)':'var(--green)'}">${myL}</span></div><div style="font-size:11px;color:var(--muted);margin-top:4px">${teamName} vs ${oppTeamName||'Opponent'} · ${round} Score</div>`;
+  main.insertBefore(scoreBanner, grid);
+
+  // Deck type chart
+  const chartSec = gfwlMakeSection('DECK TYPES USED');
+  main.appendChild(chartSec);
+  chartSec.innerHTML += '<canvas id="gfwl-week-chart" style="width:100%;max-height:200px"></canvas><div id="gfwl-week-legend" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:4px"></div>';
+
+  const deckCounts = {};
+  [...rdReplays, ...oppRdReplays].forEach(x => {
+    const r = x.replay||x;
+    const player = x.player || '';
+    let d = r.myDeckOverride;
+    if (!d || d === '—' || d === '-') {
+      const rec = buildMatchRecord(r, player, []);
+      d = (rec && rec.myDeck && rec.myDeck !== 'Unknown') ? rec.myDeck : null;
+    }
+    if (!d || d === '—' || d === '-') d = (r.parsed?.myDeck !== '—' && r.parsed?.myDeck !== '-') ? r.parsed?.myDeck : null;
+    if (d && d !== 'Unknown') deckCounts[d] = (deckCounts[d]||0)+1;
+  });
+  const deckEntries2 = Object.entries(deckCounts).sort((a,b)=>b[1]-a[1]);
+  if (deckEntries2.length) buildDonutChart('gfwl-week-chart','gfwl-week-legend', deckEntries2, round+' Decks');
 }
 
 // ── Helper: create labeled section ────────────────────────────────────────────
