@@ -597,9 +597,9 @@ select{cursor:pointer}
   <header class="topbar">
     <div class="logo"><img class="logo-img" src="/logo.png" alt="Kerem's Duel Tools"/>KEREM'S DUEL TOOLS</div>
     <div class="nav-tabs" id="nav-tabs-desktop">
-      <button class="ntab on" onclick="switchTab('profiles',this)">Profiles</button>
+      <button class="ntab on" id="ntab-profiles" onclick="switchTab('profiles',this)">Profiles</button>
       <button class="ntab" onclick="switchTab('deck',this)">Deck Viewer</button>
-      <button class="ntab" onclick="switchTab('rps',this)">RPS Analysis</button>
+      <button class="ntab" id="ntab-rps" onclick="switchTab('rps',this)">RPS Analysis</button>
       <div style="position:relative;display:inline-block" id="deckdata-nav-wrap">
         <button class="ntab" onclick="toggleDeckDataMenu(this)" id="deckdata-nav-btn">Deck Data ▾</button>
         <div id="deckdata-dropdown" style="display:none;position:absolute;top:100%;left:0;background:var(--panel);border:1px solid var(--border);border-radius:6px;z-index:999;min-width:140px;box-shadow:0 4px 16px rgba(0,0,0,.5)">
@@ -683,28 +683,28 @@ select{cursor:pointer}
   <aside class="sidebar">
     <!-- Top action buttons -->
     <div style="padding:10px 12px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:6px;flex-shrink:0">
-      <button onclick="openBatchPanel('temp')" style="width:100%;background:var(--card);color:var(--amber);border:1px solid var(--amber);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">⚡ Temporary Batch</button>
+      <button id="temp-batch-btn" onclick="openBatchPanel('temp')" style="width:100%;background:var(--card);color:var(--amber);border:1px solid var(--amber);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">⚡ Temporary Batch</button>
       <button onclick="openBatchPanel('new')" style="width:100%;background:var(--green);color:#050508;border:none;border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:9px;cursor:pointer;text-align:left">＋ New Batch</button>
       <button id="add-to-batch-btn" onclick="openBatchPanel('add')" style="display:block;width:100%;background:var(--card);color:var(--blue);border:1px solid var(--blue);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">➕ Add to Existing Batch</button>
       <button onclick="importEventData()" style="display:none;width:100%;background:var(--card);color:var(--purple,#a78bfa);border:1px solid var(--purple,#a78bfa);border-radius:6px;font-family:monospace;font-weight:bold;font-size:11px;padding:7px;cursor:pointer;text-align:left" id="import-event-data-btn">📥 Add Full Event Data</button>
       <button onclick="importEventDecks()" style="display:none;width:100%;background:var(--card);color:var(--purple,#a78bfa);border:1px solid var(--purple,#a78bfa);border-radius:6px;font-family:monospace;font-weight:bold;font-size:11px;padding:7px;cursor:pointer;text-align:left" id="import-event-decks-btn">📥 Add Full Event Decks</button>
       <button id="clean-batch-btn" onclick="cleanBatch()" style="display:none;width:100%;background:var(--card);color:var(--red);border:1px solid var(--red);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">🧹 Clean Invalid Replays</button>
-      <div style="display:flex;gap:5px">
+      <div id="sidebar-export-import-row" style="display:flex;gap:5px">
         <button class="btn-sec" onclick="exportBatch()" style="flex:1;font-size:11px;padding:5px">⬇ Export</button>
         <button class="btn-sec" onclick="importBatch()" style="flex:1;font-size:11px;padding:5px">⬆ Import</button>
       </div>
     </div>
 
     <!-- Player Search -->
-    <div style="padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0;position:relative">
-      <input id="player-search" type="text" placeholder="🔍 Search players..." 
+    <div id="sidebar-player-search" style="padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0;position:relative">
+      <input id="player-search" type="text" placeholder="🔍 Search players..."
         style="font-size:12px;padding:6px 10px;width:100%"
         oninput="onPlayerSearch(this.value)" onfocus="showPlayerDropdown()" autocomplete="off"/>
       <div id="player-search-dropdown" style="display:none;position:absolute;left:12px;right:12px;top:100%;background:var(--card);border:1px solid var(--border2);border-radius:6px;z-index:100;max-height:200px;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,.5)"></div>
     </div>
 
     <!-- Recent Batches -->
-    <div style="padding:6px 12px 4px;flex-shrink:0">
+    <div id="sidebar-recent-batches-label" style="padding:6px 12px 4px;flex-shrink:0">
       <div class="sb-label" style="margin-bottom:2px">Recent Batches</div>
     </div>
     <div class="batch-list" id="batch-list" style="flex:1;min-height:0">
@@ -13991,13 +13991,16 @@ function authHeaders() {
 
 function isAdminRole(r) { return r === 'admin'; }
 function isMinerRole(r) { return r === 'admin' || r === 'miner'; }
+// LIMITED accounts can only build Temporary Batches — no Profiles, RPS
+// Analysis, Deck Data, or GFWL Archive, and no saved/persistent batches.
+function isLimitedRole(r) { return r === 'limited'; }
 
 function applyRoleUI() {
   // Migrate legacy head_admin role on client side
   if (_userRole === 'head_admin') _userRole = 'admin';
   if (_authUser) {
-    const roleLabels = { admin:'ADMIN', miner:'MINER', user:'USER' };
-    const roleColors = { admin:'var(--amber)', miner:'var(--blue)', user:'var(--muted)' };
+    const roleLabels = { admin:'ADMIN', miner:'MINER', user:'USER', limited:'LIMITED' };
+    const roleColors = { admin:'var(--amber)', miner:'var(--blue)', user:'var(--muted)', limited:'var(--red)' };
     const roleTag = _userRole && _userRole !== 'user'
       ? ` <span style="color:${roleColors[_userRole]||'var(--muted)'};font-size:10px">${roleLabels[_userRole]||_userRole.toUpperCase()}</span>`
       : '';
@@ -14030,6 +14033,52 @@ function applyRoleUI() {
         }
       }
     });
+  }
+
+  // LIMITED: the ONLY thing reachable is the "⚡ Temporary Batch" button.
+  // No other sidebar actions, no top nav, no page content. Everything
+  // above overrides that for miners/admins, so this runs last and wins
+  // for a limited account.
+  if (isLimitedRole(_userRole)) {
+    // Sidebar — keep only "⚡ Temporary Batch", hide every other action
+    const tempBtn = document.getElementById('temp-batch-btn');
+    if (tempBtn) tempBtn.style.display = 'block';
+    document.querySelectorAll('[onclick*="openBatchPanel"]').forEach(el => {
+      if (el.id !== 'temp-batch-btn') el.style.display = 'none';
+    });
+    ['import-event-data-btn','import-event-decks-btn','clean-batch-btn',
+     'sidebar-export-import-row','sidebar-player-search',
+     'sidebar-recent-batches-label','batch-list'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+
+    // Top nav — hide the entire nav bar (desktop and mobile). There is
+    // nothing for a limited account to navigate to.
+    const navDesktop = document.getElementById('nav-tabs-desktop');
+    if (navDesktop) navDesktop.style.display = 'none';
+    const navMobile = document.getElementById('nav-mobile-wrap');
+    if (navMobile) navMobile.style.display = 'none';
+
+    // Main content area — hide all pages and show a simple placeholder
+    // pointing back at the Temporary Batch button instead.
+    const rightPanel = document.getElementById('right-panel');
+    if (rightPanel) rightPanel.style.display = 'none';
+    let placeholder = document.getElementById('limited-role-placeholder');
+    if (!placeholder) {
+      placeholder = document.createElement('main');
+      placeholder.id = 'limited-role-placeholder';
+      placeholder.className = 'right';
+      placeholder.style.cssText = 'display:flex;align-items:center;justify-content:center;flex:1;height:100%';
+      placeholder.innerHTML = '<div style="text-align:center;color:var(--muted);font-family:monospace">'
+        + '<div style="font-size:32px;margin-bottom:10px">⚡</div>'
+        + '<div>Use <strong style="color:var(--amber)">Temporary Batch</strong> on the left to submit replays.</div>'
+        + '</div>';
+      if (rightPanel && rightPanel.parentElement) {
+        rightPanel.parentElement.insertBefore(placeholder, rightPanel.nextSibling);
+      }
+    }
+    placeholder.style.display = 'flex';
   }
 }
 
@@ -14160,7 +14209,7 @@ async function openAdminPanel() {
   // Add user form
   const addRow = document.createElement('div');
   addRow.style.cssText = 'display:flex;gap:7px;flex-wrap:wrap;padding:10px;background:var(--card);border:1px solid var(--border);border-radius:7px';
-  addRow.innerHTML = '<input id="au-name" placeholder="Name" style="flex:1;min-width:90px"/><input id="au-email" placeholder="Email" type="email" style="flex:2;min-width:140px"/><input id="au-pass" placeholder="Password" type="password" style="flex:1;min-width:90px"/><select id="au-role" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px;border-radius:5px;outline:none"><option value="user">User</option><option value="miner">Miner</option><option value="admin">Admin</option></select><button class="btn-go" onclick="adminAddUser()" style="font-size:12px;padding:6px 12px;white-space:nowrap">+ Add</button>';
+  addRow.innerHTML = '<input id="au-name" placeholder="Name" style="flex:1;min-width:90px"/><input id="au-email" placeholder="Email" type="email" style="flex:2;min-width:140px"/><input id="au-pass" placeholder="Password" type="password" style="flex:1;min-width:90px"/><select id="au-role" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px;border-radius:5px;outline:none"><option value="user">User</option><option value="limited">Limited</option><option value="miner">Miner</option><option value="admin">Admin</option></select><button class="btn-go" onclick="adminAddUser()" style="font-size:12px;padding:6px 12px;white-space:nowrap">+ Add</button>';
 
   // User list
   const usersSection = document.createElement('div');
@@ -14214,7 +14263,7 @@ async function openAdminPanel() {
     // Role select
     const sel = document.createElement('select');
     sel.style.cssText = 'background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:3px 6px;border-radius:4px;outline:none';
-    [['user','User'],['miner','Miner'],['admin','Admin']].forEach(([val,label]) => {
+    [['user','User'],['limited','Limited'],['miner','Miner'],['admin','Admin']].forEach(([val,label]) => {
       const opt = document.createElement('option');
       opt.value = val; opt.textContent = label;
       if (u.role === val) opt.selected = true;

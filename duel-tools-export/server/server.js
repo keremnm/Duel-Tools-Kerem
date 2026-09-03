@@ -519,6 +519,12 @@ function isMiner(req) {
 function isAuthenticated(req) {
   return getRole(req) !== null;
 }
+// LIMITED accounts can only build Temporary Batches — Profiles, Deck Data,
+// GFWL Archive, and browsing/reading other players' saved batches are all
+// off-limits to them, both in the UI and here at the API.
+function isLimited(req) {
+  return getRole(req) === 'limited';
+}
 
 function getUser(req) {
   const auth = req.headers['authorization'] || '';
@@ -952,7 +958,7 @@ const server = http.createServer(async (req, res) => {
     return readBody(req, async data => {
       const email = (data.email||'').toLowerCase().trim();
       const pw    = (data.password||'ilovesui').trim();
-      const role  = ['admin','miner','user'].includes(data.role) ? data.role : 'user';
+      const role  = ['admin','miner','user','limited'].includes(data.role) ? data.role : 'user';
       if (!email) return json(res, 400, { error: 'Email required' });
       if (Object.values(db.users).find(u => u.email === email)) return json(res, 409, { error: 'Already exists' });
       const id = crypto.randomUUID();
@@ -970,7 +976,7 @@ const server = http.createServer(async (req, res) => {
       const u = db.users[parts[2]];
       if (!u) return json(res, 404, { error: 'Not found' });
       if (data.approved  !== undefined) u.approved = !!data.approved;
-      if (data.role !== undefined) u.role = ['admin','miner','user'].includes(data.role) ? data.role : 'user';
+      if (data.role !== undefined) u.role = ['admin','miner','user','limited'].includes(data.role) ? data.role : 'user';
       if (data.password  !== undefined) u.password = hashPassword(data.password);
       if (data.name      !== undefined) u.name = data.name;
       await saveDB();
@@ -1018,6 +1024,7 @@ const server = http.createServer(async (req, res) => {
 
   // ── GET /api/players ────────────────────────────────────────────────────────
   if (parts[0]==='players' && !parts[1] && method==='GET') {
+    if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot view player profiles' });
     return json(res, 200, Object.values(db.players));
   }
   // ── POST /api/players ───────────────────────────────────────────────────────
@@ -1052,6 +1059,7 @@ const server = http.createServer(async (req, res) => {
 
   // ── GET /api/batches ────────────────────────────────────────────────────────
   if (parts[0]==='batches' && !parts[1] && method==='GET') {
+    if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot browse saved batches' });
     const list = Object.values(db.batches).map(b => ({ id:b.id, name:b.name, player:b.player, replayCount:(b.replays||[]).length, createdAt:b.createdAt }));
     return json(res, 200, list.sort((a,b)=>b.createdAt-a.createdAt));
   }
@@ -1068,6 +1076,7 @@ const server = http.createServer(async (req, res) => {
   }
   // ── GET /api/batches/:id ────────────────────────────────────────────────────
   if (parts[0]==='batches' && parts[1] && !parts[2] && method==='GET') {
+    if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot view saved batches' });
     const b = db.batches[parts[1]];
     if (!b) return json(res, 404, { error:'Not found' });
     return json(res, 200, b);
@@ -1328,11 +1337,13 @@ const server = http.createServer(async (req, res) => {
 
   // ── GET /api/gfwl — get all GFWL season data ─────────────────────────────────
   if (parts[0]==='gfwl' && !parts[1] && method==='GET') {
+    if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot view the GFWL Archive' });
     return json(res, 200, db.gfwl);
   }
 
   // ── GET /api/gfwl/:season — get one season ────────────────────────────────
   if (parts[0]==='gfwl' && parts[1] && !parts[2] && method==='GET') {
+    if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot view the GFWL Archive' });
     return json(res, 200, db.gfwl[normalizeSeason(parts[1])] || {});
   }
 
