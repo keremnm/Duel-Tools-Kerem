@@ -6922,13 +6922,22 @@ function showBuildEventYDKModal(eventId, matches) {
 }
 
 async function buildEventYDKFromMatches(eventId, matches) {
+  // For each unique card, take the MAX copies seen in any single match (not summed
+  // across matches, and not just a flag). A card that showed up as 2x in one match
+  // and 1x in another should end up as 2x in the merged deck — never 3x.
   const cardSet = {};
   for (const m of matches) {
     const cards = m.allMine || [];
     for (const c of cards) {
       const name = (c.name||'').toLowerCase();
       if (!name) continue;
-      if (!cardSet[name]) cardSet[name] = { name: c.name, id: c.id||null };
+      const qty = c.displayCount || 1;
+      if (!cardSet[name]) {
+        cardSet[name] = { name: c.name, id: c.id||null, qty };
+      } else {
+        if (qty > cardSet[name].qty) cardSet[name].qty = qty;
+        if (!cardSet[name].id && c.id) cardSet[name].id = c.id;
+      }
     }
   }
   const uniqueCards = Object.values(cardSet);
@@ -6947,9 +6956,12 @@ async function buildEventYDKFromMatches(eventId, matches) {
     } catch(e) {}
   }
 
+  // Clamp final quantity to the banlist limit (and 3 copies max) as a safety net.
+  uniqueCards.forEach(c => { c.qty = Math.min(c.qty, banLimit(c.name), 3); });
+
   const NL = String.fromCharCode(10);
   const lines = ["#created by Kerem's Duel Tools - "+eventId, '#main'];
-  for (const c of uniqueCards) { if (c.id) lines.push(String(c.id)); }
+  for (const c of uniqueCards) { if (c.id) { for (let i=0;i<c.qty;i++) lines.push(String(c.id)); } }
   lines.push('#extra', '!side');
   const ydkText = lines.join(NL) + NL;
 
@@ -6959,7 +6971,9 @@ async function buildEventYDKFromMatches(eventId, matches) {
   const a = document.createElement('a');
   a.href = url; a.download = fname; a.click();
   URL.revokeObjectURL(url);
-  st('Downloaded: ' + fname + ' (' + uniqueCards.filter(c=>c.id).length + ' unique cards)', 'var(--green)');
+  const withId = uniqueCards.filter(c=>c.id);
+  const totalCopies = withId.reduce((a,c)=>a+c.qty,0);
+  st('Downloaded: ' + fname + ' (' + withId.length + ' unique cards, ' + totalCopies + ' total)', 'var(--green)');
 }
 
 // Legacy alias
