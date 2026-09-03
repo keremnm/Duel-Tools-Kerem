@@ -1152,6 +1152,14 @@ const server = http.createServer(async (req, res) => {
           }
           console.log(`[override] Result override for ${r.replayId}: ${data.resultOverride||'cleared'}`);
         }
+        if (data.scoreOverride !== undefined) {
+          r.scoreOverride = data.scoreOverride; // { my, opp } or null to clear
+          if (r.parsed) r.parsed.scoreOverride = data.scoreOverride;
+        }
+        if (data.overrideNote !== undefined) {
+          r.overrideNote = data.overrideNote || '';
+          if (r.parsed) r.parsed.overrideNote = data.overrideNote || '';
+        }
         // Also update parsed if available
         if (r.parsed) {
           if (data.myDeckOverride)  r.parsed.myDeck  = data.myDeckOverride;

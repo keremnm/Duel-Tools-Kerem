@@ -5926,6 +5926,23 @@ function buildDeck() {
 
       if (m.myDeckOverride)  m.myDeck  = m.myDeckOverride;
       if (m.oppDeckOverride) m.oppDeck = m.oppDeckOverride;
+
+      // Apply a saved result/score override so every downstream display
+      // (sidebar list, group W-L tally, detail header) reflects the corrected
+      // outcome instead of the raw parsed one.
+      const _ovResult = r.resultOverride || (_replayParsed && _replayParsed.resultOverride) || null;
+      const _ovScore  = r.scoreOverride  || (_replayParsed && _replayParsed.scoreOverride)  || null;
+      m.overrideNote   = r.overrideNote  || (_replayParsed && _replayParsed.overrideNote)   || '';
+      m.resultOverride = _ovResult;
+      m.scoreOverride  = _ovScore;
+      if (_ovResult) {
+        m.origResult = m.result; m.origScore = m.score; m.origMyW = m.myW; m.origOppW = m.oppW;
+        m.result = _ovResult;
+        if (_ovScore) {
+          m.myW = _ovScore.my; m.oppW = _ovScore.opp;
+          m.score = m.draws>0 ? `${m.myW}-${m.oppW}-${m.draws}` : `${m.myW}-${m.oppW}`;
+        }
+      }
       _matches.push(m);
     }
   }
@@ -7409,22 +7426,29 @@ function renderMatchSidebar(query) {
     wl.innerHTML = `<span style="color:var(--green)">${w}W</span> <span style="color:var(--dim)">—</span> <span style="color:var(--red)">${l}L</span> <span style="color:var(--dim)">· ${items.length}</span>`;
     hdr.appendChild(arrow); hdr.appendChild(lbl); hdr.appendChild(wl);
 
-    // Build Event YDK button — only for real non-GFWL event IDs with no saved decklist
+    // Build Event YDK button — for real non-GFWL event IDs with no saved decklist,
+    // and ALSO for the "Untagged" bucket when the active batch is a Temporary Batch.
+    // Temp batches have no event-tagging workflow around them, so "Untagged" is the
+    // only group they'll ever produce — without this, the merge-YDK tool would be
+    // unreachable for Temporary Batches entirely.
     const _isGFWLGroup = typeof isGFWLSeason === 'function' && isGFWLSeason(key);
-    if (isMinerRole(_userRole) && key !== 'Untagged' && !_showOpp && !_isGFWLGroup) {
+    const _isTempBatch = !!(_activeBatch && _activeBatch.isTemp);
+    const _eligibleGroup = key !== 'Untagged' || _isTempBatch;
+    if (isMinerRole(_userRole) && _eligibleGroup && !_showOpp && !_isGFWLGroup) {
       // Check both batch eventDecklists AND active profile decklists
       const _batchDecks = (_activeBatch && (_activeBatch.eventDecklists||[]));
       const _profileDecks = (_activeProfile && (_activeProfile.batches||[]).flatMap(b=>b.eventDecklists||[])) || [];
       const _allDecks = [..._batchDecks, ..._profileDecks];
-      const _existingDeck = _allDecks.find(d => (d.eventId||'').toUpperCase() === key.toUpperCase());
+      const _existingDeck = key !== 'Untagged' && _allDecks.find(d => (d.eventId||'').toUpperCase() === key.toUpperCase());
       if (!_existingDeck) {
+        const _ydkLabel = key === 'Untagged' ? ((_activeBatch && _activeBatch.name) || 'Temp Batch') : key;
         const ydkBtn = document.createElement('button');
         ydkBtn.textContent = '↓ YDK';
-        ydkBtn.title = 'Build YDK from ' + key + ' replays (no decklist saved yet)';
+        ydkBtn.title = 'Build YDK from ' + _ydkLabel + ' replays' + (key==='Untagged' ? '' : ' (no decklist saved yet)');
         ydkBtn.style.cssText = 'background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-size:9px;padding:1px 6px;border-radius:3px;cursor:pointer;flex-shrink:0;margin-left:4px';
         ydkBtn.onclick = e => {
           e.stopPropagation();
-          showBuildEventYDKModal(key, items.map(x => x.m));
+          showBuildEventYDKModal(_ydkLabel, items.map(x => x.m));
         };
         hdr.appendChild(ydkBtn);
       }
@@ -7463,7 +7487,16 @@ function renderMatchSidebar(query) {
       delBtn.style.cssText = 'background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px;padding:0 2px;font-family:monospace;flex-shrink:0;opacity:0;transition:opacity .15s';
       delBtn.title = 'Delete match';
       delBtn.onclick = e => { e.stopPropagation(); deleteMatch(idx, m); };
-      titleRow.appendChild(titleEl); titleRow.appendChild(delBtn);
+      titleRow.appendChild(titleEl);
+      if (m.resultOverride) {
+        const noteBtn = document.createElement('button');
+        noteBtn.textContent = '📝';
+        noteBtn.title = 'Result overridden — click to read why';
+        noteBtn.style.cssText = 'background:none;border:none;color:var(--amber);cursor:pointer;font-size:11px;padding:0 2px;flex-shrink:0';
+        noteBtn.onclick = e => { e.stopPropagation(); showOverrideNoteModal(m); };
+        titleRow.appendChild(noteBtn);
+      }
+      titleRow.appendChild(delBtn);
       item.appendChild(titleRow);
       item.onmouseenter = () => delBtn.style.opacity = '1';
       item.onmouseleave = () => delBtn.style.opacity = '0';
@@ -7696,7 +7729,7 @@ async function renderMatchDisplay(m) {
   const _resultOverride = m.resultOverride || null;
   const _displayResult = _resultOverride || m.result;
   mhd.textContent = `${player} vs ${m.oppName} (${_displayResult==='w'?'W':_displayResult==='l'?'L':'D'} ${m.draws>0?m.score:`${m.myW}-${m.oppW}`})${_resultOverride?' ⚠ overridden':''}`;
-  if (_resultOverride) mhd.title = 'Result manually overridden (original: '+(m.result==='w'?'W':'L')+')';
+  if (_resultOverride) mhd.title = 'Result manually overridden (original: '+(m.origResult==='w'?'W':m.origResult==='l'?'L':(m.result==='w'?'W':'L'))+' '+(m.origScore||'')+')';
   const mlr = document.createElement('div');
   mlr.style.cssText = 'display:flex;align-items:center;gap:8px';
   const ml = document.createElement('a');
@@ -7708,38 +7741,44 @@ async function renderMatchDisplay(m) {
   mtb.appendChild(mhd); mtb.appendChild(mlr);
   mh.appendChild(mtb);
 
-  // Result override button — miners/admins only
+  // Result override — miners/admins only
   if (isMinerRole(_userRole) && _activeBatch && !_activeBatch.isTemp) {
     const overrideBar = document.createElement('div');
     overrideBar.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap';
-    const overrideLbl = document.createElement('span');
-    overrideLbl.style.cssText = 'font-size:10px;color:var(--muted);font-family:monospace';
-    overrideLbl.textContent = 'Override result:';
-    overrideBar.appendChild(overrideLbl);
-    [['W','w','var(--green)'],['L','l','var(--red)'],['Clear','clear','var(--muted)']].forEach(([label, val, col]) => {
-      const btn = document.createElement('button');
-      const isActive = val === 'clear' ? !!_resultOverride===false : _resultOverride === val;
-      btn.textContent = label;
-      btn.style.cssText = 'background:'+(isActive?col:'none')+';color:'+(isActive?'#050508':col)+';border:1px solid '+col+';font-family:monospace;font-size:9px;padding:1px 8px;border-radius:3px;cursor:pointer';
-      btn.onclick = async () => {
-        const newOverride = val === 'clear' ? null : val;
-        try {
-          const saveRes = await fetch(API+'/batches/'+_activeBatch.id+'/replay/'+encodeURIComponent(m.replayId)+'/override', {
-            method:'PATCH', headers: authHeaders(),
-            body: JSON.stringify({ resultOverride: newOverride })
-          });
-          if (!saveRes.ok) throw new Error('HTTP '+saveRes.status);
-          // Update local data
-          m.resultOverride = newOverride;
-          const localR = (_activeBatch.replays||[]).find(r=>r.replayId===m.replayId);
-          if (localR && localR.parsed) localR.parsed.resultOverride = newOverride;
-          // Refresh deck viewer
-          buildDeck();
-          st('Result override '+(newOverride?'set to '+newOverride.toUpperCase():'cleared'), 'var(--green)');
-        } catch(e) { st('Override failed: '+e.message, 'var(--red)'); }
-      };
-      overrideBar.appendChild(btn);
-    });
+
+    if (_resultOverride) {
+      const badge = document.createElement('span');
+      badge.style.cssText = 'font-size:10px;color:var(--amber);font-family:monospace;border:1px solid var(--amber);border-radius:3px;padding:1px 8px';
+      badge.textContent = '⚠ Overridden — ' + (_resultOverride==='w'?'W':'L') + ' ' + (m.draws>0?m.score:`${m.myW}-${m.oppW}`);
+      overrideBar.appendChild(badge);
+
+      if (m.overrideNote) {
+        const notesBtn = document.createElement('button');
+        notesBtn.textContent = '📝 Notes';
+        notesBtn.title = 'Read why this result was overridden';
+        notesBtn.style.cssText = 'background:none;border:1px solid var(--border2);color:var(--muted);font-family:monospace;font-size:9px;padding:1px 8px;border-radius:3px;cursor:pointer';
+        notesBtn.onclick = () => showOverrideNoteModal(m);
+        overrideBar.appendChild(notesBtn);
+      }
+
+      const editBtn = document.createElement('button');
+      editBtn.textContent = '✎ Edit';
+      editBtn.style.cssText = 'background:none;border:1px solid var(--border2);color:var(--muted);font-family:monospace;font-size:9px;padding:1px 8px;border-radius:3px;cursor:pointer';
+      editBtn.onclick = () => showResultOverrideModal(m);
+      overrideBar.appendChild(editBtn);
+
+      const clearBtn = document.createElement('button');
+      clearBtn.textContent = 'Clear';
+      clearBtn.style.cssText = 'background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:9px;padding:1px 8px;border-radius:3px;cursor:pointer';
+      clearBtn.onclick = () => { if (confirm('Clear this result override and restore the original parsed result?')) applyResultOverride(m, { resultOverride:null, scoreOverride:null, overrideNote:null }); };
+      overrideBar.appendChild(clearBtn);
+    } else {
+      const overrideBtn = document.createElement('button');
+      overrideBtn.textContent = 'Override Result';
+      overrideBtn.style.cssText = 'background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-size:9px;padding:1px 8px;border-radius:3px;cursor:pointer';
+      overrideBtn.onclick = () => showResultOverrideModal(m);
+      overrideBar.appendChild(overrideBtn);
+    }
     mtb.appendChild(overrideBar);
   }
 
@@ -7883,6 +7922,194 @@ async function renderMatchDisplay(m) {
     if(content) content.innerHTML = '<div style="color:var(--red);padding:20px;font-size:12px;font-family:monospace">Error: '+e.message+'</div>';
     console.error('deck error:', e);
   });
+}
+
+// ── Result override modal — collects the corrected game score + a required
+// explanation, instead of just flipping W/L with no record of why. ──────────
+function showResultOverrideModal(m) {
+  const existing = document.getElementById('result-override-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'result-override-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:380px;width:100%;display:flex;flex-direction:column;gap:12px';
+
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;gap:8px';
+  hdr.innerHTML = '<span style="font-family:monospace;font-weight:bold;font-size:13px;color:var(--amber)">Override Match Result</span>';
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = 'margin-left:auto;background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer';
+  closeBtn.onclick = () => overlay.remove();
+  hdr.appendChild(closeBtn);
+  box.appendChild(hdr);
+
+  const playerName = m.player || 'You';
+  const oppName    = m.oppName || 'Opponent';
+
+  const desc = document.createElement('div');
+  desc.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace';
+  desc.textContent = `Enter the corrected game score for ${playerName} vs ${oppName}, and why it's being overridden.`;
+  box.appendChild(desc);
+
+  const scoreRow = document.createElement('div');
+  scoreRow.style.cssText = 'display:flex;align-items:center;gap:8px;font-family:monospace;font-size:12px;flex-wrap:wrap';
+  const mkScoreField = (label, value) => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;gap:3px';
+    const lbl = document.createElement('span'); lbl.textContent = label; lbl.style.cssText = 'color:var(--muted);font-size:10px';
+    const inp = document.createElement('input');
+    inp.type = 'number'; inp.min = '0'; inp.max = '9'; inp.value = value != null ? value : 0;
+    inp.style.cssText = 'width:64px;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:14px;padding:6px;border-radius:5px;outline:none;box-sizing:border-box';
+    wrap.appendChild(lbl); wrap.appendChild(inp);
+    return { wrap, inp };
+  };
+  const curMy  = m.scoreOverride ? m.scoreOverride.my  : m.myW;
+  const curOpp = m.scoreOverride ? m.scoreOverride.opp : m.oppW;
+  const myField  = mkScoreField(playerName, curMy);
+  const oppField = mkScoreField(oppName, curOpp);
+  const dash = document.createElement('span'); dash.textContent = '–'; dash.style.cssText = 'color:var(--muted);margin-top:14px';
+  scoreRow.appendChild(myField.wrap); scoreRow.appendChild(dash); scoreRow.appendChild(oppField.wrap);
+  box.appendChild(scoreRow);
+
+  const reasonLbl = document.createElement('div');
+  reasonLbl.textContent = 'Reason for override:';
+  reasonLbl.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace';
+  box.appendChild(reasonLbl);
+  const reasonInput = document.createElement('textarea');
+  reasonInput.value = m.overrideNote || '';
+  reasonInput.placeholder = "e.g. Opponent conceded game 3, host ruled it a loss for them...";
+  reasonInput.style.cssText = 'width:100%;min-height:70px;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:8px;border-radius:6px;outline:none;resize:vertical;box-sizing:border-box';
+  box.appendChild(reasonInput);
+
+  const errEl = document.createElement('div');
+  errEl.style.cssText = 'font-size:11px;color:var(--red);min-height:14px;font-family:monospace';
+  box.appendChild(errEl);
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px';
+  const saveBtn = document.createElement('button');
+  saveBtn.textContent = 'Save Override';
+  saveBtn.style.cssText = 'flex:1;background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:13px;padding:10px;border-radius:6px;cursor:pointer';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:13px;padding:10px 16px;border-radius:6px;cursor:pointer';
+  cancelBtn.onclick = () => overlay.remove();
+  btnRow.appendChild(saveBtn); btnRow.appendChild(cancelBtn);
+  box.appendChild(btnRow);
+
+  saveBtn.onclick = async () => {
+    const my = parseInt(myField.inp.value, 10);
+    const opp = parseInt(oppField.inp.value, 10);
+    const reason = reasonInput.value.trim();
+    errEl.textContent = '';
+    if (isNaN(my) || isNaN(opp) || my < 0 || opp < 0) { errEl.textContent = 'Enter a valid score for both players.'; return; }
+    if (my === opp) { errEl.textContent = "Scores can't be tied — pick an actual winner."; return; }
+    if (!reason) { errEl.textContent = 'Please explain why this result is being overridden.'; return; }
+    saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
+    const resultOverride = my > opp ? 'w' : 'l';
+    await applyResultOverride(m, { resultOverride, scoreOverride: { my, opp }, overrideNote: reason });
+    overlay.remove();
+  };
+
+  overlay.appendChild(box);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+  setTimeout(() => myField.inp.focus(), 50);
+}
+
+// ── Read-only viewer for an override's explanation ──────────────────────────
+function showOverrideNoteModal(m) {
+  const existing = document.getElementById('override-note-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'override-note-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:380px;width:100%;display:flex;flex-direction:column;gap:10px';
+
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;gap:8px';
+  hdr.innerHTML = '<span style="font-family:monospace;font-weight:bold;font-size:13px;color:var(--amber)">Override Reason</span>';
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = 'margin-left:auto;background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer';
+  closeBtn.onclick = () => overlay.remove();
+  hdr.appendChild(closeBtn);
+  box.appendChild(hdr);
+
+  const meta = document.createElement('div');
+  meta.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace';
+  const origTxt = m.origResult ? ((m.origResult==='w'?'W':'L') + ' ' + (m.origScore||'')) : '';
+  meta.textContent = `${m.player||'You'} vs ${m.oppName||'Opponent'} — now ${m.resultOverride==='w'?'W':'L'} ${m.draws>0?m.score:`${m.myW}-${m.oppW}`}${origTxt?' (was '+origTxt+')':''}`;
+  box.appendChild(meta);
+
+  const noteBox = document.createElement('div');
+  noteBox.style.cssText = 'background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:10px;font-family:monospace;font-size:12px;color:var(--text);white-space:pre-wrap;max-height:220px;overflow-y:auto';
+  noteBox.textContent = m.overrideNote || '(no reason given)';
+  box.appendChild(noteBox);
+
+  const okBtn = document.createElement('button');
+  okBtn.textContent = 'Close';
+  okBtn.style.cssText = 'background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:13px;padding:9px;border-radius:6px;cursor:pointer';
+  okBtn.onclick = () => overlay.remove();
+  box.appendChild(okBtn);
+
+  overlay.appendChild(box);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+}
+
+// ── Persist a result/score override (or clear one), searching every batch this
+// session knows about for the one that actually owns the replay — mirrors the
+// same multi-batch lookup used by editDeckType, since when viewing matches via
+// a Profile, _activeBatch may not be the batch the replay is physically saved in. ──
+async function applyResultOverride(m, payload) {
+  const batchesToTry = new Set();
+  if (_activeBatch && _activeBatch.id && !_activeBatch.isTemp) batchesToTry.add(_activeBatch.id);
+  (_allProfileBatches||[]).filter(b=>b.id&&!b.isTemp).forEach(b=>batchesToTry.add(b.id));
+  (_activeProfile?.batches||[]).filter(b=>b.id&&!b.isTemp).forEach(b=>batchesToTry.add(b.id));
+
+  const body = JSON.stringify(payload);
+  let savedToServer = false;
+  for (const bid of batchesToTry) {
+    const bMem = [_activeBatch, ...(_allProfileBatches||[]), ...(_activeProfile?.batches||[])].find(b=>b&&b.id===bid);
+    const rep = bMem && bMem.replays && bMem.replays.find(r => r.replayId === m.replayId);
+    if (rep) {
+      rep.resultOverride = payload.resultOverride;
+      rep.scoreOverride  = payload.scoreOverride;
+      rep.overrideNote   = payload.overrideNote;
+      if (rep.parsed) {
+        rep.parsed.resultOverride = payload.resultOverride;
+        rep.parsed.scoreOverride  = payload.scoreOverride;
+        rep.parsed.overrideNote   = payload.overrideNote;
+      }
+    }
+    try {
+      const res = await fetch(API+'/batches/'+bid+'/replay/'+encodeURIComponent(m.replayId)+'/override', {
+        method:'PATCH', headers: authHeaders(), body
+      });
+      if (res.ok) { const d = await res.json(); if (d.ok && d.found) savedToServer = true; }
+    } catch(e) {}
+  }
+
+  if (!savedToServer) {
+    st('Could not find this replay in any saved batch — override not saved.', 'var(--red)');
+  } else {
+    st(payload.resultOverride ? 'Result override saved' : 'Override cleared', 'var(--green)');
+  }
+
+  // Rebuild from source-of-truth data so the header, sidebar score, and group
+  // tallies all pick up the change, then re-select the same match.
+  buildDeck();
+  renderMatchSidebar((document.getElementById('dsearch')||{value:''}).value||'');
+  const newIdx = _matches.findIndex(x => x.replayId === m.replayId);
+  if (newIdx >= 0) selectMatch(newIdx);
 }
 
 
@@ -8255,6 +8482,16 @@ function buildMatchRecord(replayResult, player, aliases) {
       myCards:  (g.mine||[]).map(c=>c.name.toLowerCase()),
       oppCards: (g.opp||[]).map(c=>c.name.toLowerCase()),
     }));
+    // Apply a saved result/score override — this is the single source of truth
+    // for match outcome used by every stats view (profile record, deck matchups,
+    // GFWL history, card win rate), so overriding here is what makes the override
+    // actually count anywhere instead of just relabeling one header.
+    const _resOv   = replayResult.resultOverride || p.resultOverride || null;
+    const _scoreOv = replayResult.scoreOverride  || p.scoreOverride  || null;
+    const effResult = _resOv || p.result;
+    const effMyW  = _scoreOv ? _scoreOv.my  : p.myW;
+    const effOppW = _scoreOv ? _scoreOv.opp : p.oppW;
+    const effScore = _scoreOv ? (p.draws>0 ? `${effMyW}-${effOppW}-${p.draws}` : `${effMyW}-${effOppW}`) : p.score;
     return {
       replayId, player,
       oppName:  p.oppName || replayResult.oppName || '',
@@ -8265,13 +8502,17 @@ function buildMatchRecord(replayResult, player, aliases) {
       oppDeck:   oppDeckFinal,
       myDeckConf:  replayResult.myDeckOverride ? 'Override' : (myClass  ? myClass.conf  : 'Low'),
       oppDeckConf: replayResult.oppDeckOverride ? 'Override' : (oppClass ? oppClass.conf : 'Low'),
-      matchWon:  p.result === 'w',
-      matchLost: p.result === 'l',
-      result:    p.resultOverride || p.result,
-      score:     p.score,
-      myW:       p.myW,
-      oppW:      p.oppW,
+      matchWon:  effResult === 'w',
+      matchLost: effResult === 'l',
+      result:    effResult,
+      score:     effScore,
+      myW:       effMyW,
+      oppW:      effOppW,
       draws:     p.draws,
+      resultOverride: _resOv,
+      scoreOverride:  _scoreOv,
+      overrideNote:   replayResult.overrideNote || p.overrideNote || '',
+      origResult: p.result, origScore: p.score, origMyW: p.myW, origOppW: p.oppW,
       games:     gameRecords,
       allMine:   p.allMine || [],
       allOpp:    p.allOpp  || [],
