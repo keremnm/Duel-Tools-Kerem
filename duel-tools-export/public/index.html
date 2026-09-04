@@ -598,7 +598,7 @@ select{cursor:pointer}
     <div class="logo"><img class="logo-img" src="/logo.png" alt="Kerem's Duel Tools"/>KEREM'S DUEL TOOLS</div>
     <div class="nav-tabs" id="nav-tabs-desktop">
       <button class="ntab on" id="ntab-profiles" onclick="switchTab('profiles',this)">Profiles</button>
-      <button class="ntab" onclick="switchTab('deck',this)">Deck Viewer</button>
+      <button class="ntab" id="ntab-deck" onclick="switchTab('deck',this)">Deck Viewer</button>
       <button class="ntab" id="ntab-rps" onclick="switchTab('rps',this)">RPS Analysis</button>
       <div style="position:relative;display:inline-block" id="deckdata-nav-wrap">
         <button class="ntab" onclick="toggleDeckDataMenu(this)" id="deckdata-nav-btn">Deck Data ▾</button>
@@ -607,7 +607,7 @@ select{cursor:pointer}
           <button onclick="switchTab('stats',document.getElementById('deckdata-nav-btn'));toggleDeckDataMenu()" style="display:block;width:100%;background:none;border:none;color:var(--text);font-family:monospace;font-size:12px;padding:8px 16px;cursor:pointer;text-align:left">Stats</button>
         </div>
       </div>
-      <button class="ntab" onclick="switchTab('ingame',this)">In-Game Tools</button>
+      <button class="ntab" id="ntab-ingame" onclick="switchTab('ingame',this)">In-Game Tools</button>
       <button class="ntab" id="gfwl-prep-tab" onclick="switchTab('gfwl',this)">GFWL Archive</button>
     </div>
     <!-- Mobile nav dropdown — replaces tab row on small screens -->
@@ -14035,10 +14035,10 @@ function applyRoleUI() {
     });
   }
 
-  // LIMITED: the ONLY thing reachable is the "⚡ Temporary Batch" button.
-  // No other sidebar actions, no top nav, no page content. Everything
-  // above overrides that for miners/admins, so this runs last and wins
-  // for a limited account.
+  // LIMITED: sidebar only has "⚡ Temporary Batch" — no other batch actions.
+  // Top nav only has Deck Viewer and In-Game Tools, so they can review the
+  // cards/decks their temp batch parsed. Everything above overrides that
+  // for miners/admins, so this runs last and wins for a limited account.
   if (isLimitedRole(_userRole)) {
     // Sidebar — keep only "⚡ Temporary Batch", hide every other action
     const tempBtn = document.getElementById('temp-batch-btn');
@@ -14053,32 +14053,30 @@ function applyRoleUI() {
       if (el) el.style.display = 'none';
     });
 
-    // Top nav — hide the entire nav bar (desktop and mobile). There is
-    // nothing for a limited account to navigate to.
-    const navDesktop = document.getElementById('nav-tabs-desktop');
-    if (navDesktop) navDesktop.style.display = 'none';
-    const navMobile = document.getElementById('nav-mobile-wrap');
-    if (navMobile) navMobile.style.display = 'none';
-
-    // Main content area — hide all pages and show a simple placeholder
-    // pointing back at the Temporary Batch button instead.
-    const rightPanel = document.getElementById('right-panel');
-    if (rightPanel) rightPanel.style.display = 'none';
-    let placeholder = document.getElementById('limited-role-placeholder');
-    if (!placeholder) {
-      placeholder = document.createElement('main');
-      placeholder.id = 'limited-role-placeholder';
-      placeholder.className = 'right';
-      placeholder.style.cssText = 'display:flex;align-items:center;justify-content:center;flex:1;height:100%';
-      placeholder.innerHTML = '<div style="text-align:center;color:var(--muted);font-family:monospace">'
-        + '<div style="font-size:32px;margin-bottom:10px">⚡</div>'
-        + '<div>Use <strong style="color:var(--amber)">Temporary Batch</strong> on the left to submit replays.</div>'
-        + '</div>';
-      if (rightPanel && rightPanel.parentElement) {
-        rightPanel.parentElement.insertBefore(placeholder, rightPanel.nextSibling);
-      }
+    // Top nav — hide Profiles, RPS Analysis, Deck Data (+ Stats), GFWL
+    // Archive. Deck Viewer and In-Game Tools stay so they can look at the
+    // parsed decks/cards from their temp batch.
+    ['ntab-profiles','ntab-rps','deckdata-nav-wrap','gfwl-prep-tab'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+    // Mobile nav dropdown — remove the same options
+    const mobileSel = document.getElementById('nav-mobile-sel');
+    if (mobileSel) {
+      ['profiles','rps','deckdata','stats','gfwl'].forEach(v => {
+        const opt = mobileSel.querySelector(`option[value="${v}"]`);
+        if (opt) opt.remove();
+      });
     }
-    placeholder.style.display = 'flex';
+
+    // Profiles is the default active tab, but it's hidden for this role —
+    // land on Deck Viewer instead so there's something to look at.
+    const activePage = document.querySelector('.page.on');
+    const hiddenPages = ['pg-profiles','pg-rps','pg-deckdata','pg-stats','pg-gfwl'];
+    if (!activePage || hiddenPages.includes(activePage.id)) {
+      const deckBtn = document.getElementById('ntab-deck');
+      switchTab('deck', deckBtn);
+    }
   }
 }
 
