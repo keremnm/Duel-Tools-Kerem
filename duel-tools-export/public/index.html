@@ -2347,12 +2347,15 @@ function renderBatchList(list) {
   const el = document.getElementById('batch-list');
   el.innerHTML = '';
 
-  // Always show temp batch first
-  if (_tempBatch) el.appendChild(igtBuildBatchItem(_tempBatch, list));
+  // Show every temp batch created this session, most recent first. Parsing
+  // another Temp Batch does NOT discard an earlier one anymore — each is
+  // kept as its own auto-numbered entry ("Temp Batch #1", "#2", ...) until
+  // explicitly cleared with the ✕ on that tile.
+  [..._tempBatches].reverse().forEach(tb => el.appendChild(igtBuildBatchItem(tb, list)));
 
   // Group real batches by player (case-insensitive)
   const byPlayer = {};
-  list.filter(b => !b.isTemp && (!_tempBatch || b.id !== _tempBatch.id)).forEach(b => {
+  list.filter(b => !b.isTemp).forEach(b => {
     const key = (b.player||b.name||'').toLowerCase();
     if (!byPlayer[key]) byPlayer[key] = [];
     byPlayer[key].push(b);
@@ -2360,7 +2363,7 @@ function renderBatchList(list) {
 
   // Sort players alphabetically
   const playerKeys = Object.keys(byPlayer).sort();
-  if (!playerKeys.length && !_tempBatch) {
+  if (!playerKeys.length && !_tempBatches.length) {
     el.innerHTML = '<div class="no-batches">No batches yet.</div>'; return;
   }
 
@@ -2473,8 +2476,8 @@ function igtBuildBatchItem(b, list, indented) {
 function clearTempBatch(e, id) {
   e.stopPropagation();
   if (!confirm('Clear temporary batch?')) return;
-  _tempBatch = null;
-  if (_activeBatch && _activeBatch.isTemp) {
+  _tempBatches = _tempBatches.filter(tb => tb.id !== id);
+  if (_activeBatch && _activeBatch.isTemp && _activeBatch.id === id) {
     _activeBatch = null;
     document.getElementById('rps-empty').style.display='flex';
     document.getElementById('rps-out').style.display='none';
@@ -4869,8 +4872,9 @@ async function selectPlayerBatches(ids) {
 async function selectBatch(id) {
   _batchLocalEdits = false;
   // Handle temp batch click — it lives in memory only
-  if (_tempBatch && id === _tempBatch.id) {
-    _activeBatch = _tempBatch;
+  const _tb = _tempBatches.find(tb => tb.id === id);
+  if (_tb) {
+    _activeBatch = _tb;
     loadBatches();
     renderRPS();
     buildDeck();
@@ -4961,9 +4965,14 @@ async function go() {
   if (_batchPanelMode === 'temp') {
     // Temporary batch — in-memory only, never saved to server
     // No player required: both players in each replay will be parsed
+    // Each Temp Batch created this session is kept as its own entry
+    // (auto-numbered "Temp Batch #1", "#2", ...) rather than overwriting
+    // whatever temp batch was active before — so parsing more replays
+    // later doesn't discard an earlier one.
     const tempId = 'temp-' + Date.now();
-    _tempBatch = { id: tempId, name: nextTempBatchName(), player: '', aliases: [], replays: [], createdAt: Date.now(), status: 'pending', isTemp: true, dualParse: true };
-    _activeBatch = _tempBatch;
+    const _newTempBatch = { id: tempId, name: nextTempBatchName(), player: '', aliases: [], replays: [], createdAt: Date.now(), status: 'pending', isTemp: true, dualParse: true };
+    _tempBatches.push(_newTempBatch);
+    _activeBatch = _newTempBatch;
     loadBatches(); // refresh list to show temp batch
   } else {
     // Check if batch(es) for this player already exist — merge into them
@@ -5275,7 +5284,7 @@ function doStop() {
 
 // ── Batch input panel ────────────────────────────────────────────────────────
 let _batchPanelMode = 'new'; // 'new', 'add', or 'temp'
-let _tempBatch = null; // in-memory only temp batch
+let _tempBatches = []; // all in-memory-only temp batches created this session
 
 // Auto-numbered Temp Batch names ("Temp Batch #1", "#2", ...). Persisted in
 // localStorage (per-browser) so the counter keeps climbing across reloads
@@ -14072,9 +14081,14 @@ function applyRoleUI() {
       if (el) el.style.display = 'none';
     });
     // Keep the batch list visible — it's the only place a limited account
-    // can see/select/clear its active Temporary Batch (the "⚡TEMP" tile).
-    // Saved batches never appear here for this role since GET /api/batches
-    // 403s server-side, so this will only ever show the temp batch.
+    // can see/select/clear the Temp Batches it created this session (the
+    // "⚡TEMP" tiles). Saved batches / other players never appear here for
+    // this role since GET /api/batches 403s server-side and loadBatches()
+    // falls back to an empty list on that — so only temp batches ever show.
+    // Relabel the section so it doesn't read like a list of other people's
+    // batches.
+    const recentLbl = document.querySelector('#sidebar-recent-batches-label .sb-label');
+    if (recentLbl) recentLbl.textContent = 'Your Temp Batches';
 
     // Top nav — hide Profiles, RPS Analysis, Deck Data (+ Stats), GFWL
     // Archive. Deck Viewer and In-Game Tools stay so they can look at the

@@ -123,8 +123,12 @@ async function initDB() {
     db.users[sid] = { id:sid, email:SECONDARY_ADMIN, name:'Arin', password:hashPassword('changeme'), role:'admin', approved:true, createdAt:Date.now() };
     console.log('Secondary admin created:', SECONDARY_ADMIN, '(default password: changeme — change immediately)');
   } else {
+    // Only ensure the account is approved (so it never gets stuck pending) —
+    // do NOT force role back to 'admin' here. This used to stomp any role
+    // change made via the admin panel (e.g. setting this account to
+    // 'limited' for testing) every time the server restarted/redeployed.
     const sa = Object.values(db.users).find(u => u.email === SECONDARY_ADMIN);
-    if (sa) { sa.role = 'admin'; sa.approved = true; }
+    if (sa) { sa.approved = true; }
   }
 
   // Migrate any legacy head_admin roles to admin in the DB
