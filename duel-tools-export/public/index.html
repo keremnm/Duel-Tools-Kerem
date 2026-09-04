@@ -14008,6 +14008,12 @@ async function gateLogin() {
     localStorage.setItem('dt_token', _authToken);
     document.getElementById('auth-gate').remove();
     applyRoleUI();
+    // initApp() already rendered the sidebar batch list once at page load,
+    // before this login happened — with no token, so an account-gated
+    // endpoint like GET /api/batches had no way to know who was asking and
+    // returned the unfiltered list. Re-fetch now that we're authenticated
+    // so the sidebar reflects this account's actual permissions.
+    loadBatches();
   } catch(e) { gateMsg('Network error'); btn.textContent='Sign In'; btn.disabled=false; }
 }
 
@@ -14594,6 +14600,7 @@ async function initAuth() {
         const gate = document.getElementById('auth-gate');
         if (gate) gate.remove();
         applyRoleUI();
+        loadBatches(); // re-fetch now that the account/role is confirmed (see gateLogin)
         return;
       }
     } catch(e) {}
