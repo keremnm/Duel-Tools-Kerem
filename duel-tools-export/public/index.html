@@ -2332,7 +2332,11 @@ function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 // ══════════════════════════════════════════════════════════════════════
 async function loadBatches() {
   try {
-    const r = await fetch(`${API}/batches`);
+    // IMPORTANT: this must send the auth token. Without it the server sees
+    // an anonymous request — getRole(req) returns null, so the isLimited()
+    // check on GET /api/batches never matches 'limited' and happily returns
+    // every saved batch, regardless of the caller's actual role.
+    const r = await fetch(`${API}/batches`, { headers: authHeaders() });
     const data = await r.json().catch(() => []);
     // A blocked/failed request (e.g. LIMITED accounts get 403 here) returns
     // an {error:...} object, not an array — fall back to [] so the temp
@@ -4882,7 +4886,9 @@ async function selectBatch(id) {
     return;
   }
   try {
-    const r = await fetch(`${API}/batches/${id}`);
+    // Same reason as loadBatches() above: must send the auth token so the
+    // server can actually identify (and gate) a limited account here.
+    const r = await fetch(`${API}/batches/${id}`, { headers: authHeaders() });
     _activeBatch = await r.json();
     loadBatches();
     renderRPS();
