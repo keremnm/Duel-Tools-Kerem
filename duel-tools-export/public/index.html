@@ -6180,8 +6180,35 @@ function renderRPS() {
 function buildDeck() {
   if (!_activeBatch) return;
   _matches = [];
-  const player  = _activeBatch.player;
+  let player  = _activeBatch.player;
   const replays = _activeBatch.replays || [];
+
+  // For dualParse temp batches with no player explicitly set: auto-detect
+  // the player common to (most of) the replays in this batch, and use
+  // THAT player's perspective for every match by default — instead of
+  // naively defaulting to whichever name happened to be "player1" in each
+  // individual replay's JSON (which varies replay-to-replay on duelingbook
+  // and would otherwise silently show the wrong side's deck for any replay
+  // where the batch's actual player was recorded as player2).
+  if (_activeBatch.dualParse && !player && replays.length) {
+    const _counts = {};
+    for (const r of replays) {
+      if (r.player1) { const k = r.player1.toLowerCase(); _counts[k] = (_counts[k]||0) + 1; }
+      if (r.player2) { const k = r.player2.toLowerCase(); _counts[k] = (_counts[k]||0) + 1; }
+    }
+    let _best = null, _bestCount = 0;
+    for (const k of Object.keys(_counts)) {
+      if (_counts[k] > _bestCount) { _bestCount = _counts[k]; _best = k; }
+    }
+    if (_best) {
+      // Recover original casing from whichever replay had it
+      for (const r of replays) {
+        if ((r.player1||'').toLowerCase() === _best) { player = r.player1; break; }
+        if ((r.player2||'').toLowerCase() === _best) { player = r.player2; break; }
+      }
+      _activeBatch.player = player; // cache — avoids recomputing every rebuild
+    }
+  }
 
   const _buildDeckAliases = (() => {
     const key = (_activeBatch.player||'').toLowerCase();
@@ -6197,12 +6224,19 @@ function buildDeck() {
     let _replayParsed = r.parsed;
     if (_activeBatch.dualParse && r.player1 && r.player2) {
       const _pLow = (player||'').toLowerCase();
-      if (_pLow && (r.player2||'').toLowerCase() === _pLow && r.parsedP2) {
+      const _r1Low = (r.player1||'').toLowerCase();
+      const _r2Low = (r.player2||'').toLowerCase();
+      if (_pLow && _r2Low === _pLow && r.parsedP2) {
         // Selected player is player2 of this replay — use P2 perspective
         _replayPlayer = r.player2;
         _replayParsed = r.parsedP2;
+      } else if (_pLow && _r1Low === _pLow) {
+        // Selected player is player1 of this replay — use the default parse
+        _replayPlayer = r.player1;
+        _replayParsed = r.parsed;
       } else {
-        // Default: player1 perspective (or selected player is player1)
+        // Selected player isn't in this replay at all (rare) — fall back
+        // to player1's perspective so the match still renders.
         _replayPlayer = r.player1 || player;
         _replayParsed = r.parsed;
       }
