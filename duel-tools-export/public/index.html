@@ -2333,9 +2333,14 @@ function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 async function loadBatches() {
   try {
     const r = await fetch(`${API}/batches`);
-    const list = await r.json();
+    const data = await r.json().catch(() => []);
+    // A blocked/failed request (e.g. LIMITED accounts get 403 here) returns
+    // an {error:...} object, not an array — fall back to [] so the temp
+    // batch tile (added first, below) still renders instead of the whole
+    // list silently failing.
+    const list = Array.isArray(data) ? data : [];
     renderBatchList(list);
-  } catch(e) { console.error('loadBatches:', e); }
+  } catch(e) { console.error('loadBatches:', e); renderBatchList([]); }
 }
 
 function renderBatchList(list) {
@@ -4957,7 +4962,7 @@ async function go() {
     // Temporary batch — in-memory only, never saved to server
     // No player required: both players in each replay will be parsed
     const tempId = 'temp-' + Date.now();
-    _tempBatch = { id: tempId, name: 'Temp', player: '', aliases: [], replays: [], createdAt: Date.now(), status: 'pending', isTemp: true, dualParse: true };
+    _tempBatch = { id: tempId, name: nextTempBatchName(), player: '', aliases: [], replays: [], createdAt: Date.now(), status: 'pending', isTemp: true, dualParse: true };
     _activeBatch = _tempBatch;
     loadBatches(); // refresh list to show temp batch
   } else {
@@ -5271,6 +5276,18 @@ function doStop() {
 // ── Batch input panel ────────────────────────────────────────────────────────
 let _batchPanelMode = 'new'; // 'new', 'add', or 'temp'
 let _tempBatch = null; // in-memory only temp batch
+
+// Auto-numbered Temp Batch names ("Temp Batch #1", "#2", ...). Persisted in
+// localStorage (per-browser) so the counter keeps climbing across reloads
+// instead of restarting at #1 and producing duplicate labels.
+function nextTempBatchName() {
+  let n = 1;
+  try {
+    n = (parseInt(localStorage.getItem('dt_temp_batch_seq') || '0', 10) || 0) + 1;
+    localStorage.setItem('dt_temp_batch_seq', String(n));
+  } catch(e) {}
+  return 'Temp Batch #' + n;
+}
 
 function openBatchPanel(mode) {
   _batchPanelMode = mode;
@@ -7724,7 +7741,10 @@ function renderMatchSidebar(query) {
     const _isGFWLGroup = typeof isGFWLSeason === 'function' && isGFWLSeason(key);
     const _isTempBatch = !!(_activeBatch && _activeBatch.isTemp);
     const _eligibleGroup = key !== 'Untagged' || _isTempBatch;
-    if (isMinerRole(_userRole) && _eligibleGroup && !_showOpp && !_isGFWLGroup) {
+    // Temp Batch YDK export is available to anyone who can create a Temp
+    // Batch (miner/admin/limited) — not gated to miner+ like the real-event
+    // decklist-building workflow below is.
+    if ((_isTempBatch || isMinerRole(_userRole)) && _eligibleGroup && !_showOpp && !_isGFWLGroup) {
       // Check both batch eventDecklists AND active profile decklists
       const _batchDecks = (_activeBatch && (_activeBatch.eventDecklists||[]));
       const _profileDecks = (_activeProfile && (_activeProfile.batches||[]).flatMap(b=>b.eventDecklists||[])) || [];
@@ -14047,11 +14067,14 @@ function applyRoleUI() {
       if (el.id !== 'temp-batch-btn') el.style.display = 'none';
     });
     ['import-event-data-btn','import-event-decks-btn','clean-batch-btn',
-     'sidebar-export-import-row','sidebar-player-search',
-     'sidebar-recent-batches-label','batch-list'].forEach(id => {
+     'sidebar-export-import-row','sidebar-player-search'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.style.display = 'none';
     });
+    // Keep the batch list visible — it's the only place a limited account
+    // can see/select/clear its active Temporary Batch (the "⚡TEMP" tile).
+    // Saved batches never appear here for this role since GET /api/batches
+    // 403s server-side, so this will only ever show the temp batch.
 
     // Top nav — hide Profiles, RPS Analysis, Deck Data (+ Stats), GFWL
     // Archive. Deck Viewer and In-Game Tools stay so they can look at the
