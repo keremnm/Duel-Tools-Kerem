@@ -11509,7 +11509,10 @@ function renderProfileGrid(batches) {
     card.onmouseout  = () => { card.style.borderColor='var(--border)'; card.style.transform=''; };
     card.onclick = () => openProfile(player, pBatches, []);
 
-    // Get GFWL team for current/latest season
+    // Get GFWL team for current/latest season — no longer shown on the tile
+    // itself (search, the Season tab, and the Conference tab all filter off
+    // window._playerRegistry directly, not off anything rendered here), but
+    // kept around to surface as a hover tooltip on the name.
     const _pReg = window._playerRegistry && window._playerRegistry[player.toLowerCase()];
     const _teams = _pReg ? (_pReg.gfwlTeams || _pReg.teams || []) : [];
 
@@ -11519,38 +11522,23 @@ function renderProfileGrid(batches) {
       _currentTeam = [..._teams].sort((a,b)=>(b.season||'').localeCompare(a.season||''))[0];
     }
 
-    // Conf color for team badge
-    const _teamSeason = _currentTeam?.season?.toUpperCase();
-    const _teamLookup = _teamSeason && _gfwlData[_teamSeason]?.teams;
-    const _teamKey = _teamLookup && Object.keys(_teamLookup).find(k=>k.toLowerCase()===(_currentTeam.team||'').toLowerCase());
-    const _teamConf = _teamKey && _teamLookup[_teamKey]?.conference;
-    const _confColor = _teamConf ? (CONF_COLORS&&CONF_COLORS[_teamConf]?.text||'var(--amber)') : 'var(--amber)';
-
-    // Top row: name + team badge side by side, name wraps, badge shrinks to content
+    // Top row: just the name, centered on the tile
     const topRow = document.createElement('div');
-    topRow.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap';
+    topRow.style.cssText = 'display:flex;align-items:center;justify-content:center';
 
     const nameEl = document.createElement('div');
-    nameEl.style.cssText = 'font-size:14px;font-weight:bold;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    nameEl.style.cssText = 'font-size:14px;font-weight:bold;color:var(--text);text-align:center;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
     nameEl.textContent = player;
-    nameEl.title = player; // show full name on hover
+    // Team affiliation is still available on hover even though it's off the tile
+    nameEl.title = _currentTeam ? player+' — '+_currentTeam.season+' · '+_currentTeam.team : player;
     topRow.appendChild(nameEl);
-
-    if (_currentTeam) {
-      const teamEl = document.createElement('div');
-      // Team name: allow wrapping on · separator so long team names don't blow out the card
-      teamEl.style.cssText = 'font-size:10px;font-family:monospace;color:'+_confColor+';border:1px solid '+_confColor+';padding:1px 7px;border-radius:4px;white-space:nowrap;flex-shrink:0;max-width:55%;overflow:hidden;text-overflow:ellipsis';
-      teamEl.textContent = _currentTeam.season+' · '+_currentTeam.team;
-      teamEl.title = _currentTeam.season+' · '+_currentTeam.team;
-      topRow.appendChild(teamEl);
-    }
     card.appendChild(topRow);
 
     // Tags row (only if player has tags)
     const _tags = _pReg ? (_pReg.tags||[]) : [];
     if (_tags.length) {
       const tagsRow = document.createElement('div');
-      tagsRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:3px';
+      tagsRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:3px;justify-content:center';
       for (const tag of _tags) {
         const t = document.createElement('span');
         t.style.cssText = 'font-size:9px;font-family:monospace;color:var(--muted);border:1px solid var(--border);padding:1px 5px;border-radius:3px';
