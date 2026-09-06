@@ -2138,17 +2138,31 @@ const GFWL_PLAYOFF_ROUND_CODES = {
 function gfwlPlayoffRoundFromLabel(lbl) {
   const u = (lbl||'').toUpperCase().trim();
   if (!u) return null;
-  // "S9: Wildcard" / "S9: Top 8" — full round name after the colon
-  if (u.includes(':')) {
-    const part = u.split(':').slice(1).join(':').replace(/\s+/g,' ').trim();
+  // Build every reasonable "the round part of this label" candidate and
+  // check EACH one against BOTH conventions (short code and full wording).
+  // Real labels have turned out to mix conventions — some typed with a
+  // season-prefix colon out of habit from the regular-week format ("S9: WC-
+  // WV1"), some with a season prefix but no colon ("S9 WC-WV1"), some as
+  // the bare short code ("WC-WV1"), and some as the full word ("S9:
+  // Wildcard"). The old version only ever checked ONE candidate against ONE
+  // convention depending on whether a colon was present, so e.g. "S9: WC-
+  // WV1" (colon present, but short code after it, not a full word) matched
+  // neither and silently fell through as "not a playoff replay at all".
+  const candidates = new Set([u]);
+  if (u.includes(':')) candidates.add(u.split(':').slice(1).join(':').replace(/\s+/g,' ').trim());
+  const stripped = u.replace(/^S\d+\s*:?\s*/, '').trim(); // drop a leading "S9"/"S9:"/"S9 " if present
+  if (stripped) candidates.add(stripped);
+
+  for (const cand of candidates) {
+    if (!cand) continue;
+    // Full round-name wording: "WILDCARD", "TOP 8", ...
     for (const key of Object.keys(GFWL_PLAYOFF_ROUND_CODES)) {
-      if (part === key.toUpperCase()) return key;
+      if (cand === key.toUpperCase()) return key;
     }
-    return null;
-  }
-  // "WC-WV1" / "T8-WV2" / "FINALS-WV1" — short code, no season/colon at all
-  for (const [key, code] of Object.entries(GFWL_PLAYOFF_ROUND_CODES)) {
-    if (u === code || u.startsWith(code+'-') || u.startsWith(code+' ')) return key;
+    // Short code: "WC-WV1", "T8-WV2", "FINALS-WV1", ...
+    for (const [key, code] of Object.entries(GFWL_PLAYOFF_ROUND_CODES)) {
+      if (cand === code || cand.startsWith(code+'-') || cand.startsWith(code+' ')) return key;
+    }
   }
   return null;
 }
@@ -2973,8 +2987,8 @@ async function gfwlOpenSeasonStats(season) {
   const hdrBar = document.createElement('div');
   hdrBar.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap';
   const backBtn = document.createElement('button');
-  backBtn.textContent = '← '+season;
-  backBtn.style.cssText = 'background:none;border:none;color:var(--muted);font-family:monospace;font-size:12px;cursor:pointer;padding:0';
+  backBtn.textContent = '← Back to '+season;
+  backBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:5px 12px;border-radius:5px;cursor:pointer';
   backBtn.onclick = () => gfwlLoadSeason(season);
   hdrBar.appendChild(backBtn);
   const titleEl = document.createElement('div');
@@ -3129,7 +3143,7 @@ async function gfwlOpenSeasonStats(season) {
 
   // ── Top players leaderboard ──────────────────────────────────────────────
   const MIN_MATCHES = 5;
-  const lbSec = gfwlMakeSection('TOP PLAYERS BY WIN % (min '+MIN_MATCHES+' matches)');
+  const lbSec = gfwlMakeSection('TOP PLAYERS BY MATCH WINS (min '+MIN_MATCHES+' matches)');
   left.appendChild(lbSec);
   const lbRows = Object.entries(playerRecords)
     .map(([pLower, recs]) => {
@@ -3138,7 +3152,7 @@ async function gfwlOpenSeasonStats(season) {
       return { player: recs[0].player, team: playerTeam[pLower], w, l, total: w+l, winPct: (w+l)?Math.round(w/(w+l)*100):0 };
     })
     .filter(p => p.total >= MIN_MATCHES)
-    .sort((a,b) => b.winPct-a.winPct || b.total-a.total)
+    .sort((a,b) => b.w-a.w || b.winPct-a.winPct || b.total-a.total)
     .slice(0, 15);
   if (!lbRows.length) {
     lbSec.insertAdjacentHTML('beforeend', '<div style="font-size:12px;color:var(--muted)">No players have reached '+MIN_MATCHES+' matches yet.</div>');
