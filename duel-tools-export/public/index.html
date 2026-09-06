@@ -2122,15 +2122,22 @@ function gfwlWeekNum(label) {
   // Regular weeks: WK1, WK 1, WK2 etc — sort first (1-999)
   const wkM = u.match(/WK\s*(\d+)/);
   if (wkM) return parseInt(wkM[1]);
-  // Tournament rounds after regular season — ascending: WC < T10 < T8 < T4 < T2
-  if (u.includes('WC'))  return 1000;   // Wild Card
-  if (u.includes('T16')) return 1010;
-  if (u.includes('T10')) return 1020;
-  if (u.includes('T8'))  return 1030;
-  if (u.includes('T4'))  return 1040;
-  if (u.includes('T2'))  return 1050;
-  if (u.includes('FINAL') || u.includes('GRAND')) return 1060;
-  return 999; // unknown label sorts before tournament rounds
+  // Playoff rounds after the regular season — ascending: Wildcard < Top 8 <
+  // Top 4 < Finals. These must match the ACTUAL round-name strings used
+  // elsewhere (PLAYOFF_ROUNDS = ['Wildcard','Top 8','Top 4','Finals'], see
+  // getRoundScore/gfwlOpenRoundReport), not old abbreviations like "WC"/"T8"/
+  // "T4" — those never appear in a real label ("Wildcard" doesn't contain
+  // "WC", "Top 8" doesn't contain "T8" because of the space), so every
+  // playoff round used to fall through to the 999 default and sort as ties
+  // in whatever order they happened to be inserted.
+  if (/WILD\s*CARD/.test(u))     return 1000;
+  if (/TOP\s*16/.test(u))        return 1010;
+  if (/TOP\s*10/.test(u))        return 1020;
+  if (/TOP\s*8/.test(u))         return 1030;
+  if (/TOP\s*4/.test(u))         return 1040;
+  if (/TOP\s*2/.test(u))         return 1050;
+  if (/FINAL/.test(u) || /GRAND/.test(u)) return 1060;
+  return 999; // unknown label sorts before playoff rounds
 }
 
 function sortEventKeys(keys) {
@@ -7750,10 +7757,15 @@ function renderMatchSidebar(query) {
   });
 
   // Sort: GFWL seasons (S#) descending numeric, then events alpha, Untagged last
-  // Within GFWL season groups, sort matches by week number ascending (WK1 first)
+  // Within GFWL season groups, sort matches by week number ascending (WK1 first).
+  // NOTE: items here are {m, idx} wrapper objects, not raw match records — the
+  // eventLabel lives on .m.eventLabel. (Sorting on a.eventLabel/b.eventLabel
+  // directly always compared undefined===undefined, i.e. never actually sorted,
+  // which is why newly-added weeks showed up in insertion order instead of
+  // chronological order — e.g. Week 7 added after Week 8 appeared below it.)
   for (const key of Object.keys(groups)) {
     if (isGFWLSeason(key)) {
-      groups[key].sort((a,b) => gfwlWeekNum(a.eventLabel) - gfwlWeekNum(b.eventLabel));
+      groups[key].sort((a,b) => gfwlWeekNum(a.m.eventLabel) - gfwlWeekNum(b.m.eventLabel));
     }
   }
   const sortedKeys = sortEventKeys(Object.keys(groups));
@@ -8980,6 +8992,18 @@ function buildMatchRecord(replayResult, player, aliases) {
   const myDeckFinal  = replayResult.myDeckOverride  || eventDeckType2 || (myClass  ? myClass.dc  : 'Unknown');
   const oppDeckFinal = replayResult.oppDeckOverride || (oppClass ? oppClass.dc : 'Unknown');
 
+  // A saved result/score override trumps the freshly-parsed outcome here too —
+  // this is the legacy (not-yet-migrated) parse path, so without this a replay
+  // that hasn't been through the /parsed migration yet would silently ignore
+  // any override until it got migrated, same bug as the fast path above used
+  // to have.
+  const _resOv2   = replayResult.resultOverride || null;
+  const _scoreOv2 = replayResult.scoreOverride  || null;
+  const effResult2 = _resOv2 || parsed.result;
+  const effMyW2  = _scoreOv2 ? _scoreOv2.my  : parsed.myW;
+  const effOppW2 = _scoreOv2 ? _scoreOv2.opp : parsed.oppW;
+  const effScore2 = _scoreOv2 ? (parsed.draws>0 ? `${effMyW2}-${effOppW2}-${parsed.draws}` : `${effMyW2}-${effOppW2}`) : parsed.score;
+
   return {
     replayId:  replayId,
     player,
@@ -8991,13 +9015,17 @@ function buildMatchRecord(replayResult, player, aliases) {
     oppDeck:   oppDeckFinal,
     myDeckConf:  replayResult.myDeckOverride  ? 'Override' : (myClass  ? myClass.conf  : 'Low'),
     oppDeckConf: replayResult.oppDeckOverride ? 'Override' : (oppClass ? oppClass.conf : 'Low'),
-    matchWon:  parsed.result === 'w',
-    matchLost: parsed.result === 'l',
-    result:    parsed.result,
-    score:     parsed.score,
-    myW:       parsed.myW,
-    oppW:      parsed.oppW,
+    matchWon:  effResult2 === 'w',
+    matchLost: effResult2 === 'l',
+    result:    effResult2,
+    score:     effScore2,
+    myW:       effMyW2,
+    oppW:      effOppW2,
     draws:     parsed.draws,
+    resultOverride: _resOv2,
+    scoreOverride:  _scoreOv2,
+    overrideNote:   replayResult.overrideNote || '',
+    origResult: parsed.result, origScore: parsed.score, origMyW: parsed.myW, origOppW: parsed.oppW,
     games:     gameRecords,
     allMine:   parsed.allMine,
     allOpp:    parsed.allOpp,

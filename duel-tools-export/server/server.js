@@ -599,6 +599,52 @@ function findOrCreateBatchForPlayer(playerEntry) {
   db.batches[id] = batch;
   return batch;
 }
+// A manually-overridden result must trump the raw parsed outcome everywhere,
+// including when a replay gets mirrored into an opponent's batch via
+// cross-linking — otherwise Player A's corrected result (e.g. a DQ ruling)
+// never shows up on Player B's copy of the same match. flipResult() mirrors
+// a W/L across the two sides of one match.
+function flipResult(r) { return r === 'w' ? 'l' : r === 'l' ? 'w' : r; }
+
+// Apply a result/score/deck override payload to one replay record, updating
+// both the top-level override fields and the cached `parsed` block's mirror
+// fields so every reader (buildMatchRecord, GFWL week/round scores, the
+// profile matchup tables, ...) sees the corrected outcome. `flip` mirrors
+// W/L and swaps my/opp — used when applying the SAME override to a
+// cross-linked twin replay sitting in the opponent's own batch, so an
+// override trumps cross-linking instead of being visible only to whoever
+// set it.
+function applyOverrideToReplay(r, data, flip) {
+  if (data.myDeckOverride !== undefined) {
+    const v = data.myDeckOverride;
+    r[flip ? 'oppDeckOverride' : 'myDeckOverride'] = v;
+    if (r.parsed && v) r.parsed[flip ? 'oppDeck' : 'myDeck'] = v;
+  }
+  if (data.oppDeckOverride !== undefined) {
+    const v = data.oppDeckOverride;
+    r[flip ? 'myDeckOverride' : 'oppDeckOverride'] = v;
+    if (r.parsed && v) r.parsed[flip ? 'myDeck' : 'oppDeck'] = v;
+  }
+  if (data.resultOverride !== undefined) {
+    const ro = data.resultOverride ? (flip ? flipResult(data.resultOverride) : data.resultOverride) : null;
+    r.resultOverride = ro;
+    if (r.parsed) {
+      r.parsed.resultOverride = ro;
+      if (ro) r.parsed.resultEffective = ro;
+      else delete r.parsed.resultEffective;
+    }
+  }
+  if (data.scoreOverride !== undefined) {
+    const so = data.scoreOverride ? (flip ? { my: data.scoreOverride.opp, opp: data.scoreOverride.my } : data.scoreOverride) : null;
+    r.scoreOverride = so;
+    if (r.parsed) r.parsed.scoreOverride = so;
+  }
+  if (data.overrideNote !== undefined) {
+    r.overrideNote = data.overrideNote || '';
+    if (r.parsed) r.parsed.overrideNote = data.overrideNote || '';
+  }
+}
+
 function crossLinkReplay(replayData, opponentUsername, originalBatchPlayer) {
   const opponentEntry = findPlayerByUsername(opponentUsername);
   if (!opponentEntry) return null;
@@ -618,13 +664,20 @@ function crossLinkReplay(replayData, opponentUsername, originalBatchPlayer) {
     if (existing) {
       if (existing.timedOut && !replayData.timedOut) {
         // Player B has a failed import — upgrade it with the crosslinked parsed data
-        // (their perspective: result/decks are mirrored from Player A's data)
+        // (their perspective: result/decks are mirrored from Player A's data).
+        // A manual result/score override on A's side is the source of truth for
+        // the match outcome, so it must win here too, not the raw parsed result.
         const origParsed2 = replayData.parsed || null;
+        const _resOv2   = replayData.resultOverride || (origParsed2 && origParsed2.resultOverride) || null;
+        const _scoreOv2 = replayData.scoreOverride  || (origParsed2 && origParsed2.scoreOverride)  || null;
+        const effResult2 = _resOv2 || (origParsed2 && origParsed2.result);
+        const effMyW2  = _scoreOv2 ? _scoreOv2.my  : (origParsed2 && origParsed2.myW);
+        const effOppW2 = _scoreOv2 ? _scoreOv2.opp : (origParsed2 && origParsed2.oppW);
         const mirrored2 = origParsed2 ? {
           oppName:  originalBatchPlayer || null,
-          result:   origParsed2.result === 'w' ? 'l' : origParsed2.result === 'l' ? 'w' : origParsed2.result,
-          score:    origParsed2.score ? origParsed2.score.split('-').reverse().join('-') : null,
-          myW: origParsed2.oppW, oppW: origParsed2.myW, draws: origParsed2.draws,
+          result:   flipResult(effResult2),
+          score:    _scoreOv2 ? `${effOppW2}-${effMyW2}` : (origParsed2.score ? origParsed2.score.split('-').reverse().join('-') : null),
+          myW: effOppW2, oppW: effMyW2, draws: origParsed2.draws,
           myDeck:  origParsed2.oppDeck  || 'Unknown',
           oppDeck: origParsed2.myDeck   || 'Unknown',
           games: origParsed2.games, allMine: origParsed2.allOpp||[], allOpp: origParsed2.allMine||[],
@@ -635,6 +688,12 @@ function crossLinkReplay(replayData, opponentUsername, originalBatchPlayer) {
           myDeckOverride: replayData.oppDeckOverride||null,
           oppDeckOverride: replayData.myDeckOverride||null,
           eventLabel: existing.eventLabel || replayData.eventLabel || '',
+          // Mirror the override itself (flipped) onto B's copy so it stays
+          // correct even if the mirrored `parsed` block above ever gets
+          // rebuilt/re-migrated independently of this one assignment.
+          resultOverride: _resOv2 ? flipResult(_resOv2) : null,
+          scoreOverride:  _scoreOv2 ? { my: _scoreOv2.opp, opp: _scoreOv2.my } : null,
+          overrideNote:   replayData.overrideNote || (origParsed2 && origParsed2.overrideNote) || existing.overrideNote || '',
           crossLinked: true, updatedAt: Date.now()
         });
         return { linked: true, upgraded: true, batchId: ob.id, player: opponentEntry.name };
@@ -649,13 +708,21 @@ function crossLinkReplay(replayData, opponentUsername, originalBatchPlayer) {
   if (originalPlayerLower && batchPlayerLower === originalPlayerLower) return null;
   if (!batch.replays) batch.replays = [];
   // Build a mirrored parsed record for Player B:
-  // their perspective is the opponent's perspective from Player A's replay
+  // their perspective is the opponent's perspective from Player A's replay.
+  // A manual result/score override on A's side is the source of truth for
+  // the match outcome, so it must be baked into B's mirrored copy too —
+  // otherwise cross-linking would silently resurrect the pre-override result.
   const origParsed = replayData.parsed || null;
+  const _resOv   = replayData.resultOverride || (origParsed && origParsed.resultOverride) || null;
+  const _scoreOv = replayData.scoreOverride  || (origParsed && origParsed.scoreOverride)  || null;
+  const effResult = _resOv || (origParsed && origParsed.result);
+  const effMyW  = _scoreOv ? _scoreOv.my  : (origParsed && origParsed.myW);
+  const effOppW = _scoreOv ? _scoreOv.opp : (origParsed && origParsed.oppW);
   const mirroredParsed = origParsed ? {
     oppName:  origParsed.oppName ? originalBatchPlayer : null, // B's opponent is A
-    result:   origParsed.result === 'w' ? 'l' : origParsed.result === 'l' ? 'w' : origParsed.result,
-    score:    origParsed.score ? origParsed.score.split('-').reverse().join('-') : null,
-    myW:      origParsed.oppW, oppW: origParsed.myW, draws: origParsed.draws,
+    result:   flipResult(effResult),
+    score:    _scoreOv ? `${effOppW}-${effMyW}` : (origParsed.score ? origParsed.score.split('-').reverse().join('-') : null),
+    myW:      effOppW, oppW: effMyW, draws: origParsed.draws,
     myDeck:   origParsed.oppDeck   || 'Unknown',
     oppDeck:  origParsed.myDeck    || 'Unknown',
     games:    origParsed.games,
@@ -672,6 +739,12 @@ function crossLinkReplay(replayData, opponentUsername, originalBatchPlayer) {
     oppName:     originalBatchPlayer || replayData.oppName || '',
     myDeckOverride:  replayData.oppDeckOverride || null,  // A's opp deck = B's my deck
     oppDeckOverride: replayData.myDeckOverride  || null,
+    // Mirror the override itself (flipped) onto B's own replay record —
+    // keeps buildMatchRecord()'s "check replay.resultOverride first" logic
+    // correct on B's side independently of the baked-in parsed values above.
+    resultOverride: _resOv ? flipResult(_resOv) : null,
+    scoreOverride:  _scoreOv ? { my: _scoreOv.opp, opp: _scoreOv.my } : null,
+    overrideNote:   replayData.overrideNote || (origParsed && origParsed.overrideNote) || '',
     crossLinked: true,
     savedAt:     Date.now()
   });
@@ -1151,35 +1224,33 @@ const server = http.createServer(async (req, res) => {
     const b = db.batches[parts[1]];
     if (!b) return json(res, 404, { error:'Not found' });
     return readBody(req, async data => {
-      const r = (b.replays||[]).find(r => r.replayId === parts[3]);
+      const replayId = decodeURIComponent(parts[3]);
+      const r = (b.replays||[]).find(r => r.replayId === replayId);
       if (r) {
-        if (data.myDeckOverride  !== undefined) r.myDeckOverride  = data.myDeckOverride;
-        if (data.oppDeckOverride !== undefined) r.oppDeckOverride = data.oppDeckOverride;
-        if (data.resultOverride  !== undefined) {
-          r.resultOverride = data.resultOverride; // 'w', 'l', or null to clear
-          // Also update parsed.result so profile stats reflect the override
-          if (r.parsed) {
-            r.parsed.resultOverride = data.resultOverride;
-            if (data.resultOverride) r.parsed.resultEffective = data.resultOverride;
-            else delete r.parsed.resultEffective;
-          }
+        applyOverrideToReplay(r, data, false);
+        if (data.resultOverride !== undefined) {
           console.log(`[override] Result override for ${r.replayId}: ${data.resultOverride||'cleared'}`);
         }
-        if (data.scoreOverride !== undefined) {
-          r.scoreOverride = data.scoreOverride; // { my, opp } or null to clear
-          if (r.parsed) r.parsed.scoreOverride = data.scoreOverride;
-        }
-        if (data.overrideNote !== undefined) {
-          r.overrideNote = data.overrideNote || '';
-          if (r.parsed) r.parsed.overrideNote = data.overrideNote || '';
-        }
-        // Also update parsed if available
-        if (r.parsed) {
-          if (data.myDeckOverride)  r.parsed.myDeck  = data.myDeckOverride;
-          if (data.oppDeckOverride) r.parsed.oppDeck = data.oppDeckOverride;
-        }
         await saveBatchToPostgres(b.id);
-        return json(res, 200, { ok:true, found:true });
+
+        // A result override must trump cross-linking: this same replay may
+        // already exist as a mirrored copy in the opponent's own batch (from
+        // an earlier cross-link), and that copy would otherwise keep showing
+        // the pre-override outcome forever. Propagate the override (flipped
+        // to the opponent's perspective) to every other batch's copy of this
+        // replayId so both sides of the match agree.
+        const twinBatchIds = [];
+        for (const ob of Object.values(db.batches)) {
+          if (ob.id === b.id) continue;
+          const twin = (ob.replays||[]).find(tr => tr.replayId === replayId);
+          if (twin) { applyOverrideToReplay(twin, data, true); twinBatchIds.push(ob.id); }
+        }
+        for (const bid of twinBatchIds) await saveBatchToPostgres(bid);
+        if (twinBatchIds.length) {
+          console.log(`[override] Propagated to ${twinBatchIds.length} cross-linked twin batch(es) for ${replayId}`);
+        }
+
+        return json(res, 200, { ok:true, found:true, twinsUpdated: twinBatchIds.length });
       }
       return json(res, 200, { ok:true, found:false });
     });
