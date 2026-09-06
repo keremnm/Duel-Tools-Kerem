@@ -2167,6 +2167,54 @@ function gfwlPlayoffRoundFromLabel(lbl) {
   return null;
 }
 
+// Playoffs are NOT single matches per round — each round (WC/T8/T4/Finals)
+// is a sequence of "Waves": Wave 1 is every player each team started the
+// round with (one match per pairing); later waves feature only the players
+// who survived (won) the previous wave, equal numbers from both sides, until
+// one team has ALL of its original Wave-1 starters eliminated. The "-WV#"
+// suffix on a replay's eventLabel ("WC-WV1", "T8-WV2", ...) IS that wave
+// number, not an arbitrary/ignorable tag. Labels with no "-WV#" suffix at
+// all (older data, or the full-wordy convention "S9: Top 8") are treated as
+// Wave 1 for backward compatibility.
+function gfwlPlayoffWaveNum(label) {
+  const u = (label||'').toUpperCase();
+  const m = u.match(/WV\s*-?\s*(\d+)/) || u.match(/WAVE\s*(\d+)/);
+  if (m) return parseInt(m[1], 10) || 1;
+  return 1;
+}
+
+// Given ONE team's replays for a single playoff round (array of
+// {player, replay, label} — same shape used by seasonReplays / rdReplays
+// throughout the GFWL pages), derives the actual elimination-based outcome:
+// Wave 1 is that team's starting lineup for the round; a player is
+// "eliminated" the moment they have a loss recorded (result overrides trump
+// the raw parsed result, same as everywhere else); the team itself is fully
+// eliminated once every one of its Wave-1 starters has been eliminated. This
+// is what should drive round win/loss — NOT a flat aggregate match tally,
+// since a player who wins Wave 1 then loses Wave 2 nets out to a 1-1 "tie"
+// under a naive per-player tally despite actually being eliminated.
+function gfwlPlayoffOutcome(roundReplays) {
+  const list = roundReplays || [];
+  const byWave = {};
+  list.forEach(x => {
+    const wv = gfwlPlayoffWaveNum(x.label);
+    if (!byWave[wv]) byWave[wv] = [];
+    byWave[wv].push(x);
+  });
+  const waveNums = Object.keys(byWave).map(Number).sort((a,b) => a-b);
+  const wave1 = waveNums.length ? byWave[waveNums[0]] : [];
+  const wave1Players = new Set(wave1.map(x => x.player.toLowerCase()));
+  const eliminated = new Set();
+  list.forEach(x => {
+    const r = x.replay || {};
+    const effRes = r.resultOverride || (r.parsed && r.parsed.resultOverride) || (r.parsed && r.parsed.result) || r.result || null;
+    if (effRes === 'l') eliminated.add(x.player.toLowerCase());
+  });
+  const remaining = [...wave1Players].filter(p => !eliminated.has(p));
+  const fullyEliminated = wave1Players.size > 0 && remaining.length === 0;
+  return { byWave, waveNums, wave1Players, eliminated, remaining, fullyEliminated, hasData: list.length > 0 };
+}
+
 function gfwlWeekNum(label) {
   if (!label) return 0;
   const u = label.toUpperCase();
@@ -3287,6 +3335,55 @@ function computeTeamRecord(season, teamName, team) {
   return { w, l, total: w+l };
 }
 
+// Same as computeTeamRecord, but REGULAR SEASON ONLY — excludes any
+// playoff-round replay even if it happens to carry a season prefix out of
+// habit (e.g. "S9: T8-WV1"). Playoff seeding/conference rank must be based
+// on how a team did before playoffs started, not mixed with playoff results.
+function computeTeamRegularSeasonRecord(season, teamName, team) {
+  let w = 0, l = 0;
+  const roster = (team.roster||[]).map(p => (p.player||'').toLowerCase());
+  if (!roster.length) return { w:0, l:0, total:0 };
+  const allBatches = (_allProfileBatches && _allProfileBatches.length)
+    ? _allProfileBatches
+    : Object.values(window._gfwlBatchCache || {});
+  const seasonKey = season.toUpperCase();
+  for (const batch of allBatches) {
+    if (!roster.includes((batch.player||'').toLowerCase())) continue;
+    for (const r of (batch.replays||[])) {
+      const lbl = (r.eventLabel||'').toUpperCase();
+      const isSeasonPrefixed = lbl.startsWith(seasonKey+':') || lbl.startsWith(seasonKey+' ') || lbl===seasonKey;
+      if (!isSeasonPrefixed) continue;
+      if (gfwlPlayoffRoundFromLabel(lbl) !== null) continue; // playoff match — exclude
+      const effResult = r.resultOverride || (r.parsed && r.parsed.resultOverride) || (r.parsed && r.parsed.result) || null;
+      if (effResult === 'w') w++;
+      else if (effResult === 'l') l++;
+    }
+  }
+  return { w, l, total: w+l };
+}
+
+// Regular-season standings for every team in one conference, sorted by win%
+// (then win count, then total games) — used to show each team's conference
+// seed/rank in a playoff Round Report.
+function computeConferenceStandings(season, conference) {
+  const data = _gfwlData[season];
+  if (!data) return [];
+  const entries = Object.entries(data.teams||{}).filter(([, t]) => (t.conference||'') === (conference||''));
+  const standings = entries.map(([name, t]) => {
+    const rec = computeTeamRegularSeasonRecord(season, name, t);
+    return { name, w: rec.w, l: rec.l, total: rec.total, pct: rec.total ? rec.w/rec.total : 0 };
+  });
+  standings.sort((a,b) => b.pct-a.pct || b.w-a.w || b.total-a.total);
+  return standings;
+}
+
+function gfwlConferenceRank(season, teamName, conference) {
+  if (!conference) return null;
+  const standings = computeConferenceStandings(season, conference);
+  const idx = standings.findIndex(s => s.name === teamName);
+  return idx >= 0 ? idx+1 : null;
+}
+
 async function gfwlNewSeason() {
   const s = window.prompt('Enter season (e.g. S9, S10, Season 9):','');
   if (!s) return;
@@ -4022,7 +4119,10 @@ async function gfwlOpenTeam(season, teamName, team) {
     });
     const matchW = roundReplays.filter(x=>x.replay.parsed?.result==='w').length;
     const matchL = roundReplays.filter(x=>x.replay.parsed?.result==='l').length;
-    return { teamW, teamL, matchW, matchL, hasData: roundReplays.length > 0 };
+    // Wave-based elimination outcome — this, not the raw per-player tally
+    // above, is what should actually decide whether the round was won/lost.
+    const outcome = gfwlPlayoffOutcome(roundReplays);
+    return { teamW, teamL, matchW, matchL, hasData: roundReplays.length > 0, fullyEliminated: outcome.fullyEliminated, remaining: outcome.remaining, wave1Count: outcome.wave1Players.size };
   }
 
   // Compute season week record
@@ -4156,7 +4256,11 @@ async function gfwlOpenTeam(season, teamName, team) {
         const opp = schEntry?.opponent || '—';
         const sc = getRoundScore(round);
         const matchPct = (sc.matchW+sc.matchL) ? Math.round(sc.matchW/(sc.matchW+sc.matchL)*100) : null;
-        const rdWon = sc.hasData && sc.teamW > sc.teamL;
+        // Win/loss is dictated by wave-based elimination, not the raw match
+        // tally: a team that still has any Wave-1 starter alive is winning/
+        // advancing (green); a team with every Wave-1 starter eliminated has
+        // lost the round (red) — regardless of how the aggregate W/L nets out.
+        const rdWon = sc.hasData && !sc.fullyEliminated;
 
         const tr = document.createElement('tr');
         tr.style.cssText = 'border-bottom:1px solid var(--border2)';
@@ -4170,6 +4274,7 @@ async function gfwlOpenTeam(season, teamName, team) {
         const scoreTd = document.createElement('td');
         scoreTd.style.cssText='padding:5px 8px;text-align:center;font-family:monospace;font-weight:bold;color:'+(sc.hasData?(rdWon?'var(--green)':'var(--red)'):'var(--dim)');
         scoreTd.textContent = sc.hasData?sc.teamW+'-'+sc.teamL:'—';
+        if (sc.hasData) scoreTd.title = sc.fullyEliminated ? 'Eliminated — all '+sc.wave1Count+' Wave 1 starters lost' : (sc.remaining.length+' of '+sc.wave1Count+' Wave 1 starters still alive');
         const matchTd = document.createElement('td');
         matchTd.style.cssText='padding:5px 8px;text-align:center;font-family:monospace;font-size:11px';
         matchTd.innerHTML = sc.hasData?'<span style="color:var(--green)">'+sc.matchW+'W</span> <span style="color:var(--dim)">-</span> <span style="color:var(--red)">'+sc.matchL+'L</span>':'<span style="color:var(--dim)">—</span>';
@@ -4178,7 +4283,11 @@ async function gfwlOpenTeam(season, teamName, team) {
         pctTd.textContent=matchPct===null?'—':matchPct+'%';
         const rptTd = document.createElement('td');
         rptTd.style.cssText='padding:5px 8px';
-        if (opp !== '—') {
+        // Show the Round Report button whenever there's score data to look
+        // at, even if no opponent got scheduled/recorded — otherwise a round
+        // with an anomaly (score present but no opponent on file) is
+        // impossible to click into and self-diagnose.
+        if (sc.hasData || opp !== '—') {
           const rptBtn = document.createElement('button');
           rptBtn.textContent='Round Report';
           rptBtn.style.cssText='background:var(--amber);color:#050508;border:none;font-family:monospace;font-size:10px;font-weight:bold;padding:2px 8px;border-radius:3px;cursor:pointer;white-space:nowrap';
@@ -5033,16 +5142,54 @@ async function gfwlOpenRoundReport(season, teamName, round, oppTeamName, seasonR
     }
   }
 
-  // Two column layout
-  const grid = document.createElement('div');
-  grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px';
-  main.appendChild(grid);
+  // ── Conference rank, based on REGULAR SEASON standings only (seeding
+  // happened before playoffs started, so playoff results must not feed back
+  // into it) ─────────────────────────────────────────────────────────────
+  const homeRank = gfwlConferenceRank(season, teamName, team?.conference);
+  const oppResolvedName = oppTeamName ? (gfwlResolveTeam(season, oppTeamName)||oppTeamName) : null;
+  const oppRank = (oppTeam && oppResolvedName) ? gfwlConferenceRank(season, oppResolvedName, oppTeam.conference) : null;
+  subTitle.textContent = teamName + (homeRank?' (#'+homeRank+' '+(team?.conference||'')+')':'') + ' vs ' + (oppTeamName||'TBD') + (oppRank?' (#'+oppRank+' '+(oppTeam.conference||'')+')':'');
 
-  function makeTeamLineup(container, tName, tColor, replays) {
-    const sec = gfwlMakeSection(tName.toUpperCase()+' — STARTING 5');
-    container.appendChild(sec);
+  // ── Group each side's replays into Waves. Wave 1 = each team's full
+  // starting lineup for the round; later waves = only the players who
+  // survived (won) the previous wave, continuing until one team has every
+  // one of its Wave-1 starters eliminated. ─────────────────────────────────
+  function groupByWave(replays) {
+    const byWave = {};
+    replays.forEach(x => {
+      const wv = gfwlPlayoffWaveNum(x.label);
+      if (!byWave[wv]) byWave[wv] = [];
+      byWave[wv].push(x);
+    });
+    return byWave;
+  }
+  const homeByWave = groupByWave(rdReplays);
+  const oppByWave = groupByWave(oppRdReplays);
+  const allWaveNums = [...new Set([...Object.keys(homeByWave), ...Object.keys(oppByWave)].map(Number))].sort((a,b)=>a-b);
+
+  // Elimination-derived outcome for each side — THIS decides win/loss, not a
+  // flat aggregate match tally (which nets a player who wins Wave 1 then
+  // loses Wave 2 out to a meaningless 1-1 "tie" despite being eliminated).
+  const homeOutcome = gfwlPlayoffOutcome(rdReplays);
+  const oppOutcome = gfwlPlayoffOutcome(oppRdReplays);
+
+  let outcomeLabel, outcomeColor;
+  if (homeOutcome.fullyEliminated && !oppOutcome.fullyEliminated) { outcomeLabel = teamName.toUpperCase()+' LOST'; outcomeColor='var(--red)'; }
+  else if (oppOutcome.fullyEliminated && !homeOutcome.fullyEliminated) { outcomeLabel = teamName.toUpperCase()+' WON'; outcomeColor='var(--green)'; }
+  else if (homeOutcome.fullyEliminated && oppOutcome.fullyEliminated) { outcomeLabel = 'BOTH SIDES SHOW FULLY ELIMINATED — CHECK DATA'; outcomeColor='var(--amber)'; }
+  else { outcomeLabel = 'IN PROGRESS'; outcomeColor='var(--amber)'; }
+
+  const scoreBanner = document.createElement('div');
+  scoreBanner.style.cssText='text-align:center;padding:16px;background:var(--card);border:1px solid var(--border);border-radius:10px;margin-bottom:16px;font-family:monospace';
+  scoreBanner.innerHTML = `<div style="font-size:20px;font-weight:bold;color:${outcomeColor}">${outcomeLabel}</div>
+    <div style="font-size:11px;color:var(--muted);margin-top:6px">${teamName}: ${homeOutcome.remaining.length}/${homeOutcome.wave1Players.size} Wave 1 starters remaining &nbsp;·&nbsp; ${oppTeamName||'Opponent'}: ${oppOutcome.remaining.length}/${oppOutcome.wave1Players.size} Wave 1 starters remaining</div>
+    <div style="font-size:11px;color:var(--dim);margin-top:2px">${round}${allWaveNums.length?(' · '+allWaveNums.length+' wave'+(allWaveNums.length===1?'':'s')+' recorded'):' · no waves recorded yet'}</div>`;
+  main.appendChild(scoreBanner);
+
+  // ── Per-wave sections — each one clearly labeled "WAVE N" ────────────────
+  function makeWaveLineup(container, tColor, replays) {
     if (!replays.length) {
-      sec.appendChild(Object.assign(document.createElement('div'),{style:'color:var(--dim);font-size:12px',textContent:'No replays tagged for this round.'}));
+      container.appendChild(Object.assign(document.createElement('div'),{style:'color:var(--dim);font-size:12px',textContent:'No replays tagged for this wave.'}));
       return;
     }
     const byPlayer = {};
@@ -5056,55 +5203,70 @@ async function gfwlOpenRoundReport(season, teamName, round, oppTeamName, seasonR
     tbl.innerHTML = '<thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">PLAYER</th><th style="text-align:center;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">RESULT</th><th style="text-align:left;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">DECK</th><th style="text-align:left;padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">VS (OPP DECK)</th><th style="padding:4px 6px;color:var(--muted);font-weight:normal;font-size:10px">REPLAY</th></tr></thead>';
     const tbody = document.createElement('tbody');
     Object.entries(byPlayer).forEach(([player, reps]) => {
-      const r = reps[0];
-      const result = r.parsed?.result||r.result;
-      const rec = buildMatchRecord(r, player, []);
-      const myDeck = r.myDeckOverride || (rec&&rec.myDeck) || (r.parsed&&r.parsed.myDeck) || '—';
-      const oppDeck = r.oppDeckOverride || (rec&&rec.oppDeck) || (r.parsed&&r.parsed.oppDeck) || '—';
-      const oppName = (r.parsed&&r.parsed.oppName)||r.oppName||'—';
-      const score = (r.parsed&&r.parsed.score)||'';
-      const tr = document.createElement('tr');
-      tr.style.cssText='border-bottom:1px solid var(--border2)';
-      const won = result==='w';
-      const replayUrl = 'https://www.duelingbook.com/replay?id='+r.replayId;
-      tr.innerHTML=`<td style="padding:4px 6px;font-weight:bold;color:${tColor}">${player}</td><td style="padding:4px 6px;text-align:center;font-family:monospace;font-weight:bold;color:${won?'var(--green)':'var(--red)'}">${won?'W':'L'}${score?' '+score:''}</td><td style="padding:4px 6px;font-size:10px;color:var(--muted)">${myDeck}</td><td style="padding:4px 6px;font-size:10px;color:var(--dim)">${oppName} (${oppDeck})</td><td style="padding:4px 6px"><a href="${replayUrl}" target="_blank" style="color:var(--blue);font-size:10px;font-family:monospace">▶</a></td>`;
-      tbody.appendChild(tr);
+      reps.forEach(r => {
+        const result = r.resultOverride || (r.parsed && r.parsed.resultOverride) || (r.parsed && r.parsed.result) || r.result;
+        const rec = buildMatchRecord(r, player, []);
+        const myDeck = r.myDeckOverride || (rec&&rec.myDeck) || (r.parsed&&r.parsed.myDeck) || '—';
+        const oppDeck = r.oppDeckOverride || (rec&&rec.oppDeck) || (r.parsed&&r.parsed.oppDeck) || '—';
+        const oppName = (r.parsed&&r.parsed.oppName)||r.oppName||'—';
+        const score = (r.parsed&&r.parsed.score)||'';
+        const tr = document.createElement('tr');
+        tr.style.cssText='border-bottom:1px solid var(--border2)';
+        const won = result==='w';
+        const replayUrl = 'https://www.duelingbook.com/replay?id='+r.replayId;
+        tr.innerHTML=`<td style="padding:4px 6px;font-weight:bold;color:${tColor}">${player}</td><td style="padding:4px 6px;text-align:center;font-family:monospace;font-weight:bold;color:${won?'var(--green)':'var(--red)'}">${won?'W':'L'}${score?' '+score:''}</td><td style="padding:4px 6px;font-size:10px;color:var(--muted)">${myDeck}</td><td style="padding:4px 6px;font-size:10px;color:var(--dim)">${oppName} (${oppDeck})</td><td style="padding:4px 6px"><a href="${replayUrl}" target="_blank" style="color:var(--blue);font-size:10px;font-family:monospace">▶</a></td>`;
+        tbody.appendChild(tr);
+      });
     });
     tbl.appendChild(tbody);
-    sec.appendChild(tbl);
+    container.appendChild(tbl);
   }
 
-  const leftCol = document.createElement('div');
-  const rightCol = document.createElement('div');
-  grid.appendChild(leftCol); grid.appendChild(rightCol);
-  makeTeamLineup(leftCol, teamName, colors.text, rdReplays);
   const oppColors = oppTeam ? (CONF_COLORS[oppTeam.conference||'']||{text:'var(--muted)'}) : {text:'var(--muted)'};
-  makeTeamLineup(rightCol, oppTeamName||'Opponent', oppColors.text, oppRdReplays);
 
-  // Round score summary
-  const tally = replays => {
-    const byP = [...new Set(replays.map(x=>x.player))].map(p=>{
-      const reps=replays.filter(x=>x.player===p);
-      const w=reps.filter(x=>x.replay.parsed?.result==='w').length;
-      const l=reps.filter(x=>x.replay.parsed?.result==='l').length;
-      return w>l?'w':l>w?'l':'d';
-    });
-    return { w: byP.filter(v=>v==='w').length, l: byP.filter(v=>v==='l').length };
-  };
-  const { w: myW, l: myL } = tally(rdReplays);
+  if (!allWaveNums.length) {
+    const noneSec = gfwlMakeSection('NO WAVES RECORDED');
+    noneSec.appendChild(Object.assign(document.createElement('div'),{style:'color:var(--dim);font-size:12px',textContent:'No replays are tagged for '+round+' yet.'}));
+    main.appendChild(noneSec);
+  }
 
-  const scoreBanner = document.createElement('div');
-  scoreBanner.style.cssText='text-align:center;padding:16px;background:var(--card);border:1px solid var(--border);border-radius:10px;margin-bottom:16px;font-family:monospace';
-  scoreBanner.innerHTML=`<div style="font-size:24px;font-weight:bold"><span style="color:${myW>myL?'var(--green)':'var(--red)'}">${myW}</span> <span style="color:var(--dim)">—</span> <span style="color:${myL>myW?'var(--red)':'var(--green)'}">${myL}</span></div><div style="font-size:11px;color:var(--muted);margin-top:4px">${teamName} vs ${oppTeamName||'Opponent'} · ${round} Score</div>`;
-  main.insertBefore(scoreBanner, grid);
+  allWaveNums.forEach(wv => {
+    const waveSec = gfwlMakeSection('WAVE '+wv);
+    main.appendChild(waveSec);
+    const waveGrid = document.createElement('div');
+    waveGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:16px';
+    waveSec.appendChild(waveGrid);
 
-  // Deck type chart
-  const chartSec = gfwlMakeSection('DECK TYPES USED');
+    const leftCol = document.createElement('div');
+    const leftLbl = document.createElement('div');
+    leftLbl.style.cssText='font-size:10px;color:'+colors.text+';font-weight:bold;margin-bottom:6px';
+    leftLbl.textContent = teamName.toUpperCase();
+    leftCol.appendChild(leftLbl);
+    makeWaveLineup(leftCol, colors.text, homeByWave[wv]||[]);
+
+    const rightCol = document.createElement('div');
+    const rightLbl = document.createElement('div');
+    rightLbl.style.cssText='font-size:10px;color:'+oppColors.text+';font-weight:bold;margin-bottom:6px';
+    rightLbl.textContent = (oppTeamName||'OPPONENT').toUpperCase();
+    rightCol.appendChild(rightLbl);
+    makeWaveLineup(rightCol, oppColors.text, oppByWave[wv]||[]);
+
+    waveGrid.appendChild(leftCol); waveGrid.appendChild(rightCol);
+  });
+
+  // ── Deck type chart — WAVE 1 ONLY. The playoff format means later waves
+  // are only the survivors replaying, not new decks being brought to the
+  // round, so "decks seen" for the round is scoped to each side's starting
+  // lineup (Wave 1) per the user's explicit requirement. ───────────────────
+  const chartSec = gfwlMakeSection('DECK TYPES USED — WAVE 1');
   main.appendChild(chartSec);
   chartSec.innerHTML += '<canvas id="gfwl-week-chart" style="width:100%;max-height:200px"></canvas><div id="gfwl-week-legend" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:4px"></div>';
 
   const deckCounts = {};
-  [...rdReplays, ...oppRdReplays].forEach(x => {
+  const firstWave = allWaveNums.length ? allWaveNums[0] : 1;
+  const wave1Home = homeByWave[1] || homeByWave[firstWave] || [];
+  const wave1Opp = oppByWave[1] || oppByWave[firstWave] || [];
+  [...wave1Home, ...wave1Opp].forEach(x => {
     const r = x.replay||x;
     const player = x.player || '';
     let d = r.myDeckOverride;
@@ -5116,7 +5278,7 @@ async function gfwlOpenRoundReport(season, teamName, round, oppTeamName, seasonR
     if (d && d !== 'Unknown') deckCounts[d] = (deckCounts[d]||0)+1;
   });
   const deckEntries2 = Object.entries(deckCounts).sort((a,b)=>b[1]-a[1]);
-  if (deckEntries2.length) buildDonutChart('gfwl-week-chart','gfwl-week-legend', deckEntries2, round+' Decks');
+  if (deckEntries2.length) buildDonutChart('gfwl-week-chart','gfwl-week-legend', deckEntries2, round+' Wave 1 Decks');
 }
 
 // ── Helper: create labeled section ────────────────────────────────────────────
