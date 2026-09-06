@@ -1136,6 +1136,7 @@ select{cursor:pointer}
         <option value="">— Select Season —</option>
       </select>
       <div id="gfwl-season-stats" style="font-size:11px;color:var(--muted)"></div>
+      <button onclick="gfwlOpenSeasonStats(_gfwlCurrentSeason)" style="background:none;border:1px solid var(--purple);color:var(--purple);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer" title="Season-wide deck usage, matchups, standings and leaderboard">📊 Season Stats</button>
       <div style="margin-left:auto;display:flex;gap:6px" id="gfwl-admin-btns" style="display:none">
         <button onclick="gfwlAddTeam()" style="background:none;border:1px solid var(--green);color:var(--green);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">+ Team</button>
         <button onclick="gfwlBulkImportTeams()" style="background:none;border:1px solid var(--green);color:var(--green);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">⬆ Teams</button>
@@ -2116,6 +2117,42 @@ function buildGFWLSeasonOptions(records, currentVal) {
     seasons.map(s => `<option value="${s}"${s===currentVal?' selected':''}>${s}</option>`).join('');
 }
 
+// Maps a normalized playoff round name (as used in PLAYOFF_ROUNDS / imported
+// schedule data, e.g. "Wildcard", "Top 8") to the short code actually used
+// when tagging individual replays, e.g. "WC-WV1", "T8-WV2", "Finals-WV1" —
+// no season prefix, no colon, just "<CODE>-<anything>". Both this short-code
+// convention AND the older "S9: Wildcard" colon style are recognized
+// wherever GFWL playoff replays get matched to a round.
+const GFWL_PLAYOFF_ROUND_CODES = {
+  'wildcard': 'WC',
+  'top 16':   'T16',
+  'top 10':   'T10',
+  'top 8':    'T8',
+  'top 4':    'T4',
+  'top 2':    'T2',
+  'finals':   'FINALS',
+};
+// Given a replay's (uppercased) eventLabel, returns the normalized round key
+// ('wildcard'|'top 8'|'top 4'|'finals'|...) it belongs to, or null if it
+// isn't a playoff-round tag at all (e.g. a regular "S9: WK 8" week label).
+function gfwlPlayoffRoundFromLabel(lbl) {
+  const u = (lbl||'').toUpperCase().trim();
+  if (!u) return null;
+  // "S9: Wildcard" / "S9: Top 8" — full round name after the colon
+  if (u.includes(':')) {
+    const part = u.split(':').slice(1).join(':').replace(/\s+/g,' ').trim();
+    for (const key of Object.keys(GFWL_PLAYOFF_ROUND_CODES)) {
+      if (part === key.toUpperCase()) return key;
+    }
+    return null;
+  }
+  // "WC-WV1" / "T8-WV2" / "FINALS-WV1" — short code, no season/colon at all
+  for (const [key, code] of Object.entries(GFWL_PLAYOFF_ROUND_CODES)) {
+    if (u === code || u.startsWith(code+'-') || u.startsWith(code+' ')) return key;
+  }
+  return null;
+}
+
 function gfwlWeekNum(label) {
   if (!label) return 0;
   const u = label.toUpperCase();
@@ -2123,20 +2160,12 @@ function gfwlWeekNum(label) {
   const wkM = u.match(/WK\s*(\d+)/);
   if (wkM) return parseInt(wkM[1]);
   // Playoff rounds after the regular season — ascending: Wildcard < Top 8 <
-  // Top 4 < Finals. These must match the ACTUAL round-name strings used
-  // elsewhere (PLAYOFF_ROUNDS = ['Wildcard','Top 8','Top 4','Finals'], see
-  // getRoundScore/gfwlOpenRoundReport), not old abbreviations like "WC"/"T8"/
-  // "T4" — those never appear in a real label ("Wildcard" doesn't contain
-  // "WC", "Top 8" doesn't contain "T8" because of the space), so every
-  // playoff round used to fall through to the 999 default and sort as ties
-  // in whatever order they happened to be inserted.
-  if (/WILD\s*CARD/.test(u))     return 1000;
-  if (/TOP\s*16/.test(u))        return 1010;
-  if (/TOP\s*10/.test(u))        return 1020;
-  if (/TOP\s*8/.test(u))         return 1030;
-  if (/TOP\s*4/.test(u))         return 1040;
-  if (/TOP\s*2/.test(u))         return 1050;
-  if (/FINAL/.test(u) || /GRAND/.test(u)) return 1060;
+  // Top 4 < Finals. Recognize both the short-code convention actually used
+  // when tagging replays ("WC-WV1", "T8-WV2", "Finals-WV1", ...) and the
+  // older full-word convention ("S9: Wildcard", "S9: Top 8").
+  const roundKey = gfwlPlayoffRoundFromLabel(u);
+  const ROUND_ORDER = { wildcard:1000, 'top 16':1010, 'top 10':1020, 'top 8':1030, 'top 4':1040, 'top 2':1050, finals:1060 };
+  if (roundKey && ROUND_ORDER[roundKey] !== undefined) return ROUND_ORDER[roundKey];
   return 999; // unknown label sorts before playoff rounds
 }
 
@@ -2920,8 +2949,307 @@ function gfwlRenderSeasonGrid(season, data) {
   });
 }
 
+// ── Season Stats — league-wide deck usage, matchups, standings and leaderboard
+// for every rostered player across every team in one season. ──────────────────
+//
+// A match between two GFWL players is saved as TWO mirrored replay records —
+// one per player's own batch, produced by cross-linking (see crossLinkReplay
+// in server.js). That's exactly what a two-sided deck matchup matrix needs
+// (Player A's "Warrior beat Chaos" and Player B's "Chaos lost to Warrior"
+// are different, both-valid rows — not duplicates of each other), so the
+// per-deck / matchup stats below are built from BOTH sides on purpose. The
+// one place that MUST dedupe by replayId is any headline total that counts
+// physical matches (e.g. "matches played this season") — counting both
+// mirrored copies there would silently double the real number.
+async function gfwlOpenSeasonStats(season) {
+  if (!season) { alert('Select a season first.'); return; }
+  season = gfwlNormalizeSeason(season);
+  const data = _gfwlData[season] || { teams:{} };
+  const teams = Object.entries(data.teams || {});
+
+  const main = document.getElementById('gfwl-main');
+  main.innerHTML = '';
+
+  const hdrBar = document.createElement('div');
+  hdrBar.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap';
+  const backBtn = document.createElement('button');
+  backBtn.textContent = '← '+season;
+  backBtn.style.cssText = 'background:none;border:none;color:var(--muted);font-family:monospace;font-size:12px;cursor:pointer;padding:0';
+  backBtn.onclick = () => gfwlLoadSeason(season);
+  hdrBar.appendChild(backBtn);
+  const titleEl = document.createElement('div');
+  titleEl.style.cssText = 'font-size:20px;font-weight:bold;color:var(--purple);font-family:monospace;flex:1';
+  titleEl.textContent = season+' — Season Stats';
+  hdrBar.appendChild(titleEl);
+  main.appendChild(hdrBar);
+
+  if (!teams.length) {
+    main.insertAdjacentHTML('beforeend', '<div style="color:var(--muted);font-size:13px;text-align:center;padding:40px">No teams in this season yet.</div>');
+    return;
+  }
+
+  // Player → team map (also the full rostered-name set to fetch batches for)
+  const playerTeam = {};
+  const playerEntry = {}; // lowercased player -> their roster entry (for addedWeek/droppedWeek)
+  teams.forEach(([teamName, team]) => {
+    (team.roster||[]).forEach(p => {
+      if (!p.player) return;
+      const pl = p.player.toLowerCase();
+      playerTeam[pl] = teamName;
+      playerEntry[pl] = p;
+    });
+  });
+  const rosterNames = Object.keys(playerTeam);
+  if (!rosterNames.length) {
+    main.insertAdjacentHTML('beforeend', '<div style="color:var(--muted);font-size:13px;text-align:center;padding:40px">No rostered players in this season yet.</div>');
+    return;
+  }
+
+  const loadingBanner = document.createElement('div');
+  loadingBanner.style.cssText = 'background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:8px 14px;font-size:11px;font-family:monospace;color:var(--amber);margin-bottom:12px';
+  loadingBanner.textContent = '⟳ Loading replay data for '+rosterNames.length+' players...';
+  main.appendChild(loadingBanner);
+
+  // Fetch every rostered player's batch(es)
+  const batchCache = {};
+  try {
+    const bList = await fetch(API+'/batches', { headers: authHeaders() }).then(r=>r.json()).catch(()=>[]);
+    const list = Array.isArray(bList) ? bList : [];
+    const fetches = [];
+    for (const pName of rosterNames) {
+      const playerBatches = list.filter(b => (b.player||'').toLowerCase() === pName);
+      for (const pb of playerBatches) {
+        fetches.push(
+          fetch(API+'/batches/'+pb.id, { headers: authHeaders() }).then(r=>r.json())
+            .then(full => { if (full && full.replays) batchCache[pb.id] = full; })
+            .catch(()=>{})
+        );
+      }
+    }
+    await Promise.all(fetches);
+  } catch(e) { console.warn('[Season Stats] batch load error:', e); }
+  loadingBanner.remove();
+
+  // Collect every season-tagged replay (regular season + playoffs) per
+  // rostered player, honoring addedWeek/droppedWeek trims. `allRecords`
+  // intentionally keeps BOTH sides of every cross-linked match (see note
+  // above); `seenReplayIds` tracks unique physical matches for headline totals.
+  const seasonKey = season.toUpperCase();
+  const allRecords = [];
+  const playerRecords = {};
+  const seenReplayIds = new Set();
+
+  for (const b of Object.values(batchCache)) {
+    const pLower = (b.player||'').toLowerCase();
+    const teamName = playerTeam[pLower];
+    if (!teamName) continue; // batch matched by name but not actually on this season's rosters
+    const rEntry = playerEntry[pLower];
+    const aliases = (window._playerRegistry && window._playerRegistry[pLower]) ? (window._playerRegistry[pLower].aliases||[]) : (b.aliases||[]);
+    for (const r of (b.replays||[])) {
+      const lbl = (r.eventLabel||'').toUpperCase().trim();
+      if (!gfwlLabelInSeason(lbl, seasonKey)) continue;
+      const wkNum = parseInt((lbl.split(':')[1]||'').replace(/\D/g,'')) || 0;
+      if (wkNum > 0 && rEntry) {
+        if (rEntry.addedWeek && wkNum < rEntry.addedWeek) continue;
+        if (rEntry.droppedWeek && wkNum > rEntry.droppedWeek) continue;
+      }
+      let rec;
+      try { rec = buildMatchRecord(r, b.player, aliases); } catch(e) { rec = null; }
+      if (!rec) continue;
+      rec._team = teamName;
+      allRecords.push(rec);
+      if (!playerRecords[pLower]) playerRecords[pLower] = [];
+      playerRecords[pLower].push(rec);
+      seenReplayIds.add(r.replayId);
+    }
+  }
+
+  if (!allRecords.length) {
+    main.insertAdjacentHTML('beforeend', '<div style="color:var(--muted);font-size:13px;text-align:center;padding:40px">No parsed replays found for this season yet.</div>');
+    return;
+  }
+
+  // ── Headline tiles ─────────────────────────────────────────────────────────
+  const tilesRow = document.createElement('div');
+  tilesRow.style.cssText = 'display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px';
+  function tile(val, lbl, color) {
+    const d = document.createElement('div');
+    d.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:9px;padding:10px 16px;min-width:110px';
+    d.innerHTML = `<span style="font-size:22px;font-weight:bold;color:${color||'var(--text)'};display:block;line-height:1.2;margin-bottom:3px">${val}</span><span style="font-size:11px;color:var(--muted)">${lbl}</span>`;
+    return d;
+  }
+  tilesRow.appendChild(tile(seenReplayIds.size, 'Unique Matches', 'var(--blue)'));
+  tilesRow.appendChild(tile(teams.length, 'Teams', 'var(--text)'));
+  tilesRow.appendChild(tile(rosterNames.length, 'Rostered Players', 'var(--text)'));
+  tilesRow.appendChild(tile([...new Set(allRecords.map(r=>r.myDeck).filter(d=>d&&d!=='Unknown'))].length, 'Decks Played', 'var(--amber)'));
+  main.appendChild(tilesRow);
+
+  const body = document.createElement('div');
+  body.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start';
+  main.appendChild(body);
+  const left = document.createElement('div'); left.style.cssText = 'display:flex;flex-direction:column;gap:20px';
+  const right = document.createElement('div'); right.style.cssText = 'display:flex;flex-direction:column;gap:20px';
+  body.appendChild(left); body.appendChild(right);
+
+  // ── Team standings ───────────────────────────────────────────────────────
+  const standSec = gfwlMakeSection('TEAM STANDINGS');
+  left.appendChild(standSec);
+  const teamStats = {};
+  teams.forEach(([teamName, team]) => { teamStats[teamName] = { w:0, l:0, conference: team.conference||'—' }; });
+  allRecords.forEach(rec => {
+    const t = teamStats[rec._team];
+    if (!t) return;
+    if (rec.matchWon) t.w++; else if (rec.matchLost) t.l++;
+  });
+  const standRows = Object.entries(teamStats)
+    .map(([name, s]) => ({ name, ...s, total: s.w+s.l, winPct: (s.w+s.l) ? Math.round(s.w/(s.w+s.l)*100) : null }))
+    .sort((a,b) => (b.winPct??-1)-(a.winPct??-1) || b.total-a.total);
+  const standTable = document.createElement('table');
+  standTable.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
+  standTable.innerHTML = '<thead><tr style="border-bottom:1px solid var(--border)">'
+    + '<th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">TEAM</th>'
+    + '<th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">CONF</th>'
+    + '<th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">W</th>'
+    + '<th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">L</th>'
+    + '<th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">WIN%</th></tr></thead>';
+  const standBody = document.createElement('tbody');
+  standRows.forEach(row => {
+    const tr = document.createElement('tr');
+    tr.style.cssText = 'border-bottom:1px solid var(--border2);cursor:pointer';
+    tr.onclick = () => gfwlOpenTeam(season, row.name, data.teams[row.name]);
+    tr.innerHTML = `<td style="padding:5px 8px;font-weight:bold;color:var(--text)">${row.name}</td>`
+      + `<td style="padding:5px 8px;color:var(--muted)">${row.conference}</td>`
+      + `<td style="padding:5px 8px;text-align:center;color:var(--green);font-weight:bold">${row.w}</td>`
+      + `<td style="padding:5px 8px;text-align:center;color:var(--red);font-weight:bold">${row.l}</td>`
+      + `<td style="padding:5px 8px;text-align:center;color:${row.winPct===null?'var(--dim)':row.winPct>=50?'var(--green)':'var(--red)'}">${row.winPct===null?'—':row.winPct+'%'}</td>`;
+    standBody.appendChild(tr);
+  });
+  standTable.appendChild(standBody);
+  standSec.appendChild(standTable);
+
+  // ── Top players leaderboard ──────────────────────────────────────────────
+  const MIN_MATCHES = 5;
+  const lbSec = gfwlMakeSection('TOP PLAYERS BY WIN % (min '+MIN_MATCHES+' matches)');
+  left.appendChild(lbSec);
+  const lbRows = Object.entries(playerRecords)
+    .map(([pLower, recs]) => {
+      const w = recs.filter(r=>r.matchWon).length;
+      const l = recs.filter(r=>r.matchLost).length;
+      return { player: recs[0].player, team: playerTeam[pLower], w, l, total: w+l, winPct: (w+l)?Math.round(w/(w+l)*100):0 };
+    })
+    .filter(p => p.total >= MIN_MATCHES)
+    .sort((a,b) => b.winPct-a.winPct || b.total-a.total)
+    .slice(0, 15);
+  if (!lbRows.length) {
+    lbSec.insertAdjacentHTML('beforeend', '<div style="font-size:12px;color:var(--muted)">No players have reached '+MIN_MATCHES+' matches yet.</div>');
+  } else {
+    const lbTable = document.createElement('table');
+    lbTable.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
+    lbTable.innerHTML = '<thead><tr style="border-bottom:1px solid var(--border)">'
+      + '<th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">#</th>'
+      + '<th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">PLAYER</th>'
+      + '<th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">TEAM</th>'
+      + '<th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">W-L</th>'
+      + '<th style="text-align:center;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px">WIN%</th></tr></thead>';
+    const lbBody = document.createElement('tbody');
+    lbRows.forEach((row, i) => {
+      const tr = document.createElement('tr');
+      tr.style.cssText = 'border-bottom:1px solid var(--border2);cursor:pointer';
+      tr.onclick = () => {
+        // Same "jump to player profile" behavior as the team roster page's
+        // local gotoPlayerProfile() helper — inlined here since that one is
+        // scoped inside gfwlOpenTeam() and not reachable from this function.
+        const profilesTab = document.querySelector('.ntab[onclick*="profiles"]');
+        switchTab('profiles', profilesTab);
+        setTimeout(async () => {
+          await loadProfiles();
+          const playerBatches = (_allProfileBatches||[]).filter(b=>(b.player||'').toLowerCase()===row.player.toLowerCase());
+          if (playerBatches.length) openProfile(row.player, playerBatches, []);
+        }, 300);
+      };
+      tr.innerHTML = `<td style="padding:5px 8px;color:var(--dim)">${i+1}</td>`
+        + `<td style="padding:5px 8px;font-weight:bold;color:var(--text)">${row.player}</td>`
+        + `<td style="padding:5px 8px;color:var(--muted)">${row.team||'—'}</td>`
+        + `<td style="padding:5px 8px;text-align:center;font-family:monospace"><span style="color:var(--green)">${row.w}</span>-<span style="color:var(--red)">${row.l}</span></td>`
+        + `<td style="padding:5px 8px;text-align:center;font-weight:bold;color:${row.winPct>=50?'var(--green)':'var(--red)'}">${row.winPct}%</td>`;
+      lbBody.appendChild(tr);
+    });
+    lbTable.appendChild(lbBody);
+    lbSec.appendChild(lbTable);
+  }
+
+  // ── Deck usage / meta breakdown ──────────────────────────────────────────
+  const deckSec = gfwlMakeSection('DECK USAGE');
+  right.appendChild(deckSec);
+  deckSec.innerHTML += '<canvas id="season-deck-chart" style="width:100%;max-height:220px"></canvas><div id="season-deck-legend" style="margin-top:8px;display:flex;flex-direction:column;gap:3px"></div>';
+  const deckUsage = {};
+  allRecords.forEach(rec => { const d = rec.myDeck||'Unknown'; if (d==='Unknown') return; deckUsage[d] = (deckUsage[d]||0)+1; });
+  const deckEntries = Object.entries(deckUsage).sort((a,b)=>b[1]-a[1]);
+  if (deckEntries.length) buildDonutChart('season-deck-chart','season-deck-legend', deckEntries, season+' Deck Usage');
+  else deckSec.insertAdjacentHTML('beforeend', '<div style="font-size:12px;color:var(--muted)">No classified decks yet.</div>');
+
+  // ── Deck matchup matrix ───────────────────────────────────────────────────
+  const muSec = gfwlMakeSection('DECK MATCHUPS');
+  right.appendChild(muSec);
+  const mkDeckCounts = {};
+  allRecords.forEach(rec => { mkDeckCounts[rec.myDeck||'Unknown'] = (mkDeckCounts[rec.myDeck||'Unknown']||0)+1; });
+  const mkDeckTypes = Object.keys(mkDeckCounts).filter(d=>d!=='Unknown').sort((a,b)=>mkDeckCounts[b]-mkDeckCounts[a]);
+  const muHeaderRow = document.createElement('div');
+  muHeaderRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:10px';
+  const muLbl = document.createElement('div');
+  muLbl.style.cssText = 'font-size:10px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase';
+  muLbl.textContent = 'Filter by deck:';
+  const muSel = document.createElement('select');
+  muSel.style.cssText = 'background:var(--card2);border:1px solid var(--border2);color:var(--green);font-family:monospace;font-size:12px;font-weight:bold;padding:4px 8px;border-radius:5px;cursor:pointer;outline:none';
+  muSel.innerHTML = '<option value="All">All Decks</option>' + mkDeckTypes.map(d => `<option value="${d}">${d} (${mkDeckCounts[d]})</option>`).join('');
+  muHeaderRow.appendChild(muLbl); muHeaderRow.appendChild(muSel);
+  muSec.appendChild(muHeaderRow);
+  const muContainer = document.createElement('div');
+  muSec.appendChild(muContainer);
+  buildMatchupTable(allRecords, muContainer, 'All Players');
+  muSel.onchange = () => {
+    const filtered = muSel.value === 'All' ? allRecords : allRecords.filter(r => r.myDeck === muSel.value);
+    buildMatchupTable(filtered, muContainer, 'All Players');
+  };
+
+  // ── Card win rate lookup ──────────────────────────────────────────────────
+  const cwrSec = gfwlMakeSection('CARD WIN RATE');
+  right.appendChild(cwrSec);
+  const cwrRow = document.createElement('div');
+  cwrRow.style.cssText = 'display:flex;gap:8px;margin-bottom:10px';
+  const cwrInp = document.createElement('input');
+  cwrInp.type = 'text';
+  cwrInp.placeholder = 'e.g. Night Assailant, Scapegoat...';
+  cwrInp.style.cssText = 'flex:1;background:var(--card2);border:1px solid var(--border2);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:5px;outline:none';
+  const cwrBtn = document.createElement('button');
+  cwrBtn.textContent = 'Check';
+  cwrBtn.style.cssText = 'background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:12px;padding:6px 14px;border-radius:5px;cursor:pointer';
+  const cwrOut = document.createElement('div');
+  cwrRow.appendChild(cwrInp); cwrRow.appendChild(cwrBtn);
+  cwrSec.appendChild(cwrRow); cwrSec.appendChild(cwrOut);
+  function runCwr() {
+    const name = cwrInp.value.trim().toLowerCase();
+    if (!name) { cwrOut.innerHTML = '<div style="font-size:12px;color:var(--muted)">Enter a card name.</div>'; return; }
+    renderCardWinRate(allRecords, name, cwrOut);
+  }
+  cwrBtn.onclick = runCwr;
+  cwrInp.onkeydown = e => { if (e.key === 'Enter') runCwr(); };
+}
+
+// Is this (uppercased) eventLabel a match for the given season — either a
+// regular-season week ("S9: WK 8") or a playoff round, which carries no
+// season prefix at all ("WC-WV1", "T8-WV2", "Finals-WV1")?
+function gfwlLabelInSeason(lbl, seasonKey) {
+  const u = (lbl||'').toUpperCase().trim();
+  const sk = (seasonKey||'').toUpperCase();
+  return u.startsWith(sk+':') || u.startsWith(sk+' ') || u === sk || gfwlPlayoffRoundFromLabel(u) !== null;
+}
+
 function computeTeamRecord(season, teamName, team) {
-  // Compute from replays tagged S#: WK# where players are on this team
+  // Compute from replays tagged S#: WK# (regular season) or a playoff-round
+  // short code (WC-/T8-/T4-/FINALS-) where players are on this team. A
+  // manually-overridden result trumps the raw parsed one, same as everywhere
+  // else results are tallied.
   let w = 0, l = 0;
   const roster = (team.roster||[]).map(p => (p.player||'').toLowerCase());
   if (!roster.length) return { w:0, l:0, total:0 };
@@ -2931,16 +3259,15 @@ function computeTeamRecord(season, teamName, team) {
     ? _allProfileBatches
     : Object.values(window._gfwlBatchCache || {});
 
+  const seasonKey = season.toUpperCase();
   for (const batch of allBatches) {
     if (!roster.includes((batch.player||'').toLowerCase())) continue;
     for (const r of (batch.replays||[])) {
       const lbl = (r.eventLabel||'').toUpperCase();
-      const seasonKey = season.toUpperCase();
-      if (!lbl.startsWith(seasonKey+':') && !lbl.startsWith(seasonKey+' ')) continue;
-      if (r.parsed) {
-        if (r.parsed.result === 'w') w++;
-        else if (r.parsed.result === 'l') l++;
-      }
+      if (!gfwlLabelInSeason(lbl, seasonKey)) continue;
+      const effResult = r.resultOverride || (r.parsed && r.parsed.resultOverride) || (r.parsed && r.parsed.result) || null;
+      if (effResult === 'w') w++;
+      else if (effResult === 'l') l++;
     }
   }
   return { w, l, total: w+l };
@@ -3513,9 +3840,16 @@ async function gfwlOpenTeam(season, teamName, team) {
       for (const r of (b.replays||[])) {
         const lbl = (r.eventLabel||'').toUpperCase().trim();
         const sKey = seasonKey.toUpperCase();
-        const matches = lbl.startsWith(sKey+':') || lbl.startsWith(sKey+' ') || lbl === sKey;
+        // Playoff-round replays are tagged with a short code and NO season
+        // prefix at all ("WC-WV1", "T8-WV2", "Finals-WV1", ...), unlike
+        // regular-season weeks ("S9: WK 8") — so they need their own check
+        // here, or they'd never make it into seasonReplays and the Playoffs
+        // table would always show as empty.
+        const isPlayoffTag = gfwlPlayoffRoundFromLabel(lbl) !== null;
+        const matches = lbl.startsWith(sKey+':') || lbl.startsWith(sKey+' ') || lbl === sKey || isPlayoffTag;
         if (!matches) continue;
-        // Only count weeks the player was on this team
+        // Only count weeks the player was on this team (playoff tags have no
+        // week number to check, so they're always counted for the roster).
         const replayWk = parseInt((lbl.split(':')[1]||'').replace(/\D/g,'')) || 0;
         if (replayWk > 0) {
           if (rEntry.addedWeek && replayWk < rEntry.addedWeek) continue;
@@ -3650,18 +3984,16 @@ async function gfwlOpenTeam(season, teamName, team) {
     return { teamW, teamL, matchW, matchL, hasData: wkReplays.length > 0 };
   }
 
-  // Same as getWeekScore, but for playoff rounds ("S9: Wildcard", "S9: Top 8", ...).
-  // Matches the label text after the colon against the round name directly —
-  // NOT by extracting digits, since "Top 8" would otherwise collide with
-  // regular-season "Week 8" (both strip down to the digit "8").
+  // Same as getWeekScore, but for playoff rounds. Matches replays tagged
+  // either with the short code actually used on real replays ("WC-WV1",
+  // "T8-WV2", "Finals-WV1" — no season prefix, no colon) or the older full
+  // round-name wording ("S9: Wildcard", "S9: Top 8"), via the shared
+  // gfwlPlayoffRoundFromLabel() helper — never by extracting digits, since
+  // "Top 8" would otherwise collide with regular-season "Week 8" (both
+  // strip down to the digit "8").
   function getRoundScore(roundName) {
     const target = roundName.toLowerCase().replace(/\s+/g,' ').trim();
-    const roundReplays = seasonReplays.filter(x => {
-      const lbl = x.label;
-      if (!lbl.includes(':')) return false;
-      const part = lbl.split(':').slice(1).join(':').toLowerCase().replace(/\s+/g,' ').trim();
-      return part === target;
-    });
+    const roundReplays = seasonReplays.filter(x => gfwlPlayoffRoundFromLabel(x.label) === target);
     const playerResults = {};
     roundReplays.forEach(x => {
       const p = x.player.toLowerCase();
@@ -4591,16 +4923,14 @@ async function gfwlOpenWeekReport(season, teamName, wk, oppTeamName, seasonRepla
 
 // ── Round Report — same as gfwlOpenWeekReport but for a playoff round
 // ("Wildcard", "Top 8", "Top 4", "Finals") instead of a numeric week. Matches
-// replay labels by comparing the text after the colon to the round name
-// directly, never by extracting digits (so "S9: Top 8" is never confused
-// with regular-season "S9: WK 8"). ──────────────────────────────────────────
+// replay labels via the shared gfwlPlayoffRoundFromLabel() helper, which
+// recognizes both the short code actually used on real replays ("WC-WV1",
+// "T8-WV2", "Finals-WV1" — no season prefix, no colon) and the older full
+// round-name wording ("S9: Top 8"), never by extracting digits (so "Top 8"
+// is never confused with regular-season "WK 8"). ───────────────────────────
 async function gfwlOpenRoundReport(season, teamName, round, oppTeamName, seasonReplays) {
   const roundKey = round.toLowerCase().replace(/\s+/g,' ').trim();
-  const labelMatchesRound = lbl => {
-    if (!lbl.includes(':')) return false;
-    const part = lbl.split(':').slice(1).join(':').toLowerCase().replace(/\s+/g,' ').trim();
-    return part === roundKey;
-  };
+  const labelMatchesRound = lbl => gfwlPlayoffRoundFromLabel(lbl) === roundKey;
 
   const main = document.getElementById('gfwl-main');
   main.innerHTML = '';
@@ -4640,7 +4970,11 @@ async function gfwlOpenRoundReport(season, teamName, round, oppTeamName, seasonR
     for (const r of (b.replays||[])) {
       const lbl=(r.eventLabel||'').toUpperCase().trim();
       const sk=season.toUpperCase();
-      if (!lbl.startsWith(sk+':') && !lbl.startsWith(sk+' ') && lbl!==sk) continue;
+      // Playoff-round replays carry no season prefix at all ("WC-WV1"), so
+      // they need to pass this membership check too, same as in
+      // collectSeasonReplays() above.
+      const isPlayoffTag = gfwlPlayoffRoundFromLabel(lbl) !== null;
+      if (!lbl.startsWith(sk+':') && !lbl.startsWith(sk+' ') && lbl!==sk && !isPlayoffTag) continue;
       freshSeasonReplays.push({player:b.player,replay:r,label:lbl});
     }
   }
@@ -4677,8 +5011,9 @@ async function gfwlOpenRoundReport(season, teamName, round, oppTeamName, seasonR
       if (!oppRoster.includes((b.player||'').toLowerCase())) continue;
       for (const r of (b.replays||[])) {
         const lbl=(r.eventLabel||'').toUpperCase().trim();
-        const sk=season.toUpperCase();
-        if (!lbl.startsWith(sk+':')&&!lbl.startsWith(sk+' ')) continue;
+        // Playoff-round tags carry no season prefix ("WC-WV1"), so this no
+        // longer pre-filters on season prefix before checking the round —
+        // labelMatchesRound() alone is the correct membership test.
         if (labelMatchesRound(lbl)) oppRdReplays.push({player:b.player,replay:r,label:lbl});
       }
     }
