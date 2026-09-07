@@ -3110,10 +3110,19 @@ async function gfwlOpenSeasonStats(season) {
     for (const r of (b.replays||[])) {
       const lbl = (r.eventLabel||'').toUpperCase().trim();
       if (!gfwlLabelInSeason(lbl, seasonKey)) continue;
-      const wkNum = parseInt((lbl.split(':')[1]||'').replace(/\D/g,'')) || 0;
-      if (wkNum > 0 && rEntry) {
-        if (rEntry.addedWeek && wkNum < rEntry.addedWeek) continue;
-        if (rEntry.droppedWeek && wkNum > rEntry.droppedWeek) continue;
+      // addedWeek/droppedWeek trims only ever apply to regular-season week
+      // labels. A playoff tag ("WC-WV1") sometimes carries a season-prefix
+      // colon out of habit ("S9: WC-WV1"), and naively parsing digits after
+      // that colon would grab the "1" from "WV1" and misread it as "week 1"
+      // — wrongly dropping a real playoff match for any player added after
+      // week 1. So playoff tags always skip this check entirely.
+      const isPlayoffTag = gfwlPlayoffRoundFromLabel(lbl) !== null;
+      if (!isPlayoffTag) {
+        const wkNum = parseInt((lbl.split(':')[1]||'').replace(/\D/g,'')) || 0;
+        if (wkNum > 0 && rEntry) {
+          if (rEntry.addedWeek && wkNum < rEntry.addedWeek) continue;
+          if (rEntry.droppedWeek && wkNum > rEntry.droppedWeek) continue;
+        }
       }
       let rec;
       try { rec = buildMatchRecord(r, b.player, aliases); } catch(e) { rec = null; }
@@ -3959,12 +3968,21 @@ async function gfwlOpenTeam(season, teamName, team) {
         const isPlayoffTag = gfwlPlayoffRoundFromLabel(lbl) !== null;
         const matches = lbl.startsWith(sKey+':') || lbl.startsWith(sKey+' ') || lbl === sKey || isPlayoffTag;
         if (!matches) continue;
-        // Only count weeks the player was on this team (playoff tags have no
-        // week number to check, so they're always counted for the roster).
-        const replayWk = parseInt((lbl.split(':')[1]||'').replace(/\D/g,'')) || 0;
-        if (replayWk > 0) {
-          if (rEntry.addedWeek && replayWk < rEntry.addedWeek) continue;
-          if (rEntry.droppedWeek && replayWk > rEntry.droppedWeek) continue;
+        // Only count weeks the player was on this team. Playoff tags are
+        // ALWAYS skipped here, regardless of label shape — a playoff replay
+        // sometimes carries a season-prefix colon out of habit ("S9: WC-
+        // WV1"), and naively parsing digits after that colon grabs the "1"
+        // from "WV1" and misreads it as "week 1". That fake week number
+        // would then get compared against addedWeek/droppedWeek and could
+        // wrongly drop a real playoff match for any player added after week
+        // 1 — which is exactly how a round could end up missing most of its
+        // recorded matches.
+        if (!isPlayoffTag) {
+          const replayWk = parseInt((lbl.split(':')[1]||'').replace(/\D/g,'')) || 0;
+          if (replayWk > 0) {
+            if (rEntry.addedWeek && replayWk < rEntry.addedWeek) continue;
+            if (rEntry.droppedWeek && replayWk > rEntry.droppedWeek) continue;
+          }
         }
         seasonReplays.push({ player:b.player, replay:r, label:lbl });
       }
@@ -4893,6 +4911,13 @@ async function gfwlOpenWeekReport(season, teamName, wk, oppTeamName, seasonRepla
       const lbl=(r.eventLabel||'').toUpperCase().trim();
       const sk=season.toUpperCase();
       if (!lbl.startsWith(sk+':') && !lbl.startsWith(sk+' ') && lbl!==sk) continue;
+      // This is a WEEK report, so a playoff-tagged replay never belongs here
+      // — exclude it outright. (It also must never fall through to the
+      // week-number parse below: a playoff label sometimes carries a
+      // season-prefix colon out of habit ("S9: WC-WV1"), and naively parsing
+      // digits after that colon would grab the "1" from "WV1" and misread
+      // it as "week 1".)
+      if (gfwlPlayoffRoundFromLabel(lbl) !== null) continue;
       // Check week against addedWeek / droppedWeek
       const replayWk = parseInt((lbl.split(':')[1]||'').replace(/\D/g,'')) || 0;
       if (replayWk > 0) {
@@ -4906,9 +4931,13 @@ async function gfwlOpenWeekReport(season, teamName, wk, oppTeamName, seasonRepla
   }
   const effectiveSeasonReplays = freshSeasonReplays.length ? freshSeasonReplays : (seasonReplays||[]);
 
-  // Get this team's WK replays
+  // Get this team's WK replays. Explicitly excludes playoff-tagged labels
+  // (belt-and-suspenders — the effectiveSeasonReplays sources above already
+  // should have filtered them out, but this guards the seasonReplays
+  // fallback path too) so a playoff replay never gets misread as "week N".
   const wkReplays = effectiveSeasonReplays.filter(x => {
     const lbl = x.label;
+    if (gfwlPlayoffRoundFromLabel(lbl) !== null) return false;
     return lbl.includes(':') && parseInt((lbl.split(':')[1]||'').replace(/\D/g,'')) === wk;
   });
 
@@ -4943,6 +4972,7 @@ async function gfwlOpenWeekReport(season, teamName, wk, oppTeamName, seasonRepla
         const lbl=(r.eventLabel||'').toUpperCase().trim();
         const sk=season.toUpperCase();
         if (!lbl.startsWith(sk+':')&&!lbl.startsWith(sk+' ')) continue;
+        if (gfwlPlayoffRoundFromLabel(lbl) !== null) continue; // playoff tag — never a week match
         const wkNum=parseInt((lbl.split(':')[1]||'').replace(/\D/g,''));
         if (wkNum===wk) oppWkReplays.push({player:b.player,replay:r,label:lbl});
       }
