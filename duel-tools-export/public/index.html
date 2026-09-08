@@ -5181,16 +5181,38 @@ async function gfwlOpenRoundReport(season, teamName, round, oppTeamName, seasonR
   }
   const effectiveSeasonReplays = freshSeasonReplays.length ? freshSeasonReplays : (seasonReplays||[]);
 
-  // Get this team's replays for this round
-  const rdReplays = effectiveSeasonReplays.filter(x => labelMatchesRound(x.label));
-
   // Get opponent team's replays for this round. Alias-aware (see
   // gfwlRosterAliasMap above) so an opponent's match recorded under a
-  // secondary account still gets fetched and included.
+  // secondary account still gets fetched and included. Computed BEFORE
+  // rdReplays below, because rdReplays needs oppRosterMap too — see next.
   const oppTeam = oppTeamName ? (_gfwlData[season]?.teams[gfwlResolveTeam(season, oppTeamName)||oppTeamName]) : null;
   const oppRosterMap = oppTeam ? gfwlRosterAliasMap(oppTeam.roster||[]) : {};
   const oppRoster = Object.keys(oppRosterMap);
   const oppRdReplays = [];
+
+  // A round tag alone ("T8-WV1") does NOT prove a replay belongs to THIS
+  // specific team-vs-team series — the same tag can appear on a player's
+  // matches from a completely different pairing (an earlier pool stage
+  // against another team, a stray mislabel, leftover data from a prior
+  // bracket run, ...). Without cross-checking who the recorded opponent
+  // actually was, a Round Report between two teams can end up pulling in
+  // matches against players who were never on either roster, garbling the
+  // wave breakdown with pairings that have nothing to do with this series.
+  function replayOpponentInRoster(r, rosterMap) {
+    const oppName = ((r.parsed && r.parsed.oppName) || r.oppName || '').toLowerCase().trim();
+    return !!rosterMap[oppName];
+  }
+
+  // Get this team's replays for this round — when a specific opponent team
+  // is on record, also require the recorded opponent to actually be on
+  // THAT team's roster (see replayOpponentInRoster above). If no opponent
+  // is on record yet (e.g. the anomalous score-only row this feature was
+  // built to let you inspect), fall back to matching on the round tag alone.
+  const rdReplays = effectiveSeasonReplays.filter(x => {
+    if (!labelMatchesRound(x.label)) return false;
+    if (oppTeamName && oppRoster.length) return replayOpponentInRoster(x.replay, oppRosterMap);
+    return true;
+  });
 
   if (oppRoster.length) {
     try {
@@ -5217,8 +5239,10 @@ async function gfwlOpenRoundReport(season, teamName, round, oppTeamName, seasonR
         const lbl=(r.eventLabel||'').toUpperCase().trim();
         // Playoff-round tags carry no season prefix ("WC-WV1"), so this no
         // longer pre-filters on season prefix before checking the round —
-        // labelMatchesRound() alone is the correct membership test.
-        if (labelMatchesRound(lbl)) oppRdReplays.push({player:b.player,replay:r,label:lbl});
+        // labelMatchesRound() alone is the correct membership test. Also
+        // require the recorded opponent to be on the HOME team's roster,
+        // same reasoning as rdReplays above.
+        if (labelMatchesRound(lbl) && replayOpponentInRoster(r, roster2map)) oppRdReplays.push({player:b.player,replay:r,label:lbl});
       }
     }
   }
