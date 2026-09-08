@@ -3050,13 +3050,16 @@ async function gfwlOpenSeasonStats(season) {
     return;
   }
 
-  // Player → team map (also the full rostered-name set to fetch batches for)
+  // Player → team map (also the full rostered-name set to fetch batches
+  // for) — includes every registered alias, not just each roster player's
+  // literal name (see gfwlRosterAliasMap above), so a match recorded under
+  // a secondary account still gets counted here instead of silently
+  // vanishing from the season totals.
   const playerTeam = {};
-  const playerEntry = {}; // lowercased player -> their roster entry (for addedWeek/droppedWeek)
+  const playerEntry = {}; // lowercased player (canonical OR alias) -> their roster entry (for addedWeek/droppedWeek)
   teams.forEach(([teamName, team]) => {
-    (team.roster||[]).forEach(p => {
-      if (!p.player) return;
-      const pl = p.player.toLowerCase();
+    const aliasMap = gfwlRosterAliasMap(team.roster||[]);
+    Object.entries(aliasMap).forEach(([pl, p]) => {
       playerTeam[pl] = teamName;
       playerEntry[pl] = p;
     });
@@ -3307,6 +3310,36 @@ async function gfwlOpenSeasonStats(season) {
   cwrInp.onkeydown = e => { if (e.key === 'Enter') runCwr(); };
 }
 
+// A player's GFWL-tagged replays can live under more than one DuelingBook
+// account — their registered "aliases" (window._playerRegistry). The
+// individual Profiles page already merges a player's replays across every
+// alias, but every GFWL roster/batch lookup below used to match a batch to
+// a roster player by an EXACT name match only. That meant a match recorded
+// under a player's alias account silently never made it into that player's
+// team page, Round Report, Week Report, or Season Stats — even though it
+// showed up correctly on that player's own profile. This resolves BOTH the
+// roster's canonical name AND every known alias to the same roster entry,
+// so batch-fetching and replay-collection below catch all of a player's
+// accounts, not just whichever one happens to be spelled exactly like the
+// roster string.
+function gfwlRosterAliasMap(roster) {
+  const map = {}; // lowercased name (canonical roster name OR alias) -> roster entry
+  for (const re of (roster||[])) {
+    const canon = (re.player||'').toLowerCase().trim();
+    if (!canon) continue;
+    map[canon] = re;
+    const reg = window._playerRegistry && window._playerRegistry[canon];
+    const aliases = reg ? (reg.aliases||[]) : [];
+    aliases.forEach(a => {
+      if (a && typeof a === 'string') {
+        const al = a.toLowerCase().trim();
+        if (al) map[al] = re;
+      }
+    });
+  }
+  return map;
+}
+
 // Is this (uppercased) eventLabel a match for the given season — either a
 // regular-season week ("S9: WK 8") or a playoff round, which carries no
 // season prefix at all ("WC-WV1", "T8-WV2", "Finals-WV1")?
@@ -3322,8 +3355,10 @@ function computeTeamRecord(season, teamName, team) {
   // manually-overridden result trumps the raw parsed one, same as everywhere
   // else results are tallied.
   let w = 0, l = 0;
-  const roster = (team.roster||[]).map(p => (p.player||'').toLowerCase());
-  if (!roster.length) return { w:0, l:0, total:0 };
+  // Alias-aware (see gfwlRosterAliasMap above) — a batch recorded under a
+  // player's secondary account is still recognized as this roster player.
+  const rosterMap = gfwlRosterAliasMap(team.roster||[]);
+  if (!Object.keys(rosterMap).length) return { w:0, l:0, total:0 };
 
   // Use _allProfileBatches if available (profiles tab loaded), otherwise gfwlBatchCache
   const allBatches = (_allProfileBatches && _allProfileBatches.length)
@@ -3332,7 +3367,7 @@ function computeTeamRecord(season, teamName, team) {
 
   const seasonKey = season.toUpperCase();
   for (const batch of allBatches) {
-    if (!roster.includes((batch.player||'').toLowerCase())) continue;
+    if (!rosterMap[(batch.player||'').toLowerCase()]) continue;
     for (const r of (batch.replays||[])) {
       const lbl = (r.eventLabel||'').toUpperCase();
       if (!gfwlLabelInSeason(lbl, seasonKey)) continue;
@@ -3350,14 +3385,15 @@ function computeTeamRecord(season, teamName, team) {
 // on how a team did before playoffs started, not mixed with playoff results.
 function computeTeamRegularSeasonRecord(season, teamName, team) {
   let w = 0, l = 0;
-  const roster = (team.roster||[]).map(p => (p.player||'').toLowerCase());
-  if (!roster.length) return { w:0, l:0, total:0 };
+  // Alias-aware (see gfwlRosterAliasMap above).
+  const rosterMap = gfwlRosterAliasMap(team.roster||[]);
+  if (!Object.keys(rosterMap).length) return { w:0, l:0, total:0 };
   const allBatches = (_allProfileBatches && _allProfileBatches.length)
     ? _allProfileBatches
     : Object.values(window._gfwlBatchCache || {});
   const seasonKey = season.toUpperCase();
   for (const batch of allBatches) {
-    if (!roster.includes((batch.player||'').toLowerCase())) continue;
+    if (!rosterMap[(batch.player||'').toLowerCase()]) continue;
     for (const r of (batch.replays||[])) {
       const lbl = (r.eventLabel||'').toUpperCase();
       const isSeasonPrefixed = lbl.startsWith(seasonKey+':') || lbl.startsWith(seasonKey+' ') || lbl===seasonKey;
@@ -3893,7 +3929,12 @@ async function gfwlOpenTeam(season, teamName, team) {
 
   // ── Compute season stats from replays ─────────────────────────────────────
   const seasonKey = season.toUpperCase();
-  const rosterNames = roster.map(r => r.player.toLowerCase());
+  // Includes every registered alias, not just each roster player's literal
+  // name — a player's playoff match can be recorded under a secondary
+  // account (see gfwlRosterAliasMap above), and without this it would never
+  // get fetched here even though it's visible on that player's own profile.
+  const rosterAliasMap = gfwlRosterAliasMap(roster);
+  const rosterNames = Object.keys(rosterAliasMap);
 
   // Always fetch full batch data for ALL roster players (GFWL needs actual replays)
   window._gfwlBatchCache = {}; // store on window for player profile access
@@ -3949,9 +3990,10 @@ async function gfwlOpenTeam(season, teamName, team) {
   const seasonReplays = [];
   function collectSeasonReplays() {
     seasonReplays.length = 0;
-    // Build roster map for addedWeek/droppedWeek checks
-    const rosterMap = {};
-    for (const re of roster) rosterMap[re.player.toLowerCase()] = re;
+    // Build roster map for addedWeek/droppedWeek checks — alias-aware, so a
+    // batch recorded under a player's secondary account still resolves to
+    // their roster entry (see gfwlRosterAliasMap above).
+    const rosterMap = gfwlRosterAliasMap(roster);
     const allGFWLBatches = Object.values(gfwlBatchCache);
     for (const b of allGFWLBatches) {
       const pLower = (b.player||'').toLowerCase();
@@ -4897,9 +4939,10 @@ async function gfwlOpenWeekReport(season, teamName, wk, oppTeamName, seasonRepla
   // be empty if batches hadn't loaded yet when the schedule was first drawn)
   const team2 = _gfwlData[season]?.teams[teamName];
   // Build a map of player → roster entry so we can check addedWeek/droppedWeek
+  // — alias-aware, so a batch recorded under a player's secondary account
+  // still resolves to their roster entry (see gfwlRosterAliasMap above).
   const roster2entries = (team2?.roster||[]);
-  const roster2map = {};
-  for (const re of roster2entries) roster2map[re.player.toLowerCase()] = re;
+  const roster2map = gfwlRosterAliasMap(roster2entries);
 
   const freshSeasonReplays = [];
   const batchSrc = Object.values(window._gfwlBatchCache||{});
@@ -4943,8 +4986,12 @@ async function gfwlOpenWeekReport(season, teamName, wk, oppTeamName, seasonRepla
 
   // Get opponent team's replays for this week.
   // _gfwlBatchCache only loaded the home team's batches — fetch opponent batches now.
+  // Alias-aware (see gfwlRosterAliasMap above) so an opponent's match
+  // recorded under a secondary account still gets fetched and matched back
+  // to their roster entry.
   const oppTeam = oppTeamName ? (_gfwlData[season]?.teams[gfwlResolveTeam(season, oppTeamName)||oppTeamName]) : null;
-  const oppRoster = oppTeam ? (oppTeam.roster||[]).map(r=>r.player.toLowerCase()) : [];
+  const oppRosterMap = oppTeam ? gfwlRosterAliasMap(oppTeam.roster||[]) : {};
+  const oppRoster = Object.keys(oppRosterMap);
   const oppWkReplays = [];
 
   if (oppRoster.length) {
@@ -5108,11 +5155,12 @@ async function gfwlOpenRoundReport(season, teamName, round, oppTeamName, seasonR
   hdr.appendChild(subTitle);
   main.appendChild(hdr);
 
-  // Re-collect this team's replays fresh from the batch cache
+  // Re-collect this team's replays fresh from the batch cache — alias-aware
+  // (see gfwlRosterAliasMap above) so a player's match recorded under a
+  // secondary account still resolves to their roster entry.
   const team2 = _gfwlData[season]?.teams[teamName];
   const roster2entries = (team2?.roster||[]);
-  const roster2map = {};
-  for (const re of roster2entries) roster2map[re.player.toLowerCase()] = re;
+  const roster2map = gfwlRosterAliasMap(roster2entries);
 
   const freshSeasonReplays = [];
   const batchSrc = Object.values(window._gfwlBatchCache||{});
@@ -5136,9 +5184,12 @@ async function gfwlOpenRoundReport(season, teamName, round, oppTeamName, seasonR
   // Get this team's replays for this round
   const rdReplays = effectiveSeasonReplays.filter(x => labelMatchesRound(x.label));
 
-  // Get opponent team's replays for this round.
+  // Get opponent team's replays for this round. Alias-aware (see
+  // gfwlRosterAliasMap above) so an opponent's match recorded under a
+  // secondary account still gets fetched and included.
   const oppTeam = oppTeamName ? (_gfwlData[season]?.teams[gfwlResolveTeam(season, oppTeamName)||oppTeamName]) : null;
-  const oppRoster = oppTeam ? (oppTeam.roster||[]).map(r=>r.player.toLowerCase()) : [];
+  const oppRosterMap = oppTeam ? gfwlRosterAliasMap(oppTeam.roster||[]) : {};
+  const oppRoster = Object.keys(oppRosterMap);
   const oppRdReplays = [];
 
   if (oppRoster.length) {
