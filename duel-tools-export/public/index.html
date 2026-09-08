@@ -2905,12 +2905,52 @@ async function gfwlLoadSeason(season) {
   console.log('[GFWL] Season', season, '— teams:', teams.map(([n,t])=>n+'('+t.conference+')'));
   const statsEl = document.getElementById('gfwl-season-stats');
   if (statsEl) statsEl.textContent = teams.length + ' teams · ' + (data.numWeeks||13) + ' weeks';
-  gfwlRenderSeasonGrid(season, data);
+  // Render immediately with whatever's cached (records/badges may read as
+  // 0-0 / no round reached until replay data loads), then load every
+  // rostered player's batches across the WHOLE season and re-render with
+  // accurate regular-season records and playoff-round-reached badges.
+  gfwlRenderSeasonGrid(season, data, true);
+  gfwlLoadSeasonBatches(season, data).then(() => {
+    if (_gfwlCurrentSeason === season) gfwlRenderSeasonGrid(season, data, false);
+  });
   // Auto-sync rosters silently in background
   if (_userRole === 'admin') gfwlSyncRosters(season);
 }
 
-function gfwlRenderSeasonGrid(season, data) {
+// Fetches every rostered player's batch(es) across EVERY team in the
+// season, alias-aware (see gfwlRosterAliasMap), so the season grid's
+// per-team regular-season records and playoff-round-reached badges have
+// real data to compute from without requiring a visit to each team page or
+// the Profiles tab first.
+async function gfwlLoadSeasonBatches(season, data) {
+  const teams = Object.entries(data.teams || {});
+  const nameSet = new Set();
+  teams.forEach(([, team]) => {
+    Object.keys(gfwlRosterAliasMap(team.roster||[])).forEach(n => nameSet.add(n));
+  });
+  const rosterNames = [...nameSet];
+  if (!rosterNames.length) return;
+  window._gfwlBatchCache = window._gfwlBatchCache || {};
+  try {
+    const bList = await fetch(API+'/batches').then(r=>r.json()).catch(()=>[]);
+    const fetches = [];
+    for (const pName of rosterNames) {
+      const playerBatches = bList.filter(b=>(b.player||'').toLowerCase()===pName);
+      for (const pb of playerBatches) {
+        if (!window._gfwlBatchCache[pb.id]) {
+          fetches.push(
+            fetch(API+'/batches/'+pb.id).then(r=>r.json())
+              .then(full => { if (full && full.replays) window._gfwlBatchCache[pb.id] = full; })
+              .catch(()=>{})
+          );
+        }
+      }
+    }
+    if (fetches.length) await Promise.all(fetches);
+  } catch(e) { console.warn('[GFWL] season batch load error:', e); }
+}
+
+function gfwlRenderSeasonGrid(season, data, loading) {
   const main = document.getElementById('gfwl-main');
   main.innerHTML = '';
 
@@ -2919,6 +2959,13 @@ function gfwlRenderSeasonGrid(season, data) {
     main.innerHTML = '<div style="color:var(--muted);font-size:13px;text-align:center;padding:40px">No teams in this season yet.' +
       (_userRole === 'admin' ? ' Click <b>+ Team</b> to add one.' : '') + '</div>';
     return;
+  }
+
+  if (loading) {
+    const banner = document.createElement('div');
+    banner.style.cssText = 'background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:8px 14px;font-size:11px;font-family:monospace;color:var(--amber);margin-bottom:12px';
+    banner.textContent = '⟳ Loading records...';
+    main.appendChild(banner);
   }
 
   // Group by conference
@@ -2988,7 +3035,10 @@ function gfwlRenderSeasonGrid(season, data) {
       metaEl.textContent = active + ' active · ' + roster.length + ' total roster';
       card.appendChild(metaEl);
 
-      const record = computeTeamRecord(season, teamName, team);
+      // Regular-season record only (playoff results are shown separately as
+      // the "highest round reached" badge below) — computeTeamRegularSeasonRecord
+      // explicitly excludes playoff-tagged replays, unlike computeTeamRecord.
+      const record = computeTeamRegularSeasonRecord(season, teamName, team);
       const recEl = document.createElement('div');
       recEl.style.cssText = 'display:flex;gap:12px;font-size:12px;font-family:monospace;margin-bottom:6px';
       const wSpan = document.createElement('span'); wSpan.style.color='var(--green)'; wSpan.textContent = record.w+'W'; recEl.appendChild(wSpan);
@@ -2996,6 +3046,18 @@ function gfwlRenderSeasonGrid(season, data) {
       const lSpan = document.createElement('span'); lSpan.style.color='var(--red)'; lSpan.textContent = record.l+'L'; recEl.appendChild(lSpan);
       if (record.total) { const pct = document.createElement('span'); pct.style.cssText='color:var(--muted);font-size:10px;margin-left:auto'; pct.textContent=Math.round(record.w/record.total*100)+'% win'; recEl.appendChild(pct); }
       card.appendChild(recEl);
+
+      // Highest playoff round reached — computed fresh from actual replay
+      // data every render, so it updates automatically as matches get added
+      // (no manual "made playoffs" flag to keep in sync). Absent entirely
+      // for a team with no playoff data yet.
+      const highestRound = loading ? null : gfwlHighestPlayoffRound(season, team);
+      if (highestRound) {
+        const poEl = document.createElement('div');
+        poEl.style.cssText = 'display:inline-block;font-size:10px;font-family:monospace;font-weight:bold;color:var(--amber);border:1px solid var(--amber);padding:2px 8px;border-radius:4px;margin-bottom:8px;letter-spacing:.04em';
+        poEl.textContent = 'MADE: ' + highestRound.toUpperCase();
+        card.appendChild(poEl);
+      }
 
       if (_userRole === 'admin') {
         const editBtn = document.createElement('button');
@@ -3340,6 +3402,22 @@ function gfwlRosterAliasMap(roster) {
   return map;
 }
 
+// Once the Profiles tab has ever been visited in this session, the shared
+// _allProfileBatches list gets swapped for a LIGHTWEIGHT list (id/name/
+// player/replayCount only — no .replays field) for every batch except the
+// currently-active one. Any GFWL code that reads batch.replays must NOT
+// blindly prefer _allProfileBatches just because it's non-empty (that was
+// silently returning zero results for every function using this pattern).
+// This merges both sources by id, letting window._gfwlBatchCache — which
+// always holds full batch objects with .replays — win over the lightweight
+// entry when both exist for the same batch id.
+function gfwlAllBatchesWithReplays() {
+  const byId = {};
+  (_allProfileBatches || []).forEach(b => { if (b && b.id) byId[b.id] = b; });
+  Object.values(window._gfwlBatchCache || {}).forEach(b => { if (b && b.id) byId[b.id] = b; });
+  return Object.values(byId);
+}
+
 // Is this (uppercased) eventLabel a match for the given season — either a
 // regular-season week ("S9: WK 8") or a playoff round, which carries no
 // season prefix at all ("WC-WV1", "T8-WV2", "Finals-WV1")?
@@ -3360,10 +3438,10 @@ function computeTeamRecord(season, teamName, team) {
   const rosterMap = gfwlRosterAliasMap(team.roster||[]);
   if (!Object.keys(rosterMap).length) return { w:0, l:0, total:0 };
 
-  // Use _allProfileBatches if available (profiles tab loaded), otherwise gfwlBatchCache
-  const allBatches = (_allProfileBatches && _allProfileBatches.length)
-    ? _allProfileBatches
-    : Object.values(window._gfwlBatchCache || {});
+  // Merge full-data cache with any lightweight profile list (see
+  // gfwlAllBatchesWithReplays) so this works whether or not the Profiles
+  // tab has been visited in this session.
+  const allBatches = gfwlAllBatchesWithReplays();
 
   const seasonKey = season.toUpperCase();
   for (const batch of allBatches) {
@@ -3388,9 +3466,7 @@ function computeTeamRegularSeasonRecord(season, teamName, team) {
   // Alias-aware (see gfwlRosterAliasMap above).
   const rosterMap = gfwlRosterAliasMap(team.roster||[]);
   if (!Object.keys(rosterMap).length) return { w:0, l:0, total:0 };
-  const allBatches = (_allProfileBatches && _allProfileBatches.length)
-    ? _allProfileBatches
-    : Object.values(window._gfwlBatchCache || {});
+  const allBatches = gfwlAllBatchesWithReplays();
   const seasonKey = season.toUpperCase();
   for (const batch of allBatches) {
     if (!rosterMap[(batch.player||'').toLowerCase()]) continue;
@@ -3405,6 +3481,58 @@ function computeTeamRegularSeasonRecord(season, teamName, team) {
     }
   }
   return { w, l, total: w+l };
+}
+
+// Standalone version of getRoundScore (which only exists as a closure
+// inside gfwlOpenTeam, scoped to whichever team page is currently open) —
+// this works from any team object without opening its page, so the season
+// grid can show every team's playoff status at once. Same opponent-roster
+// cross-check as getRoundScore/gfwlOpenRoundReport: a round tag alone
+// ("T8-WV1") doesn't prove a replay belongs to this team's actual series
+// against its scheduled opponent for that round.
+function computeTeamRoundOutcome(season, team, round) {
+  const target = round.toLowerCase().replace(/\s+/g,' ').trim();
+  const rosterMap = gfwlRosterAliasMap(team.roster||[]);
+  if (!Object.keys(rosterMap).length) return { hasData:false, fullyEliminated:false };
+  const allBatches = gfwlAllBatchesWithReplays();
+  const schEntry = (team.schedule||[]).find(s => String(s.week).toLowerCase() === round.toLowerCase());
+  const oppName = schEntry?.opponent;
+  const oppTeam = oppName ? _gfwlData[season]?.teams[gfwlResolveTeam(season, oppName)||oppName] : null;
+  const oppRosterMap = oppTeam ? gfwlRosterAliasMap(oppTeam.roster||[]) : null;
+
+  const roundReplays = [];
+  for (const batch of allBatches) {
+    if (!rosterMap[(batch.player||'').toLowerCase()]) continue;
+    for (const r of (batch.replays||[])) {
+      const lbl = (r.eventLabel||'').toUpperCase().trim();
+      if (gfwlPlayoffRoundFromLabel(lbl) !== target) continue;
+      if (oppRosterMap) {
+        const oName = ((r.parsed && r.parsed.oppName) || r.oppName || '').toLowerCase().trim();
+        if (!oppRosterMap[oName]) continue;
+      }
+      roundReplays.push({ player: batch.player, replay: r, label: lbl });
+    }
+  }
+  const outcome = gfwlPlayoffOutcome(roundReplays);
+  return { hasData: roundReplays.length > 0, fullyEliminated: outcome.fullyEliminated };
+}
+
+// The highest playoff round a team has REAL recorded data for, walking
+// Wildcard → Top 8 → Top 4 → Finals in bracket order and stopping the
+// instant a round has no data (bracket rule: no legitimate data can exist
+// beyond that point) or the team is confirmed fully eliminated in a round.
+// Updates automatically as replays get added — no manual "made playoffs"
+// flag to maintain.
+const GFWL_PLAYOFF_ROUND_ORDER = ['Wildcard','Top 8','Top 4','Finals'];
+function gfwlHighestPlayoffRound(season, team) {
+  let highest = null;
+  for (const round of GFWL_PLAYOFF_ROUND_ORDER) {
+    const outcome = computeTeamRoundOutcome(season, team, round);
+    if (!outcome.hasData) break;
+    highest = round;
+    if (outcome.fullyEliminated) break;
+  }
+  return highest;
 }
 
 // Regular-season standings for every team in one conference, sorted by win%
@@ -4338,10 +4466,19 @@ async function gfwlOpenTeam(season, teamName, team) {
 
     function renderPlayoffsBody() {
       poBody.innerHTML = '';
+      // Single-elimination bracket rule: once a team is confirmed fully
+      // eliminated in a round, it is structurally impossible for them to
+      // have real matches in any LATER round. Any data attached to a later
+      // round for them (a stray/mistagged replay, a leftover scheduled
+      // opponent) isn't a legitimate result — so once eliminated, every
+      // subsequent round renders as empty ("—", no button), exactly as if
+      // nothing had been recorded, rather than surfacing junk data.
+      let priorEliminated = false;
       PLAYOFF_ROUNDS.forEach(round => {
-        const schEntry = schedule.find(s => String(s.week).toLowerCase() === round.toLowerCase());
-        const opp = schEntry?.opponent || '—';
-        const sc = getRoundScore(round);
+        const sc = priorEliminated
+          ? { hasData:false, teamW:0, teamL:0, matchW:0, matchL:0, fullyEliminated:false, remaining:[], wave1Count:0 }
+          : getRoundScore(round);
+        const opp = priorEliminated ? '—' : ((schedule.find(s => String(s.week).toLowerCase() === round.toLowerCase()))?.opponent || '—');
         const matchPct = (sc.matchW+sc.matchL) ? Math.round(sc.matchW/(sc.matchW+sc.matchL)*100) : null;
         // Win/loss is dictated by wave-based elimination, not the raw match
         // tally: a team that still has any Wave-1 starter alive is winning/
@@ -4373,8 +4510,9 @@ async function gfwlOpenTeam(season, teamName, team) {
         // Show the Round Report button whenever there's score data to look
         // at, even if no opponent got scheduled/recorded — otherwise a round
         // with an anomaly (score present but no opponent on file) is
-        // impossible to click into and self-diagnose.
-        if (sc.hasData || opp !== '—') {
+        // impossible to click into and self-diagnose. Never shown once the
+        // team is already confirmed eliminated in an earlier round.
+        if (!priorEliminated && (sc.hasData || opp !== '—')) {
           const rptBtn = document.createElement('button');
           rptBtn.textContent='Round Report';
           rptBtn.style.cssText='background:var(--amber);color:#050508;border:none;font-family:monospace;font-size:10px;font-weight:bold;padding:2px 8px;border-radius:3px;cursor:pointer;white-space:nowrap';
@@ -4384,6 +4522,8 @@ async function gfwlOpenTeam(season, teamName, team) {
         tr.appendChild(rdTd); tr.appendChild(oppTd); tr.appendChild(scoreTd);
         tr.appendChild(matchTd); tr.appendChild(pctTd); tr.appendChild(rptTd);
         poBody.appendChild(tr);
+
+        if (!priorEliminated && sc.hasData && sc.fullyEliminated) priorEliminated = true;
       });
     }
     renderPlayoffsBody();
