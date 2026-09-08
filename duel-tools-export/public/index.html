@@ -4133,9 +4133,20 @@ async function gfwlOpenTeam(season, teamName, team) {
   // Compute week scores (team score = how many players won their match that week)
   // Each player who wins their match = 1 point for the team (best of 5 format)
   function getWeekScore(wk) {
+    // Cross-check the recorded opponent against the SCHEDULED opponent
+    // team's roster (alias-aware) when one is on file — same reasoning as
+    // getRoundScore/gfwlOpenRoundReport: a week number alone doesn't prove a
+    // replay belongs to this team's actual matchup that week.
+    const schEntryWk = (schedule||[]).find(s => s.week === wk);
+    const oppNameWk = schEntryWk?.opponent;
+    const oppTeamWk = oppNameWk ? _gfwlData[season]?.teams[gfwlResolveTeam(season, oppNameWk)||oppNameWk] : null;
+    const oppRosterMapWk = oppTeamWk ? gfwlRosterAliasMap(oppTeamWk.roster||[]) : null;
     const wkReplays = seasonReplays.filter(x => {
       const lbl = x.label;
-      return lbl.includes(':') && parseInt((lbl.split(':')[1]||'').replace(/\D/g,'')) === wk;
+      if (!lbl.includes(':') || parseInt((lbl.split(':')[1]||'').replace(/\D/g,'')) !== wk) return false;
+      if (!oppRosterMapWk) return true;
+      const oppName = ((x.replay.parsed && x.replay.parsed.oppName) || x.replay.oppName || '').toLowerCase().trim();
+      return !!oppRosterMapWk[oppName];
     });
     // Count unique players who won vs lost their match that week
     const playerResults = {};
@@ -4164,7 +4175,23 @@ async function gfwlOpenTeam(season, teamName, team) {
   // strip down to the digit "8").
   function getRoundScore(roundName) {
     const target = roundName.toLowerCase().replace(/\s+/g,' ').trim();
-    const roundReplays = seasonReplays.filter(x => gfwlPlayoffRoundFromLabel(x.label) === target);
+    // Cross-check the recorded opponent against the SCHEDULED opponent
+    // team's roster (alias-aware), same reasoning as gfwlOpenRoundReport: a
+    // round tag alone ("T8-WV1") doesn't prove a replay belongs to this
+    // team's actual series against its scheduled opponent — it could be a
+    // stray replay from an unrelated pairing that happens to carry the same
+    // round tag. Without this check the summary score here could disagree
+    // with what the Round Report itself shows for the same round.
+    const schEntry2 = (schedule||[]).find(s => String(s.week).toLowerCase() === roundName.toLowerCase());
+    const oppName2 = schEntry2?.opponent;
+    const oppTeam2 = oppName2 ? _gfwlData[season]?.teams[gfwlResolveTeam(season, oppName2)||oppName2] : null;
+    const oppRosterMap2 = oppTeam2 ? gfwlRosterAliasMap(oppTeam2.roster||[]) : null;
+    const roundReplays = seasonReplays.filter(x => {
+      if (gfwlPlayoffRoundFromLabel(x.label) !== target) return false;
+      if (!oppRosterMap2) return true; // no scheduled opponent on file — can't cross-check, keep all round-tagged matches
+      const oppName = ((x.replay.parsed && x.replay.parsed.oppName) || x.replay.oppName || '').toLowerCase().trim();
+      return !!oppRosterMap2[oppName];
+    });
     const playerResults = {};
     roundReplays.forEach(x => {
       const p = x.player.toLowerCase();
