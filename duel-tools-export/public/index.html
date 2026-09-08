@@ -2905,13 +2905,28 @@ async function gfwlLoadSeason(season) {
   console.log('[GFWL] Season', season, '— teams:', teams.map(([n,t])=>n+'('+t.conference+')'));
   const statsEl = document.getElementById('gfwl-season-stats');
   if (statsEl) statsEl.textContent = teams.length + ' teams · ' + (data.numWeeks||13) + ' weeks';
-  // Render immediately with whatever's cached (records/badges may read as
-  // 0-0 / no round reached until replay data loads), then load every
-  // rostered player's batches across the WHOLE season and re-render with
-  // accurate regular-season records and playoff-round-reached badges.
-  gfwlRenderSeasonGrid(season, data, true);
+
+  // Regular-season records + highest-playoff-round badges come precomputed
+  // from the server in ONE request — this is what makes the grid load
+  // instantly instead of waiting on a fetch per rostered player. Fetched
+  // alongside the season data itself so both are ready before the first
+  // (and normally only) render.
+  window._gfwlStandingsCache = window._gfwlStandingsCache || {};
+  try {
+    const standings = await fetch(API+'/gfwl/'+season+'/standings').then(r=>r.json());
+    if (standings && !standings.error) window._gfwlStandingsCache[season] = standings;
+  } catch(e) { console.warn('[GFWL] standings fetch error:', e); }
+
+  const haveStandings = !!window._gfwlStandingsCache[season];
+  gfwlRenderSeasonGrid(season, data, !haveStandings);
+
+  // Still warm the full-batch cache in the background — a team page (or the
+  // Season Stats tab) needs actual replay data, not just the aggregate
+  // numbers above, so this avoids a fetch delay when the user opens one. If
+  // the standings endpoint above failed for some reason, this also serves
+  // as the fallback path that fills in the grid once it resolves.
   gfwlLoadSeasonBatches(season, data).then(() => {
-    if (_gfwlCurrentSeason === season) gfwlRenderSeasonGrid(season, data, false);
+    if (_gfwlCurrentSeason === season && !haveStandings) gfwlRenderSeasonGrid(season, data, false);
   });
   // Auto-sync rosters silently in background
   if (_userRole === 'admin') gfwlSyncRosters(season);
@@ -3036,9 +3051,13 @@ function gfwlRenderSeasonGrid(season, data, loading) {
       card.appendChild(metaEl);
 
       // Regular-season record only (playoff results are shown separately as
-      // the "highest round reached" badge below) — computeTeamRegularSeasonRecord
-      // explicitly excludes playoff-tagged replays, unlike computeTeamRecord.
-      const record = computeTeamRegularSeasonRecord(season, teamName, team);
+      // the "highest round reached" badge below). Prefer the precomputed
+      // server value (see gfwlLoadSeason's /standings fetch) — instant, and
+      // computed from the server's full batch data regardless of what's
+      // loaded client-side yet. Falls back to computing it here from
+      // whatever's in the local batch cache if the standings fetch failed.
+      const standingsEntry = (window._gfwlStandingsCache && window._gfwlStandingsCache[season]) ? window._gfwlStandingsCache[season][teamName] : null;
+      const record = standingsEntry ? standingsEntry.record : computeTeamRegularSeasonRecord(season, teamName, team);
       const recEl = document.createElement('div');
       recEl.style.cssText = 'display:flex;gap:12px;font-size:12px;font-family:monospace;margin-bottom:6px';
       const wSpan = document.createElement('span'); wSpan.style.color='var(--green)'; wSpan.textContent = record.w+'W'; recEl.appendChild(wSpan);
@@ -3048,10 +3067,11 @@ function gfwlRenderSeasonGrid(season, data, loading) {
       card.appendChild(recEl);
 
       // Highest playoff round reached — computed fresh from actual replay
-      // data every render, so it updates automatically as matches get added
-      // (no manual "made playoffs" flag to keep in sync). Absent entirely
-      // for a team with no playoff data yet.
-      const highestRound = loading ? null : gfwlHighestPlayoffRound(season, team);
+      // data (server-side when the standings fetch succeeded, else here
+      // client-side), so it updates automatically as matches get added (no
+      // manual "made playoffs" flag to keep in sync). Absent entirely for a
+      // team with no playoff data yet.
+      const highestRound = standingsEntry ? standingsEntry.highestRound : (loading ? null : gfwlHighestPlayoffRound(season, team));
       if (highestRound) {
         const poEl = document.createElement('div');
         poEl.style.cssText = 'display:inline-block;font-size:10px;font-family:monospace;font-weight:bold;color:var(--amber);border:1px solid var(--amber);padding:2px 8px;border-radius:4px;margin-bottom:8px;letter-spacing:.04em';
@@ -3494,9 +3514,15 @@ function computeTeamRoundOutcome(season, team, round) {
   const target = round.toLowerCase().replace(/\s+/g,' ').trim();
   const rosterMap = gfwlRosterAliasMap(team.roster||[]);
   if (!Object.keys(rosterMap).length) return { hasData:false, fullyEliminated:false };
-  const allBatches = gfwlAllBatchesWithReplays();
   const schEntry = (team.schedule||[]).find(s => String(s.week).toLowerCase() === round.toLowerCase());
-  const oppName = schEntry?.opponent;
+  // The team's schedule is the source of truth for whether they were even
+  // drawn into this round at all. Without a schedule entry for it, any
+  // round-tagged replay on a roster player's account is stray/mistagged
+  // data (a scrimmage, a copy-pasted label, cross-season leftovers) — not
+  // proof the team reached this round — so don't even scan for it.
+  if (!schEntry) return { hasData:false, fullyEliminated:false };
+  const allBatches = gfwlAllBatchesWithReplays();
+  const oppName = schEntry.opponent;
   const oppTeam = oppName ? _gfwlData[season]?.teams[gfwlResolveTeam(season, oppName)||oppName] : null;
   const oppRosterMap = oppTeam ? gfwlRosterAliasMap(oppTeam.roster||[]) : null;
 
@@ -4311,12 +4337,21 @@ async function gfwlOpenTeam(season, teamName, team) {
     // round tag. Without this check the summary score here could disagree
     // with what the Round Report itself shows for the same round.
     const schEntry2 = (schedule||[]).find(s => String(s.week).toLowerCase() === roundName.toLowerCase());
-    const oppName2 = schEntry2?.opponent;
+    // A round tag on a replay is not proof the team actually reached that
+    // round — it could be a stray/mistagged replay from an unrelated
+    // pairing (e.g. a scrimmage, a copy-pasted label, cross-season data).
+    // The team's own schedule is the source of truth for whether they were
+    // even drawn into this round at all; without a schedule entry for it,
+    // no amount of round-tagged replay data should count.
+    if (!schEntry2) {
+      return { teamW:0, teamL:0, matchW:0, matchL:0, hasData:false, fullyEliminated:false, remaining:[], wave1Count:0 };
+    }
+    const oppName2 = schEntry2.opponent;
     const oppTeam2 = oppName2 ? _gfwlData[season]?.teams[gfwlResolveTeam(season, oppName2)||oppName2] : null;
     const oppRosterMap2 = oppTeam2 ? gfwlRosterAliasMap(oppTeam2.roster||[]) : null;
     const roundReplays = seasonReplays.filter(x => {
       if (gfwlPlayoffRoundFromLabel(x.label) !== target) return false;
-      if (!oppRosterMap2) return true; // no scheduled opponent on file — can't cross-check, keep all round-tagged matches
+      if (!oppRosterMap2) return true; // scheduled for this round, but opponent not filled in yet — can't cross-check, keep all round-tagged matches
       const oppName = ((x.replay.parsed && x.replay.parsed.oppName) || x.replay.oppName || '').toLowerCase().trim();
       return !!oppRosterMap2[oppName];
     });

@@ -1422,6 +1422,37 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, db.gfwl[normalizeSeason(parts[1])] || {});
   }
 
+  // ── GET /api/gfwl/:season/standings — precomputed per-team regular-season
+  // record + highest-playoff-round-reached, computed here from batch data
+  // already sitting in memory. The season overview grid used to need one
+  // fetch per rostered player (200+ requests for a full season) just to
+  // paint records/badges — this collapses that to a single request so the
+  // grid can render instantly. See gfwlHighestPlayoffRoundSrv below for the
+  // same schedule-is-source-of-truth + opponent-cross-check rules the
+  // client's own team-page score computation uses, kept in sync manually.
+  if (parts[0]==='gfwl' && parts[1] && parts[2]==='standings' && method==='GET') {
+    if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot view the GFWL Archive' });
+    const season = normalizeSeason(parts[1]);
+    const seasonData = db.gfwl[season];
+    if (!seasonData) return json(res, 200, {});
+    const seasonTeams = seasonData.teams || {};
+    const seasonKey = season.toUpperCase();
+    const allBatches = Object.values(db.batches);
+    const result = {};
+    for (const [teamName, team] of Object.entries(seasonTeams)) {
+      const rosterMap = gfwlRosterAliasMapSrv(team.roster||[]);
+      const rosterNames = Object.keys(rosterMap);
+      if (!rosterNames.length) { result[teamName] = { record:{w:0,l:0,total:0}, highestRound:null }; continue; }
+      const rosterNameSet = new Set(rosterNames);
+      const rosterBatches = allBatches.filter(b => rosterNameSet.has((b.player||'').toLowerCase()));
+      result[teamName] = {
+        record: computeTeamRegularSeasonRecordSrv(seasonKey, rosterBatches),
+        highestRound: gfwlHighestPlayoffRoundSrv(seasonTeams, team, rosterBatches),
+      };
+    }
+    return json(res, 200, result);
+  }
+
   // ── PATCH /api/gfwl/:season — update season data (admin only) ────────────
   if (parts[0]==='gfwl' && parts[1] && !parts[2] && method==='PATCH') {
     if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
@@ -1762,6 +1793,168 @@ process.on('unhandledRejection', (reason, promise) => {
   logError('unhandledRejection', reason?.message || String(reason), reason?.stack||'');
 });
 
+
+// ── GFWL playoff-round / wave / roster-alias logic — SERVER MIRROR of the
+// client's implementation in public/index.html (gfwlPlayoffRoundFromLabel,
+// gfwlPlayoffWaveNum, gfwlPlayoffOutcome, gfwlRosterAliasMap,
+// computeTeamRegularSeasonRecord, computeTeamRoundOutcome,
+// gfwlHighestPlayoffRound). Duplicated here (not shared via import — this is
+// a single-file-per-side app with no build step) so /api/gfwl/:season/
+// standings can compute the season grid's records/badges in one request
+// instead of the client fetching every roster player's full batch
+// individually. Keep in sync by hand if the client-side rules change.
+const GFWL_PLAYOFF_ROUND_CODES_SRV = {
+  'wildcard': 'WC',
+  'top 16':   'T16',
+  'top 10':   'T10',
+  'top 8':    'T8',
+  'top 4':    'T4',
+  'top 2':    'T2',
+  'finals':   'FINALS',
+};
+const GFWL_PLAYOFF_ROUND_ORDER_SRV = ['Wildcard','Top 8','Top 4','Finals'];
+
+function gfwlPlayoffRoundFromLabelSrv(lbl) {
+  const u = (lbl||'').toUpperCase().trim();
+  if (!u) return null;
+  const candidates = new Set([u]);
+  if (u.includes(':')) candidates.add(u.split(':').slice(1).join(':').replace(/\s+/g,' ').trim());
+  const stripped = u.replace(/^S\d+\s*:?\s*/, '').trim();
+  if (stripped) candidates.add(stripped);
+  for (const cand of candidates) {
+    if (!cand) continue;
+    for (const key of Object.keys(GFWL_PLAYOFF_ROUND_CODES_SRV)) {
+      if (cand === key.toUpperCase()) return key;
+    }
+    for (const [key, code] of Object.entries(GFWL_PLAYOFF_ROUND_CODES_SRV)) {
+      if (cand === code || cand.startsWith(code+'-') || cand.startsWith(code+' ')) return key;
+    }
+  }
+  return null;
+}
+
+function gfwlPlayoffWaveNumSrv(label) {
+  const u = (label||'').toUpperCase();
+  const m = u.match(/WV\s*-?\s*(\d+)/) || u.match(/WAVE\s*(\d+)/);
+  if (m) return parseInt(m[1], 10) || 1;
+  return 1;
+}
+
+function gfwlPlayoffOutcomeSrv(roundReplays) {
+  const list = roundReplays || [];
+  const byWave = {};
+  list.forEach(x => {
+    const wv = gfwlPlayoffWaveNumSrv(x.label);
+    if (!byWave[wv]) byWave[wv] = [];
+    byWave[wv].push(x);
+  });
+  const waveNums = Object.keys(byWave).map(Number).sort((a,b) => a-b);
+  const wave1 = waveNums.length ? byWave[waveNums[0]] : [];
+  const wave1Players = new Set(wave1.map(x => x.player.toLowerCase()));
+  const eliminated = new Set();
+  list.forEach(x => {
+    const r = x.replay || {};
+    const effRes = r.resultOverride || (r.parsed && r.parsed.resultOverride) || (r.parsed && r.parsed.result) || r.result || null;
+    if (effRes === 'l') eliminated.add(x.player.toLowerCase());
+  });
+  const remaining = [...wave1Players].filter(p => !eliminated.has(p));
+  const fullyEliminated = wave1Players.size > 0 && remaining.length === 0;
+  return { fullyEliminated, hasData: list.length > 0 };
+}
+
+// Resolves both a roster player's canonical name AND all their registered
+// aliases (db.players[canon].aliases) to the same roster entry — a batch
+// recorded under a player's secondary account is still recognized as this
+// roster player.
+function gfwlRosterAliasMapSrv(roster) {
+  const map = {};
+  for (const re of (roster||[])) {
+    const canon = (re.player||'').toLowerCase().trim();
+    if (!canon) continue;
+    map[canon] = re;
+    const entry = db.players[canon];
+    (entry ? (entry.aliases||[]) : []).forEach(a => {
+      const al = (a||'').toLowerCase().trim();
+      if (al) map[al] = re;
+    });
+  }
+  return map;
+}
+
+function gfwlResolveTeamSrv(seasonTeams, nameOrAlias) {
+  if (!nameOrAlias) return null;
+  const q = nameOrAlias.toLowerCase().trim();
+  for (const [tName, tData] of Object.entries(seasonTeams)) {
+    if (tName.toLowerCase() === q) return tName;
+    if ((tData.aliases||[]).some(a => a.toLowerCase() === q)) return tName;
+    if (tName.toLowerCase().includes(q) || q.includes(tName.toLowerCase())) return tName;
+  }
+  return null;
+}
+
+// Regular-season-only record — excludes any playoff-round replay even if it
+// carries a season prefix out of habit (e.g. "S9: T8-WV1").
+function computeTeamRegularSeasonRecordSrv(seasonKey, rosterBatches) {
+  let w = 0, l = 0;
+  for (const batch of rosterBatches) {
+    for (const r of (batch.replays||[])) {
+      const lbl = (r.eventLabel||'').toUpperCase();
+      const isSeasonPrefixed = lbl.startsWith(seasonKey+':') || lbl.startsWith(seasonKey+' ') || lbl===seasonKey;
+      if (!isSeasonPrefixed) continue;
+      if (gfwlPlayoffRoundFromLabelSrv(lbl) !== null) continue; // playoff match — exclude
+      const effResult = r.resultOverride || (r.parsed && r.parsed.resultOverride) || (r.parsed && r.parsed.result) || null;
+      if (effResult === 'w') w++;
+      else if (effResult === 'l') l++;
+    }
+  }
+  return { w, l, total: w+l };
+}
+
+// One playoff round's outcome for a team. A round tag on a replay alone
+// ("T8-WV1") is never proof the team actually reached that round — it could
+// be a stray/mistagged replay from an unrelated pairing (a scrimmage, a
+// copy-pasted label, cross-season leftovers). The team's own schedule is the
+// source of truth for whether they were even drawn into this round at all;
+// without a schedule entry for it, no round-tagged replay counts. When a
+// schedule entry (and its opponent) IS on file, cross-check the replay's
+// recorded opponent against that specific opponent's roster too — matching
+// getRoundScore/gfwlOpenRoundReport on the client so this endpoint never
+// disagrees with what a team's own page shows.
+function computeTeamRoundOutcomeSrv(seasonTeams, team, round, rosterBatches) {
+  const target = round.toLowerCase().replace(/\s+/g,' ').trim();
+  const schEntry = (team.schedule||[]).find(s => String(s.week).toLowerCase() === round.toLowerCase());
+  if (!schEntry) return { hasData:false, fullyEliminated:false };
+  const oppName = schEntry.opponent;
+  const oppTeamName = oppName ? gfwlResolveTeamSrv(seasonTeams, oppName) : null;
+  const oppTeam = oppTeamName ? seasonTeams[oppTeamName] : null;
+  const oppRosterMap = oppTeam ? gfwlRosterAliasMapSrv(oppTeam.roster||[]) : null;
+
+  const roundReplays = [];
+  for (const batch of rosterBatches) {
+    for (const r of (batch.replays||[])) {
+      const lbl = (r.eventLabel||'').toUpperCase().trim();
+      if (gfwlPlayoffRoundFromLabelSrv(lbl) !== target) continue;
+      if (oppRosterMap) {
+        const oName = ((r.parsed && r.parsed.oppName) || r.oppName || '').toLowerCase().trim();
+        if (!oppRosterMap[oName]) continue;
+      }
+      roundReplays.push({ player: batch.player, replay: r, label: lbl });
+    }
+  }
+  const outcome = gfwlPlayoffOutcomeSrv(roundReplays);
+  return { hasData: roundReplays.length > 0, fullyEliminated: outcome.fullyEliminated };
+}
+
+function gfwlHighestPlayoffRoundSrv(seasonTeams, team, rosterBatches) {
+  let highest = null;
+  for (const round of GFWL_PLAYOFF_ROUND_ORDER_SRV) {
+    const outcome = computeTeamRoundOutcomeSrv(seasonTeams, team, round, rosterBatches);
+    if (!outcome.hasData) break;
+    highest = round;
+    if (outcome.fullyEliminated) break;
+  }
+  return highest;
+}
 
 // ── GFWL season key normalizer: "Season 9", "s9" → "S9" ─────────────────────
 function normalizeSeason(s) {
