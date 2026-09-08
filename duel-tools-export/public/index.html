@@ -2167,6 +2167,31 @@ function gfwlPlayoffRoundFromLabel(lbl) {
   return null;
 }
 
+// Same as gfwlPlayoffRoundFromLabel, but season-aware. gfwlPlayoffRoundFromLabel
+// deliberately STRIPS any leading "S#:" prefix without checking its value —
+// that's correct for recognizing THAT a label is a playoff tag (some real
+// data carries the season prefix out of habit, some doesn't), but it means
+// "S8: WC-WV1" and "S9: WC-WV1" collapse to the exact same round code with
+// no way to tell them apart. That's harmless when the caller doesn't care
+// which season a match happened in, but every place that gathers "this
+// team's replays for round X in season S9" was quietly pulling in a
+// player's stray S8/S7/etc. playoff matches too — any label the round-code
+// matcher recognized got counted, regardless of season — which is exactly
+// how a team that never made the S9 playoffs could get credited with one
+// once the opponent-inference fallback (see gfwlInferRoundOpponent) started
+// trusting matches that lack a scheduled opponent to cross-check against.
+// This wrapper closes that gap: a label with an EXPLICIT season prefix must
+// match the season being queried or it's excluded outright. A bare label
+// with no season prefix at all (the normal convention for playoff tags) is
+// still accepted, since there's no season signal on it to check either way.
+function gfwlPlayoffRoundFromLabelInSeason(lbl, seasonKey) {
+  const u = (lbl||'').toUpperCase().trim();
+  if (!u || !seasonKey) return gfwlPlayoffRoundFromLabel(u);
+  const sMatch = u.match(/^S(\d+)\s*:?\s*/);
+  if (sMatch && ('S'+sMatch[1]) !== seasonKey.toUpperCase()) return null;
+  return gfwlPlayoffRoundFromLabel(u);
+}
+
 // Playoffs are NOT single matches per round — each round (WC/T8/T4/Finals)
 // is a sequence of "Waves": Wave 1 is every player each team started the
 // round with (one match per pairing); later waves feature only the players
@@ -3201,7 +3226,7 @@ async function gfwlOpenSeasonStats(season) {
       // that colon would grab the "1" from "WV1" and misread it as "week 1"
       // — wrongly dropping a real playoff match for any player added after
       // week 1. So playoff tags always skip this check entirely.
-      const isPlayoffTag = gfwlPlayoffRoundFromLabel(lbl) !== null;
+      const isPlayoffTag = gfwlPlayoffRoundFromLabelInSeason(lbl, seasonKey) !== null;
       if (!isPlayoffTag) {
         const wkNum = parseInt((lbl.split(':')[1]||'').replace(/\D/g,'')) || 0;
         if (wkNum > 0 && rEntry) {
@@ -3444,7 +3469,7 @@ function gfwlAllBatchesWithReplays() {
 function gfwlLabelInSeason(lbl, seasonKey) {
   const u = (lbl||'').toUpperCase().trim();
   const sk = (seasonKey||'').toUpperCase();
-  return u.startsWith(sk+':') || u.startsWith(sk+' ') || u === sk || gfwlPlayoffRoundFromLabel(u) !== null;
+  return u.startsWith(sk+':') || u.startsWith(sk+' ') || u === sk || gfwlPlayoffRoundFromLabelInSeason(u, sk) !== null;
 }
 
 function computeTeamRecord(season, teamName, team) {
@@ -3571,7 +3596,7 @@ function computeTeamRoundOutcome(season, teamName, team, round) {
     if (!rosterMap[(batch.player||'').toLowerCase()]) continue;
     for (const r of (batch.replays||[])) {
       const lbl = (r.eventLabel||'').toUpperCase().trim();
-      if (gfwlPlayoffRoundFromLabel(lbl) !== target) continue;
+      if (gfwlPlayoffRoundFromLabelInSeason(lbl, season) !== target) continue;
       candidates.push({ player: batch.player, replay: r, label: lbl });
     }
   }
@@ -4204,8 +4229,14 @@ async function gfwlOpenTeam(season, teamName, team) {
         // prefix at all ("WC-WV1", "T8-WV2", "Finals-WV1", ...), unlike
         // regular-season weeks ("S9: WK 8") — so they need their own check
         // here, or they'd never make it into seasonReplays and the Playoffs
-        // table would always show as empty.
-        const isPlayoffTag = gfwlPlayoffRoundFromLabel(lbl) !== null;
+        // table would always show as empty. gfwlPlayoffRoundFromLabelInSeason
+        // (not the season-blind gfwlPlayoffRoundFromLabel) also rejects a
+        // playoff tag that DOES carry an explicit season prefix for a
+        // DIFFERENT season ("S8: WC-WV1" showing up while viewing S9) — a
+        // player's batch holds every match they've ever played, across every
+        // season, so without this a prior season's playoff run could get
+        // counted as this season's.
+        const isPlayoffTag = gfwlPlayoffRoundFromLabelInSeason(lbl, sKey) !== null;
         const matches = lbl.startsWith(sKey+':') || lbl.startsWith(sKey+' ') || lbl === sKey || isPlayoffTag;
         if (!matches) continue;
         // Only count weeks the player was on this team. Playoff tags are
@@ -5388,7 +5419,13 @@ async function gfwlOpenWeekReport(season, teamName, wk, oppTeamName, seasonRepla
 // is never confused with regular-season "WK 8"). ───────────────────────────
 async function gfwlOpenRoundReport(season, teamName, round, oppTeamName, seasonReplays) {
   const roundKey = round.toLowerCase().replace(/\s+/g,' ').trim();
-  const labelMatchesRound = lbl => gfwlPlayoffRoundFromLabel(lbl) === roundKey;
+  // Season-aware (see gfwlPlayoffRoundFromLabelInSeason) — a player's batch
+  // holds matches from every season they've played, and a playoff tag
+  // carrying a DIFFERENT season's prefix ("S8: WC-WV1" while viewing S9)
+  // must not match here, or the opponent's side of this report (fetched
+  // straight from the batch cache below, not through the already
+  // season-filtered seasonReplays) could pull in a prior season's matches.
+  const labelMatchesRound = lbl => gfwlPlayoffRoundFromLabelInSeason(lbl, season) === roundKey;
 
   const main = document.getElementById('gfwl-main');
   main.innerHTML = '';
@@ -5432,7 +5469,11 @@ async function gfwlOpenRoundReport(season, teamName, round, oppTeamName, seasonR
       // Playoff-round replays carry no season prefix at all ("WC-WV1"), so
       // they need to pass this membership check too, same as in
       // collectSeasonReplays() above.
-      const isPlayoffTag = gfwlPlayoffRoundFromLabel(lbl) !== null;
+      // Season-aware, not the bare gfwlPlayoffRoundFromLabel — a player's
+      // batch holds matches from every season they've played, and a
+      // playoff tag carrying a DIFFERENT season's prefix ("S8: WC-WV1" while
+      // viewing S9) must not count here either.
+      const isPlayoffTag = gfwlPlayoffRoundFromLabelInSeason(lbl, sk) !== null;
       if (!lbl.startsWith(sk+':') && !lbl.startsWith(sk+' ') && lbl!==sk && !isPlayoffTag) continue;
       freshSeasonReplays.push({player:b.player,replay:r,label:lbl});
     }

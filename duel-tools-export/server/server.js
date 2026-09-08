@@ -1450,7 +1450,7 @@ const server = http.createServer(async (req, res) => {
       const rosterBatches = allBatches.filter(b => rosterNameSet.has((b.player||'').toLowerCase()));
       result[teamName] = {
         record: computeTeamRegularSeasonRecordSrv(seasonKey, rosterBatches),
-        highestRound: gfwlHighestPlayoffRoundSrv(seasonTeams, teamName, team, rosterBatches, playerTeamMap),
+        highestRound: gfwlHighestPlayoffRoundSrv(seasonTeams, teamName, team, rosterBatches, playerTeamMap, seasonKey),
       };
     }
     return json(res, 200, result);
@@ -1836,6 +1836,23 @@ function gfwlPlayoffRoundFromLabelSrv(lbl) {
   return null;
 }
 
+// Season-aware mirror of the client's gfwlPlayoffRoundFromLabelInSeason —
+// see that function's comment for the full reasoning. gfwlPlayoffRoundFromLabelSrv
+// deliberately strips any leading "S#:" prefix without checking its value,
+// so a label from a completely different season collapses to the same
+// round code. A batch holds every match a player has ever played across
+// every season, so a round-outcome computation for S9 must reject a label
+// that explicitly says "S8:" (or any other season) rather than silently
+// counting it — otherwise a team that never made the S9 playoffs could get
+// credited with a round via a player's stray prior-season data.
+function gfwlPlayoffRoundFromLabelInSeasonSrv(lbl, seasonKey) {
+  const u = (lbl||'').toUpperCase().trim();
+  if (!u || !seasonKey) return gfwlPlayoffRoundFromLabelSrv(u);
+  const sMatch = u.match(/^S(\d+)\s*:?\s*/);
+  if (sMatch && ('S'+sMatch[1]) !== seasonKey.toUpperCase()) return null;
+  return gfwlPlayoffRoundFromLabelSrv(u);
+}
+
 function gfwlPlayoffWaveNumSrv(label) {
   const u = (label||'').toUpperCase();
   const m = u.match(/WV\s*-?\s*(\d+)/) || u.match(/WAVE\s*(\d+)/);
@@ -1962,13 +1979,13 @@ function gfwlInferRoundOpponentSrv(seasonTeams, teamName, team, round, candidate
 // copy-pasted label, cross-season leftovers) — so every candidate is
 // checked against the inferred real opponent's roster (see
 // gfwlInferRoundOpponentSrv) before counting.
-function computeTeamRoundOutcomeSrv(seasonTeams, teamName, team, round, rosterBatches, playerTeamMap) {
+function computeTeamRoundOutcomeSrv(seasonTeams, teamName, team, round, rosterBatches, playerTeamMap, seasonKey) {
   const target = round.toLowerCase().replace(/\s+/g,' ').trim();
   const candidates = [];
   for (const batch of rosterBatches) {
     for (const r of (batch.replays||[])) {
       const lbl = (r.eventLabel||'').toUpperCase().trim();
-      if (gfwlPlayoffRoundFromLabelSrv(lbl) !== target) continue;
+      if (gfwlPlayoffRoundFromLabelInSeasonSrv(lbl, seasonKey) !== target) continue;
       candidates.push({ player: batch.player, replay: r, label: lbl });
     }
   }
@@ -1984,10 +2001,10 @@ function computeTeamRoundOutcomeSrv(seasonTeams, teamName, team, round, rosterBa
   return { hasData: roundReplays.length > 0, fullyEliminated: outcome.fullyEliminated };
 }
 
-function gfwlHighestPlayoffRoundSrv(seasonTeams, teamName, team, rosterBatches, playerTeamMap) {
+function gfwlHighestPlayoffRoundSrv(seasonTeams, teamName, team, rosterBatches, playerTeamMap, seasonKey) {
   let highest = null;
   for (const round of GFWL_PLAYOFF_ROUND_ORDER_SRV) {
-    const outcome = computeTeamRoundOutcomeSrv(seasonTeams, teamName, team, round, rosterBatches, playerTeamMap);
+    const outcome = computeTeamRoundOutcomeSrv(seasonTeams, teamName, team, round, rosterBatches, playerTeamMap, seasonKey);
     if (!outcome.hasData) break;
     highest = round;
     if (outcome.fullyEliminated) break;
