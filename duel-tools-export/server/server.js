@@ -1438,6 +1438,9 @@ const server = http.createServer(async (req, res) => {
     const seasonTeams = seasonData.teams || {};
     const seasonKey = season.toUpperCase();
     const allBatches = Object.values(db.batches);
+    // Built once and reused for every team's round-outcome inference (see
+    // gfwlInferRoundOpponentSrv) rather than per team/round.
+    const playerTeamMap = gfwlSeasonPlayerTeamMapSrv(seasonTeams);
     const result = {};
     for (const [teamName, team] of Object.entries(seasonTeams)) {
       const rosterMap = gfwlRosterAliasMapSrv(team.roster||[]);
@@ -1447,7 +1450,7 @@ const server = http.createServer(async (req, res) => {
       const rosterBatches = allBatches.filter(b => rosterNameSet.has((b.player||'').toLowerCase()));
       result[teamName] = {
         record: computeTeamRegularSeasonRecordSrv(seasonKey, rosterBatches),
-        highestRound: gfwlHighestPlayoffRoundSrv(seasonTeams, team, rosterBatches),
+        highestRound: gfwlHighestPlayoffRoundSrv(seasonTeams, teamName, team, rosterBatches, playerTeamMap),
       };
     }
     return json(res, 200, result);
@@ -1910,45 +1913,81 @@ function computeTeamRegularSeasonRecordSrv(seasonKey, rosterBatches) {
   return { w, l, total: w+l };
 }
 
+// Season-wide reverse index: lowercased player name (canonical or alias) ->
+// the name of the team whose roster they're on. Used to figure out which
+// team a recorded opponent actually plays for when a team has no schedule
+// entry for a round to cross-check against (see gfwlInferRoundOpponentSrv).
+function gfwlSeasonPlayerTeamMapSrv(seasonTeams) {
+  const map = {};
+  for (const [tName, t] of Object.entries(seasonTeams)) {
+    Object.keys(gfwlRosterAliasMapSrv(t.roster||[])).forEach(n => { if (!(n in map)) map[n] = tName; });
+  }
+  return map;
+}
+
+// Figures out which OTHER team a set of round-tagged replays for `teamName`
+// were actually played against — mirrors the client's
+// gfwlInferRoundOpponent exactly, so this endpoint never disagrees with
+// what a team's own page shows. Prefers the team's own schedule entry for
+// the round when one is on file; when it isn't (schedule metadata for
+// playoff rounds isn't always filled in even for teams that genuinely
+// played), infers it from the replay data itself by resolving each
+// candidate's recorded opponent to whichever team's roster they're
+// actually on and trusting whichever team accounts for the most matches.
+function gfwlInferRoundOpponentSrv(seasonTeams, teamName, team, round, candidates, playerTeamMap) {
+  const schEntry = (team.schedule||[]).find(s => String(s.week).toLowerCase() === round.toLowerCase());
+  if (schEntry && schEntry.opponent) {
+    const resolvedName = gfwlResolveTeamSrv(seasonTeams, schEntry.opponent) || schEntry.opponent;
+    const oppTeam = seasonTeams[resolvedName];
+    if (oppTeam) return { oppTeamName: resolvedName, oppRosterMap: gfwlRosterAliasMapSrv(oppTeam.roster||[]) };
+  }
+  const counts = {};
+  candidates.forEach(c => {
+    const r = c.replay || {};
+    const oName = ((r.parsed && r.parsed.oppName) || r.oppName || '').toLowerCase().trim();
+    const oTeam = playerTeamMap[oName];
+    if (oTeam && oTeam !== teamName) counts[oTeam] = (counts[oTeam]||0) + 1;
+  });
+  const ranked = Object.entries(counts).sort((a,b) => b[1]-a[1]);
+  if (!ranked.length) return null;
+  const inferredName = ranked[0][0];
+  const inferredTeam = seasonTeams[inferredName];
+  if (!inferredTeam) return null;
+  return { oppTeamName: inferredName, oppRosterMap: gfwlRosterAliasMapSrv(inferredTeam.roster||[]) };
+}
+
 // One playoff round's outcome for a team. A round tag on a replay alone
 // ("T8-WV1") is never proof the team actually reached that round — it could
 // be a stray/mistagged replay from an unrelated pairing (a scrimmage, a
-// copy-pasted label, cross-season leftovers). The team's own schedule is the
-// source of truth for whether they were even drawn into this round at all;
-// without a schedule entry for it, no round-tagged replay counts. When a
-// schedule entry (and its opponent) IS on file, cross-check the replay's
-// recorded opponent against that specific opponent's roster too — matching
-// getRoundScore/gfwlOpenRoundReport on the client so this endpoint never
-// disagrees with what a team's own page shows.
-function computeTeamRoundOutcomeSrv(seasonTeams, team, round, rosterBatches) {
+// copy-pasted label, cross-season leftovers) — so every candidate is
+// checked against the inferred real opponent's roster (see
+// gfwlInferRoundOpponentSrv) before counting.
+function computeTeamRoundOutcomeSrv(seasonTeams, teamName, team, round, rosterBatches, playerTeamMap) {
   const target = round.toLowerCase().replace(/\s+/g,' ').trim();
-  const schEntry = (team.schedule||[]).find(s => String(s.week).toLowerCase() === round.toLowerCase());
-  if (!schEntry) return { hasData:false, fullyEliminated:false };
-  const oppName = schEntry.opponent;
-  const oppTeamName = oppName ? gfwlResolveTeamSrv(seasonTeams, oppName) : null;
-  const oppTeam = oppTeamName ? seasonTeams[oppTeamName] : null;
-  const oppRosterMap = oppTeam ? gfwlRosterAliasMapSrv(oppTeam.roster||[]) : null;
-
-  const roundReplays = [];
+  const candidates = [];
   for (const batch of rosterBatches) {
     for (const r of (batch.replays||[])) {
       const lbl = (r.eventLabel||'').toUpperCase().trim();
       if (gfwlPlayoffRoundFromLabelSrv(lbl) !== target) continue;
-      if (oppRosterMap) {
-        const oName = ((r.parsed && r.parsed.oppName) || r.oppName || '').toLowerCase().trim();
-        if (!oppRosterMap[oName]) continue;
-      }
-      roundReplays.push({ player: batch.player, replay: r, label: lbl });
+      candidates.push({ player: batch.player, replay: r, label: lbl });
     }
   }
+  if (!candidates.length) return { hasData:false, fullyEliminated:false };
+  const inferred = gfwlInferRoundOpponentSrv(seasonTeams, teamName, team, round, candidates, playerTeamMap);
+  if (!inferred) return { hasData:false, fullyEliminated:false };
+  const roundReplays = candidates.filter(c => {
+    const r = c.replay || {};
+    const oName = ((r.parsed && r.parsed.oppName) || r.oppName || '').toLowerCase().trim();
+    return !!inferred.oppRosterMap[oName];
+  });
   const outcome = gfwlPlayoffOutcomeSrv(roundReplays);
   return { hasData: roundReplays.length > 0, fullyEliminated: outcome.fullyEliminated };
 }
 
-function gfwlHighestPlayoffRoundSrv(seasonTeams, team, rosterBatches) {
+function gfwlHighestPlayoffRoundSrv(seasonTeams, teamName, team, rosterBatches, playerTeamMap) {
   let highest = null;
   for (const round of GFWL_PLAYOFF_ROUND_ORDER_SRV) {
-    const outcome = computeTeamRoundOutcomeSrv(seasonTeams, team, round, rosterBatches);
+    const outcome = computeTeamRoundOutcomeSrv(seasonTeams, teamName, team, round, rosterBatches, playerTeamMap);
     if (!outcome.hasData) break;
     highest = round;
     if (outcome.fullyEliminated) break;

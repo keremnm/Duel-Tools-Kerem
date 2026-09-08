@@ -3071,7 +3071,7 @@ function gfwlRenderSeasonGrid(season, data, loading) {
       // client-side), so it updates automatically as matches get added (no
       // manual "made playoffs" flag to keep in sync). Absent entirely for a
       // team with no playoff data yet.
-      const highestRound = standingsEntry ? standingsEntry.highestRound : (loading ? null : gfwlHighestPlayoffRound(season, team));
+      const highestRound = standingsEntry ? standingsEntry.highestRound : (loading ? null : gfwlHighestPlayoffRound(season, teamName, team));
       if (highestRound) {
         const poEl = document.createElement('div');
         poEl.style.cssText = 'display:inline-block;font-size:10px;font-family:monospace;font-weight:bold;color:var(--amber);border:1px solid var(--amber);padding:2px 8px;border-radius:4px;margin-bottom:8px;letter-spacing:.04em';
@@ -3503,42 +3503,86 @@ function computeTeamRegularSeasonRecord(season, teamName, team) {
   return { w, l, total: w+l };
 }
 
+// Season-wide reverse index: lowercased player name (canonical or alias) ->
+// the name of the team whose roster they're on, for every team in the
+// season. Used to figure out which team a recorded opponent actually plays
+// for when a round-tagged replay's own team has no schedule entry for that
+// round to cross-check against (see gfwlInferRoundOpponent below).
+function gfwlSeasonPlayerTeamMap(season) {
+  const map = {};
+  const teams = (_gfwlData[season] && _gfwlData[season].teams) || {};
+  for (const [tName, t] of Object.entries(teams)) {
+    Object.keys(gfwlRosterAliasMap(t.roster||[])).forEach(n => { if (!(n in map)) map[n] = tName; });
+  }
+  return map;
+}
+
+// Figures out which OTHER team a set of round-tagged replays for `teamName`
+// were actually played against, so stray/mistagged replays (a scrimmage, a
+// copy-pasted label, cross-season leftovers) can be told apart from a real
+// bracket series. Prefers the team's own schedule entry for the round when
+// one is on file — the most direct signal. But schedule metadata for
+// playoff rounds isn't always filled in even for teams that genuinely
+// played (unlike the regular season's week-by-week schedule import), so
+// when there's no schedule entry, this infers the opponent from the replay
+// data itself: resolve each candidate's recorded opponent to whichever
+// team's roster they're actually on (season-wide, alias-aware), and trust
+// whichever team accounts for the most matches. A real round produces a
+// consistent plurality of matches against ONE other team; junk data either
+// doesn't resolve to any real roster at all, or is a small minority next to
+// the real pairing (exactly the Iron Goats/birdcage contamination pattern
+// found earlier this season). Returns { oppTeamName, oppRosterMap }, or
+// null if no legitimate opponent can be identified at all.
+function gfwlInferRoundOpponent(season, teamName, team, round, candidates) {
+  const schEntry = (team.schedule||[]).find(s => String(s.week).toLowerCase() === round.toLowerCase());
+  if (schEntry && schEntry.opponent) {
+    const resolvedName = gfwlResolveTeam(season, schEntry.opponent) || schEntry.opponent;
+    const oppTeam = _gfwlData[season]?.teams[resolvedName];
+    if (oppTeam) return { oppTeamName: resolvedName, oppRosterMap: gfwlRosterAliasMap(oppTeam.roster||[]) };
+  }
+  const playerTeamMap = gfwlSeasonPlayerTeamMap(season);
+  const counts = {};
+  candidates.forEach(c => {
+    const r = c.replay || {};
+    const oName = ((r.parsed && r.parsed.oppName) || r.oppName || '').toLowerCase().trim();
+    const oTeam = playerTeamMap[oName];
+    if (oTeam && oTeam !== teamName) counts[oTeam] = (counts[oTeam]||0) + 1;
+  });
+  const ranked = Object.entries(counts).sort((a,b) => b[1]-a[1]);
+  if (!ranked.length) return null;
+  const inferredName = ranked[0][0];
+  const inferredTeam = _gfwlData[season]?.teams[inferredName];
+  if (!inferredTeam) return null;
+  return { oppTeamName: inferredName, oppRosterMap: gfwlRosterAliasMap(inferredTeam.roster||[]) };
+}
+
 // Standalone version of getRoundScore (which only exists as a closure
 // inside gfwlOpenTeam, scoped to whichever team page is currently open) —
 // this works from any team object without opening its page, so the season
-// grid can show every team's playoff status at once. Same opponent-roster
-// cross-check as getRoundScore/gfwlOpenRoundReport: a round tag alone
-// ("T8-WV1") doesn't prove a replay belongs to this team's actual series
-// against its scheduled opponent for that round.
-function computeTeamRoundOutcome(season, team, round) {
+// grid can show every team's playoff status at once. Same opponent
+// inference as getRoundScore/gfwlOpenRoundReport (see gfwlInferRoundOpponent).
+function computeTeamRoundOutcome(season, teamName, team, round) {
   const target = round.toLowerCase().replace(/\s+/g,' ').trim();
   const rosterMap = gfwlRosterAliasMap(team.roster||[]);
   if (!Object.keys(rosterMap).length) return { hasData:false, fullyEliminated:false };
-  const schEntry = (team.schedule||[]).find(s => String(s.week).toLowerCase() === round.toLowerCase());
-  // The team's schedule is the source of truth for whether they were even
-  // drawn into this round at all. Without a schedule entry for it, any
-  // round-tagged replay on a roster player's account is stray/mistagged
-  // data (a scrimmage, a copy-pasted label, cross-season leftovers) — not
-  // proof the team reached this round — so don't even scan for it.
-  if (!schEntry) return { hasData:false, fullyEliminated:false };
   const allBatches = gfwlAllBatchesWithReplays();
-  const oppName = schEntry.opponent;
-  const oppTeam = oppName ? _gfwlData[season]?.teams[gfwlResolveTeam(season, oppName)||oppName] : null;
-  const oppRosterMap = oppTeam ? gfwlRosterAliasMap(oppTeam.roster||[]) : null;
-
-  const roundReplays = [];
+  const candidates = [];
   for (const batch of allBatches) {
     if (!rosterMap[(batch.player||'').toLowerCase()]) continue;
     for (const r of (batch.replays||[])) {
       const lbl = (r.eventLabel||'').toUpperCase().trim();
       if (gfwlPlayoffRoundFromLabel(lbl) !== target) continue;
-      if (oppRosterMap) {
-        const oName = ((r.parsed && r.parsed.oppName) || r.oppName || '').toLowerCase().trim();
-        if (!oppRosterMap[oName]) continue;
-      }
-      roundReplays.push({ player: batch.player, replay: r, label: lbl });
+      candidates.push({ player: batch.player, replay: r, label: lbl });
     }
   }
+  if (!candidates.length) return { hasData:false, fullyEliminated:false };
+  const inferred = gfwlInferRoundOpponent(season, teamName, team, round, candidates);
+  if (!inferred) return { hasData:false, fullyEliminated:false };
+  const roundReplays = candidates.filter(c => {
+    const r = c.replay || {};
+    const oName = ((r.parsed && r.parsed.oppName) || r.oppName || '').toLowerCase().trim();
+    return !!inferred.oppRosterMap[oName];
+  });
   const outcome = gfwlPlayoffOutcome(roundReplays);
   return { hasData: roundReplays.length > 0, fullyEliminated: outcome.fullyEliminated };
 }
@@ -3550,10 +3594,10 @@ function computeTeamRoundOutcome(season, team, round) {
 // Updates automatically as replays get added — no manual "made playoffs"
 // flag to maintain.
 const GFWL_PLAYOFF_ROUND_ORDER = ['Wildcard','Top 8','Top 4','Finals'];
-function gfwlHighestPlayoffRound(season, team) {
+function gfwlHighestPlayoffRound(season, teamName, team) {
   let highest = null;
   for (const round of GFWL_PLAYOFF_ROUND_ORDER) {
-    const outcome = computeTeamRoundOutcome(season, team, round);
+    const outcome = computeTeamRoundOutcome(season, teamName, team, round);
     if (!outcome.hasData) break;
     highest = round;
     if (outcome.fullyEliminated) break;
@@ -4329,32 +4373,21 @@ async function gfwlOpenTeam(season, teamName, team) {
   // strip down to the digit "8").
   function getRoundScore(roundName) {
     const target = roundName.toLowerCase().replace(/\s+/g,' ').trim();
-    // Cross-check the recorded opponent against the SCHEDULED opponent
-    // team's roster (alias-aware), same reasoning as gfwlOpenRoundReport: a
-    // round tag alone ("T8-WV1") doesn't prove a replay belongs to this
-    // team's actual series against its scheduled opponent — it could be a
-    // stray replay from an unrelated pairing that happens to carry the same
-    // round tag. Without this check the summary score here could disagree
-    // with what the Round Report itself shows for the same round.
-    const schEntry2 = (schedule||[]).find(s => String(s.week).toLowerCase() === roundName.toLowerCase());
-    // A round tag on a replay is not proof the team actually reached that
-    // round — it could be a stray/mistagged replay from an unrelated
-    // pairing (e.g. a scrimmage, a copy-pasted label, cross-season data).
-    // The team's own schedule is the source of truth for whether they were
-    // even drawn into this round at all; without a schedule entry for it,
-    // no amount of round-tagged replay data should count.
-    if (!schEntry2) {
-      return { teamW:0, teamL:0, matchW:0, matchL:0, hasData:false, fullyEliminated:false, remaining:[], wave1Count:0 };
+    // Figure out which OTHER team this round's matches were actually
+    // against (see gfwlInferRoundOpponent) — a round tag alone ("T8-WV1")
+    // doesn't prove a replay belongs to this team's actual series, and the
+    // schedule doesn't always have a playoff-round entry filled in even for
+    // a team that genuinely played it, so this falls back to inferring the
+    // real opponent from the replay data itself when schedule is silent.
+    const candidates = seasonReplays.filter(x => gfwlPlayoffRoundFromLabel(x.label) === target);
+    if (!candidates.length) {
+      return { teamW:0, teamL:0, matchW:0, matchL:0, hasData:false, fullyEliminated:false, remaining:[], wave1Count:0, effectiveOpponent:null };
     }
-    const oppName2 = schEntry2.opponent;
-    const oppTeam2 = oppName2 ? _gfwlData[season]?.teams[gfwlResolveTeam(season, oppName2)||oppName2] : null;
-    const oppRosterMap2 = oppTeam2 ? gfwlRosterAliasMap(oppTeam2.roster||[]) : null;
-    const roundReplays = seasonReplays.filter(x => {
-      if (gfwlPlayoffRoundFromLabel(x.label) !== target) return false;
-      if (!oppRosterMap2) return true; // scheduled for this round, but opponent not filled in yet — can't cross-check, keep all round-tagged matches
+    const inferred = gfwlInferRoundOpponent(season, teamName, team, roundName, candidates);
+    const roundReplays = inferred ? candidates.filter(x => {
       const oppName = ((x.replay.parsed && x.replay.parsed.oppName) || x.replay.oppName || '').toLowerCase().trim();
-      return !!oppRosterMap2[oppName];
-    });
+      return !!inferred.oppRosterMap[oppName];
+    }) : [];
     const playerResults = {};
     roundReplays.forEach(x => {
       const p = x.player.toLowerCase();
@@ -4372,7 +4405,7 @@ async function gfwlOpenTeam(season, teamName, team) {
     // Wave-based elimination outcome — this, not the raw per-player tally
     // above, is what should actually decide whether the round was won/lost.
     const outcome = gfwlPlayoffOutcome(roundReplays);
-    return { teamW, teamL, matchW, matchL, hasData: roundReplays.length > 0, fullyEliminated: outcome.fullyEliminated, remaining: outcome.remaining, wave1Count: outcome.wave1Players.size };
+    return { teamW, teamL, matchW, matchL, hasData: roundReplays.length > 0, fullyEliminated: outcome.fullyEliminated, remaining: outcome.remaining, wave1Count: outcome.wave1Players.size, effectiveOpponent: inferred ? inferred.oppTeamName : null };
   }
 
   // Compute season week record
@@ -4474,9 +4507,21 @@ async function gfwlOpenTeam(season, teamName, team) {
   // regular season), and always shows every round so later rounds ("more to
   // be added") just fill in as their schedule entries get imported.
   const PLAYOFF_ROUNDS = ['Wildcard','Top 8','Top 4','Finals'];
-  const hasAnyPlayoffEntry = PLAYOFF_ROUNDS.some(rd => schedule.some(s => String(s.week).toLowerCase() === rd.toLowerCase()));
-  if (hasAnyPlayoffEntry) {
+  // The section always gets built (just hidden until renderPlayoffsBody
+  // finds something to show — see there). It can't be gated up front on
+  // schedule/seasonReplays the way it used to be: this code runs
+  // synchronously before this team's batch data has actually loaded (see
+  // loadAllBatches() above, fired-and-forgotten a few lines up), so
+  // seasonReplays is still empty at this exact point even when the team has
+  // real playoff data — and playoff schedule metadata isn't always filled
+  // in even for a team that genuinely played (see gfwlInferRoundOpponent),
+  // so schedule alone was never a reliable gate either. Building the
+  // section unconditionally and toggling it once real data is in hand
+  // sidesteps needing a second "should this exist at all" check to be
+  // re-run after the async load completes.
+  {
     const poSec = gfwlMakeSection('PLAYOFFS');
+    poSec.style.display = 'none';
     left.appendChild(poSec);
 
     const poTable = document.createElement('table');
@@ -4509,11 +4554,18 @@ async function gfwlOpenTeam(season, teamName, team) {
       // subsequent round renders as empty ("—", no button), exactly as if
       // nothing had been recorded, rather than surfacing junk data.
       let priorEliminated = false;
+      let anyRoundVisible = false;
       PLAYOFF_ROUNDS.forEach(round => {
         const sc = priorEliminated
-          ? { hasData:false, teamW:0, teamL:0, matchW:0, matchL:0, fullyEliminated:false, remaining:[], wave1Count:0 }
+          ? { hasData:false, teamW:0, teamL:0, matchW:0, matchL:0, fullyEliminated:false, remaining:[], wave1Count:0, effectiveOpponent:null }
           : getRoundScore(round);
-        const opp = priorEliminated ? '—' : ((schedule.find(s => String(s.week).toLowerCase() === round.toLowerCase()))?.opponent || '—');
+        // Prefer the scheduled opponent when one's on file; otherwise fall
+        // back to whichever opponent getRoundScore inferred from the
+        // replay data itself (see gfwlInferRoundOpponent) — this is what
+        // lets a round with real data but no schedule entry still show an
+        // opponent name and a working Round Report button.
+        const schOpp = priorEliminated ? null : (schedule.find(s => String(s.week).toLowerCase() === round.toLowerCase()))?.opponent;
+        const opp = schOpp || sc.effectiveOpponent || '—';
         const matchPct = (sc.matchW+sc.matchL) ? Math.round(sc.matchW/(sc.matchW+sc.matchL)*100) : null;
         // Win/loss is dictated by wave-based elimination, not the raw match
         // tally: a team that still has any Wave-1 starter alive is winning/
@@ -4558,13 +4610,17 @@ async function gfwlOpenTeam(season, teamName, team) {
         tr.appendChild(matchTd); tr.appendChild(pctTd); tr.appendChild(rptTd);
         poBody.appendChild(tr);
 
+        if (!priorEliminated && (sc.hasData || opp !== '—')) anyRoundVisible = true;
         if (!priorEliminated && sc.hasData && sc.fullyEliminated) priorEliminated = true;
       });
+      // Stay out of the way for a team with no playoff data on record at
+      // all yet (still in the regular season) — but unlike before, this is
+      // decided from the actual computed rows, not from schedule metadata
+      // that may never get filled in.
+      poSec.style.display = anyRoundVisible ? '' : 'none';
     }
     renderPlayoffsBody();
     window._gfwlRerenderPlayoffs = renderPlayoffsBody;
-  } else {
-    window._gfwlRerenderPlayoffs = null;
   }
 
   // ── Add/Drop log ──────────────────────────────────────────────────────────
