@@ -8983,6 +8983,27 @@ function renderMatchSidebar(query) {
       delBtn.style.cssText = 'background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px;padding:0 2px;font-family:monospace;flex-shrink:0;opacity:0;transition:opacity .15s';
       delBtn.title = 'Delete match';
       delBtn.onclick = e => { e.stopPropagation(); deleteMatch(idx, m); };
+      // Retry, right here in the list — no flag or heuristic required. A
+      // person scanning matches is often the first one to notice something
+      // looks off (a card missing, a deck that doesn't match, etc.), and
+      // shouldn't have to open the match first just to find a way to fix it.
+      const retryIconBtn = document.createElement('button');
+      retryIconBtn.textContent = '↺';
+      retryIconBtn.title = 'Retry: re-fetch this replay from DuelingBook and re-parse it';
+      retryIconBtn.style.cssText = 'background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px;padding:0 2px;font-family:monospace;flex-shrink:0;opacity:0;transition:opacity .15s';
+      retryIconBtn.onclick = async e => {
+        e.stopPropagation();
+        if (!_activeBatch) return;
+        retryIconBtn.disabled = true; retryIconBtn.textContent = '…';
+        const res = await retryOneReplay(m);
+        if (!res.ok) {
+          retryIconBtn.disabled = false; retryIconBtn.textContent = '↺';
+          st('Retry failed: '+res.error, 'var(--red)');
+          return;
+        }
+        st('Retry successful: '+m.replayId, 'var(--green)');
+        buildDeck();
+      };
       titleRow.appendChild(titleEl);
       if (m.resultOverride) {
         const noteBtn = document.createElement('button');
@@ -8992,10 +9013,11 @@ function renderMatchSidebar(query) {
         noteBtn.onclick = e => { e.stopPropagation(); showOverrideNoteModal(m); };
         titleRow.appendChild(noteBtn);
       }
+      titleRow.appendChild(retryIconBtn);
       titleRow.appendChild(delBtn);
       item.appendChild(titleRow);
-      item.onmouseenter = () => delBtn.style.opacity = '1';
-      item.onmouseleave = () => delBtn.style.opacity = '0';
+      item.onmouseenter = () => { delBtn.style.opacity = '1'; retryIconBtn.style.opacity = '1'; };
+      item.onmouseleave = () => { delBtn.style.opacity = '0'; retryIconBtn.style.opacity = '0'; };
       const scoreEl = document.createElement('div');
       scoreEl.className = 'mi-score '+m.result; scoreEl.textContent = rl+' · '+m.games.length+'G';
       item.appendChild(scoreEl);
@@ -9370,6 +9392,32 @@ async function renderMatchDisplay(m) {
         else { reparseBtn.disabled = false; reparseBtn.textContent = '↺ Re-parse with current aliases'; }
       };
       entHdr.appendChild(reparseBtn);
+    }
+    // Manual "force retry" — always available on every match, not just ones
+    // flagged as failed/suspect. Re-fetches the replay from DuelingBook from
+    // scratch (unlike the alias re-parse above, which reuses cached play
+    // data) and re-parses + saves it, so anyone who suspects a specific
+    // match parsed wrong can double-check it directly, without waiting for
+    // the automatic detection in the sidebar panel to agree with them.
+    if (m.replayId && _activeBatch) {
+      const forceRetryBtn = document.createElement('button');
+      forceRetryBtn.textContent = '↺ Retry this replay';
+      forceRetryBtn.title = 'Re-fetch this replay from DuelingBook and re-parse it';
+      forceRetryBtn.style.cssText = 'margin-left:8px;background:none;border:1px solid var(--border2);color:var(--muted);font-family:monospace;font-size:10px;padding:2px 10px;border-radius:4px;cursor:pointer';
+      forceRetryBtn.onclick = async () => {
+        forceRetryBtn.disabled = true; forceRetryBtn.textContent = '...retrying...';
+        const res = await retryOneReplay({ replayId: m.replayId });
+        if (!res.ok) {
+          forceRetryBtn.disabled = false; forceRetryBtn.textContent = '↺ Retry this replay';
+          st('Retry failed: '+res.error, 'var(--red)');
+          return;
+        }
+        st('Retry successful — refreshing…', 'var(--green)');
+        buildDeck();
+        const newIdx = _matches.findIndex(mm => mm.replayId === m.replayId);
+        if (newIdx >= 0) selectMatch(newIdx);
+      };
+      entHdr.appendChild(forceRetryBtn);
     }
     entHdr.appendChild(entYdk);
     const entBlock=document.createElement('div'); entBlock.className='entire-block';
