@@ -9212,15 +9212,39 @@ async function editDeckType(m, isOpp, badgeEl, refreshFn) {
       // Always PATCH server — server will no-op if replay not in that batch
       try {
         const res = await fetch(`${API}/batches/${bid}/replay/${encodeURIComponent(m.replayId)}/override`, {
-          method:'PATCH', headers:{'Content-Type':'application/json'}, body: overrideBody
+          method:'PATCH', headers: authHeaders(), body: overrideBody
         });
         if (res.ok) { const d = await res.json(); if (d.ok && d.found) { savedToServer = true; console.log('[Override] Saved to', bid); } }
       } catch(e) {}
     }
-    if (!savedToServer) console.warn('[Override] Not found in any known batch for', m.replayId);
-    // Re-render match list badge
-    buildDeckMatchList(_matches);
-    refreshFn();
+    // Also keep any cached GFWL batch snapshot in sync, so Archive stats
+    // (deck charts, round reports) reflect the fix immediately if that
+    // season is re-opened this session, without needing a full reload.
+    if (window._gfwlBatchCache) {
+      for (const bid of batchesToTry) {
+        const cached = window._gfwlBatchCache[bid];
+        if (cached && cached.replays) {
+          const rep = cached.replays.find(r => r.replayId === m.replayId);
+          if (rep) { rep.myDeckOverride = m.myDeckOverride||null; rep.oppDeckOverride = m.oppDeckOverride||null; }
+        }
+      }
+    }
+    if (!savedToServer) {
+      st('Could not find this replay in any saved batch — deck type change not saved.', 'var(--red)');
+      console.warn('[Override] Not found in any known batch for', m.replayId);
+    } else {
+      st('Deck type saved', 'var(--green)');
+    }
+    // Rebuild from source-of-truth data so the sidebar list, the detail
+    // header/badges, and everything else reading this match all pick up
+    // the change — previously this called a function (buildDeckMatchList)
+    // that didn't exist anywhere in the codebase, which silently threw and
+    // skipped every refresh below it, leaving the sidebar showing the old
+    // deck type until the batch was reloaded from scratch.
+    buildDeck();
+    renderMatchSidebar((document.getElementById('dsearch')||{value:''}).value||'');
+    const newIdx = _matches.findIndex(x => x.replayId === m.replayId);
+    if (newIdx >= 0) selectMatch(newIdx); else refreshFn();
   };
 
   sel.onchange = () => { if (sel.value && sel.value !== '__custom__') doSave(); };
