@@ -1219,6 +1219,32 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
+  // ── PATCH /api/batches/:id/replay/:replayId — general replay field update ──
+  // Used by the "retry parse" flow to overwrite an existing replay's raw
+  // plays / parsed result / player identification with freshly re-fetched
+  // data, regardless of whether the stored copy was previously timedOut.
+  // (The POST .../replay endpoint above only overwrites an existing replay
+  // when it was previously timedOut — a replay that already has SOME parsed
+  // data, just wrong or incomplete, would silently no-op there.) Only the
+  // fields present in the body are touched — manual overrides
+  // (myDeckOverride, resultOverride, etc.) and anything else already on the
+  // replay are left exactly as they are.
+  if (parts[0]==='batches' && parts[1] && parts[2]==='replay' && parts[3] && !parts[4] && method==='PATCH') {
+    const b = db.batches[parts[1]];
+    if (!b) return json(res, 404, { error:'Not found' });
+    return readBody(req, async data => {
+      const r = (b.replays||[]).find(r => r.replayId === decodeURIComponent(parts[3]));
+      if (!r) return json(res, 404, { error:'Replay not found in batch' });
+      const fields = ['plays','allPlays','parsed','timedOut','oppName','player1','player2','eventLabel'];
+      for (const f of fields) { if (data[f] !== undefined) r[f] = data[f]; }
+      if (data.parsed) r.allPlays = []; // fresh parse means we no longer need the raw plays stored
+      r.savedAt = Date.now();
+      await saveBatchToPostgres(b.id);
+      console.log(`[replay retry] Updated replay ${r.replayId} in batch ${b.id}`);
+      return json(res, 200, { ok:true });
+    });
+  }
+
   // ── PATCH /api/batches/:id/replay/:replayId/override ───────────────────────
   if (parts[0]==='batches' && parts[1] && parts[2]==='replay' && parts[3] && parts[4]==='override' && method==='PATCH') {
     const b = db.batches[parts[1]];
@@ -1454,6 +1480,107 @@ const server = http.createServer(async (req, res) => {
       };
     }
     return json(res, 200, result);
+  }
+
+  // ── GET /api/gfwl/:season/data-health — admin diagnostic for "this match
+  // shows on one team's side but not the other" reports. For every
+  // playoff-round replay recorded by a rostered player, this checks two
+  // things: (1) does the recorded opponent resolve to ANY team's roster
+  // this season (by canonical name or registered alias)? If not, that
+  // opponent account isn't recognized as belonging to anyone — either it's
+  // missing from a roster entirely, or it's an alt account of a real roster
+  // player that was never linked as an alias via the Profiles tab. (2) when
+  // the opponent DOES resolve to a real roster player, does that player's
+  // own batch actually contain a mirrored copy of the same replay? If not,
+  // the match was only ever recorded on one side (a cross-link gap), so the
+  // OTHER team's Round Report will always come up short for it. Both are
+  // exactly what makes a Wave table look "partially missing" on one side
+  // while the other side shows the match fine.
+  if (parts[0]==='gfwl' && parts[1] && parts[2]==='data-health' && method==='GET') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    const season = normalizeSeason(parts[1]);
+    const seasonData = db.gfwl[season];
+    if (!seasonData) return json(res, 200, { unrecognizedOpponents:[], missingMirrors:[] });
+    const seasonTeams = seasonData.teams || {};
+    const seasonKey = season.toUpperCase();
+    const playerTeamMap = gfwlSeasonPlayerTeamMapSrv(seasonTeams);
+    const allBatches = Object.values(db.batches);
+    // Index once by lowercased player name for the mirror-lookup below,
+    // instead of re-filtering allBatches for every single replay.
+    const batchesByPlayer = {};
+    allBatches.forEach(b => {
+      const p = (b.player||'').toLowerCase();
+      if (!p) return;
+      (batchesByPlayer[p] = batchesByPlayer[p] || []).push(b);
+    });
+    // A player can have more than one DuelingBook account (an alt linked as
+    // an alias in Profiles). A replay's recorded opponent name is whichever
+    // ONE account they played that specific match under — it is not
+    // necessarily the same account their batch of matches happens to live
+    // in. So checking for a mirror has to look across every known name for
+    // that roster player (canonical + all aliases), not just the literal
+    // name recorded on this one replay, or an otherwise-real mirror sitting
+    // under the player's other account gets missed and wrongly flagged.
+    // rosterAliasMapCache/nameGroupCache memoize this per team since the
+    // same team is looked up repeatedly across many replays.
+    const rosterAliasMapCache = {};
+    const nameGroupCache = {}; // teamName -> Map(rosterEntry -> Set of all its names)
+    function nameGroupsFor(tName) {
+      if (nameGroupCache[tName]) return { rosterMap: rosterAliasMapCache[tName], groups: nameGroupCache[tName] };
+      const t = seasonTeams[tName];
+      const rosterMap = gfwlRosterAliasMapSrv((t && t.roster) || []);
+      const groups = new Map();
+      for (const [name, entry] of Object.entries(rosterMap)) {
+        if (!groups.has(entry)) groups.set(entry, new Set());
+        groups.get(entry).add(name);
+      }
+      rosterAliasMapCache[tName] = rosterMap;
+      nameGroupCache[tName] = groups;
+      return { rosterMap, groups };
+    }
+
+    const unrecognizedOpponents = [];
+    const missingMirrors = [];
+    const seenUnrecognized = new Set(); // dedupe: same replayId can be checked from both mirrored sides
+    const seenMissingMirror = new Set();
+    for (const [teamName, team] of Object.entries(seasonTeams)) {
+      const { rosterMap } = nameGroupsFor(teamName);
+      const rosterNames = new Set(Object.keys(rosterMap));
+      if (!rosterNames.size) continue;
+      const rosterBatches = allBatches.filter(b => rosterNames.has((b.player||'').toLowerCase()));
+      for (const batch of rosterBatches) {
+        for (const r of (batch.replays||[])) {
+          const lbl = (r.eventLabel||'').toUpperCase().trim();
+          const round = gfwlPlayoffRoundFromLabelInSeasonSrv(lbl, seasonKey);
+          if (!round) continue; // not a playoff-round replay for this season
+          const recordedOpponent = (r.parsed && r.parsed.oppName) || r.oppName || '';
+          const oppName = recordedOpponent.toLowerCase().trim();
+          if (!oppName) continue;
+          const oppTeamName = playerTeamMap[oppName];
+          if (!oppTeamName) {
+            const dk = teamName+'|'+round+'|'+r.replayId;
+            if (!seenUnrecognized.has(dk)) {
+              seenUnrecognized.add(dk);
+              unrecognizedOpponents.push({ team: teamName, player: batch.player, round, replayId: r.replayId, recordedOpponent });
+            }
+            continue;
+          }
+          if (oppTeamName === teamName) continue; // same-team pairing would be a data error of its own kind; skip here
+          const { rosterMap: oppRosterMap, groups: oppGroups } = nameGroupsFor(oppTeamName);
+          const oppEntry = oppRosterMap[oppName];
+          const oppNames = oppEntry ? (oppGroups.get(oppEntry) || new Set([oppName])) : new Set([oppName]);
+          const hasMirror = [...oppNames].some(n => (batchesByPlayer[n] || []).some(ob => (ob.replays||[]).some(orep => orep.replayId === r.replayId)));
+          if (!hasMirror) {
+            const mk = [teamName, oppTeamName].sort().join('|')+'|'+round+'|'+r.replayId;
+            if (!seenMissingMirror.has(mk)) {
+              seenMissingMirror.add(mk);
+              missingMirrors.push({ team: teamName, player: batch.player, opponentTeam: oppTeamName, opponent: recordedOpponent, round, replayId: r.replayId });
+            }
+          }
+        }
+      }
+    }
+    return json(res, 200, { unrecognizedOpponents, missingMirrors });
   }
 
   // ── PATCH /api/gfwl/:season — update season data (admin only) ────────────

@@ -1141,6 +1141,7 @@ select{cursor:pointer}
         <button onclick="gfwlAddTeam()" style="background:none;border:1px solid var(--green);color:var(--green);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">+ Team</button>
         <button onclick="gfwlBulkImportTeams()" style="background:none;border:1px solid var(--green);color:var(--green);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">⬆ Teams</button>
         <button onclick="gfwlSyncRosters()" style="background:none;border:1px solid var(--blue);color:var(--blue);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer" title="Auto-fill rosters from player profiles">↺ Rosters</button>
+        <button onclick="gfwlOpenDataHealth(_gfwlCurrentSeason)" style="background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer" title="Find playoff matches that show on one team's side but not the other">🩺 Data Health</button>
         <button onclick="gfwlAutoImportSchedule(_gfwlCurrentSeason||'S9',_S9_SCHEDULE,true).then(()=>gfwlLoadSeason(_gfwlCurrentSeason||'S9'))" style="background:none;border:1px solid var(--dim);color:var(--dim);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer" title="Force re-import schedule from embedded data">↺ Schedule</button>
         <button onclick="gfwlImportSchedule()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">⬆ Schedule</button>
         <button onclick="gfwlNewSeason()" style="background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">+ Season</button>
@@ -3831,6 +3832,108 @@ async function gfwlSyncRosters(season) {
   return synced;
 }
 
+// Renders the /api/gfwl/:season/data-health report — surfaces exactly the
+// two ways a Round Report ends up "partially missing" on one team's side:
+// an opponent name the league doesn't recognize as belonging to any
+// roster this season (unrecognizedOpponents — a missing roster entry, or
+// an alt account never linked as an alias in Profiles), and a match that
+// only exists on one side of the pairing (missingMirrors — a cross-link
+// gap at data-entry time). Admin only.
+async function gfwlOpenDataHealth(season) {
+  if (!season) { alert('Select a season first.'); return; }
+  const main = document.getElementById('gfwl-main');
+  main.innerHTML = '';
+
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap';
+  const back = document.createElement('button');
+  back.textContent = '← '+season;
+  back.style.cssText = 'background:none;border:none;color:var(--muted);font-family:monospace;font-size:12px;cursor:pointer;padding:0';
+  back.onclick = () => gfwlLoadSeason(season);
+  hdr.appendChild(back);
+  const title = document.createElement('div');
+  title.style.cssText = 'font-size:18px;font-weight:bold;color:var(--red);font-family:monospace;flex:1';
+  title.textContent = season+' — Data Health';
+  hdr.appendChild(title);
+  main.appendChild(hdr);
+
+  const loadingEl = document.createElement('div');
+  loadingEl.style.cssText = 'color:var(--muted);font-size:12px;font-family:monospace';
+  loadingEl.textContent = 'Scanning every playoff-tagged replay for '+season+'...';
+  main.appendChild(loadingEl);
+
+  let report;
+  try {
+    report = await fetch(API+'/gfwl/'+season+'/data-health', { headers: authHeaders() }).then(r=>r.json());
+  } catch(e) { report = null; }
+  loadingEl.remove();
+
+  if (!report || report.error) {
+    const errEl = document.createElement('div');
+    errEl.style.cssText = 'color:var(--red);font-size:12px;font-family:monospace';
+    errEl.textContent = 'Could not run the data-health check: ' + (report && report.error ? report.error : 'unknown error');
+    main.appendChild(errEl);
+    return;
+  }
+
+  const { unrecognizedOpponents, missingMirrors } = report;
+  if (!unrecognizedOpponents.length && !missingMirrors.length) {
+    const okEl = document.createElement('div');
+    okEl.style.cssText = 'color:var(--green);font-size:13px;font-family:monospace;padding:20px 0';
+    okEl.textContent = '✓ No issues found — every playoff-tagged replay this season resolves cleanly on both sides.';
+    main.appendChild(okEl);
+    return;
+  }
+
+  function makeIssueSection(titleText, colorVar, explainer, rows, columns) {
+    const sec = gfwlMakeSection(titleText + ' (' + rows.length + ')');
+    sec.style.marginBottom = '16px';
+    main.appendChild(sec);
+    const expl = document.createElement('div');
+    expl.style.cssText = 'font-size:11px;color:var(--muted);margin-bottom:10px;max-width:760px';
+    expl.textContent = explainer;
+    sec.appendChild(expl);
+    if (!rows.length) {
+      const noneEl = document.createElement('div');
+      noneEl.style.cssText = 'font-size:12px;color:var(--dim);font-family:monospace;margin-bottom:16px';
+      noneEl.textContent = 'None found.';
+      sec.appendChild(noneEl);
+      return;
+    }
+    const table = document.createElement('table');
+    table.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px';
+    const thead = document.createElement('thead');
+    const hRow = document.createElement('tr');
+    hRow.style.cssText = 'border-bottom:1px solid var(--border)';
+    hRow.innerHTML = columns.map(c => `<th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:normal;font-size:10px;letter-spacing:.08em">${c}</th>`).join('');
+    thead.appendChild(hRow);
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    rows.forEach(row => {
+      const tr = document.createElement('tr');
+      tr.style.cssText = 'border-bottom:1px solid var(--border2)';
+      tr.innerHTML = row.map(cell => `<td style="padding:5px 8px;font-family:monospace;color:var(--text)">${cell}</td>`).join('');
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    sec.appendChild(table);
+  }
+
+  makeIssueSection(
+    '⚠ UNRECOGNIZED OPPONENTS', 'var(--red)',
+    'Someone on the roster played a tagged playoff match against a name that isn\'t recognized as belonging to ANY team this season — either that account is missing from the opponent\'s roster entirely, or it\'s an alt account of a real roster player that has never been linked as an alias in the Profiles tab. Until it\'s linked (or added to the roster), the match will keep showing on this side only.',
+    unrecognizedOpponents.map(x => [x.team, x.player, x.round, x.recordedOpponent, x.replayId]),
+    ['TEAM', 'PLAYER', 'ROUND', 'RECORDED OPPONENT', 'REPLAY ID']
+  );
+
+  makeIssueSection(
+    '⚠ ONE-SIDED MATCHES (missing mirror)', 'var(--amber)',
+    'This match resolves to a real roster player on both sides, but only one side\'s account has a saved copy of it — the other player\'s batch has no matching replay ID. That\'s why the Round Report shows the match under one team but not the other. Re-saving/re-submitting the replay under the missing side\'s account will fix it.',
+    missingMirrors.map(x => [x.team, x.player, 'vs', x.opponentTeam+' — '+x.opponent, x.round, x.replayId]),
+    ['RECORDED BY (TEAM)', 'PLAYER', '', 'MISSING FROM', 'ROUND', 'REPLAY ID']
+  );
+}
+
 function gfwlImportSchedule() {
   document.getElementById('gfwl-schedule-inp').click();
 }
@@ -5395,7 +5498,11 @@ async function gfwlOpenWeekReport(season, teamName, wk, oppTeamName, seasonRepla
   chartSec.innerHTML += '<canvas id="gfwl-week-chart" style="width:100%;max-height:200px"></canvas><div id="gfwl-week-legend" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:4px"></div>';
 
   const deckCounts = {};
-  [...wkReplays, ...oppWkReplays].forEach(x => {
+  // Only this team's own decks (wkReplays), not the opponent's
+  // (oppWkReplays) too — same fix as the playoff Round Report chart: a
+  // team's "decks used" page should reflect only the team whose profile
+  // this report was opened from, not both sides combined.
+  wkReplays.forEach(x => {
     const r = x.replay||x;
     const player = x.player || '';
     let d = r.myDeckOverride;
@@ -5407,7 +5514,7 @@ async function gfwlOpenWeekReport(season, teamName, wk, oppTeamName, seasonRepla
     if (d && d !== 'Unknown') deckCounts[d] = (deckCounts[d]||0)+1;
   });
   const deckEntries = Object.entries(deckCounts).sort((a,b)=>b[1]-a[1]);
-  if (deckEntries.length) buildDonutChart('gfwl-week-chart','gfwl-week-legend', deckEntries, 'Week '+wk+' Decks');
+  if (deckEntries.length) buildDonutChart('gfwl-week-chart','gfwl-week-legend', deckEntries, teamName+' — Week '+wk+' Decks');
 }
 
 // ── Round Report — same as gfwlOpenWeekReport but for a playoff round
@@ -5669,8 +5776,13 @@ async function gfwlOpenRoundReport(season, teamName, round, oppTeamName, seasonR
   const deckCounts = {};
   const firstWave = allWaveNums.length ? allWaveNums[0] : 1;
   const wave1Home = homeByWave[1] || homeByWave[firstWave] || [];
-  const wave1Opp = oppByWave[1] || oppByWave[firstWave] || [];
-  [...wave1Home, ...wave1Opp].forEach(x => {
+  // Only the home team's (teamName's, i.e. whichever team's profile this
+  // Round Report was opened from) own Wave 1 decks are counted here — NOT
+  // the opponent's decks too. Previously this combined both sides
+  // ([...wave1Home, ...wave1Opp]), which double-counted the round (e.g. 6
+  // decks per side showing as 12 total) and mixed in the opponent's deck
+  // choices, which isn't what "decks used" for this team's own page means.
+  wave1Home.forEach(x => {
     const r = x.replay||x;
     const player = x.player || '';
     let d = r.myDeckOverride;
@@ -5682,7 +5794,7 @@ async function gfwlOpenRoundReport(season, teamName, round, oppTeamName, seasonR
     if (d && d !== 'Unknown') deckCounts[d] = (deckCounts[d]||0)+1;
   });
   const deckEntries2 = Object.entries(deckCounts).sort((a,b)=>b[1]-a[1]);
-  if (deckEntries2.length) buildDonutChart('gfwl-week-chart','gfwl-week-legend', deckEntries2, round+' Wave 1 Decks');
+  if (deckEntries2.length) buildDonutChart('gfwl-week-chart','gfwl-week-legend', deckEntries2, teamName+' — '+round+' Wave 1 Decks');
 }
 
 // ── Helper: create labeled section ────────────────────────────────────────────
@@ -7105,6 +7217,91 @@ function renderRPS() {
 // ══════════════════════════════════════════════════════════════════════
 // DECK VIEWER
 // ══════════════════════════════════════════════════════════════════════
+// ── Detect a replay whose stored data looks incomplete or wrong, beyond the
+// simple "timed out" / "never got any data" cases. Two extra signals:
+//   1. The match's own recorded score (myW/oppW/draws) implies N games were
+//      played, but fewer than N Game records actually got parsed — a strong
+//      sign DuelingBook returned truncated play data on the original fetch.
+//   2. The match has a recorded score at all, but NO card data anywhere
+//      (not even inside individual games) — an aggregation/parse failure.
+// This deliberately does NOT flag things like "Game 2 only has 7 unique
+// cards while Game 1 has 10" on their own — differing card counts between
+// games of the same match are completely normal (not every card in a deck
+// gets drawn/played every game), so that alone isn't evidence of failure.
+function replayNeedsRetry(r) {
+  if (r.timedOut) return true;
+  const hasRaw = (r.allPlays && r.allPlays.length) || (r.plays && r.plays.length);
+  const p = r.parsed;
+  if (!p && !hasRaw) return true;
+  if (p) {
+    const expectedGames = (Number(p.myW)||0) + (Number(p.oppW)||0) + (Number(p.draws)||0);
+    const gameCount = (p.games||[]).length;
+    if (expectedGames > 0 && gameCount < expectedGames) return true;
+    if (expectedGames > 0 && !(p.allMine && p.allMine.length) && !(p.games||[]).some(g => (g.mine&&g.mine.length) || (g.opp&&g.opp.length))) return true;
+  }
+  return false;
+}
+function replayRetryReason(r) {
+  if (r.timedOut) return 'timed out';
+  const hasRaw = (r.allPlays && r.allPlays.length) || (r.plays && r.plays.length);
+  const p = r.parsed;
+  if (!p && !hasRaw) return 'no data';
+  if (p) {
+    const expectedGames = (Number(p.myW)||0) + (Number(p.oppW)||0) + (Number(p.draws)||0);
+    const gameCount = (p.games||[]).length;
+    if (expectedGames > 0 && gameCount < expectedGames) return `only ${gameCount}/${expectedGames} games parsed`;
+    if (expectedGames > 0 && !(p.allMine && p.allMine.length) && !(p.games||[]).some(g => (g.mine&&g.mine.length) || (g.opp&&g.opp.length))) return 'scored but no cards';
+  }
+  return 'incomplete';
+}
+
+// ── Retry one replay: fresh fetch from DuelingBook + re-parse + persist.
+// Used by both the per-row retry button and "Retry All" below. Unlike the
+// original add-replay flow, this always overwrites the existing replay
+// record via a dedicated PATCH endpoint (so it works whether the replay
+// was previously timedOut or already had wrong/partial parsed data —
+// the plain POST /replay endpoint silently no-ops for the latter case).
+// Saving here is what makes the fix stick: cards, deck-type classification
+// (computed live from cards on every render), RPS choices, and any GFWL
+// Archive stats that read this batch all pick up the corrected data next
+// time they're loaded, instead of only fixing the current in-memory view.
+async function retryOneReplay(r) {
+  if (!_activeBatch) return { ok:false, error:'No active batch' };
+  const rid = r.replayId;
+  try {
+    const result = await loadReplay(rid);
+    if (result.timedOut) return { ok:false, error: result._error || 'timeout', stillFailing:true };
+    const _rpa = (result.allPlays||result.plays||[]).filter(p=>p.play==='RPS').map(p=>({game:p.game||null,player1:p.player1||null,player2:p.player2||null,player1_choice:p.player1_choice||p.p1pick||null,player2_choice:p.player2_choice||p.p2pick||null,pick:p.pick||null}));
+    const _ppa = parseMatch(rid, result.allPlays||result.plays||[], _activeBatch.player||'', _activeBatch.aliases||[], result.player1, result.player2);
+    if (!_ppa) return { ok:false, error:'Could not parse (name/alias mismatch?)' };
+    const _psa = { games:_ppa.games, allMine:_ppa.allMine, allOpp:_ppa.allOpp, oppName:_ppa.oppName, myW:_ppa.myW, oppW:_ppa.oppW, draws:_ppa.draws, score:_ppa.score, result:_ppa.result };
+    const updateFields = { plays:_rpa, allPlays:[], timedOut:false, player1:result.player1||null, player2:result.player2||null, oppName:_ppa.oppName||'', parsed:_psa };
+
+    // Mutate the existing entry in place (rather than rebuilding it) so any
+    // fields this function doesn't know about — manual deck/result overrides
+    // in particular — are left untouched instead of being silently dropped.
+    const localReplay = (_activeBatch.replays||[]).find(rep => rep.replayId === rid);
+    if (localReplay) Object.assign(localReplay, updateFields);
+
+    if (_activeBatch.id) {
+      const saveRes = await fetch(`${API}/batches/${_activeBatch.id}/replay/${encodeURIComponent(rid)}`, {
+        method:'PATCH', headers: authHeaders(), body: JSON.stringify(updateFields)
+      });
+      if (!saveRes.ok) return { ok:false, error:'Re-fetched OK but save to server failed' };
+    }
+
+    // Keep any cached GFWL batch snapshot in sync so Archive stats (records,
+    // deck charts, round reports) reflect the fix immediately if that season
+    // is re-opened this session, without needing a full page reload.
+    window._gfwlBatchCache = window._gfwlBatchCache || {};
+    window._gfwlBatchCache[_activeBatch.id] = _activeBatch;
+
+    return { ok:true };
+  } catch(e) {
+    return { ok:false, error: e.message };
+  }
+}
+
 function buildDeck() {
   if (!_activeBatch) return;
   _matches = [];
@@ -7224,8 +7421,10 @@ function buildDeck() {
       _matches.push(m);
     }
   }
-  // Collect failed replays (timedOut or no parsed data = no deck image/type generated)
-  const failedReplays = replays.filter(r => r.timedOut || (!r.parsed && !(r.allPlays&&r.allPlays.length) && !(r.plays&&r.plays.length)));
+  // Collect failed/suspect replays: outright failures (timedOut, no data at
+  // all) plus ones whose parsed data doesn't add up to their own recorded
+  // score — see replayNeedsRetry() above.
+  const failedReplays = replays.filter(replayNeedsRetry);
 
   // Populate year filter dropdown from event dates
   const yearSel = document.getElementById('deck-year-filter');
@@ -7256,12 +7455,45 @@ function buildDeck() {
   }
   renderMatchSidebar('');
 
-  // Render failed replays panel (timedOut / no deck data = Unknown)
+  // Render failed/suspect replays panel (timedOut / no data / score-vs-parsed
+  // mismatch — see replayNeedsRetry() above)
   const failedEl = document.getElementById('failed-replays-list');
   if (failedEl) {
     if (failedReplays.length) {
       failedEl.style.display = 'block';
-      failedEl.innerHTML = `<div style="font-size:9px;color:var(--red);font-family:monospace;letter-spacing:.1em;padding:4px 2px 3px">⚠ FAILED REPLAYS (${failedReplays.length}) — click ↺ to retry</div>`;
+      failedEl.innerHTML = '';
+
+      const hdr = document.createElement('div');
+      hdr.style.cssText = 'display:flex;align-items:center;gap:6px;padding:4px 2px 3px';
+      const hdrLbl = document.createElement('div');
+      hdrLbl.style.cssText = 'font-size:9px;color:var(--red);font-family:monospace;letter-spacing:.1em;flex:1';
+      hdrLbl.textContent = `⚠ NEEDS RETRY (${failedReplays.length})`;
+      hdr.appendChild(hdrLbl);
+      const retryAllBtn = document.createElement('button');
+      retryAllBtn.textContent = '↺ Retry All';
+      retryAllBtn.title = 'Re-fetch and re-parse every replay listed below, from DuelingBook';
+      retryAllBtn.style.cssText = 'background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:9px;padding:2px 8px;border-radius:3px;cursor:pointer;flex-shrink:0';
+      retryAllBtn.onclick = async () => {
+        if (!_activeBatch) return;
+        const targets = [...failedReplays];
+        retryAllBtn.disabled = true;
+        const DELAY = 2000; // matches other bulk-retry flows — server queues concurrent CapSolver calls
+        let succeeded = 0, stillFailing = 0;
+        for (let i = 0; i < targets.length; i++) {
+          if (_stopping) break;
+          retryAllBtn.textContent = `…${i+1}/${targets.length}`;
+          st(`Retrying ${i+1}/${targets.length} — ${targets[i].replayId}`, 'var(--amber)');
+          if (i > 0) await sleep(DELAY);
+          const res = await retryOneReplay(targets[i]);
+          if (res.ok) succeeded++; else stillFailing++;
+        }
+        st(`Retry All done: ${succeeded} fixed, ${stillFailing} still failing`, stillFailing ? 'var(--amber)' : 'var(--green)');
+        _batchLocalEdits = true;
+        buildDeck();
+      };
+      hdr.appendChild(retryAllBtn);
+      failedEl.appendChild(hdr);
+
       for (const r of failedReplays) {
         const row = document.createElement('div');
         row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 2px;border-bottom:1px solid var(--border2)';
@@ -7272,8 +7504,13 @@ function buildDeck() {
         idEl.title = r.replayId;
         row.appendChild(idEl);
 
+        const reasonEl = document.createElement('span');
+        reasonEl.style.cssText = 'font-size:9px;color:var(--amber);font-family:monospace;flex-shrink:0';
+        reasonEl.textContent = replayRetryReason(r);
+        row.appendChild(reasonEl);
+
         const evEl = document.createElement('span');
-        evEl.style.cssText = 'font-size:9px;color:var(--amber);font-family:monospace;flex-shrink:0';
+        evEl.style.cssText = 'font-size:9px;color:var(--dim);font-family:monospace;flex-shrink:0';
         evEl.textContent = r.eventLabel || '';
         row.appendChild(evEl);
 
@@ -7284,40 +7521,14 @@ function buildDeck() {
         retryBtn.onclick = async () => {
           if (!_activeBatch) return;
           retryBtn.disabled = true; retryBtn.textContent = '…';
-          const rid = r.replayId;
-          try {
-            const result = await loadReplay(rid);
-            if (result.timedOut) {
-              retryBtn.disabled = false; retryBtn.textContent = '↺';
-              st('Still failing — try again later (' + (result._error||'timeout') + ')', 'var(--red)');
-              return;
-            }
-            const _rpa = (result.allPlays||result.plays||[]).filter(p=>p.play==='RPS').map(p=>({game:p.game||null,player1:p.player1||null,player2:p.player2||null,player1_choice:p.player1_choice||p.p1pick||null,player2_choice:p.player2_choice||p.p2pick||null,pick:p.pick||null}));
-            const _ppa = parseMatch(rid, result.allPlays||result.plays||[], _activeBatch.player||'', _activeBatch.aliases||[], result.player1, result.player2);
-            const _psa = _ppa ? { games:_ppa.games, allMine:_ppa.allMine, allOpp:_ppa.allOpp, oppName:_ppa.oppName, myW:_ppa.myW, oppW:_ppa.oppW, draws:_ppa.draws, score:_ppa.score, result:_ppa.result } : null;
-            const _oppName = _ppa ? _ppa.oppName : '';
-            const _evLabel = r.eventLabel || '';
-            // Replace the replay in the batch
-            _activeBatch.replays = (_activeBatch.replays||[]).filter(rep => rep.replayId !== rid);
-            const entry = { replayId:rid, plays:_rpa, allPlays:[], timedOut:false, player1:result.player1||null, player2:result.player2||null, oppName:_oppName, parsed:_psa, eventLabel:_evLabel };
-            _activeBatch.replays.push(entry);
-            // Save to server
-            if (_activeBatch.id) {
-              try {
-                await fetch(`${API}/batches/${_activeBatch.id}/replay`, {
-                  method:'POST', headers: authHeaders(),
-                  body: JSON.stringify({replayId:rid,plays:_rpa,allPlays:[],timedOut:false,oppName:_oppName,player1:result.player1||null,player2:result.player2||null,parsed:_psa,eventLabel:_evLabel})
-                });
-              } catch(e) { console.warn('Server save after retry failed:', e.message); }
-            }
-            st('Retry successful: '+rid, 'var(--green)');
-            row.remove();
-            if (!document.querySelector('#failed-replays-list div[style*="amber"]')?.nextSibling) failedEl.style.display = 'none';
-            buildDeck();
-          } catch(e) {
+          const result = await retryOneReplay(r);
+          if (!result.ok) {
             retryBtn.disabled = false; retryBtn.textContent = '↺';
-            st('Retry failed: '+e.message, 'var(--red)');
+            st((result.stillFailing ? 'Still failing — try again later (' : 'Retry failed (') + result.error + ')', 'var(--red)');
+            return;
           }
+          st('Retry successful: '+r.replayId, 'var(--green)');
+          buildDeck();
         };
         row.appendChild(retryBtn);
 
@@ -7332,7 +7543,6 @@ function buildDeck() {
             await fetch(`${API}/batches/${_activeBatch.id}/replay/${encodeURIComponent(r.replayId)}`, { method:'DELETE', headers: authHeaders() }).catch(()=>{});
           }
           row.remove();
-          if (!failedEl.querySelector('div[style]')?.nextSibling) failedEl.style.display = 'none';
           buildDeck();
         };
         row.appendChild(delBtn);
