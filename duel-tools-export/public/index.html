@@ -2310,6 +2310,26 @@ const LIMITED   = new Set(['black luster soldier - envoy of the beginning','brea
 const SEMILIM   = new Set(['abyss soldier','dark scorpion - chick the yellow','manticore of darkness','marauding captain','night assailant','vampire lord','creature swap','emergency provisions','level limit - area b','nobleman of crossout','reinforcement of the army','upstart goblin','good goblin housekeeping','gravity bind','last turn']);
 function banLimit(name){ const n=(name||'').toLowerCase().trim(); if(FORBIDDEN.has(n))return 0; if(LIMITED.has(n))return 1; if(SEMILIM.has(n))return 2; return 3; }
 
+// Standard printed-decklist ordering: Monsters, then Spells, then Traps,
+// alphabetical within each group. Anything without a recognizable type
+// (card_type missing/unresolved) sorts after all three, so a lookup miss
+// never silently reshuffles a real card out of its group.
+function cardTypeSortOrder(cardType) {
+  const t = (cardType||'').toLowerCase();
+  if (t.includes('monster')) return 0;
+  if (t.includes('spell'))   return 1;
+  if (t.includes('trap'))    return 2;
+  return 3;
+}
+// Sorts a list of {name,...} card objects by type then name. getType(card)
+// should return that card's card_type string (or '' / undefined if unknown).
+function sortCardsByTypeThenName(cards, getType) {
+  return [...cards].sort((a,b) => {
+    const td = cardTypeSortOrder(getType(a)) - cardTypeSortOrder(getType(b));
+    return td !== 0 ? td : (a.name||'').localeCompare(b.name||'');
+  });
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // STATE
 // ══════════════════════════════════════════════════════════════════════
@@ -8455,25 +8475,48 @@ function showBuildEventYDKModal(eventId, matches) {
     checkboxes.forEach(cb => { cb.checked = selAllCb.checked; });
   };
 
-  // Build button
-  const buildBtn = document.createElement('button');
-  buildBtn.textContent = '↓ Download YDK';
-  buildBtn.style.cssText = 'background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:13px;padding:10px;border-radius:6px;cursor:pointer;flex-shrink:0;margin-top:4px';
-  buildBtn.onclick = async () => {
+  // Action row: a small icon-only YDK download button, plus a big "Generate"
+  // button (the primary action) that renders the merged decklist as an
+  // image instead of just handing back a raw .ydk file.
+  const actionRow = document.createElement('div');
+  actionRow.style.cssText = 'display:flex;gap:8px;margin-top:4px;flex-shrink:0';
+
+  const dlBtn = document.createElement('button');
+  dlBtn.textContent = '⬇';
+  dlBtn.title = 'Download the merged .ydk file';
+  dlBtn.style.cssText = 'background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-weight:bold;font-size:14px;padding:10px 14px;border-radius:6px;cursor:pointer;flex-shrink:0';
+  dlBtn.onclick = async () => {
     const selected = matches.filter((m, i) => checkboxes[i].checked);
     if (!selected.length) { alert('Select at least one replay'); return; }
-    buildBtn.textContent = 'Building...'; buildBtn.disabled = true;
+    dlBtn.disabled = true;
     await buildEventYDKFromMatches(eventId, selected);
+    dlBtn.disabled = false;
+  };
+  actionRow.appendChild(dlBtn);
+
+  const genBtn = document.createElement('button');
+  genBtn.textContent = 'Generate';
+  genBtn.style.cssText = 'flex:1;background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:13px;padding:10px;border-radius:6px;cursor:pointer';
+  genBtn.onclick = async () => {
+    const selected = matches.filter((m, i) => checkboxes[i].checked);
+    if (!selected.length) { alert('Select at least one replay'); return; }
+    genBtn.textContent = 'Generating...'; genBtn.disabled = true;
+    await generateEventDecklistImage(eventId, selected);
     overlay.remove();
   };
-  box.appendChild(buildBtn);
+  actionRow.appendChild(genBtn);
+
+  box.appendChild(actionRow);
 
   overlay.appendChild(box);
   overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
   document.body.appendChild(overlay);
 }
 
-async function buildEventYDKFromMatches(eventId, matches) {
+// Merges the "allMine" cards across a set of matches into one deduped,
+// type-then-alphabetically sorted decklist. Shared by the YDK download and
+// the decklist image generator so both always agree on contents/order.
+async function mergeCardsFromMatches(matches) {
   // For each unique card, take the MAX copies seen in any single match (not summed
   // across matches, and not just a flag). A card that showed up as 2x in one match
   // and 1x in another should end up as 2x in the merged deck — never 3x.
@@ -8493,7 +8536,7 @@ async function buildEventYDKFromMatches(eventId, matches) {
     }
   }
   const uniqueCards = Object.values(cardSet);
-  if (!uniqueCards.length) { st('No cards found in selected replays', 'var(--red)'); return; }
+  if (!uniqueCards.length) return [];
 
   // Look up missing IDs
   const needIds = uniqueCards.filter(c => !c.id);
@@ -8511,6 +8554,20 @@ async function buildEventYDKFromMatches(eventId, matches) {
   // Clamp final quantity to the banlist limit (and 3 copies max) as a safety net.
   uniqueCards.forEach(c => { c.qty = Math.min(c.qty, banLimit(c.name), 3); });
 
+  // Resolve card_type for everything we have an id for, so the merged list
+  // can follow the standard Monsters → Spells → Traps → alphabetical
+  // decklist ordering instead of whatever order cards happened to be
+  // encountered in across the selected replays.
+  const idsToResolve = uniqueCards.map(c => c.id).filter(Boolean);
+  if (idsToResolve.length) { try { await lookupPasscodeNames(idsToResolve); } catch(e) {} }
+
+  return sortCardsByTypeThenName(uniqueCards, c => c.id && window._cardDataCache[c.id] ? window._cardDataCache[c.id].card_type : '');
+}
+
+async function buildEventYDKFromMatches(eventId, matches) {
+  const uniqueCards = await mergeCardsFromMatches(matches);
+  if (!uniqueCards.length) { st('No cards found in selected replays', 'var(--red)'); return; }
+
   const NL = String.fromCharCode(10);
   const lines = ["#created by Kerem's Duel Tools - "+eventId, '#main'];
   for (const c of uniqueCards) { if (c.id) { for (let i=0;i<c.qty;i++) lines.push(String(c.id)); } }
@@ -8526,6 +8583,43 @@ async function buildEventYDKFromMatches(eventId, matches) {
   const withId = uniqueCards.filter(c=>c.id);
   const totalCopies = withId.reduce((a,c)=>a+c.qty,0);
   st('Downloaded: ' + fname + ' (' + withId.length + ' unique cards, ' + totalCopies + ' total)', 'var(--green)');
+}
+
+// Renders the merged decklist as a printable/saveable image page — same
+// pattern as the In-Game Tools deck builder's "Export Image" (igtExportImage):
+// a new window, dark background, card tiles grouped under bold section
+// headers, with a Print/Save button. Here the sections are Monsters/Spells/
+// Traps (rather than Main/Side/Extra) since this is a merged representative
+// decklist built from replay data, not a single real deck with its own
+// side/extra split.
+async function generateEventDecklistImage(eventId, matches) {
+  const uniqueCards = await mergeCardsFromMatches(matches);
+  if (!uniqueCards.length) { st('No cards found in selected replays', 'var(--red)'); return; }
+
+  const SECTION_NAMES = ['MONSTERS', 'SPELLS', 'TRAPS', 'OTHER'];
+  const bySection = [[], [], [], []];
+  uniqueCards.forEach(c => {
+    const cardType = c.id && window._cardDataCache[c.id] ? window._cardDataCache[c.id].card_type : '';
+    bySection[cardTypeSortOrder(cardType)].push(c);
+  });
+
+  let html = '';
+  SECTION_NAMES.forEach((label, i) => {
+    const sec = bySection[i];
+    if (!sec.length) return;
+    const count = sec.reduce((a,c)=>a+c.qty,0);
+    const exp = []; sec.forEach(c => { for (let i2=0;i2<c.qty;i2++) exp.push(c); });
+    const cards = exp.map(c => c.id
+      ? '<div style="width:71px;height:103px;overflow:hidden;display:inline-block;vertical-align:top;margin:2px"><img src="https://images.ygoprodeck.com/images/cards/'+c.id+'.jpg" style="width:100%;height:100%;object-fit:cover" crossorigin="anonymous"/></div>'
+      : '<div style="width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-block;vertical-align:top;margin:2px;font-size:8px;color:#666;padding:3px">'+c.name+'</div>'
+    ).join('');
+    html += '<div style="margin-bottom:20px"><div style="font-size:14px;font-weight:700;color:#00e596;letter-spacing:2px;margin-bottom:8px">'+label+' ('+count+')</div><div style="line-height:0">'+cards+'</div></div>';
+  });
+
+  const win = window.open('', '_blank', 'width=900,height=800');
+  if (!win) { st('Allow popups', 'var(--amber)'); return; }
+  win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+eventId+' Decklist</title><style>body{background:#06060c;margin:0;padding:20px;font-family:monospace}.btn{background:#00e596;color:#050508;border:none;padding:10px 24px;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:16px;display:block}.hdr{color:#f5a623;font-size:16px;font-weight:700;letter-spacing:2px;margin-bottom:16px}@media print{.btn{display:none}body{padding:0}}</style></head><body><div class="hdr">🏆 '+eventId+'</div><button class="btn" onclick="window.print()">Print / Save as Image</button>'+html+'<\/body><\/html>');
+  win.document.close();
 }
 
 // Legacy alias
@@ -9982,17 +10076,7 @@ function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlaye
         cards.push({ id: info.id || info.serial_number || '', name, displayCount, raw: stat.max });
       }
     }
-    const typeOrder = n => {
-      const t = (cardIdMap[n] && cardIdMap[n].card_type) ? cardIdMap[n].card_type.toLowerCase() : '';
-      if (t.includes('monster')) return 0;
-      if (t.includes('spell'))   return 1;
-      if (t.includes('trap'))    return 2;
-      return 3;
-    };
-    return cards.sort((a,b) => {
-      const td = typeOrder(a.name) - typeOrder(b.name);
-      return td !== 0 ? td : a.name.localeCompare(b.name);
-    });
+    return sortCardsByTypeThenName(cards, c => cardIdMap[c.name] && cardIdMap[c.name].card_type);
   }
 
   // Build all games
@@ -10017,7 +10101,13 @@ function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlaye
         }
       });
     });
-    return Object.values(combined).sort((a,b) => a.name.localeCompare(b.name));
+    // Same Monsters → Spells → Traps → alphabetical ordering as each
+    // individual game's card list (buildGameCards above) — this used to sort
+    // purely alphabetically, which is why the "ENTIRE MATCH" combined view
+    // interleaved monsters/spells/traps (e.g. "Magician of Faith" landing
+    // between "Jar of Greed" and "Metamorphosis") while each Game N section
+    // right below it was correctly grouped by type.
+    return sortCardsByTypeThenName(Object.values(combined), c => cardIdMap[c.name] && cardIdMap[c.name].card_type);
   }
 
   const allMine = combineAcrossGames('mine');
