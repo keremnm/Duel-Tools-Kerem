@@ -8415,10 +8415,14 @@ function showBuildEventYDKModal(eventId, matches) {
   const box = document.createElement('div');
   box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:460px;width:100%;display:flex;flex-direction:column;gap:10px;max-height:80vh;overflow:hidden';
 
-  // Header
+  // Header — also shows whose replays these are, since a decklist merged
+  // from a pile of "vs X" matches is meaningless without knowing which side
+  // of each match it was built from.
+  const playerName = eventDecklistPlayerName(matches);
   const hdr = document.createElement('div');
   hdr.style.cssText = 'display:flex;align-items:center;gap:8px;flex-shrink:0';
-  hdr.innerHTML = '<span style="font-family:monospace;font-weight:bold;font-size:13px;color:var(--amber)">Build YDK — '+eventId+'</span>';
+  hdr.innerHTML = '<span style="font-family:monospace;font-weight:bold;font-size:13px;color:var(--amber)">Build YDK — '+eventId+'</span>'
+    + (playerName ? '<span style="font-family:monospace;font-size:12px;color:var(--muted)">· '+playerName+'</span>' : '');
   const closeBtn = document.createElement('button');
   closeBtn.textContent = '✕';
   closeBtn.style.cssText = 'margin-left:auto;background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer';
@@ -8513,6 +8517,13 @@ function showBuildEventYDKModal(eventId, matches) {
   document.body.appendChild(overlay);
 }
 
+// Whose replays a merged event decklist was built from — every match record
+// carries the batch owner's username as .player, so any one of them (they're
+// all the same person's replays) tells us who this decklist belongs to.
+function eventDecklistPlayerName(matches) {
+  return (matches && matches[0] && matches[0].player) || (_activeBatch && _activeBatch.player) || '';
+}
+
 // Merges the "allMine" cards across a set of matches into one deduped,
 // type-then-alphabetically sorted decklist. Shared by the YDK download and
 // the decklist image generator so both always agree on contents/order.
@@ -8592,9 +8603,14 @@ async function buildEventYDKFromMatches(eventId, matches) {
 // Traps (rather than Main/Side/Extra) since this is a merged representative
 // decklist built from replay data, not a single real deck with its own
 // side/extra split.
+function _escapeHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 async function generateEventDecklistImage(eventId, matches) {
   const uniqueCards = await mergeCardsFromMatches(matches);
   if (!uniqueCards.length) { st('No cards found in selected replays', 'var(--red)'); return; }
+  const playerName = eventDecklistPlayerName(matches);
 
   const SECTION_NAMES = ['MONSTERS', 'SPELLS', 'TRAPS', 'OTHER'];
   const bySection = [[], [], [], []];
@@ -8609,16 +8625,26 @@ async function generateEventDecklistImage(eventId, matches) {
     if (!sec.length) return;
     const count = sec.reduce((a,c)=>a+c.qty,0);
     const exp = []; sec.forEach(c => { for (let i2=0;i2<c.qty;i2++) exp.push(c); });
+    // No crossorigin attribute here — this page never touches the images via
+    // canvas (it relies on the browser's own Print/Save-as-image dialog), and
+    // setting crossorigin on an <img> whose server doesn't answer with a
+    // matching CORS header makes the browser refuse to display it at all,
+    // which is what was silently blanking out every card image. Each image
+    // also gets a data-name + onerror fallback (wired up by the script at
+    // the bottom of the page) so a genuinely bad/unresolvable id shows a
+    // labeled box instead of a broken-image icon.
     const cards = exp.map(c => c.id
-      ? '<div style="width:71px;height:103px;overflow:hidden;display:inline-block;vertical-align:top;margin:2px"><img src="https://images.ygoprodeck.com/images/cards/'+c.id+'.jpg" style="width:100%;height:100%;object-fit:cover" crossorigin="anonymous"/></div>'
-      : '<div style="width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-block;vertical-align:top;margin:2px;font-size:8px;color:#666;padding:3px">'+c.name+'</div>'
+      ? '<div style="width:71px;height:103px;overflow:hidden;display:inline-block;vertical-align:top;margin:2px"><img src="https://images.ygoprodeck.com/images/cards/'+c.id+'.jpg" data-name="'+_escapeHtml(c.name)+'" style="width:100%;height:100%;object-fit:cover"/></div>'
+      : '<div style="width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-block;vertical-align:top;margin:2px;font-size:8px;color:#666;padding:3px">'+_escapeHtml(c.name)+'</div>'
     ).join('');
     html += '<div style="margin-bottom:20px"><div style="font-size:14px;font-weight:700;color:#00e596;letter-spacing:2px;margin-bottom:8px">'+label+' ('+count+')</div><div style="line-height:0">'+cards+'</div></div>';
   });
 
   const win = window.open('', '_blank', 'width=900,height=800');
   if (!win) { st('Allow popups', 'var(--amber)'); return; }
-  win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+eventId+' Decklist</title><style>body{background:#06060c;margin:0;padding:20px;font-family:monospace}.btn{background:#00e596;color:#050508;border:none;padding:10px 24px;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:16px;display:block}.hdr{color:#f5a623;font-size:16px;font-weight:700;letter-spacing:2px;margin-bottom:16px}@media print{.btn{display:none}body{padding:0}}</style></head><body><div class="hdr">🏆 '+eventId+'</div><button class="btn" onclick="window.print()">Print / Save as Image</button>'+html+'<\/body><\/html>');
+  const titleLine = '🏆 '+eventId+(playerName ? ' <span style="color:#8a8a9a;font-weight:400">· '+_escapeHtml(playerName)+'</span>' : '');
+  const fallbackScript = "document.querySelectorAll('img[data-name]').forEach(function(img){img.onerror=function(){var n=document.createElement('div');n.style.cssText='width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-flex;align-items:center;justify-content:center;text-align:center;vertical-align:top;margin:2px;font-size:8px;color:#666;padding:3px';n.textContent=img.getAttribute('data-name');img.replaceWith(n);};});";
+  win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+eventId+' Decklist</title><style>body{background:#06060c;margin:0;padding:20px;font-family:monospace}.btn{background:#00e596;color:#050508;border:none;padding:10px 24px;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:16px;display:block}.hdr{color:#f5a623;font-size:16px;font-weight:700;letter-spacing:2px;margin-bottom:16px}@media print{.btn{display:none}body{padding:0}}</style></head><body><div class="hdr">'+titleLine+'</div><button class="btn" onclick="window.print()">Print / Save as Image</button>'+html+'<script>'+fallbackScript+'<\/script><\/body><\/html>');
   win.document.close();
 }
 
@@ -9517,6 +9543,31 @@ async function renderMatchDisplay(m) {
   async function refreshCards() {
     content.innerHTML = '';
     const showCards = _showOpp ? m.allOpp : m.allMine;
+
+    // Re-sort every card list (the combined "entire match" list AND each
+    // individual game's list) by Monster → Spell → Trap → alphabetical,
+    // using authoritative type data from the YGOPRODeck cache rather than
+    // whatever card_type happened to get captured from the raw replay while
+    // parsing (cardIdMap) — that source is built only from "card" objects
+    // that showed up in the play log, which doesn't reliably cover every
+    // card, so cards it missed fell into an "unknown type" bucket and threw
+    // off the ordering (this is what was still showing as mixed even after
+    // switching the sort itself to type-then-name — the sort was right, the
+    // type data feeding it wasn't complete). Doing this here, at render
+    // time, means it benefits from the same reliable lookup path already
+    // used for images/merged-YDK generation, and only needs to run once per
+    // match (the arrays are sorted in place, so re-opening this match reuses
+    // the corrected order).
+    const idsToResolve = [
+      ...showCards.map(c=>c.id),
+      ...(m.games||[]).flatMap(g => [...(g.mine||[]), ...(g.opp||[])].map(c=>c.id)),
+    ].filter(Boolean);
+    if (idsToResolve.length) { try { await lookupPasscodeNames(idsToResolve); } catch(e) {} }
+    const byResolvedType = c => (c.id && window._cardDataCache[c.id]) ? window._cardDataCache[c.id].card_type : '';
+    const resortInPlace = arr => { const sorted = sortCardsByTypeThenName(arr, byResolvedType); arr.length = 0; arr.push(...sorted); };
+    resortInPlace(showCards);
+    (m.games||[]).forEach(g => { if (g.mine) resortInPlace(g.mine); if (g.opp) resortInPlace(g.opp); });
+
     const deckClass = classifyFromCards(showCards);
     // Use override if set, fall back to classifier
     const overrideKey = _showOpp ? 'oppDeckOverride' : 'myDeckOverride';
@@ -15074,12 +15125,19 @@ function igtExportImage(target) {
   let html = '';
   for (const sec of secs) {
     const exp=[]; sec.cards.forEach(c=>{for(let i=0;i<c.qty;i++)exp.push(c);});
-    const cards=exp.map(c=>c.id?'<div style="width:71px;height:103px;overflow:hidden;display:inline-block;vertical-align:top;margin:2px"><img src="https://images.ygoprodeck.com/images/cards/'+c.id+'.jpg" style="width:100%;height:100%;object-fit:cover" crossorigin="anonymous"/></div>':'<div style="width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-block;vertical-align:top;margin:2px;font-size:8px;color:#666;padding:3px">'+c.name+'</div>').join('');
+    // No crossorigin attribute — this page never touches the images via
+    // canvas (it relies on the browser's own Print/Save dialog), and setting
+    // crossorigin="anonymous" on an <img> whose server doesn't answer with a
+    // matching CORS header makes the browser refuse to display it at all.
+    // data-name + the fallback script below swap in a text tile if an image
+    // ever fails to load for any other reason (bad id, network hiccup, etc).
+    const cards=exp.map(c=>c.id?'<div style="width:71px;height:103px;overflow:hidden;display:inline-block;vertical-align:top;margin:2px"><img src="https://images.ygoprodeck.com/images/cards/'+c.id+'.jpg" data-name="'+_escapeHtml(c.name)+'" style="width:100%;height:100%;object-fit:cover"/></div>':'<div style="width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-block;vertical-align:top;margin:2px;font-size:8px;color:#666;padding:3px">'+_escapeHtml(c.name)+'</div>').join('');
     html+='<div style="margin-bottom:20px"><div style="font-size:14px;font-weight:700;color:#00e596;letter-spacing:2px;margin-bottom:8px">'+sec.label+' ('+sec.count+')</div><div style="line-height:0">'+cards+'</div></div>';
   }
   const win=window.open('','_blank','width=900,height=800');
   if(!win){st('Allow popups','var(--amber)');return;}
-  win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Decklist</title><style>body{background:#06060c;margin:0;padding:20px;font-family:monospace}.btn{background:#00e596;color:#050508;border:none;padding:10px 24px;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:16px;display:block}@media print{.btn{display:none}body{padding:0}}</style></head><body><button class="btn" onclick="window.print()">Print / Save as PDF</button>'+html+'<\/body><\/html>');
+  const fallbackScript = "document.querySelectorAll('img[data-name]').forEach(function(img){img.onerror=function(){var n=document.createElement('div');n.style.cssText='width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-flex;align-items:center;justify-content:center;text-align:center;vertical-align:top;margin:2px;font-size:8px;color:#666;padding:3px';n.textContent=img.getAttribute('data-name');img.replaceWith(n);};});";
+  win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Decklist</title><style>body{background:#06060c;margin:0;padding:20px;font-family:monospace}.btn{background:#00e596;color:#050508;border:none;padding:10px 24px;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:16px;display:block}@media print{.btn{display:none}body{padding:0}}</style></head><body><button class="btn" onclick="window.print()">Print / Save as PDF</button>'+html+'<script>'+fallbackScript+'<\/script><\/body><\/html>');
   win.document.close();
 }
 
