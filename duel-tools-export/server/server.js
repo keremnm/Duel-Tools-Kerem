@@ -85,15 +85,20 @@ async function connectPostgres() {
     }, 1000);
   });
   console.log('Connected to PostgreSQL, batches:', Object.keys(db.batches).length);
-  // Build event date catalog from hardcoded anchors (instant, no network)
-  // Only runs if catalog is empty — avoids redundant work on reconnects
-  const knownDates = Object.keys(db.eventDates).filter(k=>!k.startsWith('_')).length;
-  if (knownDates < 10) {
-    const added = buildEventCatalog();
-    if (added > 0) {
-      await saveDB('eventDates');
-      console.log('[EventDates] Built catalog with', Object.keys(db.eventDates).filter(k=>!k.startsWith('_')).length, 'entries');
-    }
+  // Merge the hardcoded event-date catalog into db.eventDates on every startup
+  // (instant, no network — buildEventCatalog() only adds brand-new codes or
+  // upgrades a coarse year-only 'catalog' entry with a more precise date, and
+  // never touches a 'formatlibrary-live' entry). This used to only run once
+  // ever (guarded by "fewer than 10 known dates"), which meant a code deploy
+  // that added new event codes or corrected a date in EVENT_DATE_CATALOG had
+  // no effect on an already-seeded production database — the only way to
+  // apply it was a manual POST /api/event-dates/refresh. Running it
+  // unconditionally (it's pure local lookups, not a network scrape) means new
+  // events and date corrections just take effect on the next deploy.
+  const added = buildEventCatalog();
+  if (added > 0) {
+    await saveDB('eventDates');
+    console.log('[EventDates] Catalog merge: added/upgraded', added, 'entries, total:', Object.keys(db.eventDates).filter(k=>!k.startsWith('_')).length);
   }
   // Flush any data that was buffered while Postgres was down
   if (_pendingFlushKeys && _pendingFlushKeys.size > 0) {
@@ -2151,14 +2156,23 @@ function normalizeSeason(s) {
 }
 
 // ── Format Library event date scraper ───────────────────────────────────────
+// Values may be either a bare year ('2026' — coarse fallback, sorts as Jan 1
+// of that year) or an exact 'YYYY-MM-DD' date pulled straight from Format
+// Library's Event Database (https://formatlibrary.com/events). Exact dates
+// are what let events within the same year sort in their true chronological
+// order instead of tying at the same Jan-1 placeholder — always prefer an
+// exact date over a bare year when one is known.
 const EVENT_DATE_CATALOG = {
-  'GFCEU26': '2026',
-  'SESB18': '2026',
-  'PWCQ88': '2026',
-  'FLC40': '2026',
-  'CLASH26': '2026',
-  'GWW02': '2026',
-  'PWCQ87': '2026',
+  'PWCQ90': '2026-08-09',
+  'PWCQ89': '2026-07-26',
+  'FLC41': '2026-07-20',
+  'GFCEU26': '2026-07-11',
+  'PWCQ88': '2026-06-13',
+  'SESB18': '2026-06-12',
+  'CLASH26': '2026-06-06',
+  'GWW02': '2026-05-30',
+  'PWCQ87': '2026-05-23',
+  'FLC40': '2026-05-18',
   'GFC25': '2026',
   'PWCQ86': '2026',
   'GSLP26A': '2026',
@@ -2426,12 +2440,22 @@ const EVENT_DATE_CATALOG = {
   'SJCPOM05': '2005',
 };
 
-// Build the event date catalog from CSV-sourced data into db.eventDates
+// Build the event date catalog from CSV-sourced data into db.eventDates.
+// Catalog values are either a bare year ('2026') or an exact 'YYYY-MM-DD'.
 function buildEventCatalog() {
   let added = 0;
-  for (const [code, yr] of Object.entries(EVENT_DATE_CATALOG)) {
-    if (!db.eventDates[code]) {
-      db.eventDates[code] = { date: yr + '-01-01', source: 'catalog' };
+  for (const [code, val] of Object.entries(EVENT_DATE_CATALOG)) {
+    const dateStr = /^\d{4}$/.test(val) ? val + '-01-01' : val;
+    const existing = db.eventDates[code];
+    if (!existing) {
+      db.eventDates[code] = { date: dateStr, source: 'catalog' };
+      added++;
+    } else if (existing.source === 'catalog' && existing.date !== dateStr) {
+      // Upgrade a coarse year-only placeholder (or a stale catalog value)
+      // with a more precise one — e.g. once we learn the exact date for a
+      // code we previously only had the year for. Never overwrites a
+      // 'formatlibrary-live'-sourced entry, which is already authoritative.
+      db.eventDates[code] = { date: dateStr, source: 'catalog' };
       added++;
     }
   }

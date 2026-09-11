@@ -186,16 +186,27 @@ select{cursor:pointer}
 .player-lbl{font-size:13px;color:var(--muted);margin-bottom:10px;display:flex;align-items:center;gap:8px}
 .player-lbl .pname{color:var(--text);font-weight:bold}
 .player-lbl .pcnt{color:var(--dim);font-size:10px}
-.card-grid{display:flex;flex-wrap:wrap;gap:5px}
-.cth{position:relative;cursor:pointer;border-radius:5px;overflow:hidden;transition:transform .15s,box-shadow .15s;flex-shrink:0;width:76px;height:112px;background:#0f0f1a}
+/* Always exactly 10 columns — cards fill the available row width (1fr each)
+   instead of wrapping whenever a fixed pixel size runs out of room. That
+   used to mean a wide screen crammed 16+ cards into one row while the next
+   row sat mostly empty; now every row (but the last, which just has fewer
+   cards) uses the full width, so a short trailing row of leftover cards
+   still lines up in the same 10-slot grid instead of floating small and
+   left-aligned. */
+.card-grid{display:grid;grid-template-columns:repeat(10,1fr);gap:6px}
+.cth{position:relative;cursor:pointer;border-radius:5px;overflow:hidden;transition:transform .15s,box-shadow .15s;width:100%;aspect-ratio:59/86;background:#0f0f1a}
 .cth:hover{transform:scale(1.08);z-index:10;box-shadow:0 8px 24px rgba(0,0,0,.8)}
 .cth img{display:block;width:100%;height:100%;object-fit:cover}
 .cth .tip{display:none;position:absolute;bottom:100%;left:50%;transform:translateX(-50%);background:#0a0a14;border:1px solid var(--border2);color:#ddd;font-size:10px;padding:3px 8px;border-radius:4px;white-space:nowrap;z-index:20;pointer-events:none;margin-bottom:5px;max-width:200px;overflow:hidden;text-overflow:ellipsis}
 .cth:hover .tip{display:block}
 .cth.opp{outline:2px solid rgba(155,114,245,0.4);outline-offset:-2px}
 .nodata{font-size:12px;color:var(--dim);padding:10px 0;line-height:1.7}
-.sm .cth{width:52px;height:76px}
-.lg .cth{width:100px;height:147px}
+/* S/M/D size toggle: M (no modifier) fills the full 10-column width; S and
+   D (large) cap each card's width within its column instead of stretching
+   it, so the toggle still controls visible card size while the row itself
+   always stays at 10 columns. */
+.card-grid.sm .cth{max-width:60px;margin:0 auto}
+.card-grid.lg .cth{max-width:130px;margin:0 auto}
 
 /* ── Deck Data tab ── */
 #pg-deckdata{flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:18px 20px;scrollbar-width:thin;scrollbar-color:var(--border) var(--bg)}
@@ -1784,14 +1795,23 @@ const _eventSeriesOrder = {
   'TISIS': '2020-10', 'FLC':  '2020-01',
 };
 
+// Values may be either a bare year ('2026' — coarse fallback, sorts as Jan 1
+// of that year) or an exact 'YYYY-MM-DD' date from Format Library's Event
+// Database (https://formatlibrary.com/events). This is only a pre-fetch /
+// offline fallback — the live, server-synced _eventDates (populated by
+// loadEventDates()) always takes priority in getEventDate() when present.
+// Kept in sync with the server's EVENT_DATE_CATALOG in server/server.js.
 const _STATIC_EVENT_DATES = {
-  'GFCEU26': '2026',
-  'SESB18': '2026',
-  'PWCQ88': '2026',
-  'FLC40': '2026',
-  'CLASH26': '2026',
-  'GWW02': '2026',
-  'PWCQ87': '2026',
+  'PWCQ90': '2026-08-09',
+  'PWCQ89': '2026-07-26',
+  'FLC41': '2026-07-20',
+  'GFCEU26': '2026-07-11',
+  'PWCQ88': '2026-06-13',
+  'SESB18': '2026-06-12',
+  'CLASH26': '2026-06-06',
+  'GWW02': '2026-05-30',
+  'PWCQ87': '2026-05-23',
+  'FLC40': '2026-05-18',
   'GFC25': '2026',
   'PWCQ86': '2026',
   'GSLP26A': '2026',
@@ -2067,8 +2087,10 @@ function inferEventYear(code) {
   if (!code) return null;
   const c = code.toUpperCase().trim();
   if (/^S\d+$/i.test(c)) return null; // GFWL season
-  const yr = _STATIC_EVENT_DATES[c];
-  return yr ? (yr + '-01-01') : null;
+  const val = _STATIC_EVENT_DATES[c];
+  if (!val) return null;
+  // val is either a bare year ('2026') or an exact 'YYYY-MM-DD' date
+  return /^\d{4}$/.test(val) ? val + '-01-01' : val;
 }
 
 function getEventDate(code) {
@@ -3683,11 +3705,16 @@ async function gfwlAddTeam() {
   _gfwlCurrentSeason = gfwlNormalizeSeason(_gfwlCurrentSeason);
   const name = window.prompt('Team name:','');
   if (!name) return;
+  if (!_gfwlData[_gfwlCurrentSeason]) _gfwlData[_gfwlCurrentSeason] = { teams:{} };
+  if (!_gfwlData[_gfwlCurrentSeason].teams) _gfwlData[_gfwlCurrentSeason].teams = {};
+  // A name that already exists (case-insensitive) would otherwise get wiped
+  // below — this button always sends empty roster/addDrops/schedule, which
+  // the server PATCH endpoint applies as-is (it's a plain Object.assign).
+  const existingKey = Object.keys(_gfwlData[_gfwlCurrentSeason].teams).find(nm => nm.toLowerCase() === name.trim().toLowerCase());
+  if (existingKey) { alert('"'+existingKey+'" already exists this season — use the ✎ edit button on that team to change its conference instead. Adding it again here would erase its roster.'); return; }
   const conf = window.prompt('Conference (Red/Blue/Yellow):','Blue');
   if (!conf) return;
   const teamData = { conference: conf.trim(), roster:[], addDrops:[], schedule:[], notes:'', aliases:[] };
-  if (!_gfwlData[_gfwlCurrentSeason]) _gfwlData[_gfwlCurrentSeason] = { teams:{} };
-  if (!_gfwlData[_gfwlCurrentSeason].teams) _gfwlData[_gfwlCurrentSeason].teams = {};
   _gfwlData[_gfwlCurrentSeason].teams[name.trim()] = teamData;
   try {
     const r2 = await fetch(`${API}/gfwl/${_gfwlCurrentSeason}/team/${encodeURIComponent(name.trim())}`, {
@@ -4029,6 +4056,13 @@ Yellow - D-Generation X"></textarea>
     if (!_gfwlData[_gfwlCurrentSeason]) _gfwlData[_gfwlCurrentSeason] = { teams:{} };
     if (!_gfwlData[_gfwlCurrentSeason].teams) _gfwlData[_gfwlCurrentSeason].teams = {};
 
+    // Case-insensitive lookup of already-known team names, so re-importing a
+    // conference list (e.g. re-pasting the regular-season conference sheet
+    // mid-season) matches an existing team like "birdcage" even if it's
+    // stored with different casing, instead of silently creating a duplicate.
+    const existingLower = {};
+    for (const nm of Object.keys(_gfwlData[_gfwlCurrentSeason].teams)) existingLower[nm.toLowerCase()] = nm;
+
     // Show progress
     const progWrap = document.getElementById('gfwl-import-progress');
     const progBar  = document.getElementById('gfwl-import-bar');
@@ -4041,15 +4075,28 @@ Yellow - D-Generation X"></textarea>
       const entry = entries[i];
       if (progBar) progBar.style.width = Math.round((i/entries.length)*100)+'%';
       if (progLbl) progLbl.textContent = (i+1)+'/'+entries.length+' — '+entry.name;
-      const teamData = { conference: entry.conference, aliases: entry.aliases, roster:[], addDrops:[], schedule:[], notes:'' };
-      _gfwlData[_gfwlCurrentSeason].teams[entry.name] = teamData;
+
+      // IMPORTANT: a team already on this season's roster (roster, add/drop
+      // log, schedule, notes) must keep all of that — this import only ever
+      // touches conference + aliases. Sending a fresh object with empty
+      // roster:[]/addDrops:[]/schedule:[] for a team that already has real
+      // data would silently wipe it, since the server PATCH endpoint does a
+      // plain Object.assign of whatever fields are sent.
+      const existingKey = existingLower[entry.name.toLowerCase()];
+      const existingTeam = existingKey ? _gfwlData[_gfwlCurrentSeason].teams[existingKey] : null;
+      const canonicalName = existingKey || entry.name;
+      const teamData = existingTeam
+        ? { ...existingTeam, conference: entry.conference, aliases: entry.aliases.length ? entry.aliases : (existingTeam.aliases||[]) }
+        : { conference: entry.conference, aliases: entry.aliases, roster:[], addDrops:[], schedule:[], notes:'' };
+      _gfwlData[_gfwlCurrentSeason].teams[canonicalName] = teamData;
+      if (!existingKey) existingLower[entry.name.toLowerCase()] = canonicalName;
       try {
-        await fetch(`${API}/gfwl/${_gfwlCurrentSeason}/team/${encodeURIComponent(entry.name)}`, {
+        await fetch(`${API}/gfwl/${_gfwlCurrentSeason}/team/${encodeURIComponent(canonicalName)}`, {
           method:'PATCH', headers: authHeaders(),
           body: JSON.stringify(teamData)
         });
         added++;
-      } catch(e) { console.warn('Failed to save team', entry.name, e); }
+      } catch(e) { console.warn('Failed to save team', canonicalName, e); }
     }
     if (progBar) progBar.style.width = '100%';
     if (progLbl) progLbl.textContent = 'Done! '+added+' teams imported.';
@@ -8505,16 +8552,17 @@ async function buildGrid(container, cards, cardSize, showOpp) {
     container.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:10px">No cards detected.</div>';
     return;
   }
-  const sizeMap = {S:'52px',M:'72px',D:'96px'};
-  const w = sizeMap[cardSize]||'72px';
-  const h = cardSize==='S'?'76px':cardSize==='D'?'141px':'106px';
+  // Sizing is handled entirely by the .card-grid/.cth CSS now (always 10
+  // columns filling the row width, with .sm/.lg capping each card's size
+  // within its column) — no inline width/height here, so cards actually
+  // grow to fill a short trailing row instead of staying pinned to a fixed
+  // pixel size regardless of how much room is available.
   const grid = document.createElement('div');
   grid.className = 'card-grid ' + (cardSize==='S'?'sm':cardSize==='D'?'lg':'');
   for (const card of cards) {
     for (let i=0;i<card.displayCount;i++) {
       const wrap = document.createElement('div');
       wrap.className = 'cth' + (showOpp?' opp':'');
-      wrap.style.cssText = `width:${w};height:${h}`;
       const tip  = document.createElement('div'); tip.className='tip'; tip.textContent=card.name;
       const img  = document.createElement('img');
       img.alt = card.name; img.loading = 'lazy';
@@ -11944,6 +11992,22 @@ async function showDeckViewPopup(deck) {
         const _imgId = window._cardDataCache[p]?.imageId || p;
         img.src = `https://images.ygoprodeck.com/images/cards/${_imgId}.jpg`;
       }
+      // Shared "can't render this tile" fallback — used whether or not a name
+      // was ever resolved, so an invalid/typo'd passcode (unresolvable name)
+      // shows up as an obvious, labeled placeholder instead of a blank box.
+      const showUnresolved = () => {
+        img.style.display = 'none';
+        const n = document.createElement('div');
+        n.style.cssText = 'font-size:7px;color:'+(name?'var(--muted)':'var(--red)')+';font-family:monospace;word-break:break-word;padding:2px;background:var(--card2);border-radius:3px;min-height:60px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;cursor:pointer;border:1px solid '+(name?'var(--border)':'var(--red)');
+        if (name) {
+          n.textContent = name;
+          n.onclick = () => showCardPopup(name);
+        } else {
+          n.innerHTML = '⚠ UNKNOWN CARD<br>#'+p;
+          n.title = 'Passcode '+p+' did not match any known card — likely a typo in the source decklist.';
+        }
+        wrap.appendChild(n);
+      };
       img.onerror = async () => {
         // Alternate art passcode — try looking up the correct image by card name
         if (name) {
@@ -11952,23 +12016,13 @@ async function showDeckViewPopup(deck) {
             const _d = await _r.json();
             const _baseId = _d?.data?.[0]?.id;
             if (_baseId && String(_baseId) !== String(p)) {
-              img.onerror = () => {
-                img.style.display='none';
-                const n = document.createElement('div');
-                n.style.cssText='font-size:7px;color:var(--muted);font-family:monospace;word-break:break-word;padding:2px;background:var(--card2);border-radius:3px;min-height:60px;display:flex;align-items:center;justify-content:center;text-align:center;cursor:pointer';
-                n.textContent = name; wrap.appendChild(n);
-                n.onclick = () => showCardPopup(name);
-              };
+              img.onerror = showUnresolved;
               img.src = `https://images.ygoprodeck.com/images/cards/${_baseId}.jpg`;
               return;
             }
           } catch(e) {}
         }
-        img.style.display='none';
-        const n = document.createElement('div');
-        n.style.cssText='font-size:7px;color:var(--muted);font-family:monospace;word-break:break-word;padding:2px;background:var(--card2);border-radius:3px;min-height:60px;display:flex;align-items:center;justify-content:center;text-align:center;cursor:pointer';
-        n.textContent = name; wrap.appendChild(n);
-        n.onclick = () => showCardPopup(name);
+        showUnresolved();
       };
       wrap.onclick = () => showCardPopup(name);
       wrap.appendChild(img);
