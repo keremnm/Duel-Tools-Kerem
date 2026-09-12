@@ -8633,17 +8633,30 @@ async function generateEventDecklistImage(eventId, matches) {
     // also gets a data-name + onerror fallback (wired up by the script at
     // the bottom of the page) so a genuinely bad/unresolvable id shows a
     // labeled box instead of a broken-image icon.
-    const cards = exp.map(c => c.id
-      ? '<div style="width:71px;height:103px;overflow:hidden;display:inline-block;vertical-align:top;margin:2px"><img src="https://images.ygoprodeck.com/images/cards/'+c.id+'.jpg" data-name="'+_escapeHtml(c.name)+'" style="width:100%;height:100%;object-fit:cover"/></div>'
-      : '<div style="width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-block;vertical-align:top;margin:2px;font-size:8px;color:#666;padding:3px">'+_escapeHtml(c.name)+'</div>'
-    ).join('');
+    //
+    // Image URL must use the card's ygoprodeck *imageId* (window._cardDataCache),
+    // not the raw passcode from the replay — for alternate-art prints those two
+    // differ, and hitting the image CDN with the wrong one 404s (which is why
+    // some cards were showing and some weren't). This mirrors the same
+    // imageId lookup already used for the deck-viewer card grid.
+    const fallbackBoxStyle = 'width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-flex;align-items:center;justify-content:center;text-align:center;vertical-align:top;margin:2px;font-size:8px;line-height:1.3;color:#666;padding:3px;box-sizing:border-box';
+    const cards = exp.map(c => {
+      const imgId = c.id && window._cardDataCache[c.id] ? (window._cardDataCache[c.id].imageId || c.id) : c.id;
+      return imgId
+        ? '<div style="width:71px;height:103px;overflow:hidden;display:inline-block;vertical-align:top;margin:2px"><img src="https://images.ygoprodeck.com/images/cards/'+imgId+'.jpg" data-name="'+_escapeHtml(c.name)+'" style="width:100%;height:100%;object-fit:cover"/></div>'
+        : '<div style="'+fallbackBoxStyle+'">'+_escapeHtml(c.name)+'</div>';
+    }).join('');
     html += '<div style="margin-bottom:20px"><div style="font-size:14px;font-weight:700;color:#00e596;letter-spacing:2px;margin-bottom:8px">'+label+' ('+count+')</div><div style="line-height:0">'+cards+'</div></div>';
   });
 
   const win = window.open('', '_blank', 'width=900,height=800');
   if (!win) { st('Allow popups', 'var(--amber)'); return; }
   const titleLine = '🏆 '+eventId+(playerName ? ' <span style="color:#8a8a9a;font-weight:400">· '+_escapeHtml(playerName)+'</span>' : '');
-  const fallbackScript = "document.querySelectorAll('img[data-name]').forEach(function(img){img.onerror=function(){var n=document.createElement('div');n.style.cssText='width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-flex;align-items:center;justify-content:center;text-align:center;vertical-align:top;margin:2px;font-size:8px;color:#666;padding:3px';n.textContent=img.getAttribute('data-name');img.replaceWith(n);};});";
+  // line-height:1.3 (explicit, not inherited) keeps a wrapped multi-word
+  // fallback name legible — the surrounding card row uses line-height:0 to
+  // keep image tiles tight together, and without overriding it here a
+  // fallback box's wrapped text lines collapse on top of each other.
+  const fallbackScript = "document.querySelectorAll('img[data-name]').forEach(function(img){img.onerror=function(){var n=document.createElement('div');n.style.cssText='width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-flex;align-items:center;justify-content:center;text-align:center;vertical-align:top;margin:2px;font-size:8px;line-height:1.3;color:#666;padding:3px;box-sizing:border-box';n.textContent=img.getAttribute('data-name');img.replaceWith(n);};});";
   win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+eventId+' Decklist</title><style>body{background:#06060c;margin:0;padding:20px;font-family:monospace}.btn{background:#00e596;color:#050508;border:none;padding:10px 24px;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:16px;display:block}.hdr{color:#f5a623;font-size:16px;font-weight:700;letter-spacing:2px;margin-bottom:16px}@media print{.btn{display:none}body{padding:0}}</style></head><body><div class="hdr">'+titleLine+'</div><button class="btn" onclick="window.print()">Print / Save as Image</button>'+html+'<script>'+fallbackScript+'<\/script><\/body><\/html>');
   win.document.close();
 }
@@ -15131,12 +15144,17 @@ function igtExportImage(target) {
     // matching CORS header makes the browser refuse to display it at all.
     // data-name + the fallback script below swap in a text tile if an image
     // ever fails to load for any other reason (bad id, network hiccup, etc).
-    const cards=exp.map(c=>c.id?'<div style="width:71px;height:103px;overflow:hidden;display:inline-block;vertical-align:top;margin:2px"><img src="https://images.ygoprodeck.com/images/cards/'+c.id+'.jpg" data-name="'+_escapeHtml(c.name)+'" style="width:100%;height:100%;object-fit:cover"/></div>':'<div style="width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-block;vertical-align:top;margin:2px;font-size:8px;color:#666;padding:3px">'+_escapeHtml(c.name)+'</div>').join('');
+    const cards=exp.map(c=>{
+      const imgId = c.id && window._cardDataCache[c.id] ? (window._cardDataCache[c.id].imageId || c.id) : c.id;
+      return imgId
+        ? '<div style="width:71px;height:103px;overflow:hidden;display:inline-block;vertical-align:top;margin:2px"><img src="https://images.ygoprodeck.com/images/cards/'+imgId+'.jpg" data-name="'+_escapeHtml(c.name)+'" style="width:100%;height:100%;object-fit:cover"/></div>'
+        : '<div style="width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-flex;align-items:center;justify-content:center;text-align:center;vertical-align:top;margin:2px;font-size:8px;line-height:1.3;color:#666;padding:3px;box-sizing:border-box">'+_escapeHtml(c.name)+'</div>';
+    }).join('');
     html+='<div style="margin-bottom:20px"><div style="font-size:14px;font-weight:700;color:#00e596;letter-spacing:2px;margin-bottom:8px">'+sec.label+' ('+sec.count+')</div><div style="line-height:0">'+cards+'</div></div>';
   }
   const win=window.open('','_blank','width=900,height=800');
   if(!win){st('Allow popups','var(--amber)');return;}
-  const fallbackScript = "document.querySelectorAll('img[data-name]').forEach(function(img){img.onerror=function(){var n=document.createElement('div');n.style.cssText='width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-flex;align-items:center;justify-content:center;text-align:center;vertical-align:top;margin:2px;font-size:8px;color:#666;padding:3px';n.textContent=img.getAttribute('data-name');img.replaceWith(n);};});";
+  const fallbackScript = "document.querySelectorAll('img[data-name]').forEach(function(img){img.onerror=function(){var n=document.createElement('div');n.style.cssText='width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-flex;align-items:center;justify-content:center;text-align:center;vertical-align:top;margin:2px;font-size:8px;line-height:1.3;color:#666;padding:3px;box-sizing:border-box';n.textContent=img.getAttribute('data-name');img.replaceWith(n);};});";
   win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Decklist</title><style>body{background:#06060c;margin:0;padding:20px;font-family:monospace}.btn{background:#00e596;color:#050508;border:none;padding:10px 24px;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:16px;display:block}@media print{.btn{display:none}body{padding:0}}</style></head><body><button class="btn" onclick="window.print()">Print / Save as PDF</button>'+html+'<script>'+fallbackScript+'<\/script><\/body><\/html>');
   win.document.close();
 }
