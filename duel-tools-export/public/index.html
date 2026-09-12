@@ -1397,6 +1397,7 @@ select{cursor:pointer}
                 <button class="dd-btn-sec" onclick="igtPrResetOrder()" style="font-size:11px;padding:6px 10px" title="Reset order (keep players)">↺</button>
                 <button class="dd-btn-sec" onclick="igtPrClear()" style="font-size:11px;padding:6px 10px" title="Clear all players">✕</button>
               </div>
+              <div id="igt-pr-order" style="display:flex;flex-direction:column;margin-top:8px"></div>
               <div id="igt-pr-result" style="font-size:14px;font-weight:bold;color:var(--green);text-align:center;margin-top:8px;min-height:18px"></div>
             </div>
 
@@ -15359,6 +15360,7 @@ function igtPrPick(){
   for(let i=shuffled.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[shuffled[i],shuffled[j]]=[shuffled[j],shuffled[i]];}
   _igtPrOrder=shuffled;
   const orderEl=document.getElementById('igt-pr-order');
+  if(!orderEl)return;
   orderEl.innerHTML='';
   shuffled.forEach((p,i)=>{
     const row=document.createElement('div');
@@ -15367,10 +15369,11 @@ function igtPrPick(){
     const nm=document.createElement('span');nm.textContent=p;
     row.appendChild(num);row.appendChild(nm);orderEl.appendChild(row);
   });
-  document.getElementById('igt-pr-result').textContent='';
+  const resEl=document.getElementById('igt-pr-result');
+  if(resEl)resEl.textContent='';
 }
-function igtPrResetOrder(){_igtPrOrder=[];document.getElementById('igt-pr-order').innerHTML='';document.getElementById('igt-pr-result').textContent='';}
-function igtPrClear(){_igtPrPlayers=[];_igtPrOrder=[];igtPrRenderList();document.getElementById('igt-pr-order').innerHTML='';document.getElementById('igt-pr-result').textContent='';}
+function igtPrResetOrder(){_igtPrOrder=[];const o=document.getElementById('igt-pr-order');if(o)o.innerHTML='';const r=document.getElementById('igt-pr-result');if(r)r.textContent='';}
+function igtPrClear(){_igtPrPlayers=[];_igtPrOrder=[];igtPrRenderList();const o=document.getElementById('igt-pr-order');if(o)o.innerHTML='';const r=document.getElementById('igt-pr-result');if(r)r.textContent='';}
 
 // ══════════════════════════════════════════════════════════════════════
 // INIT
