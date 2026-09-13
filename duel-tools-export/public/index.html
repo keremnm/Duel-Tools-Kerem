@@ -9101,18 +9101,18 @@ function renderMatchSidebar(query) {
     wl.innerHTML = `<span style="color:var(--green)">${w}W</span> <span style="color:var(--dim)">—</span> <span style="color:var(--red)">${l}L</span> <span style="color:var(--dim)">· ${items.length}</span>`;
     hdr.appendChild(arrow); hdr.appendChild(lbl); hdr.appendChild(wl);
 
-    // Build Event YDK button — for real non-GFWL event IDs with no saved decklist,
-    // and ALSO for the "Untagged" bucket when the active batch is a Temporary Batch.
-    // Temp batches have no event-tagging workflow around them, so "Untagged" is the
-    // only group they'll ever produce — without this, the merge-YDK tool would be
+    // Build Event YDK button — for real event IDs (including GFWL season
+    // groups, e.g. "S9") with no saved decklist, and ALSO for the "Untagged"
+    // bucket when the active batch is a Temporary Batch. Temp batches have no
+    // event-tagging workflow around them, so "Untagged" is the only group
+    // they'll ever produce — without this, the merge-YDK tool would be
     // unreachable for Temporary Batches entirely.
-    const _isGFWLGroup = typeof isGFWLSeason === 'function' && isGFWLSeason(key);
     const _isTempBatch = !!(_activeBatch && _activeBatch.isTemp);
     const _eligibleGroup = key !== 'Untagged' || _isTempBatch;
     // Temp Batch YDK export is available to anyone who can create a Temp
     // Batch (miner/admin/limited) — not gated to miner+ like the real-event
     // decklist-building workflow below is.
-    if ((_isTempBatch || isMinerRole(_userRole)) && _eligibleGroup && !_showOpp && !_isGFWLGroup) {
+    if ((_isTempBatch || isMinerRole(_userRole)) && _eligibleGroup && !_showOpp) {
       // Check both batch eventDecklists AND active profile decklists
       const _batchDecks = (_activeBatch && (_activeBatch.eventDecklists||[]));
       const _profileDecks = (_activeProfile && (_activeProfile.batches||[]).flatMap(b=>b.eventDecklists||[])) || [];
