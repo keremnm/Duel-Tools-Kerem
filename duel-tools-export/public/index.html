@@ -12131,6 +12131,33 @@ async function showDeckViewPopup(deck) {
     }
   } else { passcodes.forEach(p => mainPasscodes.push(p)); }
 
+  // The earlier lookupPasscodeNames(passcodes) call only resolved the MAIN
+  // deck (parseYDK deliberately excludes side, since it's only meant to feed
+  // deck-type classification) — so side-deck cards never got a card_type in
+  // the cache, and sorting them below would have nothing to sort by. Resolve
+  // whatever's still missing (normally just the side deck) before sorting.
+  const stillUnresolved = [...mainPasscodes, ...sidePasscodes].filter(p => !window._cardDataCache[p]);
+  if (stillUnresolved.length) { try { await lookupPasscodeNames(stillUnresolved); } catch(e) {} }
+
+  // Decklists come out of the YDK in whatever order the file happens to list
+  // them — sort each section Monster → Spell → Trap → alphabetical (the
+  // standard printed-decklist order), same rule used everywhere else cards
+  // are grouped in this app. Type/name come from the cache lookupPasscodeNames
+  // just populated above, which covers every passcode in this deck.
+  function sortPasscodesByType(pList) {
+    return [...pList].sort((a, b) => {
+      const typeA = window._cardDataCache[a] ? window._cardDataCache[a].card_type : '';
+      const typeB = window._cardDataCache[b] ? window._cardDataCache[b].card_type : '';
+      const td = cardTypeSortOrder(typeA) - cardTypeSortOrder(typeB);
+      if (td !== 0) return td;
+      const nameA = window._passcodeCache[a] || '';
+      const nameB = window._passcodeCache[b] || '';
+      return nameA.localeCompare(nameB);
+    });
+  }
+  const sortedMainPasscodes = sortPasscodesByType(mainPasscodes);
+  const sortedSidePasscodes = sortPasscodesByType(sidePasscodes);
+
   // Fixed 10-per-row grid
   function renderCardGrid(pList, cols) {
     const grid = document.createElement('div');
@@ -12196,9 +12223,9 @@ async function showDeckViewPopup(deck) {
   }
 
   // Main deck: always 10 per row
-  renderSection('MAIN DECK', mainPasscodes, 10);
+  renderSection('MAIN DECK', sortedMainPasscodes, 10);
   // Side deck: up to 15 cards, 10 per row (2 rows max)
-  renderSection('SIDE DECK', sidePasscodes, 10);
+  renderSection('SIDE DECK', sortedSidePasscodes, 10);
 }
 
 async function screenshotDeckView(code) {
