@@ -14753,14 +14753,25 @@ function igtShowYdkeDialog(target) {
 }
 
 // ── Card tile rendering ───────────────────────────────────────────────────────
+// Tints the card art itself by zone status, so a card's status reads at a
+// glance instead of only from the small text banner: grayed out when pulled
+// from the deck entirely ("not"), blue-washed when banished, red-washed when
+// in the graveyard. The filter desaturates/darkens the art and a translucent
+// color layer on top does the actual tinting (plain alpha blend, not a CSS
+// mix-blend-mode, so it can't crush the art to black on top of the darkening
+// filter).
+const IGT_TINT_FILTER  = { not:'grayscale(1) brightness(.55)', banish:'grayscale(.5) brightness(.6)', grave:'grayscale(.5) brightness(.55)' };
+const IGT_TINT_OVERLAY = { banish:'rgba(70,110,230,.45)', grave:'rgba(210,50,50,.4)' };
+
 function igtCardTile(card, opts) {
   const size = opts.size || 72; // default bigger
   const h = Math.round(size * 1.45);
   const wrap = document.createElement('div');
   wrap.style.cssText = `position:relative;width:${size}px;height:${h}px;flex-shrink:0;cursor:pointer;border-radius:3px;overflow:hidden;border:2px solid ${opts.borderColor||'transparent'};transition:border-color .1s`;
 
+  const tintFilter = opts.tint && IGT_TINT_FILTER[opts.tint];
   const img = document.createElement('img');
-  img.style.cssText = 'width:100%;height:100%;object-fit:cover;object-position:top;display:block';
+  img.style.cssText = 'width:100%;height:100%;object-fit:cover;object-position:top;display:block' + (tintFilter ? ';filter:'+tintFilter : '');
   img.src = card.id ? `https://images.ygoprodeck.com/images/cards_small/${card.id}.jpg` : '';
   img.alt = card.name;
   img.title = card.name;
@@ -14772,8 +14783,19 @@ function igtCardTile(card, opts) {
     nm.textContent = card.name;
     wrap.appendChild(nm);
   };
+  wrap.appendChild(img);
 
-  // Status label (SIDED IN, GRAVE, BANISH, OUT, NOT IN DECK)
+  // Color wash for banish/grave (appended after the img so it paints above
+  // it; "not"/gray needs no color layer, the filter alone handles it).
+  const tintOverlay = opts.tint && IGT_TINT_OVERLAY[opts.tint];
+  if (tintOverlay) {
+    const ov = document.createElement('div');
+    ov.style.cssText = `position:absolute;inset:0;background:${tintOverlay};pointer-events:none`;
+    wrap.appendChild(ov);
+  }
+
+  // Status label (SIDED IN, GRAVE, BANISH, OUT, NOT IN DECK) — appended last
+  // so it always sits above the tint overlay.
   if (opts.label) {
     const lbl = document.createElement('div');
     lbl.style.cssText = `position:absolute;top:0;left:0;right:0;background:${opts.labelColor||'rgba(0,0,0,.85)'};color:#fff;font-size:8px;font-weight:bold;text-align:center;padding:2px 1px;font-family:monospace;letter-spacing:.04em;line-height:1.3`;
@@ -14781,7 +14803,6 @@ function igtCardTile(card, opts) {
     wrap.appendChild(lbl);
   }
 
-  wrap.appendChild(img);
   if (opts.onClick) wrap.onclick = opts.onClick;
   return wrap;
 }
@@ -15035,7 +15056,7 @@ function igtMtRenderSection(cards, elId, countElId, gameState) {
     else if (status === 'banish') { label='BANISHED';    labelColor='rgba(80,100,200,.9)';   borderColor='var(--blue)'; }
     else if (sidedIn)  { label='SIDED IN';  labelColor='rgba(0,180,110,.85)';  borderColor='var(--green)'; }
     else if (sidedOut) { label='SIDED OUT'; labelColor='rgba(200,50,50,.85)';  borderColor='var(--red)'; }
-    const tile = igtCardTile(card, { size:78, label, labelColor, borderColor });
+    const tile = igtCardTile(card, { size:78, label, labelColor, borderColor, tint: status });
     tile.onclick = () => {
       const cycle = [undefined, 'not', 'grave', 'banish'];
       const cur = gameState[key];
@@ -15135,7 +15156,7 @@ function igtOtRenderSection(cards, elId, countElId) {
     if (status === 'not')    { label='NOT IN DECK'; labelColor='rgba(80,80,80,.9)';     borderColor='var(--dim)'; }
     if (status === 'grave')  { label='GRAVEYARD';   labelColor='rgba(30,30,30,.92)';    borderColor='#666'; }
     if (status === 'banish') { label='BANISHED';    labelColor='rgba(80,100,200,.9)';   borderColor='var(--blue)'; }
-    const tile = igtCardTile(card, { size:78, label, labelColor, borderColor });
+    const tile = igtCardTile(card, { size:78, label, labelColor, borderColor, tint: status });
     tile.onclick = () => {
       const cycle = [undefined, 'not', 'grave', 'banish'];
       const cur = _igtOtStates[key];
