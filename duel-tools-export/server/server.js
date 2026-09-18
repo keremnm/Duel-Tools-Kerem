@@ -619,6 +619,34 @@ function flipResult(r) { return r === 'w' ? 'l' : r === 'l' ? 'w' : r; }
 // cross-linked twin replay sitting in the opponent's own batch, so an
 // override trumps cross-linking instead of being visible only to whoever
 // set it.
+// Re-stamp a replay's OWN existing override fields onto its `parsed` block.
+// Any code path that replaces or rebuilds `r.parsed` from a fresh parse — a
+// retry, a migration, a cross-link upgrade — must call this immediately
+// after, no matter why the reparse happened. Overrides live in two places at
+// once (top-level r.resultOverride/r.scoreOverride/r.myDeckOverride/etc, AND
+// mirrored inside r.parsed.*), and almost every reader in this app looks at
+// r.parsed.* first. A fresh parse naturally has no idea an override exists,
+// so if this isn't called, the top-level field survives untouched while the
+// value everyone actually sees quietly reverts — which is functionally the
+// same as losing the correction. This is the single point every write path
+// should go through so "an override sticks until someone explicitly changes
+// or clears it" holds everywhere, not just in the specific spots a bug
+// report happened to surface it.
+function reapplyOverridesToParsed(r) {
+  if (!r || !r.parsed) return;
+  if (r.myDeckOverride)  r.parsed.myDeck  = r.myDeckOverride;
+  if (r.oppDeckOverride) r.parsed.oppDeck = r.oppDeckOverride;
+  if (r.resultOverride) {
+    r.parsed.resultOverride = r.resultOverride;
+    r.parsed.resultEffective = r.resultOverride;
+  } else {
+    r.parsed.resultOverride = null;
+    delete r.parsed.resultEffective;
+  }
+  r.parsed.scoreOverride = r.scoreOverride || null;
+  if (r.overrideNote) r.parsed.overrideNote = r.overrideNote;
+}
+
 function applyOverrideToReplay(r, data, flip) {
   if (data.myDeckOverride !== undefined) {
     const v = data.myDeckOverride;
@@ -670,35 +698,49 @@ function crossLinkReplay(replayData, opponentUsername, originalBatchPlayer) {
       if (existing.timedOut && !replayData.timedOut) {
         // Player B has a failed import — upgrade it with the crosslinked parsed data
         // (their perspective: result/decks are mirrored from Player A's data).
-        // A manual result/score override on A's side is the source of truth for
-        // the match outcome, so it must win here too, not the raw parsed result.
+        //
+        // IMPORTANT: existing.* may already carry a manual override that was
+        // set directly on B's own (still-timed-out) placeholder before A's
+        // real data ever arrived — e.g. someone corrected the score or the
+        // detected deck on B's copy while it was still pending. That
+        // correction was made specifically for B's record and must WIN over
+        // whatever comes mirrored from A, not get silently blanked out just
+        // because A doesn't happen to have the same override. So every
+        // override field here is "B's existing value first, A's mirrored
+        // value only as a fallback" — never the reverse.
         const origParsed2 = replayData.parsed || null;
-        const _resOv2   = replayData.resultOverride || (origParsed2 && origParsed2.resultOverride) || null;
-        const _scoreOv2 = replayData.scoreOverride  || (origParsed2 && origParsed2.scoreOverride)  || null;
-        const effResult2 = _resOv2 || (origParsed2 && origParsed2.result);
-        const effMyW2  = _scoreOv2 ? _scoreOv2.my  : (origParsed2 && origParsed2.myW);
-        const effOppW2 = _scoreOv2 ? _scoreOv2.opp : (origParsed2 && origParsed2.oppW);
+        const _resOvA   = replayData.resultOverride || (origParsed2 && origParsed2.resultOverride) || null;
+        const _scoreOvA = replayData.scoreOverride  || (origParsed2 && origParsed2.scoreOverride)  || null;
+        const finalResultOverride  = existing.resultOverride  || (_resOvA ? flipResult(_resOvA) : null);
+        const finalScoreOverride   = existing.scoreOverride   || (_scoreOvA ? { my: _scoreOvA.opp, opp: _scoreOvA.my } : null);
+        const finalMyDeckOverride  = existing.myDeckOverride  || (replayData.oppDeckOverride || null);
+        const finalOppDeckOverride = existing.oppDeckOverride || (replayData.myDeckOverride  || null);
+        const finalOverrideNote    = existing.overrideNote || replayData.overrideNote || (origParsed2 && origParsed2.overrideNote) || '';
+
+        const effResultA = _resOvA || (origParsed2 && origParsed2.result);
+        const effMyWA  = _scoreOvA ? _scoreOvA.my  : (origParsed2 && origParsed2.myW);
+        const effOppWA = _scoreOvA ? _scoreOvA.opp : (origParsed2 && origParsed2.oppW);
         const mirrored2 = origParsed2 ? {
           oppName:  originalBatchPlayer || null,
-          result:   flipResult(effResult2),
-          score:    _scoreOv2 ? `${effOppW2}-${effMyW2}` : (origParsed2.score ? origParsed2.score.split('-').reverse().join('-') : null),
-          myW: effOppW2, oppW: effMyW2, draws: origParsed2.draws,
-          myDeck:  origParsed2.oppDeck  || 'Unknown',
-          oppDeck: origParsed2.myDeck   || 'Unknown',
+          result:   finalResultOverride || flipResult(effResultA),
+          score:    finalScoreOverride ? `${finalScoreOverride.my}-${finalScoreOverride.opp}` : (_scoreOvA ? `${effOppWA}-${effMyWA}` : (origParsed2.score ? origParsed2.score.split('-').reverse().join('-') : null)),
+          myW: finalScoreOverride ? finalScoreOverride.my : effOppWA, oppW: finalScoreOverride ? finalScoreOverride.opp : effMyWA, draws: origParsed2.draws,
+          myDeck:  finalMyDeckOverride  || origParsed2.oppDeck || 'Unknown',
+          oppDeck: finalOppDeckOverride || origParsed2.myDeck  || 'Unknown',
           games: origParsed2.games, allMine: origParsed2.allOpp||[], allOpp: origParsed2.allMine||[],
+          resultOverride: finalResultOverride || null,
+          scoreOverride:  finalScoreOverride  || null,
+          overrideNote:   finalOverrideNote,
         } : null;
         Object.assign(existing, {
           plays: replayData.plays||[], parsed: mirrored2, timedOut: false,
           oppName: originalBatchPlayer || replayData.oppName || '',
-          myDeckOverride: replayData.oppDeckOverride||null,
-          oppDeckOverride: replayData.myDeckOverride||null,
+          myDeckOverride: finalMyDeckOverride,
+          oppDeckOverride: finalOppDeckOverride,
           eventLabel: existing.eventLabel || replayData.eventLabel || '',
-          // Mirror the override itself (flipped) onto B's copy so it stays
-          // correct even if the mirrored `parsed` block above ever gets
-          // rebuilt/re-migrated independently of this one assignment.
-          resultOverride: _resOv2 ? flipResult(_resOv2) : null,
-          scoreOverride:  _scoreOv2 ? { my: _scoreOv2.opp, opp: _scoreOv2.my } : null,
-          overrideNote:   replayData.overrideNote || (origParsed2 && origParsed2.overrideNote) || existing.overrideNote || '',
+          resultOverride: finalResultOverride,
+          scoreOverride:  finalScoreOverride,
+          overrideNote:   finalOverrideNote,
           crossLinked: true, updatedAt: Date.now()
         });
         return { linked: true, upgraded: true, batchId: ob.id, player: opponentEntry.name };
@@ -1139,6 +1181,84 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
+  // ── GET /api/scout/:name — pre-match opponent scouting report ──────────────
+  // Aggregates a player's known match history into deck usage % and win %
+  // per deck, so pairing against someone shows what they're likely to bring
+  // before the duel even starts. Two sources, deduped by replayId so a
+  // crosslinked replay is never double-counted:
+  //   1. The player's own batch(es) — already in their own perspective, and
+  //      already includes matches OTHER people uploaded against them, since
+  //      crossLinkReplay() mirrors those in automatically the moment both
+  //      sides are known players (see crossLinkReplay above).
+  //   2. A fallback scan of every other batch's replays where this name
+  //      shows up as oppName — covers anyone never auto-recognized (no
+  //      registered profile, so nothing was ever crosslinked for them),
+  //      with myDeck/oppDeck/result flipped to their perspective the same
+  //      way crossLinkReplay() does it.
+  if (parts[0]==='scout' && parts[1] && method==='GET') {
+    if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot scout opponents' });
+    const targetRaw = decodeURIComponent(parts[1]).trim();
+    if (!targetRaw) return json(res, 400, { error: 'Name required' });
+
+    const entry = findPlayerByUsername(targetRaw);
+    const seen = new Set();   // replayId -> already counted
+    const decks = {};         // deck name -> { count, w, l, d }
+
+    const bump = (deckName, effResult) => {
+      const deck = deckName || 'Unknown';
+      if (!decks[deck]) decks[deck] = { count: 0, w: 0, l: 0, d: 0 };
+      decks[deck].count++;
+      if (effResult === 'w') decks[deck].w++;
+      else if (effResult === 'l') decks[deck].l++;
+      else if (effResult === 'd') decks[deck].d++;
+    };
+
+    if (entry) {
+      const ownBatches = Object.values(db.batches).filter(b =>
+        b.player && playerNames(entry).includes(b.player.toLowerCase())
+      );
+      for (const batch of ownBatches) {
+        for (const r of (batch.replays||[])) {
+          if (seen.has(r.replayId)) continue;
+          seen.add(r.replayId);
+          const deck = r.myDeckOverride || (r.parsed && r.parsed.myDeck) || 'Unknown';
+          const effResult = r.resultOverride || (r.parsed && r.parsed.resultOverride) || (r.parsed && r.parsed.result) || r.result || null;
+          bump(deck, effResult);
+        }
+      }
+    }
+
+    const aliasSet = new Set([targetRaw.toLowerCase(), ...(entry ? playerNames(entry) : [])]);
+    for (const batch of Object.values(db.batches)) {
+      for (const r of (batch.replays||[])) {
+        if (seen.has(r.replayId)) continue;
+        const oppName = (r.oppName || (r.parsed && r.parsed.oppName) || '').toLowerCase();
+        if (!oppName || !aliasSet.has(oppName)) continue;
+        seen.add(r.replayId);
+        const deck = r.oppDeckOverride || (r.parsed && r.parsed.oppDeck) || 'Unknown';
+        const rawResult = r.resultOverride || (r.parsed && r.parsed.resultOverride) || (r.parsed && r.parsed.result) || r.result || null;
+        bump(deck, flipResult(rawResult));
+      }
+    }
+
+    const totalMatches = seen.size;
+    const deckList = Object.entries(decks).map(([deck, s]) => {
+      const decided = s.w + s.l; // draws excluded from the win% denominator
+      return {
+        deck, count: s.count, wins: s.w, losses: s.l, draws: s.d,
+        usagePct: totalMatches ? Math.round((s.count/totalMatches)*1000)/10 : 0,
+        winPct: decided ? Math.round((s.w/decided)*1000)/10 : null,
+      };
+    }).sort((a,b) => b.count - a.count);
+
+    return json(res, 200, {
+      name: entry ? entry.name : targetRaw,
+      found: totalMatches > 0,
+      totalMatches,
+      decks: deckList,
+    });
+  }
+
   // ── GET /api/batches ────────────────────────────────────────────────────────
   if (parts[0]==='batches' && !parts[1] && method==='GET') {
     if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot browse saved batches' });
@@ -1217,6 +1337,11 @@ const server = http.createServer(async (req, res) => {
         if (data.parsed) r.parsed = data.parsed;
         if (data.plays)  r.plays  = data.plays;
         r.allPlays = []; // clear raw plays once parsed
+        // This migration's incoming `parsed` block is a fresh computation
+        // with no idea a manual override exists — re-stamp r's own override
+        // onto it so the corrected result/score/deck keeps being what's
+        // actually displayed, not just what's stored at the top level.
+        reapplyOverridesToParsed(r);
         await saveBatchToPostgres(b.id);
         console.log(`[parsed] Migrated replay ${r.replayId} — allPlays cleared`);
       }
@@ -1233,7 +1358,11 @@ const server = http.createServer(async (req, res) => {
   // data, just wrong or incomplete, would silently no-op there.) Only the
   // fields present in the body are touched — manual overrides
   // (myDeckOverride, resultOverride, etc.) and anything else already on the
-  // replay are left exactly as they are.
+  // replay are left exactly as they are at the top level. But a fresh
+  // `data.parsed` replaces r.parsed wholesale and has no idea an override
+  // exists, so reapplyOverridesToParsed() re-stamps it afterward — otherwise
+  // the override field itself survives while the value every view actually
+  // reads (r.parsed.*) would silently revert to the raw re-parse.
   if (parts[0]==='batches' && parts[1] && parts[2]==='replay' && parts[3] && !parts[4] && method==='PATCH') {
     const b = db.batches[parts[1]];
     if (!b) return json(res, 404, { error:'Not found' });
@@ -1242,7 +1371,7 @@ const server = http.createServer(async (req, res) => {
       if (!r) return json(res, 404, { error:'Replay not found in batch' });
       const fields = ['plays','allPlays','parsed','timedOut','oppName','player1','player2','eventLabel'];
       for (const f of fields) { if (data[f] !== undefined) r[f] = data[f]; }
-      if (data.parsed) r.allPlays = []; // fresh parse means we no longer need the raw plays stored
+      if (data.parsed) { r.allPlays = []; reapplyOverridesToParsed(r); } // fresh parse means we no longer need the raw plays stored
       r.savedAt = Date.now();
       await saveBatchToPostgres(b.id);
       console.log(`[replay retry] Updated replay ${r.replayId} in batch ${b.id}`);
@@ -1341,9 +1470,29 @@ const server = http.createServer(async (req, res) => {
         await saveBatchToPostgres(b.id);
         } catch(saveErr) { console.error('[replay POST] Save error:', saveErr.message); throw saveErr; }
       } else if (dup.timedOut && !data.timedOut) {
-        // Existing timed-out entry being updated with real data — overwrite it
+        // Existing timed-out entry being updated with real data — overwrite it.
+        // Preserve any override that was already set directly on this
+        // placeholder (result/score/deck correction made while it was still
+        // pending) — replacing the object wholesale must not silently drop
+        // it, and it must also be re-baked into the fresh `parsed` block so
+        // it still wins over the newly-arrived raw parse.
         const parsedData2 = data.parsed || null;
-        b.replays[dupIdx] = { replayId:data.replayId, plays:data.plays||[], allPlays:parsedData2?[]:(minPlays||[]).map(stripPlay), parsed:parsedData2, timedOut:false, eventLabel:dup.eventLabel||data.eventLabel||'', oppName:data.oppName||dup.oppName||'', player1:data.player1||dup.player1||null, player2:data.player2||dup.player2||null, savedAt:Date.now() };
+        const preservedResultOverride  = dup.resultOverride  || null;
+        const preservedScoreOverride   = dup.scoreOverride   || null;
+        const preservedMyDeckOverride  = dup.myDeckOverride  || null;
+        const preservedOppDeckOverride = dup.oppDeckOverride || null;
+        const preservedOverrideNote    = dup.overrideNote    || '';
+        if (parsedData2) {
+          if (preservedMyDeckOverride)  parsedData2.myDeck  = preservedMyDeckOverride;
+          if (preservedOppDeckOverride) parsedData2.oppDeck = preservedOppDeckOverride;
+          if (preservedResultOverride)  { parsedData2.resultOverride = preservedResultOverride; parsedData2.resultEffective = preservedResultOverride; }
+          if (preservedScoreOverride)   parsedData2.scoreOverride = preservedScoreOverride;
+          if (preservedOverrideNote)    parsedData2.overrideNote = preservedOverrideNote;
+        }
+        b.replays[dupIdx] = { replayId:data.replayId, plays:data.plays||[], allPlays:parsedData2?[]:(minPlays||[]).map(stripPlay), parsed:parsedData2, timedOut:false, eventLabel:dup.eventLabel||data.eventLabel||'', oppName:data.oppName||dup.oppName||'', player1:data.player1||dup.player1||null, player2:data.player2||dup.player2||null, savedAt:Date.now(),
+          resultOverride: preservedResultOverride, scoreOverride: preservedScoreOverride,
+          myDeckOverride: preservedMyDeckOverride, oppDeckOverride: preservedOppDeckOverride,
+          overrideNote: preservedOverrideNote, crossLinked: dup.crossLinked||false };
         b.status = 'ready';
         console.log(`[replay] Updated timed-out replay ${data.replayId} with real data`);
         await saveBatchToPostgres(b.id);

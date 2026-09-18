@@ -1280,6 +1280,12 @@ select{cursor:pointer}
 
       <!-- OPP TRACKER -->
       <div id="igt-opptrack" class="igt-panel">
+        <!-- Scouting: look up an opponent's known deck usage/win% before the duel starts -->
+        <div style="padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap">
+          <input id="igt-ot-scout-name" type="text" placeholder="Opponent username (for scouting)..." style="flex:1;min-width:160px" onkeydown="if(event.key==='Enter')igtScoutOpponent()"/>
+          <button class="dd-btn-sec" onclick="igtScoutOpponent()" style="font-size:11px">🔍 Scout</button>
+        </div>
+        <div id="igt-ot-scout-result" style="padding:0 14px;flex-shrink:0"></div>
         <!-- Toolbar -->
         <div style="padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap">
           <input id="igt-ot-archetype" type="text" placeholder="Opponent archetype (e.g. Chaos Turbo)..." style="flex:1;min-width:160px"/>
@@ -6595,6 +6601,74 @@ function clearForm() {
   pb(0); qi('');
 }
 
+// ── Auto-import from DuelingBook save prompt (deep link) ─────────────────────
+// The DuelingBook-side "Save to Duel Tools" userscript opens/focuses this
+// site with ?dt_import=1&player=NAME&replay=ID&event=LABEL after a match.
+// We capture + strip those params immediately (so a refresh/back never
+// re-triggers it), then once the user is authenticated we open the existing
+// New Batch panel, fill it in, and let them hit ▶ Analyze — reusing the
+// exact same go() import/parse/save pipeline as a manual paste, so nothing
+// about batch-matching or parsing is duplicated in the userscript.
+let _pendingDtImport = null;
+(function captureDtImportParams() {
+  try {
+    const p = new URLSearchParams(location.search);
+    if (p.get('dt_import') !== '1') return;
+    const pending = {
+      player: (p.get('player') || '').trim(),
+      event:  (p.get('event')  || '').trim(),
+      replay: (p.get('replay') || '').trim()
+    };
+    const clean = new URL(location.href);
+    ['dt_import', 'player', 'event', 'replay'].forEach(k => clean.searchParams.delete(k));
+    history.replaceState({}, '', clean.pathname + clean.search + clean.hash);
+    if (pending.replay) {
+      _pendingDtImport = pending;
+      localStorage.setItem('dt_pending_import', JSON.stringify(pending));
+    }
+  } catch (e) {}
+})();
+
+function checkPendingDtImport() {
+  let pending = _pendingDtImport;
+  if (!pending) {
+    try {
+      const raw = localStorage.getItem('dt_pending_import');
+      if (raw) pending = JSON.parse(raw);
+    } catch (e) {}
+  }
+  if (!pending || !pending.replay) return;
+  _pendingDtImport = null;
+  try { localStorage.removeItem('dt_pending_import'); } catch (e) {}
+  if (!pending.player) {
+    alert("Duel Tools: the save prompt didn't include a player name, so this replay can't be auto-imported. Paste the replay ID in manually.");
+    return;
+  }
+  openBatchPanel('new');
+  setTimeout(() => {
+    const pi = document.getElementById('player-inp');
+    const ui = document.getElementById('urls-inp');
+    const ei = document.getElementById('batch-event-label-inp');
+    if (pi) pi.value = pending.player;
+    if (ui) ui.value = pending.replay;
+    if (ei && pending.event) ei.value = pending.event.toUpperCase();
+    if (typeof updateExtractedList === 'function') updateExtractedList();
+    if (typeof st === 'function') st('Auto-filled from DuelingBook — saving...', 'var(--amber)');
+    // Complete the save automatically, the same way a manual paste +
+    // ▶ Analyze click would — the DuelingBook prompt already asked for
+    // confirmation before opening this tab, so no second click should be
+    // required here.
+    setTimeout(() => {
+      const btn = document.getElementById('gobtn');
+      if (btn && !btn.disabled && typeof go === 'function') {
+        go();
+      } else if (typeof st === 'function') {
+        st('Auto-filled from DuelingBook — review and click ▶ Analyze.', 'var(--amber)');
+      }
+    }, 40);
+  }, 150);
+}
+
 // Live URL extraction display
 document.addEventListener('DOMContentLoaded', () => {
   const urlsInp = document.getElementById('urls-inp');
@@ -7712,9 +7786,21 @@ async function reparseReplay(replayId) {
     });
     if (!saveRes.ok) { st('Re-parse succeeded but save failed', 'var(--red)'); return false; }
 
-    // Update local _activeBatch so deck viewer reflects change without reload
+    // Update local _activeBatch so deck viewer reflects change without reload.
+    // The server preserves any existing override when it re-saves `parsed`
+    // (see reapplyOverridesToParsed in server.js), but this in-memory copy
+    // is what the UI actually reads until the next full reload — so it
+    // needs the same re-stamping, or a reparse would visibly show a manual
+    // correction as gone even though it's still safe on the server.
     const localReplay = (_activeBatch.replays||[]).find(r => r.replayId === replayId);
-    if (localReplay) { localReplay.parsed = parsedStore; }
+    if (localReplay) {
+      if (localReplay.myDeckOverride)  parsedStore.myDeck  = localReplay.myDeckOverride;
+      if (localReplay.oppDeckOverride) parsedStore.oppDeck = localReplay.oppDeckOverride;
+      if (localReplay.resultOverride) { parsedStore.resultOverride = localReplay.resultOverride; parsedStore.resultEffective = localReplay.resultOverride; }
+      if (localReplay.scoreOverride)  parsedStore.scoreOverride = localReplay.scoreOverride;
+      if (localReplay.overrideNote)   parsedStore.overrideNote  = localReplay.overrideNote;
+      localReplay.parsed = parsedStore;
+    }
 
     st('Re-parsed successfully — reopen match to see cards', 'var(--green)');
     return true;
@@ -15133,12 +15219,56 @@ function igtMtNewMatch() {
 // ── OPP TRACKER ───────────────────────────────────────────────────────────────
 function igtOtImportYDK() { igtImportYDK('opp'); }
 
+// Pre-match scouting: looks up everything Duel Tools knows about an
+// opponent's match history (server aggregates it from their own batch plus
+// any replay where they show up as the opponent, deduped) and shows deck
+// usage % / win % per deck they're known to run — before a single card has
+// been seen this match.
+async function igtScoutOpponent() {
+  const inp = document.getElementById('igt-ot-scout-name');
+  const out = document.getElementById('igt-ot-scout-result');
+  const name = (inp && inp.value || '').trim();
+  if (!out) return;
+  if (!name) { st('Enter an opponent username first', 'var(--amber)'); return; }
+  out.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:6px 0">Searching...</div>';
+  try {
+    const res = await fetch(`${API}/scout/${encodeURIComponent(name)}`, { headers: authHeaders() });
+    const data = await res.json();
+    if (!res.ok) {
+      out.innerHTML = '<div style="font-size:11px;color:var(--red);padding:6px 0">'+_escapeHtml(data.error||'Scout lookup failed')+'</div>';
+      return;
+    }
+    if (!data.found || !data.decks.length) {
+      out.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:6px 0">No match history found for "'+_escapeHtml(name)+'".</div>';
+      return;
+    }
+    const totalW = data.decks.reduce((s,d)=>s+d.wins,0);
+    const totalL = data.decks.reduce((s,d)=>s+d.losses,0);
+    const rows = data.decks.map(d => {
+      const winColor = d.winPct===null ? 'var(--dim)' : d.winPct>=50 ? 'var(--green)' : 'var(--red)';
+      return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)">'
+        + '<span style="flex:1;font-family:monospace;font-size:12px;color:var(--text);cursor:pointer" onclick="document.getElementById(\'igt-ot-archetype\').value='+JSON.stringify(d.deck)+'" title="Click to set as opponent archetype">'+_escapeHtml(d.deck)+'</span>'
+        + '<span style="font-size:11px;color:var(--muted);width:72px;text-align:right">'+d.usagePct+'% used</span>'
+        + '<span style="font-size:11px;width:80px;text-align:right;color:'+winColor+'">'+(d.winPct===null?'—':d.winPct+'% win')+'</span>'
+        + '</div>';
+    }).join('');
+    out.innerHTML = '<div style="background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-bottom:8px">'
+      + '<div style="font-size:11px;color:var(--muted);margin-bottom:4px;font-family:monospace">'+_escapeHtml(data.name)+' — '+data.totalMatches+' known matches ('+totalW+'W-'+totalL+'L overall)</div>'
+      + rows
+      + '</div>';
+  } catch(e) {
+    out.innerHTML = '<div style="font-size:11px;color:var(--red);padding:6px 0">Scout lookup failed: '+_escapeHtml(e.message)+'</div>';
+  }
+}
+
 function igtOtReset() {
   if (!confirm('Reset opponent tracker?')) return;
   _igtOppDeck = {main:[],side:[],extra:[]};
   _igtOtStates = {};
   const arcEl=document.getElementById('igt-ot-archetype'); if(arcEl) arcEl.value='';
   const notesEl=document.getElementById('igt-ot-notes'); if(notesEl) notesEl.value='';
+  const scoutNameEl=document.getElementById('igt-ot-scout-name'); if(scoutNameEl) scoutNameEl.value='';
+  const scoutResEl=document.getElementById('igt-ot-scout-result'); if(scoutResEl) scoutResEl.innerHTML='';
   igtOtRenderTiles();
 }
 
@@ -15498,6 +15628,7 @@ async function gateLogin() {
     // returned the unfiltered list. Re-fetch now that we're authenticated
     // so the sidebar reflects this account's actual permissions.
     loadBatches();
+    checkPendingDtImport();
   } catch(e) { gateMsg('Network error'); btn.textContent='Sign In'; btn.disabled=false; }
 }
 
@@ -16085,6 +16216,7 @@ async function initAuth() {
         if (gate) gate.remove();
         applyRoleUI();
         loadBatches(); // re-fetch now that the account/role is confirmed (see gateLogin)
+        checkPendingDtImport();
         return;
       }
     } catch(e) {}
