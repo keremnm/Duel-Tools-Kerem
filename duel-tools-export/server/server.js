@@ -799,6 +799,18 @@ function crossLinkReplay(replayData, opponentUsername, originalBatchPlayer) {
   return { linked: true, duplicate: false, batchId: batch.id, player: opponentEntry.name };
 }
 
+// In-memory store for the Live Tracker relay — see the route handler below
+// for why this deliberately isn't part of the persisted `db`.
+const liveSessions = new Map(); // code -> { data, updatedAt }
+const LIVE_SESSION_TTL_MS = 6 * 60 * 60 * 1000; // 6h, plenty for one sitting
+const LIVE_CODE_RE = /^[A-Z0-9]{6,12}$/;
+setInterval(() => {
+  const now = Date.now();
+  for (const [code, sess] of liveSessions) {
+    if (now - sess.updatedAt > LIVE_SESSION_TTL_MS) liveSessions.delete(code);
+  }
+}, 30 * 60 * 1000).unref();
+
 // ── HTTP server ───────────────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -829,6 +841,31 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+
+  // ── LIVE TRACKER RELAY ────────────────────────────────────────────────────
+  // Lets the DuelingBook Tampermonkey tracker (dt-live-tracker.user.js) push a
+  // snapshot of the CURRENT match to a short-lived, per-code slot that the
+  // website's My Tracker / Opp Tracker tabs poll — this is what "Live Sync"
+  // means on those tabs. Deliberately kept in memory only, not persisted to
+  // db.json/Postgres: a live match snapshot is throwaway state, not archival
+  // data, so a dyno restart just drops in-progress sync — the tracker keeps
+  // pushing every few seconds and refills it on its own, no migration needed.
+  if (parts[0] === 'live' && parts[1] && method === 'POST') {
+    const code = parts[1].toUpperCase();
+    if (!LIVE_CODE_RE.test(code)) return json(res, 400, { error: 'Invalid pairing code' });
+    readBody(req, (data) => {
+      liveSessions.set(code, { data, updatedAt: Date.now() });
+      json(res, 200, { ok: true });
+    });
+    return;
+  }
+  if (parts[0] === 'live' && parts[1] && method === 'GET') {
+    const code = parts[1].toUpperCase();
+    const sess = liveSessions.get(code);
+    if (!sess) return json(res, 404, { error: 'No live session for this code yet — start the tracker on DuelingBook first' });
+    json(res, 200, { data: sess.data, updatedAt: sess.updatedAt });
+    return;
+  }
 
   // ── POST /api/gfwl/dedup — one-time fix: merge case-duplicate team names ────
   // e.g. merges "Birdcage" (from schedule import) into "birdcage" (from roster)

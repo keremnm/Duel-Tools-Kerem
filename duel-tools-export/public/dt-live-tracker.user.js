@@ -1,14 +1,15 @@
 // ==UserScript==
 // @name         Duel Tools — Live Tracker
 // @namespace    http://tampermonkey.net/
-// @version      0.2
-// @description  Watches the in-page Duel Log during a live match to drive dual action timers, known-card tracking, and a YDK export of the opponent's revealed cards.
+// @version      0.3
+// @description  Watches the in-page Duel Log during a live match to drive dual action timers, known-card tracking, a YDK export of the opponent's revealed cards, and live sync to the Duel Tools website's My Tracker / Opp Tracker.
 // @author       Kerem's Duel Tools
 // @match        https://www.duelingbook.com/*
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
 // @connect      db.ygoprodeck.com
+// @connect      duel-tools-kerem-production.up.railway.app
 // @run-at       document-idle
 // ==/UserScript==
 (function () {
@@ -53,6 +54,49 @@
     /^Flipped /, /^Declared effect/
   ];
   const isResetAction = (text) => RESET_WORDS.some((re) => re.test(text));
+
+  // ── Live sync to the Duel Tools website ─────────────────────────────────
+  // Pushes a snapshot of the current match to a short-lived "pairing code"
+  // slot on the Duel Tools backend, which the site's My Tracker / Opp
+  // Tracker tabs poll to show the same data there instead of only in this
+  // DuelingBook overlay. No site login ever touches this script — the code
+  // is just a random shared secret between this tracker and whichever
+  // browser tab on the site has it entered.
+  const SITE_API_BASE = 'https://duel-tools-kerem-production.up.railway.app/api';
+  function getOrCreatePairCode() {
+    let code = safeGetValue('dt_tracker_pair_code', null);
+    if (!code) {
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I/L — easy to read/type
+      code = '';
+      for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
+      safeSetValue('dt_tracker_pair_code', code);
+    }
+    return code;
+  }
+  function pushLiveSnapshot(code, snapshot, onDone) {
+    try {
+      GM_xmlhttpRequest({
+        method: 'POST',
+        url: SITE_API_BASE + '/live/' + code,
+        headers: { 'Content-Type': 'application/json' },
+        data: JSON.stringify(snapshot),
+        onload: function () { if (onDone) onDone(true); },
+        onerror: function () { if (onDone) onDone(false); }
+      });
+    } catch (e) {
+      console.warn('[Duel Tools Tracker] live sync push failed:', e);
+      if (onDone) onDone(false);
+    }
+  }
+
+  // ── Estimating how much of the opponent's deck is still unseen ─────────
+  // Rough, clearly-labeled guesswork, not a real hypergeometric model — we
+  // don't know their actual decklist, only what's been revealed so far. A
+  // standard deck size and a standard max-copy count are assumed; both are
+  // just reasonable defaults, not measured facts about this specific match.
+  const ASSUMED_DECK_SIZE = 40;
+  const ASSUMED_OPENING_HAND = 5;
+  const ASSUMED_MAX_COPIES = 3;
 
   // ── Name → passcode resolution, for exporting a YDK of opponent cards ──
   // YDK files reference cards by their numeric passcode, not by name, so
@@ -318,13 +362,71 @@
       feed: [], // last N parsed events for the debug view
       paused: false,
       myDeckList: deckList || null, // [{id, name, total}] — the uploaded YDK, persists indefinitely once set
-      myDeckRemaining: null // [{id, name, total, seen}] — rebuilt fresh every GAME (the deck reshuffles each game)
+      myDeckRemaining: null, // [{id, name, total, seen}] — rebuilt fresh every GAME (the deck reshuffles each game)
+      game: 1, // which game of this MATCH we're on — 1 unless resetForNewGame() has bumped it
+      matchConcluded: false, // set true once "View Replay" appears — mirrors the outer matchConcluded flag, for the live-sync payload
+      oppDrawsThisGame: 0 // every "Drew ..." by the opponent this game, revealed or not — feeds the draw-probability estimate
     };
 
     function freshDeckRemaining() {
       return state.myDeckList ? state.myDeckList.map((c) => ({ id: c.id, name: c.name, total: c.total, seen: 0 })) : null;
     }
     state.myDeckRemaining = freshDeckRemaining();
+
+    // Rough estimate of how many copies of a known opponent card are still
+    // unaccounted for (somewhere in their deck or hand, we don't know which)
+    // and, from that, a rough % chance their NEXT draw is a copy of it.
+    // Both assume a standard deck size / opening hand / max-copy count — see
+    // the ASSUMED_* constants above for exactly what's being guessed at.
+    function oppCardEstimate(card) {
+      const unseenCopies = Math.max(0, ASSUMED_MAX_COPIES - card.count);
+      const remainingInDeck = Math.max(1, ASSUMED_DECK_SIZE - ASSUMED_OPENING_HAND - (state.oppDrawsThisGame || 0));
+      const pctNextDraw = Math.round((unseenCopies / remainingInDeck) * 100);
+      return { unseenCopies, pctNextDraw };
+    }
+
+    // Rough LP-based "who's ahead" estimate — NOT a real win probability
+    // (that would need board state, hand size, resources, etc.), just a
+    // clearly-labeled edge indicator: 50/50 at even LP, saturating toward
+    // the extremes as the LP gap grows.
+    function computeEdgePct() {
+      const diff = state.myLP - state.oppLP;
+      return Math.round(50 + 50 * Math.tanh(diff / 4000));
+    }
+
+    function buildSnapshot() {
+      return {
+        myUsername: state.myUsername,
+        oppUsername: state.oppUsername,
+        game: state.game,
+        matchConcluded: !!state.matchConcluded,
+        paused: state.paused,
+        myLP: state.myLP,
+        oppLP: state.oppLP,
+        myTimer: Math.floor(state.myTimer),
+        oppTimer: Math.floor(state.oppTimer),
+        edgePct: computeEdgePct(),
+        myDeck: state.myDeckRemaining || [],
+        oppCards: state.knownOppCards.map((c) => Object.assign({}, c, oppCardEstimate(c))),
+        updatedAt: Date.now()
+      };
+    }
+
+    const PAIR_CODE = getOrCreatePairCode();
+    let lastPush = 0;
+    function maybePushLive(force) {
+      const now = Date.now();
+      if (!force && now - lastPush < 3000) return;
+      lastPush = now;
+      pushLiveSnapshot(PAIR_CODE, buildSnapshot(), function (ok) {
+        const el = panel.querySelector('#dt-tr-sync-status');
+        if (!el) return;
+        el.textContent = ok
+          ? 'Synced ' + new Date().toLocaleTimeString()
+          : 'Sync failed — will keep retrying';
+        el.style.color = ok ? '#555' : '#a55';
+      });
+    }
 
     function who(username) {
       if (username.toLowerCase() === state.myUsername.toLowerCase()) return 'me';
@@ -373,6 +475,12 @@
       lpM = /^Gained (\d+) LP$/.exec(ev.text);
       if (lpM) { if (side === 'me') state.myLP += parseInt(lpM[1], 10); else state.oppLP += parseInt(lpM[1], 10); }
 
+      // Every opponent draw shrinks their remaining deck by one, whether or
+      // not we learn what it was — feeds the draw-probability estimate.
+      if (side === 'opp' && /^Drew /.test(ev.text)) {
+        state.oppDrawsThisGame = (state.oppDrawsThisGame || 0) + 1;
+      }
+
       // Known-card accumulation for the opponent (feeds the YDK export and
       // the probability engine once that's wired in) — covers every way a
       // card of theirs becomes visible to you.
@@ -386,15 +494,19 @@
       // an effect that moves it from Deck to somewhere else. Everything
       // else (Set/Activated/Summoned/Sent from hand or a zone, etc.) is the
       // SAME physical card continuing to act, not a new copy leaving the
-      // deck, so those must NOT double-count it.
+      // deck, so those must NOT double-count it. Conversely, an effect that
+      // RETURNS the card to the deck puts it back — it goes back to "unseen"
+      // (and the red "out of deck" tint on the site/decklist image reverts).
       if (side === 'me' && state.myDeckRemaining && revealedName) {
         const leftDeck = /^Drew /.test(ev.text) || / from Deck\b/.test(ev.text);
-        if (leftDeck) {
-          const entry = state.myDeckRemaining.find((c) => c.name.toLowerCase() === revealedName.toLowerCase());
-          if (entry && entry.seen < entry.total) {
-            entry.seen++;
-            renderMyDeck();
-          }
+        const returnedToDeck = /^Returned .+ to (?:the )?Deck\b/i.test(ev.text);
+        const entry = state.myDeckRemaining.find((c) => c.name.toLowerCase() === revealedName.toLowerCase());
+        if (leftDeck && entry && entry.seen < entry.total) {
+          entry.seen++;
+          renderMyDeck();
+        } else if (returnedToDeck && entry && entry.seen > 0) {
+          entry.seen--;
+          renderMyDeck();
         }
       }
 
@@ -420,6 +532,7 @@
       // render right away too so an LP change shows up the instant it's
       // parsed, not up to 200ms later.
       renderTimers();
+      maybePushLive(); // throttled to once/3s — new events don't spam the site
     }
 
     // ── Timer tick loop ────────────────────────────────────────────────
@@ -439,6 +552,7 @@
       if (oppLive) state.oppTimer += dt;
 
       renderTimers();
+      maybePushLive(); // throttled to once/3s inside
     }, 200);
 
     // ── Overlay UI ───────────────────────────────────────────────────────
@@ -468,6 +582,7 @@
           '<div>LP <span id="dt-tr-mylp">8000</span></div>' +
           '<div>LP <span id="dt-tr-opplp">8000</span></div>' +
         '</div>' +
+        '<div id="dt-tr-edge" title="Rough LP-based estimate — not a real win probability" style="text-align:center;color:#887;font-size:10px;margin-bottom:6px">Edge: 50% / 50%</div>' +
         '<div style="color:#666;margin-bottom:4px">Opp cards seen (<span id="dt-tr-oppcount">0</span>):</div>' +
         '<div id="dt-tr-oppcards" style="max-height:60px;overflow-y:auto;color:#9ac;margin-bottom:6px;font-size:10px"></div>' +
         '<button id="dt-tr-ydk-btn" style="width:100%;background:#222;color:#9ac;border:1px solid #333;border-radius:5px;padding:5px;cursor:pointer;font-family:monospace;font-size:10px;margin-bottom:4px">📥 Download opponent YDK</button>' +
@@ -478,6 +593,14 @@
           '<input id="dt-tr-deck-file" type="file" accept=".ydk" style="display:none"/>' +
           '<button id="dt-tr-deck-upload-btn" style="width:100%;background:#222;color:#9c9;border:1px solid #333;border-radius:5px;padding:5px;cursor:pointer;font-family:monospace;font-size:10px">📤 Upload your deck (YDK)</button>' +
           '<div id="dt-tr-deck-status" style="color:#666;font-size:10px;margin-top:2px"></div>' +
+        '</div>' +
+        '<div style="border-top:1px solid #333;margin:2px 0 6px;padding-top:6px">' +
+          '<div style="color:#666;margin-bottom:4px">Site pairing code — enter once on My/Opp Tracker:</div>' +
+          '<div style="display:flex;gap:6px;align-items:center;margin-bottom:2px">' +
+            '<span id="dt-tr-paircode" style="font-weight:bold;color:#7cf;letter-spacing:2px;font-size:13px;flex:1"></span>' +
+            '<button id="dt-tr-paircode-copy" style="background:#222;color:#7cf;border:1px solid #333;border-radius:4px;padding:2px 8px;cursor:pointer;font-family:monospace;font-size:10px">Copy</button>' +
+          '</div>' +
+          '<div id="dt-tr-sync-status" style="color:#555;font-size:9px">not synced yet</div>' +
         '</div>' +
         '<div style="color:#666;margin-bottom:2px">Live feed:</div>' +
         '<div id="dt-tr-feed" style="max-height:120px;overflow-y:auto;font-size:10px;line-height:1.5"></div>' +
@@ -496,6 +619,16 @@
     panel.querySelector('#dt-tr-refresh').onclick = function () {
       console.log('[Duel Tools Tracker] manual refresh clicked — starting a brand-new match');
       beginTrackingForNewDuel(state.myUsername);
+    };
+    panel.querySelector('#dt-tr-paircode').textContent = PAIR_CODE;
+    panel.querySelector('#dt-tr-paircode-copy').onclick = function () {
+      const btn = panel.querySelector('#dt-tr-paircode-copy');
+      const done = function () { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy'; }, 1200); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(PAIR_CODE).then(done).catch(done);
+      } else {
+        done(); // clipboard API unavailable — code is still visible to copy by hand
+      }
     };
     // Basic drag-to-move on the header
     (function makeDraggable() {
@@ -564,6 +697,7 @@
           const totalCards = list.reduce((s, c) => s + c.total, 0);
           status.textContent = 'Loaded ' + list.length + ' unique card(s), ' + totalCards + ' total in main deck.';
           renderMyDeck();
+          maybePushLive(true);
         }).catch(function (err) {
           btn.disabled = false;
           btn.textContent = '📤 Upload your deck (YDK)';
@@ -587,11 +721,20 @@
       panel.querySelector('#dt-tr-opptimer').style.opacity = state.paused ? '.3' : (state.oppTimerRunning ? '1' : '.4');
       panel.querySelector('#dt-tr-pause').textContent = state.paused ? '▶' : '⏸';
       panel.querySelector('#dt-tr-pause').title = state.paused ? 'Resume timers' : 'Pause timers';
+      const myEdge = computeEdgePct();
+      panel.querySelector('#dt-tr-edge').textContent = 'Edge: You ' + myEdge + '% · Opp ' + (100 - myEdge) + '%';
     }
     function renderOppCards() {
       const el = panel.querySelector('#dt-tr-oppcards');
       panel.querySelector('#dt-tr-oppcount').textContent = state.knownOppCards.reduce((s, c) => s + c.count, 0);
-      el.innerHTML = state.knownOppCards.map((c) => c.name + (c.count > 1 ? ' ×' + c.count : '')).join('<br/>');
+      el.innerHTML = state.knownOppCards.map((c) => {
+        const est = oppCardEstimate(c);
+        const base = c.name + (c.count > 1 ? ' ×' + c.count : '');
+        const tail = est.unseenCopies > 0
+          ? ' <span style="color:#665">(' + est.unseenCopies + ' unseen, ~' + est.pctNextDraw + '% next draw)</span>'
+          : ' <span style="color:#544">(none left of ' + ASSUMED_MAX_COPIES + ' assumed)</span>';
+        return base + tail;
+      }).join('<br/>');
     }
     function renderMyDeck() {
       const summaryEl = panel.querySelector('#dt-tr-mydeck-summary');
@@ -621,8 +764,14 @@
     function setPaused(val) {
       state.paused = !!val;
       renderTimers();
+      maybePushLive(true);
+    }
+    function setMatchConcluded(val) {
+      state.matchConcluded = !!val;
+      maybePushLive(true);
     }
     renderMyDeck();
+    maybePushLive(true); // initial snapshot — the site sees "connected" right away instead of after 3s
 
     // Called when a new GAME starts within the SAME match (e.g. game 2/3 of
     // a Bo3, or a replay after a draw) — resets everything that's specific
@@ -631,12 +780,14 @@
     // deliberately leaves knownOppCards/oppUsername/myDeckList alone, since
     // those describe the whole match, not one game of it.
     function resetForNewGame() {
+      state.game = (state.game || 1) + 1;
       state.myLP = 8000;
       state.oppLP = 8000;
       state.turnHolder = null;
       state.myTimer = 0; state.oppTimer = 0;
       state.myTimerRunning = true; state.oppTimerRunning = false;
       state.oppInterruptUntil = 0;
+      state.oppDrawsThisGame = 0;
       state.feed = [];
       state.paused = false;
       state.myDeckRemaining = freshDeckRemaining();
@@ -645,9 +796,10 @@
       renderMyDeck();
       const status = panel.querySelector('#dt-tr-ydk-status');
       if (status) status.textContent = 'New game in this match — LP, timers & your deck reset. Opponent cards kept.';
+      maybePushLive(true);
     }
 
-    return { applyEvent, resetForNewGame, setPaused };
+    return { applyEvent, resetForNewGame, setPaused, setMatchConcluded };
   }
 
   // ── Wire the log watcher up to a #duel_log element ──────────────────────
@@ -839,6 +991,7 @@
           matchConcluded = true;
           console.log('[Duel Tools Tracker] match concluded (View Replay appeared) — pausing timers; the next new duel will start a fresh match');
           if (activeTracker && activeTracker.setPaused) activeTracker.setPaused(true);
+          if (activeTracker && activeTracker.setMatchConcluded) activeTracker.setMatchConcluded(true);
         }
       }
     }

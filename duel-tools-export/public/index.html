@@ -1244,6 +1244,13 @@ select{cursor:pointer}
 
       <!-- MY TRACKER -->
       <div id="igt-mytrack" class="igt-panel">
+        <!-- Live Sync: pairs with the DuelingBook Live Tracker userscript -->
+        <div style="padding:6px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap;background:var(--card2)">
+          <span style="font-size:10px;color:var(--muted);letter-spacing:.06em">🔴 LIVE SYNC</span>
+          <input id="igt-mt-live-code" type="text" placeholder="Pairing code from tracker..." style="width:150px;text-transform:uppercase;letter-spacing:1px;font-size:11px" maxlength="12" onkeydown="if(event.key==='Enter')igtLiveConnect(this.value)"/>
+          <button class="dd-btn-sec" id="igt-mt-live-btn" onclick="igtLiveConnect(document.getElementById('igt-mt-live-code').value)" style="font-size:11px">Connect</button>
+          <span id="igt-mt-live-status" style="font-size:10px;color:var(--muted)"></span>
+        </div>
         <!-- Toolbar -->
         <div style="padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap">
           <div style="display:flex;gap:4px">
@@ -1255,6 +1262,7 @@ select{cursor:pointer}
           <button class="btn-go"   onclick="igtMtRecord('l')" style="background:var(--red);font-size:11px;padding:4px 14px">+ LOSS</button>
           <button class="dd-btn-sec" onclick="igtMtRecord('d')" style="font-size:11px">DRAW</button>
           <div id="igt-mt-record" style="font-size:12px;color:var(--muted);font-family:monospace"></div>
+          <button class="dd-btn-sec" onclick="igtExportImage('my')" style="font-size:11px">🖼 Decklist Image</button>
           <button class="dd-btn-sec" onclick="igtMtNewMatch()" style="font-size:11px;margin-left:auto">NEW MATCH</button>
         </div>
         <!-- Main content: cards + notes -->
@@ -1280,6 +1288,13 @@ select{cursor:pointer}
 
       <!-- OPP TRACKER -->
       <div id="igt-opptrack" class="igt-panel">
+        <!-- Live Sync: pairs with the DuelingBook Live Tracker userscript -->
+        <div style="padding:6px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap;background:var(--card2)">
+          <span style="font-size:10px;color:var(--muted);letter-spacing:.06em">🔴 LIVE SYNC</span>
+          <input id="igt-ot-live-code" type="text" placeholder="Pairing code from tracker..." style="width:150px;text-transform:uppercase;letter-spacing:1px;font-size:11px" maxlength="12" onkeydown="if(event.key==='Enter')igtLiveConnect(this.value)"/>
+          <button class="dd-btn-sec" id="igt-ot-live-btn" onclick="igtLiveConnect(document.getElementById('igt-ot-live-code').value)" style="font-size:11px">Connect</button>
+          <span id="igt-ot-live-status" style="font-size:10px;color:var(--muted)"></span>
+        </div>
         <!-- Scouting: look up an opponent's known deck usage/win% before the duel starts -->
         <div style="padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap">
           <input id="igt-ot-scout-name" type="text" placeholder="Opponent username (for scouting)..." style="flex:1;min-width:160px" onkeydown="if(event.key==='Enter')igtScoutOpponent()"/>
@@ -14728,6 +14743,7 @@ function igtTab(name, btn) {
   if (panel) panel.classList.add('igt-active');
   if (name === 'side') igtSpRender();
   if (name === 'mytrack') igtMtRender();
+  if (name === 'mytrack' || name === 'opptrack') igtLiveInitOnce();
 }
 
 // ── YDKe decode ───────────────────────────────────────────────────────────────
@@ -14846,8 +14862,12 @@ function igtShowYdkeDialog(target) {
 // color layer on top does the actual tinting (plain alpha blend, not a CSS
 // mix-blend-mode, so it can't crush the art to black on top of the darkening
 // filter).
-const IGT_TINT_FILTER  = { not:'grayscale(1) brightness(.55)', banish:'grayscale(.5) brightness(.6)', grave:'grayscale(.5) brightness(.55)' };
-const IGT_TINT_OVERLAY = { banish:'rgba(70,110,230,.45)', grave:'rgba(210,50,50,.4)' };
+// 'live-out' is a 4th status, driven by Live Sync rather than a manual click:
+// a card the DuelingBook tracker has seen leave your deck this game (drawn,
+// or pulled out by an effect). It reverts automatically the moment the
+// tracker sees it go back ("Returned ... to Deck") — no click needed.
+const IGT_TINT_FILTER  = { not:'grayscale(1) brightness(.55)', banish:'grayscale(.5) brightness(.6)', grave:'grayscale(.5) brightness(.55)', 'live-out':'grayscale(.35) brightness(.65)' };
+const IGT_TINT_OVERLAY = { banish:'rgba(70,110,230,.45)', grave:'rgba(210,50,50,.4)', 'live-out':'rgba(220,40,40,.5)' };
 
 function igtCardTile(card, opts) {
   const size = opts.size || 72; // default bigger
@@ -15155,6 +15175,7 @@ function igtMtRenderSection(cards, elId, countElId, gameState) {
 }
 
 function igtMtRender() {
+  if (_igtLiveCode) return; // Live Sync owns the main-deck tiles while connected — see igtLiveRenderMyTracker
   const mainCards = _igtSpState
     ? _igtSpState.main
     : _igtDeck.main.flatMap(c => Array(c.qty).fill(null).map(() => ({id:c.id,name:c.name,type:c.type})));
@@ -15299,12 +15320,173 @@ function igtOtRenderSection(cards, elId, countElId) {
 }
 
 function igtOtRenderTiles() {
+  if (_igtLiveCode) return; // Live Sync owns the opponent tiles while connected — see igtLiveRenderOppTracker
   // Expand each card by qty - one tile per copy
   const mainCards = _igtOppDeck.main.flatMap(c => Array(c.qty).fill(null).map(()=>({id:c.id,name:c.name,type:c.type})));
   const sideCards = _igtOppDeck.side.flatMap(c => Array(c.qty).fill(null).map(()=>({id:c.id,name:c.name,type:c.type})));
   igtOtRenderSection(mainCards, 'igt-ot-tiles', 'igt-ot-deck-count');
   igtOtRenderSection(sideCards, 'igt-ot-side-tiles', 'igt-ot-side-count');
 }
+
+// ── LIVE SYNC — pairs with the DuelingBook Live Tracker userscript ──────────
+// The userscript (dt-live-tracker.user.js) generates a short pairing code
+// and pushes a snapshot of the current match to POST /api/live/:code every
+// few seconds. Entering that same code here polls GET /api/live/:code and
+// drives My Tracker's main-deck tiles + Opp Tracker's tiles directly from
+// that live data — no more re-typing what the overlay on DuelingBook already
+// knows. One code powers BOTH tabs at once; connecting from either tab
+// connects both. Side decks and match notes/W-L stay manual either way —
+// live sync only covers what the tracker can actually see (main-deck cards
+// leaving/returning, and the opponent's revealed cards).
+let _igtLiveCode = null;
+let _igtLiveInterval = null;
+let _igtLiveNameIdCache = {};  // lowercased card name -> ygoprodeck id, or null if not found
+let _igtLiveLastData = null;   // most recent snapshot, kept around for igtExportImage()
+
+function igtLiveInitOnce() {
+  if (igtLiveInitOnce._done) return;
+  igtLiveInitOnce._done = true;
+  const saved = (localStorage.getItem('dt_live_pair_code') || '').trim();
+  if (!saved) return;
+  ['igt-mt-live-code', 'igt-ot-live-code'].forEach(id => { const el = document.getElementById(id); if (el) el.value = saved; });
+  igtLiveConnect(saved);
+}
+
+function igtLiveSetStatus(text, color) {
+  ['igt-mt-live-status', 'igt-ot-live-status'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.textContent = text; el.style.color = color || 'var(--muted)'; }
+  });
+}
+
+function igtLiveSetButtons(connected) {
+  ['igt-mt-live-btn', 'igt-ot-live-btn'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = connected ? 'Disconnect' : 'Connect';
+    el.onclick = connected ? igtLiveDisconnect : function () {
+      const inp = document.getElementById(id.replace('-btn', '-code'));
+      igtLiveConnect(inp ? inp.value : '');
+    };
+  });
+}
+
+function igtLiveConnect(code) {
+  code = (code || '').trim().toUpperCase();
+  if (!code) { st('Enter a pairing code from the Live Tracker first', 'var(--amber)'); return; }
+  _igtLiveCode = code;
+  localStorage.setItem('dt_live_pair_code', code);
+  ['igt-mt-live-code', 'igt-ot-live-code'].forEach(id => { const el = document.getElementById(id); if (el) el.value = code; });
+  igtLiveSetButtons(true);
+  igtLiveSetStatus('Connecting...', 'var(--muted)');
+  clearInterval(_igtLiveInterval);
+  igtLivePoll();
+  _igtLiveInterval = setInterval(igtLivePoll, 3000);
+}
+
+function igtLiveDisconnect() {
+  _igtLiveCode = null;
+  _igtLiveLastData = null;
+  clearInterval(_igtLiveInterval);
+  _igtLiveInterval = null;
+  localStorage.removeItem('dt_live_pair_code');
+  igtLiveSetButtons(false);
+  igtLiveSetStatus('Disconnected', 'var(--muted)');
+  igtMtRender();      // fall back to manual state for both tabs
+  igtOtRenderTiles();
+}
+
+async function igtLivePoll() {
+  if (!_igtLiveCode) return;
+  try {
+    const res = await fetch(`${API}/live/${_igtLiveCode}`);
+    if (res.status === 404) { igtLiveSetStatus('Waiting for the tracker to send data...', 'var(--amber)'); return; }
+    if (!res.ok) { igtLiveSetStatus('Sync error', 'var(--red)'); return; }
+    const body = await res.json();
+    const data = body.data || {};
+    _igtLiveLastData = data;
+    const ageSec = Math.max(0, Math.round((Date.now() - body.updatedAt) / 1000));
+    const staleness = ageSec > 15 ? 'var(--amber)' : 'var(--green)';
+    const label = (data.oppUsername ? 'vs ' + data.oppUsername + ' · ' : '') + 'G' + (data.game || 1)
+      + (data.matchConcluded ? ' · match over' : '') + ' · updated ' + (ageSec < 2 ? 'just now' : ageSec + 's ago');
+    igtLiveSetStatus('Connected — ' + label, staleness);
+    await igtLiveResolveNames(data.oppCards || []);
+    igtLiveSyncMyDeckIntoBuilder(data.myDeck || []);
+    igtLiveRenderMyTracker(data);
+    igtLiveRenderOppTracker(data);
+  } catch (e) {
+    igtLiveSetStatus('Connection failed — will keep retrying', 'var(--red)');
+  }
+}
+
+// Card names only come through the live payload (the tracker doesn't resolve
+// ids itself) — resolve+cache each new opponent name once via the same
+// ygoprodeck lookup the rest of In-Game Tools already uses for search.
+async function igtLiveResolveNames(cards) {
+  const missing = cards.map(c => c.name).filter(n => !(n.toLowerCase() in _igtLiveNameIdCache));
+  for (const name of [...new Set(missing)]) {
+    try {
+      const res = await fetch('https://db.ygoprodeck.com/api/v7/cardinfo.php?name=' + encodeURIComponent(name));
+      const data = await res.json();
+      _igtLiveNameIdCache[name.toLowerCase()] = (data.data && data.data[0] && data.data[0].id) || null;
+    } catch (e) { _igtLiveNameIdCache[name.toLowerCase()] = null; }
+  }
+}
+
+// Keeps _igtDeck.main mirroring the live-tracked decklist so other features
+// that read from it (Decklist Image export in particular) stay in sync
+// without a separate manual YDK import.
+function igtLiveSyncMyDeckIntoBuilder(deck) {
+  _igtDeck.main = deck.map(c => ({ id: c.id, name: c.name, type: '', qty: c.total }));
+}
+
+function igtLiveRenderMyTracker(data) {
+  const el = document.getElementById('igt-mt-tiles');
+  const countEl = document.getElementById('igt-mt-deck-count');
+  if (!el) return;
+  const deck = data.myDeck || [];
+  const totalAll = deck.reduce((s, c) => s + c.total, 0);
+  const totalSeen = deck.reduce((s, c) => s + c.seen, 0);
+  if (countEl) countEl.textContent = '(' + (totalAll - totalSeen) + '/' + totalAll + ' unseen)';
+  el.innerHTML = '';
+  deck.forEach(c => {
+    for (let i = 0; i < c.total; i++) {
+      const isOut = i < c.seen;
+      const tile = igtCardTile({ id: c.id, name: c.name }, {
+        size: 72,
+        tint: isOut ? 'live-out' : null,
+        label: isOut ? 'DRAWN' : null,
+        labelColor: isOut ? 'rgba(210,50,50,.9)' : null,
+        borderColor: isOut ? 'var(--red)' : 'transparent'
+      });
+      tile.title = c.name + (isOut ? ' — currently out of your deck (drawn/played this game)' : ' — still in deck');
+      el.appendChild(tile);
+    }
+  });
+}
+
+function igtLiveRenderOppTracker(data) {
+  const el = document.getElementById('igt-ot-tiles');
+  const countEl = document.getElementById('igt-ot-deck-count');
+  if (!el) return;
+  const cards = data.oppCards || [];
+  if (countEl) countEl.textContent = '(' + cards.reduce((s, c) => s + c.count, 0) + ' revealed)';
+  el.innerHTML = '';
+  cards.forEach(c => {
+    const id = _igtLiveNameIdCache[c.name.toLowerCase()];
+    const label = c.count > 1 ? '×' + c.count : null;
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:2px';
+    const tile = igtCardTile({ id, name: c.name }, { size: 78, label, labelColor: 'rgba(80,100,200,.85)', borderColor: 'var(--blue)' });
+    const prob = document.createElement('div');
+    prob.style.cssText = 'font-size:8px;color:var(--muted);text-align:center;max-width:78px';
+    prob.title = 'Rough estimate — assumes a 40-card deck and up to '+(c.assumedMax||3)+' copies; not a real hypergeometric calc since we don\'t know their actual decklist.';
+    prob.textContent = c.unseenCopies > 0 ? c.unseenCopies + ' left · ~' + c.pctNextDraw + '% next draw' : 'none left (est.)';
+    wrap.appendChild(tile); wrap.appendChild(prob);
+    el.appendChild(wrap);
+  });
+}
+
 
 // ── DECKLIST IMAGE ────────────────────────────────────────────────────────────
 function igtExportImage(target) {
@@ -15314,6 +15496,12 @@ function igtExportImage(target) {
   if (d.side.length)  secs.push({label:'SIDE DECK',  cards:d.side,  count:d.side.reduce((s,c)=>s+c.qty,0)});
   if (d.extra.length) secs.push({label:'EXTRA DECK', cards:d.extra, count:d.extra.reduce((s,c)=>s+c.qty,0)});
   if (!secs.length) { st('No cards to export', 'var(--amber)'); return; }
+  // While Live Sync is connected, tint main-deck copies that are currently
+  // out of the deck (drawn/played this game) red in the exported image too —
+  // reverts on its own next export once the tracker sees them go back.
+  const liveSeenMap = (target !== 'opp' && _igtLiveCode && _igtLiveLastData && _igtLiveLastData.myDeck)
+    ? Object.fromEntries(_igtLiveLastData.myDeck.map(c => [c.name.toLowerCase(), c.seen]))
+    : null;
   let html = '';
   for (const sec of secs) {
     const exp=[]; sec.cards.forEach(c=>{for(let i=0;i<c.qty;i++)exp.push(c);});
@@ -15323,14 +15511,26 @@ function igtExportImage(target) {
     // matching CORS header makes the browser refuse to display it at all.
     // data-name + the fallback script below swap in a text tile if an image
     // ever fails to load for any other reason (bad id, network hiccup, etc).
+    const seenSoFar = {};
     const cards=exp.map(c=>{
       const imgId = c.id && window._cardDataCache[c.id] ? (window._cardDataCache[c.id].imageId || c.id) : c.id;
+      let outOfDeck = false;
+      if (liveSeenMap && sec.label === 'MAIN DECK') {
+        const key = c.name.toLowerCase();
+        const copyNum = seenSoFar[key] = (seenSoFar[key] || 0) + 1; // 1-based copy number for this card
+        outOfDeck = copyNum <= (liveSeenMap[key] || 0);
+      }
+      const overlay = outOfDeck
+        ? '<div style="position:absolute;inset:0;background:rgba(220,40,40,.45)"></div><div style="position:absolute;bottom:0;left:0;right:0;background:rgba(150,20,20,.9);color:#fff;font-size:7px;font-weight:700;text-align:center;padding:1px 0">OUT</div>'
+        : '';
+      const border = outOfDeck ? '2px solid #e04040' : '1px solid transparent';
       return imgId
-        ? '<div style="width:71px;height:103px;overflow:hidden;display:inline-block;vertical-align:top;margin:2px"><img src="https://images.ygoprodeck.com/images/cards/'+imgId+'.jpg" data-name="'+_escapeHtml(c.name)+'" style="width:100%;height:100%;object-fit:cover"/></div>'
-        : '<div style="width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-flex;align-items:center;justify-content:center;text-align:center;vertical-align:top;margin:2px;font-size:8px;line-height:1.3;color:#666;padding:3px;box-sizing:border-box">'+_escapeHtml(c.name)+'</div>';
+        ? '<div style="position:relative;width:71px;height:103px;overflow:hidden;display:inline-block;vertical-align:top;margin:2px;border:'+border+'"><img src="https://images.ygoprodeck.com/images/cards/'+imgId+'.jpg" data-name="'+_escapeHtml(c.name)+'" style="width:100%;height:100%;object-fit:cover"/>'+overlay+'</div>'
+        : '<div style="position:relative;width:71px;height:103px;background:#1a1a1a;border:'+(outOfDeck?'2px solid #e04040':'1px solid #333')+';display:inline-flex;align-items:center;justify-content:center;text-align:center;vertical-align:top;margin:2px;font-size:8px;line-height:1.3;color:#666;padding:3px;box-sizing:border-box">'+_escapeHtml(c.name)+overlay+'</div>';
     }).join('');
     html+='<div style="margin-bottom:20px"><div style="font-size:14px;font-weight:700;color:#00e596;letter-spacing:2px;margin-bottom:8px">'+sec.label+' ('+sec.count+')</div><div style="line-height:0">'+cards+'</div></div>';
   }
+  if (liveSeenMap) html = '<div style="color:#e04040;font-size:11px;margin-bottom:12px">🔴 Red = currently out of your deck this game (live, from the DuelingBook tracker)</div>' + html;
   const win=window.open('','_blank','width=900,height=800');
   if(!win){st('Allow popups','var(--amber)');return;}
   const fallbackScript = "document.querySelectorAll('img[data-name]').forEach(function(img){img.onerror=function(){var n=document.createElement('div');n.style.cssText='width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-flex;align-items:center;justify-content:center;text-align:center;vertical-align:top;margin:2px;font-size:8px;line-height:1.3;color:#666;padding:3px;box-sizing:border-box';n.textContent=img.getAttribute('data-name');img.replaceWith(n);};});";
