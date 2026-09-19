@@ -53,9 +53,22 @@
   const isResetAction = (text) => RESET_WORDS.some((re) => re.test(text));
 
   // ── One-time setup: your own username, so "everyone else" = opponent ───
+  // Every GM_* call here is wrapped in try/catch: if Tampermonkey's storage
+  // ever throws (sandbox config varies by browser/setup), the tracker should
+  // still start for THIS session instead of the click silently doing
+  // nothing — persistence is a nice-to-have, not a requirement to proceed.
+  function safeGetValue(key, def) {
+    try { return GM_getValue(key, def); }
+    catch (e) { console.warn('[Duel Tools Tracker] GM_getValue failed:', e); return def; }
+  }
+  function safeSetValue(key, val) {
+    try { GM_setValue(key, val); }
+    catch (e) { console.warn('[Duel Tools Tracker] GM_setValue failed (will ask again next time):', e); }
+  }
+
   function getMyUsername(cb) {
-    const stored = GM_getValue('dt_tracker_my_username', '');
-    if (stored) { cb(stored); return; }
+    const stored = safeGetValue('dt_tracker_my_username', '');
+    if (stored) { console.log('[Duel Tools Tracker] using saved username:', stored); cb(stored); return; }
 
     const box = document.createElement('div');
     box.id = 'dt-tracker-setup-box';
@@ -68,19 +81,30 @@
     box.innerHTML =
       '<div style="font-weight:bold;margin-bottom:8px">🎯 Duel Tools Live Tracker</div>' +
       '<label style="display:block;font-size:11px;color:#999;margin-bottom:2px">Your DuelingBook username</label>' +
-      '<input id="dt-tr-username" type="text" style="width:100%;box-sizing:border-box;margin-bottom:8px;background:#1a1a1a;color:#eee;border:1px solid #333;border-radius:4px;padding:5px;font-family:monospace"/>' +
+      '<input id="dt-tr-username" type="text" placeholder="type it exactly as shown in DuelingBook" style="width:100%;box-sizing:border-box;margin-bottom:8px;background:#1a1a1a;color:#eee;border:1px solid #333;border-radius:4px;padding:5px;font-family:monospace"/>' +
+      '<div id="dt-tr-err" style="display:none;color:#e04444;font-size:11px;margin-bottom:6px">Type your username first.</div>' +
       '<button id="dt-tr-save-username" style="width:100%;background:#00e596;color:#050508;border:none;border-radius:5px;padding:7px;font-weight:bold;cursor:pointer;font-family:monospace">Start Tracking</button>';
     document.body.appendChild(box);
+    console.log('[Duel Tools Tracker] username prompt shown');
     const inp = box.querySelector('#dt-tr-username');
+    const err = box.querySelector('#dt-tr-err');
+    inp.focus();
     const go = () => {
       const v = inp.value.trim();
-      if (!v) { inp.style.borderColor = '#e04444'; return; }
-      GM_setValue('dt_tracker_my_username', v);
+      console.log('[Duel Tools Tracker] Start Tracking clicked, value =', JSON.stringify(v));
+      if (!v) {
+        inp.style.borderColor = '#e04444';
+        err.style.display = 'block';
+        inp.focus();
+        return;
+      }
+      safeSetValue('dt_tracker_my_username', v);
       box.remove();
       cb(v);
     };
     box.querySelector('#dt-tr-save-username').onclick = go;
     inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    inp.addEventListener('input', () => { err.style.display = 'none'; inp.style.borderColor = '#333'; });
   }
 
   // ── Force-enable the log's own filter checkboxes ────────────────────────
@@ -335,10 +359,14 @@
     obs.observe(document.body, { childList: true, subtree: true });
   }
 
+  console.log('[Duel Tools Tracker] script loaded, waiting for #duel...');
   waitFor('#duel', function () {
+    console.log('[Duel Tools Tracker] #duel found');
     getMyUsername(function (myUsername) {
+      console.log('[Duel Tools Tracker] tracking started as', myUsername);
       const tracker = startTracker(myUsername);
       waitFor('#duel_log', function (duelLogEl) {
+        console.log('[Duel Tools Tracker] #duel_log found, arming log watcher');
         armLogWatcher(duelLogEl, tracker);
       });
     });
