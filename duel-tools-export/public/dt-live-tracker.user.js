@@ -111,17 +111,25 @@
   function enableLogCheckboxes(duelLogEl) {
     const wanted = ['Chat', 'Duel', 'Game', 'Private Info', 'Usernames'];
     const checkboxes = duelLogEl.querySelectorAll('input[type=checkbox]');
+    let matchedCount = 0;
     checkboxes.forEach((cb) => {
       // The label text is usually right next to the checkbox — check the
       // parent element's text and the checkbox's own following sibling.
       const context = ((cb.parentElement && cb.parentElement.textContent) || '').trim();
       const matches = wanted.some((w) => context.indexOf(w) !== -1);
-      if (matches && !cb.checked) {
-        cb.checked = true;
-        cb.dispatchEvent(new Event('change', { bubbles: true }));
-        cb.dispatchEvent(new Event('click', { bubbles: true }));
+      if (matches) {
+        matchedCount++;
+        if (!cb.checked) {
+          cb.checked = true;
+          cb.dispatchEvent(new Event('change', { bubbles: true }));
+          cb.dispatchEvent(new Event('click', { bubbles: true }));
+        }
       }
     });
+    console.log('[Duel Tools Tracker] checkboxes: found', checkboxes.length, 'total,', matchedCount, 'matched a wanted label (expected 5)');
+    if (matchedCount < wanted.length) {
+      console.warn('[Duel Tools Tracker] not all 5 log filters were found/checked — you may need to check them yourself (Chat, Duel, Game, Private Info, Usernames) in the Duel Log panel.');
+    }
   }
 
   // ── Parse one log line ──────────────────────────────────────────────────
@@ -327,6 +335,8 @@
     let seen = 0;
     let pending = false;
 
+    let loggedZeroCandidatesOnce = false;
+    let loggedParseFailOnce = false;
     function scan() {
       // Every entry rendered so far, in order — we only process ones past
       // the `seen` count so this stays cheap even as the log grows long.
@@ -334,10 +344,24 @@
         const t = (el.textContent || '').trim();
         return /^\[\d+:\d+\]/.test(t) && el.children.length === 0 || (el.children.length && /^\[\d+:\d+\]/.test(t) && !Array.from(el.children).some((c) => /^\[\d+:\d+\]/.test((c.textContent || '').trim())));
       });
+      if (all.length === 0 && !loggedZeroCandidatesOnce && duelLogEl.textContent.trim()) {
+        // The panel has SOME text in it, but nothing matched our "line
+        // starts with [m:ss]" shape — the real DOM structure doesn't match
+        // what this was built against (a screenshot). Log a sample so this
+        // is fixable from one console paste instead of another guess.
+        loggedZeroCandidatesOnce = true;
+        console.warn('[Duel Tools Tracker] #duel_log has content but no lines matched the expected "[m:ss] Username: text" shape. First 300 chars of its text:', duelLogEl.textContent.trim().slice(0, 300));
+      }
       for (let i = seen; i < all.length; i++) {
         const ev = parseLine(all[i].textContent);
-        if (ev) tracker.applyEvent(ev);
+        if (ev) {
+          tracker.applyEvent(ev);
+        } else if (!loggedParseFailOnce) {
+          loggedParseFailOnce = true;
+          console.warn('[Duel Tools Tracker] found a candidate line but could not parse it:', JSON.stringify(all[i].textContent));
+        }
       }
+      if (all.length > seen) console.log('[Duel Tools Tracker] processed', all.length - seen, 'new log line(s), total seen:', all.length);
       seen = all.length;
     }
     function scheduleScan() {
@@ -359,14 +383,33 @@
     obs.observe(document.body, { childList: true, subtree: true });
   }
 
+  // The #duel_log panel doesn't exist in the page at all until it's opened —
+  // confirmed from a real recorded session: clicking #log_btn is what
+  // creates it. Earlier versions of this script only ever waited passively
+  // for #duel_log to show up, which meant tracking silently did nothing
+  // unless you'd already opened the log panel yourself. Now it opens the
+  // panel itself (only if it isn't already open, so it never toggles a
+  // panel you opened yourself closed again).
+  function ensureDuelLogOpen(cb) {
+    const existing = document.querySelector('#duel_log');
+    if (existing) { console.log('[Duel Tools Tracker] #duel_log already open'); cb(existing); return; }
+    waitFor('#log_btn', function (btn) {
+      console.log('[Duel Tools Tracker] #log_btn found — opening Duel Log panel');
+      try { btn.click(); } catch (e) { console.warn('[Duel Tools Tracker] could not click #log_btn:', e); }
+      waitFor('#duel_log', function (duelLogEl) {
+        console.log('[Duel Tools Tracker] #duel_log found, arming log watcher');
+        cb(duelLogEl);
+      });
+    });
+  }
+
   console.log('[Duel Tools Tracker] script loaded, waiting for #duel...');
   waitFor('#duel', function () {
     console.log('[Duel Tools Tracker] #duel found');
     getMyUsername(function (myUsername) {
       console.log('[Duel Tools Tracker] tracking started as', myUsername);
       const tracker = startTracker(myUsername);
-      waitFor('#duel_log', function (duelLogEl) {
-        console.log('[Duel Tools Tracker] #duel_log found, arming log watcher');
+      ensureDuelLogOpen(function (duelLogEl) {
         armLogWatcher(duelLogEl, tracker);
       });
     });
