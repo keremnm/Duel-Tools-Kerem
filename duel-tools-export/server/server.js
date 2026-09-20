@@ -823,7 +823,7 @@ function crossLinkReplay(replayData, opponentUsername, originalBatchPlayer) {
 
 // In-memory store for the Live Tracker relay — see the route handler below
 // for why this deliberately isn't part of the persisted `db`.
-const liveSessions = new Map(); // code -> { data, updatedAt }
+const liveSessions = new Map(); // code -> { data, updatedAt, pendingSide?: { main, setAt } }
 const LIVE_SESSION_TTL_MS = 6 * 60 * 60 * 1000; // 6h, plenty for one sitting
 const LIVE_CODE_RE = /^[A-Z0-9]{6,12}$/;
 setInterval(() => {
@@ -872,20 +872,56 @@ const server = http.createServer(async (req, res) => {
   // db.json/Postgres: a live match snapshot is throwaway state, not archival
   // data, so a dyno restart just drops in-progress sync — the tracker keeps
   // pushing every few seconds and refills it on its own, no migration needed.
-  if (parts[0] === 'live' && parts[1] && method === 'POST') {
+  if (parts[0] === 'live' && parts[1] && !parts[2] && method === 'POST') {
     const code = parts[1].toUpperCase();
     if (!LIVE_CODE_RE.test(code)) return json(res, 400, { error: 'Invalid pairing code' });
     readBody(req, (data) => {
-      liveSessions.set(code, { data, updatedAt: Date.now() });
+      const existing = liveSessions.get(code);
+      liveSessions.set(code, { data, updatedAt: Date.now(), pendingSide: existing && existing.pendingSide });
       json(res, 200, { ok: true });
     });
     return;
   }
-  if (parts[0] === 'live' && parts[1] && method === 'GET') {
+  if (parts[0] === 'live' && parts[1] && !parts[2] && method === 'GET') {
     const code = parts[1].toUpperCase();
     const sess = liveSessions.get(code);
     if (!sess) return json(res, 404, { error: 'No live session for this code yet — start the tracker on DuelingBook first' });
     json(res, 200, { data: sess.data, updatedAt: sess.updatedAt });
+    return;
+  }
+
+  // ── Side Practice → Live Tracker siding sync ──────────────────────────────
+  // A one-shot slot, separate from the main tracker->site snapshot above and
+  // flowing the opposite direction (site->tracker): the website's Side
+  // Practice tab POSTs the post-side main-deck composition here once, the
+  // Tampermonkey tracker polls GET and applies it as soon as it sees it, then
+  // DELETEs it so it isn't re-applied to a later game. Kept on the same
+  // in-memory liveSessions entry as the regular snapshot (created if it
+  // doesn't exist yet) rather than a separate map, since it's scoped to the
+  // exact same pairing code and TTL sweep.
+  if (parts[0] === 'live' && parts[1] && parts[2] === 'side' && method === 'POST') {
+    const code = parts[1].toUpperCase();
+    if (!LIVE_CODE_RE.test(code)) return json(res, 400, { error: 'Invalid pairing code' });
+    readBody(req, (body) => {
+      let sess = liveSessions.get(code);
+      if (!sess) { sess = { data: {}, updatedAt: Date.now() }; liveSessions.set(code, sess); }
+      sess.pendingSide = { main: (body && body.main) || [], setAt: Date.now() };
+      json(res, 200, { ok: true });
+    });
+    return;
+  }
+  if (parts[0] === 'live' && parts[1] && parts[2] === 'side' && method === 'GET') {
+    const code = parts[1].toUpperCase();
+    const sess = liveSessions.get(code);
+    if (!sess || !sess.pendingSide) return json(res, 404, { error: 'No pending side-deck update for this code' });
+    json(res, 200, sess.pendingSide);
+    return;
+  }
+  if (parts[0] === 'live' && parts[1] && parts[2] === 'side' && method === 'DELETE') {
+    const code = parts[1].toUpperCase();
+    const sess = liveSessions.get(code);
+    if (sess) delete sess.pendingSide;
+    json(res, 200, { ok: true });
     return;
   }
 

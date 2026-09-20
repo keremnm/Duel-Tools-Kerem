@@ -63,12 +63,16 @@
   // is just a random shared secret between this tracker and whichever
   // browser tab on the site has it entered.
   const SITE_API_BASE = 'https://duel-tools-kerem-production.up.railway.app/api';
+  function randomPairCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I/L — easy to read/type
+    let code = '';
+    for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
+    return code;
+  }
   function getOrCreatePairCode() {
     let code = safeGetValue('dt_tracker_pair_code', null);
     if (!code) {
-      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I/L — easy to read/type
-      code = '';
-      for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
+      code = randomPairCode();
       safeSetValue('dt_tracker_pair_code', code);
     }
     return code;
@@ -364,7 +368,21 @@
       matchConcluded: false, // set true once "View Replay" appears — mirrors the outer matchConcluded flag, for the live-sync payload
       matchStartedAt: Date.now(), // fixed once per match — lets the site detect "this is a brand-new match" without guessing
       myWins: 0, oppWins: 0, // game wins THIS MATCH — first to 2 (Bo3, extending past G3 on a draw) wins the match
-      gameResults: [] // ['win'|'loss', ...] — one entry per completed game this match, in order
+      gameResults: [], // ['win'|'loss', ...] — one entry per completed game this match, in order
+      // Control-changing effects (Creature Swap is the only one legal in
+      // Goat Format) make the OPPONENT's side of the log name a card that's
+      // actually YOURS. controlSwappedNames remembers exactly which specific
+      // card names that's happened to (lowercased), so only THOSE names keep
+      // crediting your own deck when the opponent's side names them — see
+      // the routing logic in applyEvent for why this replaced an earlier,
+      // much broader "always check my deck first" rule that misfired for
+      // any shared staple name (Sangan, Pot of Greed, etc.) the opponent
+      // simply played a copy of themselves. Reset every new GAME, since
+      // Creature Swap's control change doesn't survive a reshuffle.
+      controlSwappedNames: new Set(),
+      controlSwapWindowUntil: 0, // ms timestamp — the next opponent-voiced reveal of one of MY cards within this window is assumed to be the just-swapped copy
+      awaitingNewGameChoice: false, // true right after a game-ending "Admitted defeat"/"Lost Duel" until the next "Chose to go first/second" — see applyEvent's new-game detection
+      lastGameResetAt: 0 // ms timestamp of the last resetForNewGame() call — debounces against double-firing if the RPS-based reset (drawn games) and the "chose to go first" reset both react to the same boundary
     };
 
     function freshDeckRemaining() {
@@ -409,9 +427,33 @@
 
       const fromGrave  = /\bfrom (?:the )?(?:GY|Graveyard)\b/i.test(text);
       const fromBanish = /\bfrom (?:the )?Banish(?:ed)?(?: Zone)?\b/i.test(text) || /\bfrom (?:play|removal)\b/i.test(text);
-      const fromDeck   = /\bfrom Deck\b/i.test(text);
+      const fromDeckExplicit = /\bfrom Deck\b/i.test(text);
       const fromHand   = /\bfrom hand\b/i.test(text);
-      const from = fromGrave ? 'grave' : fromBanish ? 'banish' : fromDeck ? 'deck' : fromHand ? 'hand' : null;
+
+      let from;
+      if (fromGrave) from = 'grave';
+      else if (fromBanish) from = 'banish';
+      else if (fromDeckExplicit) from = 'deck';
+      else if (fromHand) from = 'hand';
+      else {
+        // No explicit "from X" clause in the log text at all — this used to
+        // fall through to a single hardcoded zone-guessing order applied no
+        // matter the destination, which silently corrupted counts for any
+        // deck running 2+ copies of the same card: e.g. drawing a SECOND
+        // Chaos Sorcerer while the first already sat in hand would "take"
+        // from hand (since it already had a copy) and immediately give it
+        // right back, net zero — the genuinely new copy was never counted.
+        // Inferring the source from the DESTINATION instead avoids that: an
+        // unqualified draw/return-to-hand is always a fresh copy off the
+        // deck (DuelingBook's plain "Drew X" never spells out "from Deck"),
+        // and an unqualified summon/set/activation is overwhelmingly played
+        // straight from hand — both are near-certainties, unlike guessing
+        // across every zone. Only to-grave/to-banish with truly no stated
+        // source is left ambiguous (see applyZoneTransition's fallback).
+        if (to === 'hand') from = 'deck';
+        else if (to === 'field') from = 'hand';
+        else from = null;
+      }
 
       return { from, to };
     }
@@ -429,16 +471,33 @@
         if (entry.zones[zone] > 0) { entry.zones[zone]--; return true; }
         return false;
       }
-      if (action.from !== 'deck') {
-        // Take from the named source if we can; otherwise fall back through
-        // the other zones in likelihood order. Field is checked first since
-        // most non-deck movement (to GY/banish/hand) starts from a card
-        // that's already on the field, not sitting in hand.
-        const order = action.from ? [action.from, 'field', 'hand', 'grave', 'banish'] : ['field', 'hand', 'grave', 'banish'];
+      if (action.from === 'deck') {
+        // A fresh copy off the deck (a draw, or classifyCardAction inferred
+        // it from an unqualified "to hand") — never consume an existing
+        // zone tally for this. This is the fix for a second (or third) copy
+        // of the same card silently not being counted: e.g. drawing a 2nd
+        // Chaos Sorcerer while the 1st already sits in hand must ADD to the
+        // hand tally, not cancel out against it.
+      } else if (action.from) {
+        // A specific source zone is known (either stated explicitly in the
+        // log, or inferred from the destination — see classifyCardAction).
+        // Take from it; only fall back through the other zones if that
+        // exact zone's tally is unexpectedly already empty, so a genuinely
+        // mis-tracked case still degrades gracefully instead of dropping
+        // the transition entirely.
+        const order = [action.from, 'field', 'hand', 'grave', 'banish'];
+        for (let i = 0; i < order.length; i++) { if (take(order[i])) break; }
+      } else {
+        // Truly no source information at all — reachable for an unqualified
+        // move to grave/banish (e.g. a plain "Sent X to GY", most often from
+        // the field) or a return to deck with no "from X" clause (could
+        // plausibly be leaving hand, field, grave, or banish). Falls back
+        // through every zone in rough likelihood order rather than assuming
+        // one, since narrowing this to just field/hand previously broke
+        // "Returned X to Deck" reverting a banished copy correctly.
+        const order = ['field', 'hand', 'grave', 'banish'];
         for (let i = 0; i < order.length; i++) { if (take(order[i])) break; }
       }
-      // action.from === 'deck' means the copy wasn't tracked before now
-      // (fresh out of the deck) — nothing to remove from an existing zone.
       if (action.to !== null) entry.zones[action.to]++;
       // action.to === null means "back in the deck" — nothing to increment.
     }
@@ -531,7 +590,7 @@
       };
     }
 
-    const PAIR_CODE = getOrCreatePairCode();
+    let PAIR_CODE = getOrCreatePairCode(); // mutable — regeneratePairCode() below can replace it mid-session
     let lastPush = 0;
     function maybePushLive(force) {
       const now = Date.now();
@@ -544,6 +603,59 @@
           ? 'Synced ' + new Date().toLocaleTimeString()
           : 'Sync failed — will keep retrying';
         el.style.color = ok ? '#555' : '#a55';
+      });
+    }
+
+    // ── Side Practice → Live Tracker siding sync ────────────────────────────
+    // DuelingBook's actual in-duel siding screen never shows up in #duel_log
+    // (it's a separate deck-editor UI, not a logged duel action) — there's no
+    // event this tracker could watch to see what got swapped in/out on the
+    // real DuelingBook siding step. The practical alternative: the website's
+    // own Side Practice tab already lets you build the post-side deck by
+    // hand, and its "Push to Live Tracker" button (index.html) sends that
+    // composition here via the same pairing-code relay, one-shot, under
+    // POST /api/live/:code/side. This just polls for it periodically and,
+    // once one shows up, applies it as this match's new myDeckList (kept
+    // for every future game of the match, exactly like a re-uploaded YDK)
+    // and clears the pending slot so it isn't re-applied on the next game.
+    function fetchPendingSideUpdate(cb) {
+      try {
+        GM_xmlhttpRequest({
+          method: 'GET',
+          url: SITE_API_BASE + '/live/' + PAIR_CODE + '/side',
+          onload: function (res) {
+            if (res.status !== 200) { cb(null); return; }
+            try { cb(JSON.parse(res.responseText)); } catch (e) { cb(null); }
+          },
+          onerror: function () { cb(null); }
+        });
+      } catch (e) { cb(null); }
+    }
+    function clearPendingSideUpdate() {
+      try { GM_xmlhttpRequest({ method: 'DELETE', url: SITE_API_BASE + '/live/' + PAIR_CODE + '/side' }); }
+      catch (e) { /* best-effort — a stale pending update just gets re-applied harmlessly next poll, same list */ }
+    }
+    function applyPendingSideUpdate(mainList) {
+      // mainList: [{id, name, type, total}] — already grouped by the site
+      state.myDeckList = mainList;
+      saveMyDeckList(mainList);
+      state.myDeckRemaining = freshDeckRemaining();
+      renderMyDeck();
+      maybePushLive(true);
+      const status = panel.querySelector('#dt-tr-ydk-status');
+      if (status) status.textContent = 'Decklist updated from Side Practice (' + mainList.reduce((s, c) => s + c.total, 0) + ' cards) — applies starting now';
+      console.log('[Duel Tools Tracker] applied a pending side-deck update from Side Practice:', mainList);
+    }
+    let lastSideCheck = Date.now(); // starts the 5s throttle from tracker init, not an immediate first check
+    function maybeCheckPendingSide() {
+      const now = Date.now();
+      if (now - lastSideCheck < 5000) return;
+      lastSideCheck = now;
+      fetchPendingSideUpdate(function (payload) {
+        if (payload && Array.isArray(payload.main) && payload.main.length) {
+          applyPendingSideUpdate(payload.main);
+          clearPendingSideUpdate();
+        }
       });
     }
 
@@ -599,23 +711,53 @@
       if (ev.text === 'Admitted defeat' || ev.text === 'Lost Duel') {
         if (side === 'me') { state.oppWins++; state.gameResults.push('loss'); }
         else if (side === 'opp') { state.myWins++; state.gameResults.push('win'); }
+        // A normal (non-drawn) G2/G3 never replays DuelingBook's RPS/coin-toss
+        // screen — only a DRAWN game forced into an extra one does (see
+        // watchForNewDuels/#rps_start below). Instead the loser of THIS game
+        // is simply given the choice to go first or second, logged as a
+        // plain "Chose to go first/second" line with no #rps_start moment at
+        // all. Arming this flag lets that exact line (matched below) trigger
+        // resetForNewGame() itself, from inside the log stream, instead of
+        // relying solely on a DOM watcher that never fires for this case.
+        state.awaitingNewGameChoice = true;
         maybePushLive(true);
       }
 
-      // Which side a revealed card belongs to is decided by NAME first, not
-      // by who spoke the line — a control-changing effect (Creature Swap
-      // and the like) makes the OPPONENT'S side of the log name one of YOUR
-      // cards (it's now under their control), and without this check that
-      // card would get wrongly added to their known-card list instead of
-      // just updating your own deck's zone tracking. This can misfire only
-      // in the rare case where you and your opponent both run a card with
-      // the exact same name (a shared staple) — if that happens for you,
-      // say so and this'll need a more specific Creature-Swap-only check.
+      // New GAME within the same match, detected the same way (mirrors the
+      // exact "Chose to go" substring the site's own trusted replay parser
+      // already uses for game boundaries — see the parseMatch() comment in
+      // index.html). Debounced against the DOM-based #rps_start reset (for
+      // drawn games) firing for the same boundary via lastGameResetAt.
+      if (ev.text.includes('Chose to go') && state.awaitingNewGameChoice) {
+        state.awaitingNewGameChoice = false;
+        if (Date.now() - state.lastGameResetAt > 3000) resetForNewGame();
+      }
+
+      // Which side a revealed card belongs to is decided by who SPOKE the
+      // line, by default — that's correct the overwhelming majority of the
+      // time, including when your opponent simply plays their own copy of a
+      // card that happens to share a name with something in your deck (a
+      // very common case in Goat Format, where most decks share staples).
+      // The exception is a control-changing effect (only Creature Swap is
+      // legal in Goat) handing one of YOUR cards to the opponent — the very
+      // next time their side names a card that's in your OWN decklist right
+      // after "Activated Creature Swap", that specific name is remembered in
+      // controlSwappedNames for the rest of the game, so it keeps crediting
+      // your deck no matter who controls it afterward. Everything else
+      // routes by speaker, so an opponent's own Sangan/Pot of Greed/etc.
+      // never gets misattributed to you just because you run one too.
+      if (/^Activated Creature Swap\b/i.test(ev.text)) {
+        state.controlSwapWindowUntil = Date.now() + 8000; // generous window covering the mandatory summons that immediately follow
+      }
       const revealedName = extractRevealedCardName(ev.text);
       const myEntry = revealedName && state.myDeckRemaining
         ? state.myDeckRemaining.find((c) => c.name.toLowerCase() === revealedName.toLowerCase())
         : null;
-      if (myEntry) {
+      if (side === 'opp' && myEntry && Date.now() < state.controlSwapWindowUntil) {
+        state.controlSwappedNames.add(myEntry.name.toLowerCase());
+      }
+      const isControlSwapped = revealedName && state.controlSwappedNames.has(revealedName.toLowerCase());
+      if (side === 'me' && myEntry) {
         // Your OWN deck's cards: which zone each revealed copy is currently
         // sitting in (hand, field, graveyard, or banished) — a label sticks
         // until another recognized move happens, it never clears on its
@@ -623,15 +765,23 @@
         // that status is manual-only, reserved for the click-to-cycle UI.
         applyZoneTransition(myEntry, ev.text);
         renderMyDeck();
-      } else if (side === 'opp' && revealedName) {
-        // Known-card accumulation for the opponent (feeds the YDK export) —
-        // covers every way a card of theirs becomes visible to you. Tracks
-        // actual per-copy records (see addKnownOppCard above) using the
-        // same "don't inflate past the real peak copy count" philosophy as
-        // the site's own replay parser, so a card that returns to
-        // hand/deck and gets reused (Jar of Greed, Thunder Dragon, ...)
-        // doesn't inflate past its real copy count.
-        addKnownOppCard(revealedName, ev.text);
+      } else if (side === 'opp') {
+        if (myEntry && isControlSwapped) {
+          // Confirmed via the Creature Swap window above: this is your own
+          // card, just under the opponent's control — keep crediting your
+          // deck's zone tracking instead of their known-card list.
+          applyZoneTransition(myEntry, ev.text);
+          renderMyDeck();
+        } else if (revealedName) {
+          // Known-card accumulation for the opponent (feeds the YDK export) —
+          // covers every way a card of theirs becomes visible to you. Tracks
+          // actual per-copy records (see addKnownOppCard above) using the
+          // same "don't inflate past the real peak copy count" philosophy as
+          // the site's own replay parser, so a card that returns to
+          // hand/deck and gets reused (Jar of Greed, Thunder Dragon, ...)
+          // doesn't inflate past its real copy count.
+          addKnownOppCard(revealedName, ev.text);
+        }
       }
 
       // Reset-action → reset that player's timer
@@ -677,6 +827,7 @@
 
       renderTimers();
       maybePushLive(); // throttled to once/3s inside
+      maybeCheckPendingSide(); // throttled to once/5s inside
     }, 200);
 
     // ── Overlay UI ───────────────────────────────────────────────────────
@@ -723,6 +874,7 @@
           '<div style="display:flex;gap:6px;align-items:center;margin-bottom:2px">' +
             '<span id="dt-tr-paircode" style="font-weight:bold;color:#7cf;letter-spacing:2px;font-size:13px;flex:1"></span>' +
             '<button id="dt-tr-paircode-copy" style="background:#222;color:#7cf;border:1px solid #333;border-radius:4px;padding:2px 8px;cursor:pointer;font-family:monospace;font-size:10px">Copy</button>' +
+            '<button id="dt-tr-paircode-regen" title="Generate a new code (you\'ll need to re-enter it on the site)" style="background:#222;color:#e8a03d;border:1px solid #333;border-radius:4px;padding:2px 8px;cursor:pointer;font-family:monospace;font-size:10px">↻ New</button>' +
           '</div>' +
           '<div id="dt-tr-sync-status" style="color:#555;font-size:9px">not synced yet</div>' +
         '</div>' +
@@ -753,6 +905,20 @@
       } else {
         done(); // clipboard API unavailable — code is still visible to copy by hand
       }
+    };
+    panel.querySelector('#dt-tr-paircode-regen').onclick = function () {
+      // A fresh random code, same charset/length as a first-time one — for
+      // when the old code was shared somewhere it shouldn't have been, or
+      // just to start clean. It has to be re-entered on the site afterward;
+      // nothing pushes the change there automatically since the pairing is
+      // one-directional (this script initiates, the site just polls).
+      if (!confirm('Generate a new pairing code?\n\nYou will need to re-enter it on the website\'s My Tracker / Opp Tracker tabs — the old code will stop syncing immediately.')) return;
+      PAIR_CODE = randomPairCode();
+      safeSetValue('dt_tracker_pair_code', PAIR_CODE);
+      panel.querySelector('#dt-tr-paircode').textContent = PAIR_CODE;
+      const status = panel.querySelector('#dt-tr-sync-status');
+      if (status) status.textContent = 'New code generated — re-enter it on the site';
+      maybePushLive(true);
     };
     // Basic drag-to-move on the header
     (function makeDraggable() {
@@ -918,6 +1084,12 @@
       state.feed = [];
       state.paused = false;
       state.myDeckRemaining = freshDeckRemaining();
+      // Creature Swap's control change doesn't survive a reshuffle — a new
+      // game starts everyone back with their own deck.
+      state.controlSwappedNames = new Set();
+      state.controlSwapWindowUntil = 0;
+      state.awaitingNewGameChoice = false;
+      state.lastGameResetAt = Date.now();
       renderTimers();
       renderFeed();
       renderMyDeck();
@@ -926,7 +1098,17 @@
       maybePushLive(true);
     }
 
-    return { applyEvent, resetForNewGame, setPaused, setMatchConcluded };
+    // Whether this MATCH's win condition (first to 2 game wins) has actually
+    // been reached yet — a much more reliable signal than scraping for
+    // "View Replay" text, which (per a real match) can appear after a
+    // single game's own replay becomes available, not just at the true end
+    // of a Bo3. Used to stop watchForMatchEnd from treating an early game's
+    // replay button as the whole match concluding.
+    function isMatchDecided() {
+      return state.myWins >= 2 || state.oppWins >= 2;
+    }
+
+    return { applyEvent, resetForNewGame, setPaused, setMatchConcluded, isMatchDecided };
   }
 
   // ── Wire the log watcher up to a #duel_log element ──────────────────────
@@ -945,7 +1127,22 @@
     // the one we're about to track. Replaying it would silently merge the
     // wrong opponent's cards into the new match's list. skipExisting tells us
     // to start counting from "now" instead of from 0 in that case.
-    let seen = (opts && opts.skipExisting) ? getCandidateLogLines(duelLogEl).length : 0;
+    //
+    // "now" is deliberately opts.baselineCount when the caller provides one,
+    // NOT a fresh re-count taken at this exact moment. Re-counting here used
+    // to silently swallow the whole opening hand: ensureDuelLogOpen (the
+    // caller) may need to click #log_btn and wait for #duel_log to even
+    // exist, and DuelingBook can log the new match's RPS result and starting
+    // "Drew X" x5/6 lines well within that gap — a live re-count at attach
+    // time would then treat those as leftover from the PREVIOUS match and
+    // skip them forever. baselineCount is captured by watchForNewDuels the
+    // instant the new match/game is actually detected, closing that gap.
+    let seen = 0;
+    if (opts && opts.skipExisting) {
+      seen = (typeof opts.baselineCount === 'number')
+        ? Math.min(opts.baselineCount, getCandidateLogLines(duelLogEl).length)
+        : getCandidateLogLines(duelLogEl).length;
+    }
     if (opts && opts.skipExisting && seen > 0) {
       console.log('[Duel Tools Tracker] skipping', seen, 'pre-existing log line(s) from before this match');
     }
@@ -1049,14 +1246,20 @@
     if (activeLogObserver) { activeLogObserver.disconnect(); activeLogObserver = null; }
   }
 
-  function beginTrackingForNewDuel(myUsername) {
+  function beginTrackingForNewDuel(myUsername, opts) {
     matchConcluded = false;
     teardownPreviousDuel();
     console.log('[Duel Tools Tracker] starting a fresh tracker for this match, as', myUsername);
     const tracker = startTracker(myUsername, loadMyDeckList());
     activeTracker = tracker;
     ensureDuelLogOpen(function (duelLogEl) {
-      activeLogObserver = armLogWatcher(duelLogEl, tracker, { skipExisting: true });
+      // baselineCount, when the caller captured one up front (see
+      // watchForNewDuels), anchors "pre-existing, skip these" to the moment
+      // the new match was actually detected rather than to whenever this
+      // callback happens to fire — see armLogWatcher for why that gap
+      // matters.
+      const baselineCount = (opts && typeof opts.baselineCount === 'number') ? opts.baselineCount : undefined;
+      activeLogObserver = armLogWatcher(duelLogEl, tracker, { skipExisting: true, baselineCount });
     });
   }
 
@@ -1112,14 +1315,25 @@
     let pending = false;
     function scan() {
       const el = findViewReplay();
-      if (el) {
-        handled.add(el);
-        if (!matchConcluded) {
-          matchConcluded = true;
-          console.log('[Duel Tools Tracker] match concluded (View Replay appeared) — pausing timers; the next new duel will start a fresh match');
-          if (activeTracker && activeTracker.setPaused) activeTracker.setPaused(true);
-          if (activeTracker && activeTracker.setMatchConcluded) activeTracker.setMatchConcluded(true);
-        }
+      if (!el) return;
+      // Gate on the match's actual win condition (first to 2 game wins),
+      // not just the text appearing — a "View Replay" button can become
+      // available after a SINGLE game's replay is ready, not only once the
+      // whole Bo3 is decided. Treating that as the match ending prompted the
+      // "new match?" confirmation box for what was really just G2 starting,
+      // and if that box went unanswered/unnoticed the tracker just sat
+      // frozen on the previous game's numbers — never resetting for G2 at
+      // all. Deliberately does NOT add `el` to `handled` when undecided, so
+      // the same element gets re-checked on every scan until the win
+      // threshold is actually reached (cheap — this only runs a few times a
+      // second while a "View Replay" element exists at all).
+      if (activeTracker && activeTracker.isMatchDecided && !activeTracker.isMatchDecided()) return;
+      handled.add(el);
+      if (!matchConcluded) {
+        matchConcluded = true;
+        console.log('[Duel Tools Tracker] match concluded (View Replay appeared AND the win threshold was reached) — pausing timers; the next new duel will start a fresh match');
+        if (activeTracker && activeTracker.setPaused) activeTracker.setPaused(true);
+        if (activeTracker && activeTracker.setMatchConcluded) activeTracker.setMatchConcluded(true);
       }
     }
     function scheduleScan() {
@@ -1144,8 +1358,17 @@
       const nowPresent = !!document.querySelector('#rps_start');
       if (nowPresent && !rpsPresent) {
         if (matchConcluded) {
+          // Snapshot how many log lines already exist RIGHT NOW — the
+          // instant the new match is detected — not later once
+          // promptNewDuel's confirmation box has been clicked and
+          // ensureDuelLogOpen has finished (re-)opening the panel. That gap
+          // is exactly where the opening hand's "Drew X" lines could
+          // otherwise get skipped as if they were leftover from the
+          // previous match — see armLogWatcher.
+          const logEl = document.querySelector('#duel_log');
+          const baselineCount = logEl ? getCandidateLogLines(logEl).length : 0;
           console.log('[Duel Tools Tracker] new MATCH detected (#rps_start after a concluded match)');
-          promptNewDuel(function () { beginTrackingForNewDuel(myUsername); });
+          promptNewDuel(function () { beginTrackingForNewDuel(myUsername, { baselineCount }); });
         } else {
           console.log('[Duel Tools Tracker] new GAME within the same match detected (#rps_start reappeared, e.g. a drawn game being replayed) — keeping opponent cards, resetting LP/timers');
           beginNewGameSameMatch();
