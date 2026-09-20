@@ -2353,16 +2353,20 @@ function isStapleCard(name) { return STAPLE_CARDS.has((name||'').toLowerCase().t
 // nearly every match, so calling that out per-card would just be clutter.
 // Returns '' when the card is a staple, wasn't found in any game, or there
 // are no per-game records to check against (e.g. games==null).
+// `games` may span more than one match (e.g. an event decklist image merges
+// several replays' games together) — seenIn is deduped and sorted so a card
+// that showed up in "game 1" across three different matches still comes out
+// as "G1", not "G1/1/1".
 function cardGameSeenLabel(cardName, games, isOpp) {
   if (!cardName || isStapleCard(cardName) || !games || !games.length) return '';
   const key = cardName.toLowerCase().trim();
-  const seenIn = [];
+  const seenIn = new Set();
   games.forEach(g => {
     const list = isOpp ? g.opp : g.mine;
-    if (list && list.some(c => (c.name||'').toLowerCase().trim() === key)) seenIn.push(g.gameNum);
+    if (list && list.some(c => (c.name||'').toLowerCase().trim() === key)) seenIn.add(g.gameNum);
   });
-  if (!seenIn.length) return '';
-  return 'G' + seenIn.join('/');
+  if (!seenIn.size) return '';
+  return 'G' + [...seenIn].sort((a,b)=>a-b).join('/');
 }
 
 // Standard printed-decklist ordering: Monsters, then Spells, then Traps,
@@ -8746,10 +8750,13 @@ async function generateEventDecklistImage(eventId, matches) {
   const uniqueCards = await mergeCardsFromMatches(matches);
   if (!uniqueCards.length) { st('No cards found in selected replays', 'var(--red)'); return; }
   const playerName = eventDecklistPlayerName(matches);
-  // G1/G2/G3 per-card labeling only makes sense against a single match's own
-  // games — with more than one replay selected, "G1" would be ambiguous
-  // (whose G1?), so the label is only computed for a single-replay selection.
-  const singleMatchGames = (matches.length === 1) ? matches[0].games : null;
+  // G1/G2/G3 labeling: pool every selected replay's per-game card lists
+  // together, so a card's badge reflects which game SLOT(s) (1/2/3, i.e. its
+  // position within a Bo3) it tends to show up in across the whole event —
+  // not just within one match. cardGameSeenLabel already dedupes game
+  // numbers, so a card seen in "game 1" of three different matches still
+  // shows as "G1", not "G1/1/1".
+  const allGames = matches.flatMap(m => m.games || []);
 
   const SECTION_NAMES = ['MONSTERS', 'SPELLS', 'TRAPS', 'OTHER'];
   const bySection = [[], [], [], []];
@@ -8781,7 +8788,7 @@ async function generateEventDecklistImage(eventId, matches) {
     const fallbackBoxStyle = 'width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-flex;align-items:center;justify-content:center;text-align:center;vertical-align:top;margin:2px;font-size:8px;line-height:1.3;color:#666;padding:3px;box-sizing:border-box';
     const cards = exp.map(c => {
       const imgId = c.id && window._cardDataCache[c.id] ? (window._cardDataCache[c.id].imageId || c.id) : c.id;
-      const gameLabel = singleMatchGames ? cardGameSeenLabel(c.name, singleMatchGames, false) : '';
+      const gameLabel = cardGameSeenLabel(c.name, allGames, false);
       const gameLabelHtml = gameLabel
         ? '<div style="position:absolute;bottom:2px;right:2px;background:rgba(0,0,0,.75);color:#f5a623;font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 4px;border-radius:3px;line-height:1.3">'+gameLabel+'</div>'
         : '';
