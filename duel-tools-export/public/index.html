@@ -1253,7 +1253,7 @@ select{cursor:pointer}
         </div>
         <!-- Toolbar -->
         <div style="padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap">
-          <div style="display:flex;gap:4px">
+          <div style="display:flex;gap:4px" id="igt-mt-gtabs">
             <button class="dd-btn-sec on" id="igt-mt-g1-btn" onclick="igtMtSetGame(1,this)" style="font-size:11px;padding:4px 10px">G1</button>
             <button class="dd-btn-sec"    id="igt-mt-g2-btn" onclick="igtMtSetGame(2,this)" style="font-size:11px;padding:4px 10px">G2</button>
             <button class="dd-btn-sec"    id="igt-mt-g3-btn" onclick="igtMtSetGame(3,this)" style="font-size:11px;padding:4px 10px">G3</button>
@@ -2331,6 +2331,39 @@ const FORBIDDEN = new Set(['chaos emperor dragon - envoy of the end','fiber jar'
 const LIMITED   = new Set(['black luster soldier - envoy of the beginning','breaker the magical warrior','cyber jar','dark magician of chaos','d.d. warrior lady','exodia the forbidden one','exiled force','injection fairy lily','jinzo','left arm of the forbidden one','left leg of the forbidden one','morphing jar','protector of the sanctuary','reflect bounder','right arm of the forbidden one','right leg of the forbidden one','sacred phoenix of nephthys','sangan','sinister serpent','tribe-infecting virus','twin-headed behemoth','card destruction','delinquent duo','graceful charity','heavy storm','lightning vortex','mage power','mystical space typhoon','pot of greed','premature burial','snatch steal','swords of revealing light','united we stand','call of the haunted','ceasefire','deck devastation virus','magic cylinder','mirror force','reckless greed','ring of destruction','torrential tribute']);
 const SEMILIM   = new Set(['abyss soldier','dark scorpion - chick the yellow','manticore of darkness','marauding captain','night assailant','vampire lord','creature swap','emergency provisions','level limit - area b','nobleman of crossout','reinforcement of the army','upstart goblin','good goblin housekeeping','gravity bind','last turn']);
 function banLimit(name){ const n=(name||'').toLowerCase().trim(); if(FORBIDDEN.has(n))return 0; if(LIMITED.has(n))return 1; if(SEMILIM.has(n))return 2; return 3; }
+
+// ══════════════════════════════════════════════════════════════════════
+// STAPLE CARDS — kept deliberately short for now: only cards that are
+// truly deck-agnostic (played in virtually every Goat Format deck
+// regardless of archetype/strategy), so calling out "which game(s) was
+// this seen in" for them in the Deck Viewer would just be noise. Everything
+// NOT on this list gets a G1/G2/G3-style per-game label instead — most other
+// "staple-ish" cards (MST, Heavy Storm, Scapegoat, Nobleman of Crossout,
+// etc.) are actually deck-type-specific enough in practice that labeling
+// them needs more thought, so they're intentionally left off rather than
+// guessed at. Easy to extend later if a card should be added or removed.
+// ══════════════════════════════════════════════════════════════════════
+const STAPLE_CARDS = new Set([
+  'pot of greed','graceful charity','ring of destruction'
+]);
+function isStapleCard(name) { return STAPLE_CARDS.has((name||'').toLowerCase().trim()); }
+
+// Which game(s) of a match a card was seen in, formatted as "G1", "G2/3",
+// "G1/2/3", etc. Staples (see above) never get a label — they show up in
+// nearly every match, so calling that out per-card would just be clutter.
+// Returns '' when the card is a staple, wasn't found in any game, or there
+// are no per-game records to check against (e.g. games==null).
+function cardGameSeenLabel(cardName, games, isOpp) {
+  if (!cardName || isStapleCard(cardName) || !games || !games.length) return '';
+  const key = cardName.toLowerCase().trim();
+  const seenIn = [];
+  games.forEach(g => {
+    const list = isOpp ? g.opp : g.mine;
+    if (list && list.some(c => (c.name||'').toLowerCase().trim() === key)) seenIn.push(g.gameNum);
+  });
+  if (!seenIn.length) return '';
+  return 'G' + seenIn.join('/');
+}
 
 // Standard printed-decklist ordering: Monsters, then Spells, then Traps,
 // alphabetical within each group. Anything without a recognizable type
@@ -8713,6 +8746,10 @@ async function generateEventDecklistImage(eventId, matches) {
   const uniqueCards = await mergeCardsFromMatches(matches);
   if (!uniqueCards.length) { st('No cards found in selected replays', 'var(--red)'); return; }
   const playerName = eventDecklistPlayerName(matches);
+  // G1/G2/G3 per-card labeling only makes sense against a single match's own
+  // games — with more than one replay selected, "G1" would be ambiguous
+  // (whose G1?), so the label is only computed for a single-replay selection.
+  const singleMatchGames = (matches.length === 1) ? matches[0].games : null;
 
   const SECTION_NAMES = ['MONSTERS', 'SPELLS', 'TRAPS', 'OTHER'];
   const bySection = [[], [], [], []];
@@ -8744,9 +8781,13 @@ async function generateEventDecklistImage(eventId, matches) {
     const fallbackBoxStyle = 'width:71px;height:103px;background:#1a1a1a;border:1px solid #333;display:inline-flex;align-items:center;justify-content:center;text-align:center;vertical-align:top;margin:2px;font-size:8px;line-height:1.3;color:#666;padding:3px;box-sizing:border-box';
     const cards = exp.map(c => {
       const imgId = c.id && window._cardDataCache[c.id] ? (window._cardDataCache[c.id].imageId || c.id) : c.id;
+      const gameLabel = singleMatchGames ? cardGameSeenLabel(c.name, singleMatchGames, false) : '';
+      const gameLabelHtml = gameLabel
+        ? '<div style="position:absolute;bottom:2px;right:2px;background:rgba(0,0,0,.75);color:#f5a623;font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 4px;border-radius:3px;line-height:1.3">'+gameLabel+'</div>'
+        : '';
       return imgId
-        ? '<div style="width:71px;height:103px;overflow:hidden;display:inline-block;vertical-align:top;margin:2px"><img src="https://images.ygoprodeck.com/images/cards/'+imgId+'.jpg" data-name="'+_escapeHtml(c.name)+'" style="width:100%;height:100%;object-fit:cover"/></div>'
-        : '<div style="'+fallbackBoxStyle+'">'+_escapeHtml(c.name)+'</div>';
+        ? '<div style="position:relative;width:71px;height:103px;overflow:hidden;display:inline-block;vertical-align:top;margin:2px"><img src="https://images.ygoprodeck.com/images/cards/'+imgId+'.jpg" data-name="'+_escapeHtml(c.name)+'" style="width:100%;height:100%;object-fit:cover"/>'+gameLabelHtml+'</div>'
+        : '<div style="position:relative;'+fallbackBoxStyle+'">'+_escapeHtml(c.name)+gameLabelHtml+'</div>';
     }).join('');
     html += '<div style="margin-bottom:20px"><div style="font-size:14px;font-weight:700;color:#00e596;letter-spacing:2px;margin-bottom:8px">'+label+' ('+count+')</div><div style="line-height:0">'+cards+'</div></div>';
   });
@@ -8781,7 +8822,12 @@ function dlYDK(cards, filename) {
 }
 
 // ── Build card grid ──────────────────────────────────────────────────────────
-async function buildGrid(container, cards, cardSize, showOpp) {
+// gameLabelFn(card), when passed, returns a "G1"/"G2/3"/"G1/2/3" string (or ''
+// for staples/unmatched cards) to badge onto that card's tiles — used for the
+// Deck Viewer's "ENTIRE MATCH" section so it's clear which game(s) each
+// non-staple card actually showed up in. Per-game sections don't pass this
+// (a card in the G1 block is inherently a G1 card already).
+async function buildGrid(container, cards, cardSize, showOpp, gameLabelFn) {
   container.innerHTML = '';
   if (!cards || !cards.length) {
     container.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:10px">No cards detected.</div>';
@@ -8795,9 +8841,11 @@ async function buildGrid(container, cards, cardSize, showOpp) {
   const grid = document.createElement('div');
   grid.className = 'card-grid ' + (cardSize==='S'?'sm':cardSize==='D'?'lg':'');
   for (const card of cards) {
+    const gameLabel = gameLabelFn ? gameLabelFn(card) : '';
     for (let i=0;i<card.displayCount;i++) {
       const wrap = document.createElement('div');
       wrap.className = 'cth' + (showOpp?' opp':'');
+      wrap.style.position = 'relative';
       const tip  = document.createElement('div'); tip.className='tip'; tip.textContent=card.name;
       const img  = document.createElement('img');
       img.alt = card.name; img.loading = 'lazy';
@@ -8808,6 +8856,13 @@ async function buildGrid(container, cards, cardSize, showOpp) {
         fb.textContent = card.name; wrap.appendChild(fb);
       };
       wrap.appendChild(tip); wrap.appendChild(img);
+      if (gameLabel) {
+        const gl = document.createElement('div');
+        gl.className = 'game-seen-badge';
+        gl.textContent = gameLabel;
+        gl.style.cssText = 'position:absolute;bottom:2px;right:2px;background:rgba(0,0,0,.75);color:var(--amber, #f5a623);font-size:8px;font-weight:700;letter-spacing:.5px;padding:1px 4px;border-radius:3px;line-height:1.3;pointer-events:none;z-index:2';
+        wrap.appendChild(gl);
+      }
       grid.appendChild(wrap);  // append to grid, not container
       // Load image async
       fetchCardImageUrl(card.id, card.name).then(src => {
@@ -9756,7 +9811,7 @@ async function renderMatchDisplay(m) {
     entBlock.appendChild(entHdr);
     const entBody=document.createElement('div'); entBody.className='game-body';
     const entGrid=document.createElement('div');
-    await buildGrid(entGrid, showCards, _currentCardSize, _showOpp);
+    await buildGrid(entGrid, showCards, _currentCardSize, _showOpp, c => cardGameSeenLabel(c.name, m.games, _showOpp));
     entBody.appendChild(entGrid); entBlock.appendChild(entBody); content.appendChild(entBlock);
 
     // Per-game sections
@@ -14870,8 +14925,8 @@ function igtShowYdkeDialog(target) {
 // the same look the manual click-cycle already uses for them. 'not' ("NOT IN
 // DECK") is deliberately excluded from anything Live Sync sets — that status
 // stays manual-only.
-const IGT_TINT_FILTER  = { not:'grayscale(1) brightness(.55)', banish:'grayscale(.5) brightness(.6)', grave:'grayscale(.5) brightness(.55)', hand:'brightness(.8)' };
-const IGT_TINT_OVERLAY = { banish:'rgba(70,110,230,.45)', grave:'rgba(210,50,50,.4)', hand:'rgba(230,170,30,.35)' };
+const IGT_TINT_FILTER  = { not:'grayscale(1) brightness(.55)', banish:'grayscale(.5) brightness(.6)', grave:'grayscale(.5) brightness(.55)', hand:'brightness(.8)', field:'brightness(.85)' };
+const IGT_TINT_OVERLAY = { banish:'rgba(70,110,230,.45)', grave:'rgba(210,50,50,.4)', hand:'rgba(230,170,30,.35)', field:'rgba(40,180,120,.35)' };
 
 function igtCardTile(card, opts) {
   const size = opts.size || 72; // default bigger
@@ -15346,6 +15401,8 @@ let _igtLiveCode = null;
 let _igtLiveInterval = null;
 let _igtLiveNameIdCache = {};  // lowercased card name -> ygoprodeck id, or null if not found
 let _igtLiveLastData = null;   // most recent snapshot, kept around for igtExportImage()
+let _igtLiveMatchStartedAt = null; // the tracker's matchStartedAt we last saw — a change means a brand-new match
+let _igtLiveResultsRecorded = 0;   // how many of data.gameResults we've already copied into _igtMtResults
 
 function igtLiveInitOnce() {
   if (igtLiveInitOnce._done) return;
@@ -15391,6 +15448,8 @@ function igtLiveConnect(code) {
 function igtLiveDisconnect() {
   _igtLiveCode = null;
   _igtLiveLastData = null;
+  _igtLiveMatchStartedAt = null; // so reconnecting treats the next snapshot as this connection's first, not a "new match"
+  _igtLiveResultsRecorded = 0;
   clearInterval(_igtLiveInterval);
   _igtLiveInterval = null;
   localStorage.removeItem('dt_live_pair_code');
@@ -15426,6 +15485,9 @@ async function igtLivePoll() {
     igtLiveSyncMyDeckIntoBuilder(data.myDeck || []);
     igtLiveRenderMyTracker(data);
   } catch (e) { console.warn('[Live Sync] My Tracker render failed:', e); }
+  // Keeps the G1/G2/G3(+) tab and WIN/LOSS history following the match
+  // automatically — own try/catch so a hiccup here never blocks a render.
+  try { igtLiveSyncMatchProgress(data); } catch (e) { console.warn('[Live Sync] match-progress sync failed:', e); }
   // Opponent cards only ever have a NAME from the tracker — resolving each
   // to an id/type is a separate, independently-failable step, kept in its
   // own try/catch so a slow or failed lookup for one card never blocks My
@@ -15434,6 +15496,82 @@ async function igtLivePoll() {
     await igtLiveResolveNames(data.oppCards || []);
     igtLiveRenderOppTracker(data);
   } catch (e) { console.warn('[Live Sync] Opp Tracker render failed:', e); }
+}
+
+// Creates the G4/G5/... tab on demand — a Bo3 that hits a draw plays on
+// past G3, and the fixed G1/G2/G3 buttons in the HTML don't cover that.
+// Games beyond 3 all share this one dynamically-created button family.
+function igtLiveEnsureGameTab(game) {
+  let btn = document.getElementById('igt-mt-g' + game + '-btn');
+  if (btn) return btn;
+  const tabs = document.getElementById('igt-mt-gtabs');
+  if (!tabs) return null;
+  btn = document.createElement('button');
+  btn.className = 'dd-btn-sec';
+  btn.id = 'igt-mt-g' + game + '-btn';
+  btn.style.cssText = 'font-size:11px;padding:4px 10px';
+  btn.textContent = 'G' + game;
+  btn.onclick = function () { igtMtSetGame(game, btn); };
+  tabs.appendChild(btn);
+  return btn;
+}
+
+// Keeps the G1/G2/G3(+) tab and the WIN/LOSS history following the live
+// match automatically, so you never have to remember to click G2 yourself
+// mid-duel (which is how a game's cards used to end up overlapping the
+// previous game's in the tracker). Three things, each driven by a fact the
+// tracker script already knows for certain:
+//  - data.matchStartedAt changing means a genuinely NEW match (the tracker
+//    only sets this once per startTracker() call) — reset the tab/history
+//    silently, no confirm() prompt, since this is an automatic, trusted
+//    transition rather than a manual destructive click.
+//  - data.game tells us which tab should be showing; a game past 3 (a
+//    drawn Bo3 pushing to G4+) gets its tab created on the fly.
+//  - data.gameResults grows by one every time DuelingBook logs "Admitted
+//    defeat"/"Lost Duel" for either side (see applyEvent in the tracker
+//    script) — each new entry is copied into the existing WIN/LOSS history
+//    feature so it shows up exactly like a manually-clicked +WIN/+LOSS
+//    would, tagged with the game it actually happened in.
+function igtLiveSyncMatchProgress(data) {
+  if (data.matchStartedAt && data.matchStartedAt !== _igtLiveMatchStartedAt) {
+    const isFirstPollThisConnection = _igtLiveMatchStartedAt === null;
+    _igtLiveMatchStartedAt = data.matchStartedAt;
+    _igtLiveResultsRecorded = 0;
+    if (!isFirstPollThisConnection) {
+      _igtMtStates = { 1: {}, 2: {}, 3: {} };
+      _igtMtResults = [];
+      document.querySelectorAll('[id^="igt-mt-g"]').forEach(b => {
+        const n = parseInt(b.id.replace('igt-mt-g', '').replace('-btn', ''), 10);
+        if (n > 3) b.remove(); else b.classList.remove('on');
+      });
+      const g1 = document.getElementById('igt-mt-g1-btn');
+      if (g1) g1.classList.add('on');
+      _igtMtGame = 1;
+      igtMtRenderHistory();
+    }
+  }
+
+  const game = data.game || 1;
+  if (game !== _igtMtGame) {
+    const btn = igtLiveEnsureGameTab(game);
+    igtMtSetGame(game, btn);
+  }
+
+  const results = data.gameResults || [];
+  for (let i = _igtLiveResultsRecorded; i < results.length; i++) {
+    _igtMtResults.push({ game: i + 1, result: results[i] === 'win' ? 'w' : 'l' });
+  }
+  if (results.length > _igtLiveResultsRecorded) {
+    _igtLiveResultsRecorded = results.length;
+    igtMtRenderHistory();
+    const recEl = document.getElementById('igt-mt-record');
+    if (recEl) {
+      const w = _igtMtResults.filter(r => r.result === 'w').length;
+      const l = _igtMtResults.filter(r => r.result === 'l').length;
+      const d = _igtMtResults.filter(r => r.result === 'd').length;
+      recEl.innerHTML = _igtMtResults.length ? `<span style="color:var(--green)">${w}W</span> <span style="color:var(--muted)">—</span> <span style="color:var(--red)">${l}L</span>${d ? ' — <span style="color:var(--amber)">' + d + 'D</span>' : ''}` : '';
+    }
+  }
 }
 
 // Card names only come through the live payload (the tracker doesn't resolve
@@ -15463,31 +15601,35 @@ function igtLiveSyncMyDeckIntoBuilder(deck) {
 }
 
 // Renders one tile per copy, tagged with whichever zone the tracker last saw
-// that copy move to (hand/field, Graveyard, or Banished) — reusing the exact
-// look the manual click-cycle already uses for grave/banish, so a card reads
-// the same way whether Live Sync or a manual click put it there. A copy with
-// no zone yet is just a normal, untagged tile (still in the deck). "NOT IN
-// DECK" never appears here — that status is manual-only.
+// that copy move to (Hand, Field, Graveyard, or Banished) — reusing the
+// exact look the manual click-cycle already uses for grave/banish, so a
+// card reads the same way whether Live Sync or a manual click put it there.
+// "Field" covers Set/Summoned/Activated cards still out on the field —
+// distinct from "Hand" — and sticks until the card actually leaves the
+// field (to GY, banished, or back to deck), not just because it's sitting
+// there being used. A copy with no zone yet is a normal, untagged tile
+// (still in the deck). "NOT IN DECK" never appears here — manual-only.
 function igtLiveRenderMyTracker(data) {
   const el = document.getElementById('igt-mt-tiles');
   const countEl = document.getElementById('igt-mt-deck-count');
   if (!el) return;
   const deck = data.myDeck || [];
   const totalAll = deck.reduce((s, c) => s + c.total, 0);
-  const totalOut = deck.reduce((s, c) => s + (c.zones ? c.zones.hand + c.zones.grave + c.zones.banish : 0), 0);
+  const totalOut = deck.reduce((s, c) => s + (c.zones ? c.zones.hand + c.zones.field + c.zones.grave + c.zones.banish : 0), 0);
   if (countEl) countEl.textContent = '(' + (totalAll - totalOut) + '/' + totalAll + ' unseen)';
   el.innerHTML = '';
-  const ZONE_LABEL = { hand: 'IN HAND', grave: 'GRAVEYARD', banish: 'BANISHED' };
-  const ZONE_COLOR = { hand: 'rgba(230,170,30,.9)', grave: 'rgba(30,30,30,.92)', banish: 'rgba(80,100,200,.9)' };
-  const ZONE_BORDER = { hand: 'var(--amber)', grave: '#666', banish: 'var(--blue)' };
+  const ZONE_LABEL = { hand: 'IN HAND', field: 'ON FIELD', grave: 'GRAVEYARD', banish: 'BANISHED' };
+  const ZONE_COLOR = { hand: 'rgba(230,170,30,.9)', field: 'rgba(30,150,90,.9)', grave: 'rgba(30,30,30,.92)', banish: 'rgba(80,100,200,.9)' };
+  const ZONE_BORDER = { hand: 'var(--amber)', field: 'var(--green)', grave: '#666', banish: 'var(--blue)' };
   igtSortCards(deck).forEach(c => {
-    const zones = c.zones || { hand: 0, grave: 0, banish: 0 };
+    const zones = c.zones || { hand: 0, field: 0, grave: 0, banish: 0 };
     // Expand into per-copy tags: however many are in each zone, then the rest untagged (still in deck).
     const tags = [
       ...Array(zones.hand).fill('hand'),
+      ...Array(zones.field).fill('field'),
       ...Array(zones.grave).fill('grave'),
       ...Array(zones.banish).fill('banish'),
-      ...Array(Math.max(0, c.total - zones.hand - zones.grave - zones.banish)).fill(null)
+      ...Array(Math.max(0, c.total - zones.hand - zones.field - zones.grave - zones.banish)).fill(null)
     ];
     tags.forEach(zone => {
       const tile = igtCardTile({ id: c.id, name: c.name }, {
@@ -15503,11 +15645,17 @@ function igtLiveRenderMyTracker(data) {
   });
 }
 
+// One tile per physical copy actually seen this match — same style as My
+// Tracker, no "×N" shorthand — and no speculation about how many more might
+// still be in their deck/hand: we only ever show what's been confirmed. The
+// count is also capped at the card's real Goat Format limit (banLimit(),
+// same list the deck parser already enforces) as a safety net in case the
+// live inference ever overcounts — it should never legitimately exceed it.
 function igtLiveRenderOppTracker(data) {
   const el = document.getElementById('igt-ot-tiles');
   const countEl = document.getElementById('igt-ot-deck-count');
   if (!el) return;
-  const cards = data.oppCards || [];
+  const cards = (data.oppCards || []).map(c => ({ name: c.name, count: Math.min(c.count, banLimit(c.name)) })).filter(c => c.count > 0);
   if (countEl) countEl.textContent = '(' + cards.reduce((s, c) => s + c.count, 0) + ' revealed)';
   el.innerHTML = '';
   const sortable = cards.map(c => {
@@ -15515,16 +15663,11 @@ function igtLiveRenderOppTracker(data) {
     return Object.assign({}, c, { id: cached && cached.id, type: (cached && cached.type) || '' });
   });
   igtSortCards(sortable).forEach(c => {
-    const label = c.count > 1 ? '×' + c.count : null;
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:2px';
-    const tile = igtCardTile({ id: c.id, name: c.name }, { size: 78, label, labelColor: 'rgba(80,100,200,.85)', borderColor: 'var(--blue)' });
-    const prob = document.createElement('div');
-    prob.style.cssText = 'font-size:8px;color:var(--muted);text-align:center;max-width:78px';
-    prob.title = 'Rough estimate — assumes a 40-card deck and up to '+(c.assumedMax||3)+' copies; not a real hypergeometric calc since we don\'t know their actual decklist.';
-    prob.textContent = c.unseenCopies > 0 ? c.unseenCopies + ' left · ~' + c.pctNextDraw + '% next draw' : 'none left (est.)';
-    wrap.appendChild(tile); wrap.appendChild(prob);
-    el.appendChild(wrap);
+    for (let i = 0; i < c.count; i++) {
+      const tile = igtCardTile({ id: c.id, name: c.name }, { size: 78, borderColor: 'var(--blue)' });
+      tile.title = c.name;
+      el.appendChild(tile);
+    }
   });
 }
 
@@ -16328,7 +16471,42 @@ async function loadCrosslinksSection(el) {
     '<div id="cl-scan-result" style="font-size:12px;color:var(--muted);min-height:20px;margin:10px 0"></div>' +
     '<button id="cl-scan-btn" onclick="runCrosslinkScan()" style="background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:12px;padding:8px 20px;border-radius:6px;cursor:pointer">' +
       'Scan + Link All Replays' +
+    '</button>' +
+    '<div style="font-size:13px;color:var(--text);margin:22px 0 12px;border-top:1px solid var(--border);padding-top:16px">' +
+      '<b>Repair Cross-Linked Game Data</b>' +
+      '<div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5">' +
+        'One-time fix for a bug where a mirrored replay\'s G1/G2/G3 card lists showed the ' +
+        'original player\'s cards instead of the mirrored player\'s own. Re-derives each ' +
+        'cross-linked replay\'s per-game cards from its original. Safe to run multiple times.' +
+      '</div>' +
+    '</div>' +
+    '<div id="cl-repair-result" style="font-size:12px;color:var(--muted);min-height:20px;margin:10px 0"></div>' +
+    '<button id="cl-repair-btn" onclick="runCrosslinkGameRepair()" style="background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:12px;padding:8px 20px;border-radius:6px;cursor:pointer">' +
+      'Repair Game Data' +
     '</button>';
+}
+
+async function runCrosslinkGameRepair() {
+  const btn = document.getElementById('cl-repair-btn');
+  const res = document.getElementById('cl-repair-result');
+  if (!btn || !res) return;
+  btn.disabled = true; btn.textContent = '⏳ Repairing...';
+  res.style.color = 'var(--muted)'; res.textContent = 'Running repair — this may take a moment for large datasets...';
+  try {
+    const r = await fetch(API+'/crosslink/repair-games', { method:'POST', headers: authHeaders() });
+    const d = await r.json();
+    if (r.ok) {
+      res.style.color = 'var(--green)';
+      res.textContent = 'Done: ' + d.repaired + ' replays repaired across ' + d.batchesUpdated + ' batches. ' + d.checked + ' checked, ' + d.noOriginal + ' had no original on file, ' + d.errors + ' errors.';
+    } else {
+      res.style.color = 'var(--red)';
+      res.textContent = '✗ Failed: ' + (d.error||'unknown error');
+    }
+  } catch(e) {
+    res.style.color = 'var(--red)';
+    res.textContent = '✗ Error: ' + e.message;
+  }
+  btn.disabled = false; btn.textContent = 'Repair Game Data';
 }
 
 async function runCrosslinkScan() {

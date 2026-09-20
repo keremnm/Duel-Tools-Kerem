@@ -90,14 +90,6 @@
   }
 
   // ── Estimating how much of the opponent's deck is still unseen ─────────
-  // Rough, clearly-labeled guesswork, not a real hypergeometric model — we
-  // don't know their actual decklist, only what's been revealed so far. A
-  // standard deck size and a standard max-copy count are assumed; both are
-  // just reasonable defaults, not measured facts about this specific match.
-  const ASSUMED_DECK_SIZE = 40;
-  const ASSUMED_OPENING_HAND = 5;
-  const ASSUMED_MAX_COPIES = 3;
-
   // ── Name → passcode resolution, for exporting a YDK of opponent cards ──
   // YDK files reference cards by their numeric passcode, not by name, so
   // turning the known-card list (plain text names, parsed from the log)
@@ -367,139 +359,140 @@
       feed: [], // last N parsed events for the debug view
       paused: false,
       myDeckList: deckList || null, // [{id, name, type, total}] — the uploaded YDK, persists indefinitely once set
-      myDeckRemaining: null, // [{id, name, type, total, zones:{hand,grave,banish}}] — rebuilt fresh every GAME (the deck reshuffles each game)
+      myDeckRemaining: null, // [{id, name, type, total, zones:{hand,field,grave,banish}}] — rebuilt fresh every GAME (the deck reshuffles each game)
       game: 1, // which game of this MATCH we're on — 1 unless resetForNewGame() has bumped it
       matchConcluded: false, // set true once "View Replay" appears — mirrors the outer matchConcluded flag, for the live-sync payload
-      oppDrawsThisGame: 0 // every "Drew ..." by the opponent this game, revealed or not — feeds the draw-probability estimate
+      matchStartedAt: Date.now(), // fixed once per match — lets the site detect "this is a brand-new match" without guessing
+      myWins: 0, oppWins: 0, // game wins THIS MATCH — first to 2 (Bo3, extending past G3 on a draw) wins the match
+      gameResults: [] // ['win'|'loss', ...] — one entry per completed game this match, in order
     };
 
     function freshDeckRemaining() {
-      return state.myDeckList ? state.myDeckList.map((c) => ({ id: c.id, name: c.name, type: c.type || '', total: c.total, zones: { hand: 0, grave: 0, banish: 0 } })) : null;
+      return state.myDeckList ? state.myDeckList.map((c) => ({ id: c.id, name: c.name, type: c.type || '', total: c.total, zones: { hand: 0, field: 0, grave: 0, banish: 0 } })) : null;
     }
     state.myDeckRemaining = freshDeckRemaining();
 
-    // Moves one copy of a card between zones as the log reveals it happening.
-    // Zones are aggregate counts, not per-physical-copy identity (the log
-    // never gives us a serial number to track one specific copy across
-    // lines) — "hand" is a catch-all for "left the deck, not in GY/banished"
-    // (covers the hand AND the field, since the log doesn't let us reliably
-    // tell those apart every time). A label sticks to a card until another
-    // recognized move happens — it does NOT clear itself when a copy just
-    // sits on the field being used.
+    // Classifies a single log line into a zone transition — shared by both
+    // your own deck (exact accounting, since we know your real decklist)
+    // and the opponent's (inferred copy-records, since we only see what
+    // they reveal). Zones are "hand", "field" (monster/spell/trap zones —
+    // Set, Summoned, or Activated and still out there), "grave", "banish",
+    // or null meaning "back in the deck / not tracked". Returns null when
+    // the line isn't a recognized transition at all (e.g. a card merely
+    // "Revealed ... from Deck" stays in the deck — nothing to track yet).
     //
-    // NOTE: the exact "to/from Graveyard" and "to/from Banished" phrasing
-    // below is a best-effort guess at DuelingBook's real wording (confirmed
-    // patterns only exist for Drew/Set/Summoned/Sent/Returned so far) — if
-    // labels aren't tracking correctly in a real match, the fix is almost
-    // certainly just widening these regexes, so send the exact log line.
-    function applyZoneTransition(entry, text) {
-      const toGrave    = /\bto (?:the )?(?:GY|Graveyard)\b/i.test(text);
-      const toBanish   = /^Banished /i.test(text) || /\bto (?:the )?Banish(?:ed)?(?: Zone)?\b/i.test(text);
-      const toDeck     = /^Returned .+ to (?:the )?(?:top of |bottom of )?Deck\b/i.test(text);
-      const fromGrave  = /\bfrom (?:the )?(?:GY|Graveyard)\b/i.test(text);
-      const fromBanish = /\bfrom (?:the )?Banish(?:ed)?(?: Zone)?\b/i.test(text);
-      const fromDeck   = /^Drew /i.test(text) || /\bfrom Deck\b/i.test(text);
+    // NOTE: this is a best-effort guess at DuelingBook's real wording,
+    // confirmed only for the verbs actually seen in testing (Drew, Set,
+    // Summoned, Sent, Returned, Banished/Removed, Added). If a label isn't
+    // tracking correctly in a real match, the fix is almost certainly
+    // widening these regexes — the exact log line text is what's needed to
+    // do that precisely, so please paste it if you spot a miss.
+    function classifyCardAction(text) {
+      if (/^Revealed .+ from Deck\b/i.test(text)) return null; // stays in the deck — nothing to track yet
 
+      const toGrave  = /\bto (?:the )?(?:GY|Graveyard)\b/i.test(text);
+      const toBanish = /^(?:Banished|Removed) /i.test(text) ||
+                        /\bto (?:the )?Banish(?:ed)?(?: Zone)?\b/i.test(text) ||
+                        /\bremoved .+ from (?:play|the field)\b/i.test(text);
+      const toDeck   = /^Returned .+ to (?:the )?(?:top of |bottom of )?Deck\b/i.test(text) ||
+                        /\bto (?:the )?(?:top|bottom) of (?:the )?Deck\b/i.test(text);
+      const toHand   = /^Drew /i.test(text) || /^Added /i.test(text) || /\bto (?:your |their )?hand\b/i.test(text);
+      const toField  = /^(?:Set|Activated|Normal Summoned|Special Summoned|Flip Summoned|Flipped) /i.test(text);
+
+      let to;
+      if (toGrave) to = 'grave';
+      else if (toBanish) to = 'banish';
+      else if (toDeck) to = null;
+      else if (toHand) to = 'hand';
+      else if (toField) to = 'field';
+      else return null; // no recognized destination — e.g. "Attacked", pure chat, etc.
+
+      const fromGrave  = /\bfrom (?:the )?(?:GY|Graveyard)\b/i.test(text);
+      const fromBanish = /\bfrom (?:the )?Banish(?:ed)?(?: Zone)?\b/i.test(text) || /\bfrom (?:play|removal)\b/i.test(text);
+      const fromDeck   = /\bfrom Deck\b/i.test(text);
+      const fromHand   = /\bfrom hand\b/i.test(text);
+      const from = fromGrave ? 'grave' : fromBanish ? 'banish' : fromDeck ? 'deck' : fromHand ? 'hand' : null;
+
+      return { from, to };
+    }
+
+    // Moves one copy of a card between zones as the log reveals it
+    // happening. Zones are aggregate counts, not per-physical-copy identity
+    // (the log never gives us a serial number to track one specific copy
+    // across lines) — a label sticks to a card until another recognized
+    // move happens, it does NOT clear itself just because a copy sits on
+    // the field being used for a while.
+    function applyZoneTransition(entry, text) {
+      const action = classifyCardAction(text);
+      if (!action) return;
       function take(zone) {
         if (entry.zones[zone] > 0) { entry.zones[zone]--; return true; }
         return false;
       }
-      // Best-guess source when the line doesn't name one: prefer taking from
-      // "hand" (the common case) before falling back to grave/banish.
-      function takeGuessedSource(preferred) {
-        if (preferred && take(preferred)) return;
-        if (take('hand')) return;
-        if (take('grave')) return;
-        take('banish');
+      if (action.from !== 'deck') {
+        // Take from the named source if we can; otherwise fall back through
+        // the other zones in likelihood order. Field is checked first since
+        // most non-deck movement (to GY/banish/hand) starts from a card
+        // that's already on the field, not sitting in hand.
+        const order = action.from ? [action.from, 'field', 'hand', 'grave', 'banish'] : ['field', 'hand', 'grave', 'banish'];
+        for (let i = 0; i < order.length; i++) { if (take(order[i])) break; }
       }
-
-      if (toGrave) {
-        takeGuessedSource(fromBanish ? 'banish' : null);
-        entry.zones.grave++;
-      } else if (toBanish) {
-        takeGuessedSource(fromGrave ? 'grave' : null);
-        entry.zones.banish++;
-      } else if (toDeck) {
-        takeGuessedSource(fromGrave ? 'grave' : fromBanish ? 'banish' : null);
-        // back in the deck — no zone to increment, it's just unseen again
-      } else if (fromGrave) {
-        take('grave'); entry.zones.hand++; // e.g. Special Summoned from the Graveyard
-      } else if (fromBanish) {
-        take('banish'); entry.zones.hand++; // e.g. Special Summoned from Banished
-      } else if (fromDeck) {
-        entry.zones.hand++; // freshly left the deck, no more specific destination named yet
-      }
+      // action.from === 'deck' means the copy wasn't tracked before now
+      // (fresh out of the deck) — nothing to remove from an existing zone.
+      if (action.to !== null) entry.zones[action.to]++;
+      // action.to === null means "back in the deck" — nothing to increment.
     }
 
     // Mirrors the site's OWN established replay-parsing accounting (see
     // parseMatch()/buildGameCards() in index.html): a naive "count every
     // reveal" tally inflates fast for any card that returns to hand/deck and
     // gets reused (Jar of Greed, Thunder Dragon, etc. showing up as "×5" of
-    // a 3-copy card). Instead this tracks a running "currently out of deck"
-    // total (cum) per card and the PEAK it ever reached (max) — max is what
-    // we actually report, since that's the real proof of how many distinct
-    // copies exist, not how many times we've seen one.
-    // Unlike our own deck (where we see every card's true zone at all times),
-    // the opponent's hand is hidden — a card can be revealed for the first
-    // time by an action that implies it left the deck a while ago (e.g. a
-    // "Discarded X from hand to GY" with no earlier "Drew X" line, since
-    // opponent draws aren't named in the log until something reveals them).
-    // So instead of a single cum/max counter, we track actual per-copy
-    // "records" (one per physical copy we currently believe is out of the
-    // deck, tagged with a guessed zone) and derive count from how many
-    // records exist. A transition tries to reuse an existing record in the
+    // a 3-copy card). Uses the SAME classifyCardAction() transition logic as
+    // your own deck above, but instead of one exact zone-count per card it
+    // tracks actual per-copy "records" (one per physical copy currently
+    // believed out of the deck, tagged with a guessed zone) — because unlike
+    // your own deck, the opponent's hand is hidden, so a card can be
+    // revealed for the first time by an action that implies it left the
+    // deck a while ago (e.g. a "Discarded X from hand to GY" with no earlier
+    // "Drew X" line, since opponent draws aren't named until something
+    // reveals them). A transition tries to reuse an existing record in the
     // zone it should be coming from; if none matches, it assumes it's
     // revealing a copy we didn't know about yet and creates a new record —
     // this is what lets two simultaneous "Discarded ... from hand" lines for
     // the same name correctly register as 2 distinct copies instead of 1.
-    function classifyOppCardAction(text) {
-      if (/^Revealed .+ from Deck\b/i.test(text)) return null; // stays in the deck — not a real copy yet
-      if (/^Drew /i.test(text)) return { from: null, to: 'hand' };
-      if (/ from Deck\b/i.test(text)) return { from: null, to: 'field' };
-      if (/^Returned .+ to (?:the )?(?:top of |bottom of )?Deck\b/i.test(text) ||
-          / to (?:the )?(?:top|bottom) of (?:the )?Deck\b/i.test(text)) return { from: 'any', to: null };
-      if (/^Discarded .+ from hand to (?:GY|Graveyard)\b/i.test(text)) return { from: 'hand', to: 'grave' };
-      if (/^Set .+ from hand\b/i.test(text)) return { from: 'hand', to: 'field' };
-      if (/^Activated .+ from hand\b/i.test(text)) return { from: 'hand', to: 'field' };
-      if (/Special Summoned .+ from (?:the )?Graveyard\b/i.test(text)) return { from: 'grave', to: 'field' };
-      if (/Special Summoned .+ from (?:the )?Banish(?:ed)?\b/i.test(text)) return { from: 'banish', to: 'field' };
-      if (/^Banished /i.test(text) || /\bto (?:the )?Banish(?:ed)?(?: Zone)?\b/i.test(text)) return { from: 'any', to: 'banish' };
-      if (/\bto (?:the )?(?:GY|Graveyard)\b/i.test(text)) return { from: 'any', to: 'grave' };
-      return null; // e.g. "Attacked", "Normal Summoned" of an already-tracked field copy — no new info
-    }
+    // `max` (the peak record count ever reached) is what's actually
+    // reported, since that's the real proof of how many distinct copies
+    // exist, not how many times we've seen one.
     function addKnownOppCard(name, text) {
       let entry = state.knownOppCards.find((c) => c.name === name);
       if (!entry) { entry = { name, records: [], max: 0 }; state.knownOppCards.push(entry); }
-      const action = classifyOppCardAction(text);
+      const action = classifyCardAction(text);
       if (action) {
         if (action.to === null) {
-          // returning to deck — one fewer copy out (pick the most recently tracked one)
-          if (entry.records.length > 0) entry.records.pop();
-        } else if (action.from === null) {
-          // freshly leaving the deck — always a distinct, newly-out copy
-          entry.records.push(action.to);
+          // returning to deck — one fewer copy out. Prefer removing from the
+          // named source zone; otherwise drop the most recently tracked one.
+          const idx = (action.from && action.from !== 'deck') ? entry.records.lastIndexOf(action.from) : entry.records.length - 1;
+          if (idx >= 0) entry.records.splice(idx, 1);
+        } else if (action.from === 'deck' || !action.from) {
+          // Fresh from the deck, or no source named — try to reuse an
+          // existing record first (covers e.g. Set/Activated of a card we
+          // already know is in their hand); only counts as a NEW copy if
+          // nothing matches.
+          let idx = -1;
+          if (!action.from) {
+            const order = ['field', 'hand', 'grave', 'banish'];
+            for (let i = 0; i < order.length && idx < 0; i++) idx = entry.records.lastIndexOf(order[i]);
+          }
+          if (idx >= 0) entry.records[idx] = action.to;
+          else entry.records.push(action.to);
         } else {
-          const idx = action.from === 'any'
-            ? entry.records.length - 1
-            : entry.records.lastIndexOf(action.from);
+          const idx = entry.records.lastIndexOf(action.from);
           if (idx >= 0) entry.records[idx] = action.to;
           else entry.records.push(action.to); // no matching source copy — reveals one we didn't know about
         }
       }
       if (entry.records.length > entry.max) entry.max = entry.records.length;
       return entry;
-    }
-
-    // Rough estimate of how many copies of a known opponent card are still
-    // unaccounted for (somewhere in their deck or hand, we don't know which)
-    // and, from that, a rough % chance their NEXT draw is a copy of it.
-    // Both assume a standard deck size / opening hand / max-copy count — see
-    // the ASSUMED_* constants above for exactly what's being guessed at.
-    function oppCardEstimate(card) {
-      const unseenCopies = Math.max(0, ASSUMED_MAX_COPIES - card.max);
-      const remainingInDeck = Math.max(1, ASSUMED_DECK_SIZE - ASSUMED_OPENING_HAND - (state.oppDrawsThisGame || 0));
-      const pctNextDraw = Math.round((unseenCopies / remainingInDeck) * 100);
-      return { unseenCopies, pctNextDraw };
     }
 
     // Rough LP-based "who's ahead" estimate — NOT a real win probability
@@ -516,6 +509,10 @@
         myUsername: state.myUsername,
         oppUsername: state.oppUsername,
         game: state.game,
+        matchStartedAt: state.matchStartedAt,
+        myWins: state.myWins,
+        oppWins: state.oppWins,
+        gameResults: state.gameResults,
         matchConcluded: !!state.matchConcluded,
         paused: state.paused,
         myLP: state.myLP,
@@ -524,9 +521,12 @@
         oppTimer: Math.floor(state.oppTimer),
         edgePct: computeEdgePct(),
         myDeck: state.myDeckRemaining || [],
+        // Factual only — a card's count is exactly how many distinct copies
+        // we've actually seen leave the deck (see addKnownOppCard above), no
+        // guess at how many more might be left unseen in their deck/hand.
         oppCards: state.knownOppCards
           .filter((c) => c.max > 0)
-          .map((c) => Object.assign({ name: c.name, count: c.max, assumedMax: ASSUMED_MAX_COPIES }, oppCardEstimate(c))),
+          .map((c) => ({ name: c.name, count: c.max })),
         updatedAt: Date.now()
       };
     }
@@ -570,7 +570,7 @@
         const n = drewM[1].trim();
         return /^a card$/i.test(n) ? null : n;
       }
-      const m = /^(?:Set |Activated |Normal Summoned |Special Summoned |Flip Summoned |Flipped (?:Set )?|Sent |Discarded |Banished |Revealed |Declared effect of |Returned |Moved |Changed )([A-Za-z0-9 ,.'\-:]+?)(?: from| to| in| on| \()/.exec(text);
+      const m = /^(?:Set |Activated |Normal Summoned |Special Summoned |Flip Summoned |Flipped (?:Set )?|Sent |Discarded |Banished |Removed |Added |Revealed |Declared effect of |Returned |Moved |Changed )([A-Za-z0-9 ,.'\-:]+?)(?: from| to| in| on| \()/.exec(text);
       const n = m && m[1] && m[1].trim();
       return (n && !/^card$/i.test(n)) ? n : null;
     }
@@ -590,35 +590,48 @@
       lpM = /^Gained (\d+) LP$/.exec(ev.text);
       if (lpM) { if (side === 'me') state.myLP += parseInt(lpM[1], 10); else state.oppLP += parseInt(lpM[1], 10); }
 
-      // Every opponent draw shrinks their remaining deck by one, whether or
-      // not we learn what it was — feeds the draw-probability estimate.
-      if (side === 'opp' && /^Drew /.test(ev.text)) {
-        state.oppDrawsThisGame = (state.oppDrawsThisGame || 0) + 1;
+      // Per-GAME win/loss — DuelingBook logs the loser's line as exactly
+      // "Admitted defeat" or "Lost Duel" (same signal the site's own replay
+      // parser uses to determine gameWinners — see parseMatch() in
+      // index.html). The other side won that game. This does NOT touch
+      // matchConcluded (the whole-match "View Replay" signal) — a single
+      // game ending mid-Bo3 doesn't end the match.
+      if (ev.text === 'Admitted defeat' || ev.text === 'Lost Duel') {
+        if (side === 'me') { state.oppWins++; state.gameResults.push('loss'); }
+        else if (side === 'opp') { state.myWins++; state.gameResults.push('win'); }
+        maybePushLive(true);
       }
 
-      // Known-card accumulation for the opponent (feeds the YDK export and
-      // the draw-probability estimate) — covers every way a card of theirs
-      // becomes visible to you. Tracks actual per-copy records (see
-      // addKnownOppCard above) using the same "don't inflate past the real
-      // peak copy count" philosophy as the site's own replay parser, so a
-      // card that returns to hand/deck and gets reused (Jar of Greed,
-      // Thunder Dragon, ...) doesn't inflate past its real copy count.
+      // Which side a revealed card belongs to is decided by NAME first, not
+      // by who spoke the line — a control-changing effect (Creature Swap
+      // and the like) makes the OPPONENT'S side of the log name one of YOUR
+      // cards (it's now under their control), and without this check that
+      // card would get wrongly added to their known-card list instead of
+      // just updating your own deck's zone tracking. This can misfire only
+      // in the rare case where you and your opponent both run a card with
+      // the exact same name (a shared staple) — if that happens for you,
+      // say so and this'll need a more specific Creature-Swap-only check.
       const revealedName = extractRevealedCardName(ev.text);
-      if (side === 'opp' && revealedName) {
+      const myEntry = revealedName && state.myDeckRemaining
+        ? state.myDeckRemaining.find((c) => c.name.toLowerCase() === revealedName.toLowerCase())
+        : null;
+      if (myEntry) {
+        // Your OWN deck's cards: which zone each revealed copy is currently
+        // sitting in (hand, field, graveyard, or banished) — a label sticks
+        // until another recognized move happens, it never clears on its
+        // own. "NOT IN DECK" is deliberately not something this ever sets —
+        // that status is manual-only, reserved for the click-to-cycle UI.
+        applyZoneTransition(myEntry, ev.text);
+        renderMyDeck();
+      } else if (side === 'opp' && revealedName) {
+        // Known-card accumulation for the opponent (feeds the YDK export) —
+        // covers every way a card of theirs becomes visible to you. Tracks
+        // actual per-copy records (see addKnownOppCard above) using the
+        // same "don't inflate past the real peak copy count" philosophy as
+        // the site's own replay parser, so a card that returns to
+        // hand/deck and gets reused (Jar of Greed, Thunder Dragon, ...)
+        // doesn't inflate past its real copy count.
         addKnownOppCard(revealedName, ev.text);
-      }
-
-      // Your OWN deck's cards: which zone each revealed copy is currently
-      // sitting in (hand/field, graveyard, or banished) — a label sticks
-      // until another recognized move happens, it never clears on its own.
-      // "NOT IN DECK" is deliberately not something this ever sets — that
-      // status is manual-only, reserved for the click-to-cycle UI.
-      if (side === 'me' && state.myDeckRemaining && revealedName) {
-        const entry = state.myDeckRemaining.find((c) => c.name.toLowerCase() === revealedName.toLowerCase());
-        if (entry) {
-          applyZoneTransition(entry, ev.text);
-          renderMyDeck();
-        }
       }
 
       // Reset-action → reset that player's timer
@@ -840,14 +853,9 @@
       const el = panel.querySelector('#dt-tr-oppcards');
       const visible = state.knownOppCards.filter((c) => c.max > 0); // a card only ever "Revealed ... from Deck" (never drawn) has max 0 — nothing proven to have left the deck yet
       panel.querySelector('#dt-tr-oppcount').textContent = visible.reduce((s, c) => s + c.max, 0);
-      el.innerHTML = visible.map((c) => {
-        const est = oppCardEstimate(c);
-        const base = c.name + (c.max > 1 ? ' ×' + c.max : '');
-        const tail = est.unseenCopies > 0
-          ? ' <span style="color:#665">(' + est.unseenCopies + ' unseen, ~' + est.pctNextDraw + '% next draw)</span>'
-          : ' <span style="color:#544">(none left of ' + ASSUMED_MAX_COPIES + ' assumed)</span>';
-        return base + tail;
-      }).join('<br/>');
+      // Factual only — exactly how many distinct copies we've actually seen
+      // leave the deck, no guess at how many more are left unseen.
+      el.innerHTML = visible.map((c) => c.name + (c.max > 1 ? ' ×' + c.max : '')).join('<br/>');
     }
     function renderMyDeck() {
       const summaryEl = panel.querySelector('#dt-tr-mydeck-summary');
@@ -858,13 +866,14 @@
         return;
       }
       const totalAll = state.myDeckRemaining.reduce((s, c) => s + c.total, 0);
-      const totalOut = state.myDeckRemaining.reduce((s, c) => s + c.zones.hand + c.zones.grave + c.zones.banish, 0);
+      const totalOut = state.myDeckRemaining.reduce((s, c) => s + c.zones.hand + c.zones.field + c.zones.grave + c.zones.banish, 0);
       summaryEl.textContent = (totalAll - totalOut) + '/' + totalAll + ' unseen';
       el.innerHTML = state.myDeckRemaining
-        .filter((c) => c.zones.hand + c.zones.grave + c.zones.banish > 0)
+        .filter((c) => c.zones.hand + c.zones.field + c.zones.grave + c.zones.banish > 0)
         .map((c) => {
           const parts = [];
           if (c.zones.hand)   parts.push(c.zones.hand + ' in hand');
+          if (c.zones.field)  parts.push(c.zones.field + ' on field');
           if (c.zones.grave)  parts.push(c.zones.grave + ' in GY');
           if (c.zones.banish) parts.push(c.zones.banish + ' banished');
           return c.name + ': ' + parts.join(', ');
@@ -906,7 +915,6 @@
       state.myTimer = 0; state.oppTimer = 0;
       state.myTimerRunning = true; state.oppTimerRunning = false;
       state.oppInterruptUntil = 0;
-      state.oppDrawsThisGame = 0;
       state.feed = [];
       state.paused = false;
       state.myDeckRemaining = freshDeckRemaining();

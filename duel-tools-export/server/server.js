@@ -678,6 +678,28 @@ function applyOverrideToReplay(r, data, flip) {
   }
 }
 
+// Per-game card lists inside parsed.games ({gameNum, winner, first, mine,
+// opp, mineRaw, oppRaw}) are relative to whichever player originally parsed
+// the replay ("mine" = them, "opp" = their opponent). When a replay gets
+// cross-linked and mirrored into the opponent's own batch, every OTHER field
+// on the mirrored record (oppName, result, score, myW/oppW, myDeck/oppDeck,
+// allMine/allOpp) is correctly swapped for the opponent's perspective — but
+// `games` was being copied straight through unflipped, so a mirrored replay's
+// G1/G2/G3 sections showed the ORIGINAL player's cards under "mine" instead
+// of the mirrored player's own. This flips mine<->opp (and mineRaw<->oppRaw)
+// per game while leaving gameNum/winner/first alone, since those are already
+// absolute (a game number and real usernames, not "my side" vs "their side").
+function flipGames(games) {
+  if (!games) return games;
+  return games.map(g => ({
+    ...g,
+    mine: g.opp || [],
+    opp:  g.mine || [],
+    mineRaw: g.oppRaw,
+    oppRaw:  g.mineRaw,
+  }));
+}
+
 function crossLinkReplay(replayData, opponentUsername, originalBatchPlayer) {
   const opponentEntry = findPlayerByUsername(opponentUsername);
   if (!opponentEntry) return null;
@@ -727,7 +749,7 @@ function crossLinkReplay(replayData, opponentUsername, originalBatchPlayer) {
           myW: finalScoreOverride ? finalScoreOverride.my : effOppWA, oppW: finalScoreOverride ? finalScoreOverride.opp : effMyWA, draws: origParsed2.draws,
           myDeck:  finalMyDeckOverride  || origParsed2.oppDeck || 'Unknown',
           oppDeck: finalOppDeckOverride || origParsed2.myDeck  || 'Unknown',
-          games: origParsed2.games, allMine: origParsed2.allOpp||[], allOpp: origParsed2.allMine||[],
+          games: flipGames(origParsed2.games), allMine: origParsed2.allOpp||[], allOpp: origParsed2.allMine||[],
           resultOverride: finalResultOverride || null,
           scoreOverride:  finalScoreOverride  || null,
           overrideNote:   finalOverrideNote,
@@ -772,7 +794,7 @@ function crossLinkReplay(replayData, opponentUsername, originalBatchPlayer) {
     myW:      effOppW, oppW: effMyW, draws: origParsed.draws,
     myDeck:   origParsed.oppDeck   || 'Unknown',
     oppDeck:  origParsed.myDeck    || 'Unknown',
-    games:    origParsed.games,
+    games:    flipGames(origParsed.games),
     allMine:  origParsed.allOpp  || [],
     allOpp:   origParsed.allMine || [],
   } : null;
@@ -937,6 +959,59 @@ const server = http.createServer(async (req, res) => {
 
     console.log('[crosslink/scan] Done:', linked, 'linked,', skipped, 'skipped,', errors, 'errors');
     return json(res, 200, { ok: true, linked, skipped, errors, batchesUpdated: batchIds.size });
+  }
+
+  // ── POST /api/crosslink/repair-games — fix already-mirrored replays whose
+  // parsed.games was copied unflipped (a bug fixed in crossLinkReplay/flipGames
+  // above: every OTHER field on a mirrored record was correctly swapped for
+  // the mirrored player's perspective, but games[].mine/opp were not, so a
+  // pre-existing cross-linked replay's G1/G2/G3 sections could show the
+  // original player's cards instead of the mirrored player's own). For every
+  // replay flagged crossLinked, finds the original (non-crosslinked) replay
+  // with the same replayId in another batch and re-derives games from it via
+  // flipGames — a one-time repair pass for records saved before the fix,
+  // safe to run repeatedly (a replay whose games already match the flipped
+  // original is simply left alone).
+  if (parts[0]==='crosslink' && parts[1]==='repair-games' && method==='POST') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    let repaired = 0, checked = 0, noOriginal = 0, errors = 0;
+    const batchIds = new Set();
+
+    // Index every non-crosslinked replay by replayId so mirrored copies can
+    // find their original in one pass instead of re-scanning all batches
+    // per replay.
+    const originalsById = new Map();
+    for (const batch of Object.values(db.batches)) {
+      for (const replay of (batch.replays||[])) {
+        if (!replay.crossLinked && replay.replayId) originalsById.set(replay.replayId, replay);
+      }
+    }
+
+    for (const batch of Object.values(db.batches)) {
+      for (const replay of (batch.replays||[])) {
+        if (!replay.crossLinked || !replay.parsed) continue;
+        checked++;
+        try {
+          const original = originalsById.get(replay.replayId);
+          if (!original || !original.parsed || !original.parsed.games) { noOriginal++; continue; }
+          const correctGames = flipGames(original.parsed.games);
+          if (JSON.stringify(correctGames) === JSON.stringify(replay.parsed.games)) continue; // already correct
+          replay.parsed.games = correctGames;
+          batchIds.add(batch.id);
+          repaired++;
+        } catch(e) {
+          console.error('[crosslink/repair-games] Error on', replay.replayId, e.message);
+          errors++;
+        }
+      }
+    }
+
+    for (const bid of batchIds) {
+      await saveBatchToPostgres(bid).catch(e => console.error('[crosslink/repair-games] save error:', e.message));
+    }
+
+    console.log('[crosslink/repair-games] Done:', repaired, 'repaired,', checked, 'checked,', noOriginal, 'no original found,', errors, 'errors');
+    return json(res, 200, { ok: true, repaired, checked, noOriginal, errors, batchesUpdated: batchIds.size });
   }
 
   // ── GET /api/changelog — head admin audit log ──────────────────────────────
