@@ -14862,12 +14862,16 @@ function igtShowYdkeDialog(target) {
 // color layer on top does the actual tinting (plain alpha blend, not a CSS
 // mix-blend-mode, so it can't crush the art to black on top of the darkening
 // filter).
-// 'live-out' is a 4th status, driven by Live Sync rather than a manual click:
-// a card the DuelingBook tracker has seen leave your deck this game (drawn,
-// or pulled out by an effect). It reverts automatically the moment the
-// tracker sees it go back ("Returned ... to Deck") — no click needed.
-const IGT_TINT_FILTER  = { not:'grayscale(1) brightness(.55)', banish:'grayscale(.5) brightness(.6)', grave:'grayscale(.5) brightness(.55)', 'live-out':'grayscale(.35) brightness(.65)' };
-const IGT_TINT_OVERLAY = { banish:'rgba(70,110,230,.45)', grave:'rgba(210,50,50,.4)', 'live-out':'rgba(220,40,40,.5)' };
+// 'hand' is a 4th status, driven by Live Sync rather than a manual click: a
+// card the DuelingBook tracker currently has out of the deck but not in the
+// Graveyard or Banished (i.e. in hand or on the field — the log doesn't
+// always let us tell those apart). 'grave'/'banish' are ALSO auto-applied by
+// Live Sync when the tracker sees a card actually reach those zones, reusing
+// the same look the manual click-cycle already uses for them. 'not' ("NOT IN
+// DECK") is deliberately excluded from anything Live Sync sets — that status
+// stays manual-only.
+const IGT_TINT_FILTER  = { not:'grayscale(1) brightness(.55)', banish:'grayscale(.5) brightness(.6)', grave:'grayscale(.5) brightness(.55)', hand:'brightness(.8)' };
+const IGT_TINT_OVERLAY = { banish:'rgba(70,110,230,.45)', grave:'rgba(210,50,50,.4)', hand:'rgba(230,170,30,.35)' };
 
 function igtCardTile(card, opts) {
   const size = opts.size || 72; // default bigger
@@ -15398,70 +15402,104 @@ function igtLiveDisconnect() {
 
 async function igtLivePoll() {
   if (!_igtLiveCode) return;
+  let data;
   try {
     const res = await fetch(`${API}/live/${_igtLiveCode}`);
     if (res.status === 404) { igtLiveSetStatus('Waiting for the tracker to send data...', 'var(--amber)'); return; }
     if (!res.ok) { igtLiveSetStatus('Sync error', 'var(--red)'); return; }
     const body = await res.json();
-    const data = body.data || {};
+    data = body.data || {};
     _igtLiveLastData = data;
     const ageSec = Math.max(0, Math.round((Date.now() - body.updatedAt) / 1000));
     const staleness = ageSec > 15 ? 'var(--amber)' : 'var(--green)';
     const label = (data.oppUsername ? 'vs ' + data.oppUsername + ' · ' : '') + 'G' + (data.game || 1)
       + (data.matchConcluded ? ' · match over' : '') + ' · updated ' + (ageSec < 2 ? 'just now' : ageSec + 's ago');
     igtLiveSetStatus('Connected — ' + label, staleness);
-    await igtLiveResolveNames(data.oppCards || []);
-    igtLiveSyncMyDeckIntoBuilder(data.myDeck || []);
-    igtLiveRenderMyTracker(data);
-    igtLiveRenderOppTracker(data);
   } catch (e) {
     igtLiveSetStatus('Connection failed — will keep retrying', 'var(--red)');
+    return;
   }
+  // My Tracker needs no external lookups (the tracker already sends id+type
+  // straight from your uploaded YDK), so it renders immediately and never
+  // waits on — or gets blocked by — opponent name resolution below.
+  try {
+    igtLiveSyncMyDeckIntoBuilder(data.myDeck || []);
+    igtLiveRenderMyTracker(data);
+  } catch (e) { console.warn('[Live Sync] My Tracker render failed:', e); }
+  // Opponent cards only ever have a NAME from the tracker — resolving each
+  // to an id/type is a separate, independently-failable step, kept in its
+  // own try/catch so a slow or failed lookup for one card never blocks My
+  // Tracker, and a render still happens with whatever's resolved so far.
+  try {
+    await igtLiveResolveNames(data.oppCards || []);
+    igtLiveRenderOppTracker(data);
+  } catch (e) { console.warn('[Live Sync] Opp Tracker render failed:', e); }
 }
 
 // Card names only come through the live payload (the tracker doesn't resolve
 // ids itself) — resolve+cache each new opponent name once via the same
 // ygoprodeck lookup the rest of In-Game Tools already uses for search.
+// Resolved in parallel (not sequentially) so a match with many revealed
+// cards doesn't stall behind one-at-a-time network round trips, and each
+// lookup is independently caught so one bad/unmatched name can't abort the
+// rest of the batch.
 async function igtLiveResolveNames(cards) {
-  const missing = cards.map(c => c.name).filter(n => !(n.toLowerCase() in _igtLiveNameIdCache));
-  for (const name of [...new Set(missing)]) {
+  const missing = [...new Set(cards.map(c => c.name))].filter(n => !(n.toLowerCase() in _igtLiveNameIdCache));
+  await Promise.all(missing.map(async (name) => {
     try {
       const res = await fetch('https://db.ygoprodeck.com/api/v7/cardinfo.php?name=' + encodeURIComponent(name));
       const data = await res.json();
-      _igtLiveNameIdCache[name.toLowerCase()] = (data.data && data.data[0] && data.data[0].id) || null;
+      const card = data.data && data.data[0];
+      _igtLiveNameIdCache[name.toLowerCase()] = card ? { id: card.id, type: card.type || '' } : null;
     } catch (e) { _igtLiveNameIdCache[name.toLowerCase()] = null; }
-  }
+  }));
 }
 
 // Keeps _igtDeck.main mirroring the live-tracked decklist so other features
 // that read from it (Decklist Image export in particular) stay in sync
 // without a separate manual YDK import.
 function igtLiveSyncMyDeckIntoBuilder(deck) {
-  _igtDeck.main = deck.map(c => ({ id: c.id, name: c.name, type: '', qty: c.total }));
+  _igtDeck.main = deck.map(c => ({ id: c.id, name: c.name, type: c.type || '', qty: c.total }));
 }
 
+// Renders one tile per copy, tagged with whichever zone the tracker last saw
+// that copy move to (hand/field, Graveyard, or Banished) — reusing the exact
+// look the manual click-cycle already uses for grave/banish, so a card reads
+// the same way whether Live Sync or a manual click put it there. A copy with
+// no zone yet is just a normal, untagged tile (still in the deck). "NOT IN
+// DECK" never appears here — that status is manual-only.
 function igtLiveRenderMyTracker(data) {
   const el = document.getElementById('igt-mt-tiles');
   const countEl = document.getElementById('igt-mt-deck-count');
   if (!el) return;
   const deck = data.myDeck || [];
   const totalAll = deck.reduce((s, c) => s + c.total, 0);
-  const totalSeen = deck.reduce((s, c) => s + c.seen, 0);
-  if (countEl) countEl.textContent = '(' + (totalAll - totalSeen) + '/' + totalAll + ' unseen)';
+  const totalOut = deck.reduce((s, c) => s + (c.zones ? c.zones.hand + c.zones.grave + c.zones.banish : 0), 0);
+  if (countEl) countEl.textContent = '(' + (totalAll - totalOut) + '/' + totalAll + ' unseen)';
   el.innerHTML = '';
-  deck.forEach(c => {
-    for (let i = 0; i < c.total; i++) {
-      const isOut = i < c.seen;
+  const ZONE_LABEL = { hand: 'IN HAND', grave: 'GRAVEYARD', banish: 'BANISHED' };
+  const ZONE_COLOR = { hand: 'rgba(230,170,30,.9)', grave: 'rgba(30,30,30,.92)', banish: 'rgba(80,100,200,.9)' };
+  const ZONE_BORDER = { hand: 'var(--amber)', grave: '#666', banish: 'var(--blue)' };
+  igtSortCards(deck).forEach(c => {
+    const zones = c.zones || { hand: 0, grave: 0, banish: 0 };
+    // Expand into per-copy tags: however many are in each zone, then the rest untagged (still in deck).
+    const tags = [
+      ...Array(zones.hand).fill('hand'),
+      ...Array(zones.grave).fill('grave'),
+      ...Array(zones.banish).fill('banish'),
+      ...Array(Math.max(0, c.total - zones.hand - zones.grave - zones.banish)).fill(null)
+    ];
+    tags.forEach(zone => {
       const tile = igtCardTile({ id: c.id, name: c.name }, {
         size: 72,
-        tint: isOut ? 'live-out' : null,
-        label: isOut ? 'DRAWN' : null,
-        labelColor: isOut ? 'rgba(210,50,50,.9)' : null,
-        borderColor: isOut ? 'var(--red)' : 'transparent'
+        tint: zone,
+        label: zone ? ZONE_LABEL[zone] : null,
+        labelColor: zone ? ZONE_COLOR[zone] : null,
+        borderColor: zone ? ZONE_BORDER[zone] : 'transparent'
       });
-      tile.title = c.name + (isOut ? ' — currently out of your deck (drawn/played this game)' : ' — still in deck');
+      tile.title = c.name + (zone ? ' — ' + ZONE_LABEL[zone].toLowerCase() : ' — still in deck');
       el.appendChild(tile);
-    }
+    });
   });
 }
 
@@ -15472,12 +15510,15 @@ function igtLiveRenderOppTracker(data) {
   const cards = data.oppCards || [];
   if (countEl) countEl.textContent = '(' + cards.reduce((s, c) => s + c.count, 0) + ' revealed)';
   el.innerHTML = '';
-  cards.forEach(c => {
-    const id = _igtLiveNameIdCache[c.name.toLowerCase()];
+  const sortable = cards.map(c => {
+    const cached = _igtLiveNameIdCache[c.name.toLowerCase()];
+    return Object.assign({}, c, { id: cached && cached.id, type: (cached && cached.type) || '' });
+  });
+  igtSortCards(sortable).forEach(c => {
     const label = c.count > 1 ? '×' + c.count : null;
     const wrap = document.createElement('div');
     wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:2px';
-    const tile = igtCardTile({ id, name: c.name }, { size: 78, label, labelColor: 'rgba(80,100,200,.85)', borderColor: 'var(--blue)' });
+    const tile = igtCardTile({ id: c.id, name: c.name }, { size: 78, label, labelColor: 'rgba(80,100,200,.85)', borderColor: 'var(--blue)' });
     const prob = document.createElement('div');
     prob.style.cssText = 'font-size:8px;color:var(--muted);text-align:center;max-width:78px';
     prob.title = 'Rough estimate — assumes a 40-card deck and up to '+(c.assumedMax||3)+' copies; not a real hypergeometric calc since we don\'t know their actual decklist.';
@@ -15500,7 +15541,7 @@ function igtExportImage(target) {
   // out of the deck (drawn/played this game) red in the exported image too —
   // reverts on its own next export once the tracker sees them go back.
   const liveSeenMap = (target !== 'opp' && _igtLiveCode && _igtLiveLastData && _igtLiveLastData.myDeck)
-    ? Object.fromEntries(_igtLiveLastData.myDeck.map(c => [c.name.toLowerCase(), c.seen]))
+    ? Object.fromEntries(_igtLiveLastData.myDeck.map(c => [c.name.toLowerCase(), (c.zones ? c.zones.hand + c.zones.grave + c.zones.banish : 0)]))
     : null;
   let html = '';
   for (const sec of secs) {
@@ -15782,6 +15823,10 @@ async function initApp() {
 initApp();
 // Wire URL input after page load (belt + suspenders)
 setTimeout(wireUrlsInput, 200);
+// Start Live Sync immediately if a pairing code was saved from a previous
+// session — don't wait for the user to click into My Tracker/Opp Tracker
+// first, otherwise data sits un-polled until they happen to switch tabs.
+igtLiveInitOnce();
 
 
 

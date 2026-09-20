@@ -145,10 +145,11 @@
       if (onProgress) onProgress(i + 1, knownCards.length, c.name);
       const id = await resolvePasscode(c.name);
       if (id) {
-        // A tracked "seen count" isn't necessarily the number of distinct
-        // physical copies (the same copy can trigger multiple log lines),
-        // so cap at 3 — a real deck can never legally run more anyway.
-        const copies = Math.min(c.count, 3);
+        // c.max is the peak number of copies ever simultaneously out of the
+        // deck (see addKnownOppCard) — already the real proof-of-copies
+        // count, not a raw reveal tally, but still capped at 3 as a final
+        // sanity check since a real deck can never legally run more anyway.
+        const copies = Math.min(c.max, 3);
         for (let n = 0; n < copies; n++) ids.push(id);
       } else {
         unresolved.push(c.name);
@@ -170,8 +171,11 @@
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   }
 
-  // ── Reverse lookup (passcode → name), for reading back an uploaded YDK ──
-  const nameCache = {}; // numeric id (string) -> name, or null if unresolvable
+  // ── Reverse lookup (passcode → name + type), for reading back an uploaded
+  // YDK. Type is captured alongside the name so the site can sort live tiles
+  // Monster→Spell→Trap the same way it sorts everywhere else, instead of
+  // whatever order the log happened to reveal cards in.
+  const nameCache = {}; // numeric id (string) -> { name, type } or null if unresolvable
   function resolveNameFromPasscode(id) {
     const key = String(id);
     if (key in nameCache) return Promise.resolve(nameCache[key]);
@@ -181,13 +185,14 @@
         method: 'GET',
         url: 'https://db.ygoprodeck.com/api/v7/cardinfo.php?id=' + encodeURIComponent(key),
         onload: function (res) {
-          let name = null;
+          let result = null;
           try {
             const data = JSON.parse(res.responseText);
-            name = (data && data.data && data.data[0] && data.data[0].name) || null;
-          } catch (e) { /* leave name null — unresolvable, not fatal */ }
-          nameCache[key] = name;
-          resolve(name);
+            const card = data && data.data && data.data[0];
+            result = card ? { name: card.name, type: card.type || '' } : null;
+          } catch (e) { /* leave result null — unresolvable, not fatal */ }
+          nameCache[key] = result;
+          resolve(result);
         },
         onerror: function () { nameCache[key] = null; resolve(null); },
         ontimeout: function () { nameCache[key] = null; resolve(null); },
@@ -214,8 +219,8 @@
     return ids;
   }
 
-  // Groups a flat id list into [{id, name, total}], resolving each UNIQUE
-  // id to a name sequentially (same politeness reasoning as the
+  // Groups a flat id list into [{id, name, type, total}], resolving each
+  // UNIQUE id to a name+type sequentially (same politeness reasoning as the
   // opponent-card resolver above — a deck is at most ~15-20 unique cards
   // even with duplicates grouped, so this stays quick).
   async function buildDeckListFromYdk(text, onProgress) {
@@ -227,8 +232,8 @@
     for (let i = 0; i < uniqueIds.length; i++) {
       const id = uniqueIds[i];
       if (onProgress) onProgress(i + 1, uniqueIds.length);
-      const name = await resolveNameFromPasscode(id);
-      list.push({ id, name: name || ('Unknown card #' + id), total: counts[id] });
+      const resolved = await resolveNameFromPasscode(id);
+      list.push({ id, name: (resolved && resolved.name) || ('Unknown card #' + id), type: (resolved && resolved.type) || '', total: counts[id] });
     }
     return list;
   }
@@ -358,20 +363,132 @@
       myTimer: 0, oppTimer: 0,
       myTimerRunning: true, oppTimerRunning: false,
       oppInterruptUntil: 0, // ms timestamp — opponent's timer stays live until this passes, when it's not their turn
-      knownOppCards: [], // [{name, count}] — persists across games within a match, reset only on a new match
+      knownOppCards: [], // [{name, records, max}] — records tracks currently-out copies by guessed zone, max is the peak count reached (see addKnownOppCard below); persists across games within a match, reset only on a new match
       feed: [], // last N parsed events for the debug view
       paused: false,
-      myDeckList: deckList || null, // [{id, name, total}] — the uploaded YDK, persists indefinitely once set
-      myDeckRemaining: null, // [{id, name, total, seen}] — rebuilt fresh every GAME (the deck reshuffles each game)
+      myDeckList: deckList || null, // [{id, name, type, total}] — the uploaded YDK, persists indefinitely once set
+      myDeckRemaining: null, // [{id, name, type, total, zones:{hand,grave,banish}}] — rebuilt fresh every GAME (the deck reshuffles each game)
       game: 1, // which game of this MATCH we're on — 1 unless resetForNewGame() has bumped it
       matchConcluded: false, // set true once "View Replay" appears — mirrors the outer matchConcluded flag, for the live-sync payload
       oppDrawsThisGame: 0 // every "Drew ..." by the opponent this game, revealed or not — feeds the draw-probability estimate
     };
 
     function freshDeckRemaining() {
-      return state.myDeckList ? state.myDeckList.map((c) => ({ id: c.id, name: c.name, total: c.total, seen: 0 })) : null;
+      return state.myDeckList ? state.myDeckList.map((c) => ({ id: c.id, name: c.name, type: c.type || '', total: c.total, zones: { hand: 0, grave: 0, banish: 0 } })) : null;
     }
     state.myDeckRemaining = freshDeckRemaining();
+
+    // Moves one copy of a card between zones as the log reveals it happening.
+    // Zones are aggregate counts, not per-physical-copy identity (the log
+    // never gives us a serial number to track one specific copy across
+    // lines) — "hand" is a catch-all for "left the deck, not in GY/banished"
+    // (covers the hand AND the field, since the log doesn't let us reliably
+    // tell those apart every time). A label sticks to a card until another
+    // recognized move happens — it does NOT clear itself when a copy just
+    // sits on the field being used.
+    //
+    // NOTE: the exact "to/from Graveyard" and "to/from Banished" phrasing
+    // below is a best-effort guess at DuelingBook's real wording (confirmed
+    // patterns only exist for Drew/Set/Summoned/Sent/Returned so far) — if
+    // labels aren't tracking correctly in a real match, the fix is almost
+    // certainly just widening these regexes, so send the exact log line.
+    function applyZoneTransition(entry, text) {
+      const toGrave    = /\bto (?:the )?(?:GY|Graveyard)\b/i.test(text);
+      const toBanish   = /^Banished /i.test(text) || /\bto (?:the )?Banish(?:ed)?(?: Zone)?\b/i.test(text);
+      const toDeck     = /^Returned .+ to (?:the )?(?:top of |bottom of )?Deck\b/i.test(text);
+      const fromGrave  = /\bfrom (?:the )?(?:GY|Graveyard)\b/i.test(text);
+      const fromBanish = /\bfrom (?:the )?Banish(?:ed)?(?: Zone)?\b/i.test(text);
+      const fromDeck   = /^Drew /i.test(text) || /\bfrom Deck\b/i.test(text);
+
+      function take(zone) {
+        if (entry.zones[zone] > 0) { entry.zones[zone]--; return true; }
+        return false;
+      }
+      // Best-guess source when the line doesn't name one: prefer taking from
+      // "hand" (the common case) before falling back to grave/banish.
+      function takeGuessedSource(preferred) {
+        if (preferred && take(preferred)) return;
+        if (take('hand')) return;
+        if (take('grave')) return;
+        take('banish');
+      }
+
+      if (toGrave) {
+        takeGuessedSource(fromBanish ? 'banish' : null);
+        entry.zones.grave++;
+      } else if (toBanish) {
+        takeGuessedSource(fromGrave ? 'grave' : null);
+        entry.zones.banish++;
+      } else if (toDeck) {
+        takeGuessedSource(fromGrave ? 'grave' : fromBanish ? 'banish' : null);
+        // back in the deck — no zone to increment, it's just unseen again
+      } else if (fromGrave) {
+        take('grave'); entry.zones.hand++; // e.g. Special Summoned from the Graveyard
+      } else if (fromBanish) {
+        take('banish'); entry.zones.hand++; // e.g. Special Summoned from Banished
+      } else if (fromDeck) {
+        entry.zones.hand++; // freshly left the deck, no more specific destination named yet
+      }
+    }
+
+    // Mirrors the site's OWN established replay-parsing accounting (see
+    // parseMatch()/buildGameCards() in index.html): a naive "count every
+    // reveal" tally inflates fast for any card that returns to hand/deck and
+    // gets reused (Jar of Greed, Thunder Dragon, etc. showing up as "×5" of
+    // a 3-copy card). Instead this tracks a running "currently out of deck"
+    // total (cum) per card and the PEAK it ever reached (max) — max is what
+    // we actually report, since that's the real proof of how many distinct
+    // copies exist, not how many times we've seen one.
+    // Unlike our own deck (where we see every card's true zone at all times),
+    // the opponent's hand is hidden — a card can be revealed for the first
+    // time by an action that implies it left the deck a while ago (e.g. a
+    // "Discarded X from hand to GY" with no earlier "Drew X" line, since
+    // opponent draws aren't named in the log until something reveals them).
+    // So instead of a single cum/max counter, we track actual per-copy
+    // "records" (one per physical copy we currently believe is out of the
+    // deck, tagged with a guessed zone) and derive count from how many
+    // records exist. A transition tries to reuse an existing record in the
+    // zone it should be coming from; if none matches, it assumes it's
+    // revealing a copy we didn't know about yet and creates a new record —
+    // this is what lets two simultaneous "Discarded ... from hand" lines for
+    // the same name correctly register as 2 distinct copies instead of 1.
+    function classifyOppCardAction(text) {
+      if (/^Revealed .+ from Deck\b/i.test(text)) return null; // stays in the deck — not a real copy yet
+      if (/^Drew /i.test(text)) return { from: null, to: 'hand' };
+      if (/ from Deck\b/i.test(text)) return { from: null, to: 'field' };
+      if (/^Returned .+ to (?:the )?(?:top of |bottom of )?Deck\b/i.test(text) ||
+          / to (?:the )?(?:top|bottom) of (?:the )?Deck\b/i.test(text)) return { from: 'any', to: null };
+      if (/^Discarded .+ from hand to (?:GY|Graveyard)\b/i.test(text)) return { from: 'hand', to: 'grave' };
+      if (/^Set .+ from hand\b/i.test(text)) return { from: 'hand', to: 'field' };
+      if (/^Activated .+ from hand\b/i.test(text)) return { from: 'hand', to: 'field' };
+      if (/Special Summoned .+ from (?:the )?Graveyard\b/i.test(text)) return { from: 'grave', to: 'field' };
+      if (/Special Summoned .+ from (?:the )?Banish(?:ed)?\b/i.test(text)) return { from: 'banish', to: 'field' };
+      if (/^Banished /i.test(text) || /\bto (?:the )?Banish(?:ed)?(?: Zone)?\b/i.test(text)) return { from: 'any', to: 'banish' };
+      if (/\bto (?:the )?(?:GY|Graveyard)\b/i.test(text)) return { from: 'any', to: 'grave' };
+      return null; // e.g. "Attacked", "Normal Summoned" of an already-tracked field copy — no new info
+    }
+    function addKnownOppCard(name, text) {
+      let entry = state.knownOppCards.find((c) => c.name === name);
+      if (!entry) { entry = { name, records: [], max: 0 }; state.knownOppCards.push(entry); }
+      const action = classifyOppCardAction(text);
+      if (action) {
+        if (action.to === null) {
+          // returning to deck — one fewer copy out (pick the most recently tracked one)
+          if (entry.records.length > 0) entry.records.pop();
+        } else if (action.from === null) {
+          // freshly leaving the deck — always a distinct, newly-out copy
+          entry.records.push(action.to);
+        } else {
+          const idx = action.from === 'any'
+            ? entry.records.length - 1
+            : entry.records.lastIndexOf(action.from);
+          if (idx >= 0) entry.records[idx] = action.to;
+          else entry.records.push(action.to); // no matching source copy — reveals one we didn't know about
+        }
+      }
+      if (entry.records.length > entry.max) entry.max = entry.records.length;
+      return entry;
+    }
 
     // Rough estimate of how many copies of a known opponent card are still
     // unaccounted for (somewhere in their deck or hand, we don't know which)
@@ -379,7 +496,7 @@
     // Both assume a standard deck size / opening hand / max-copy count — see
     // the ASSUMED_* constants above for exactly what's being guessed at.
     function oppCardEstimate(card) {
-      const unseenCopies = Math.max(0, ASSUMED_MAX_COPIES - card.count);
+      const unseenCopies = Math.max(0, ASSUMED_MAX_COPIES - card.max);
       const remainingInDeck = Math.max(1, ASSUMED_DECK_SIZE - ASSUMED_OPENING_HAND - (state.oppDrawsThisGame || 0));
       const pctNextDraw = Math.round((unseenCopies / remainingInDeck) * 100);
       return { unseenCopies, pctNextDraw };
@@ -407,7 +524,9 @@
         oppTimer: Math.floor(state.oppTimer),
         edgePct: computeEdgePct(),
         myDeck: state.myDeckRemaining || [],
-        oppCards: state.knownOppCards.map((c) => Object.assign({}, c, oppCardEstimate(c))),
+        oppCards: state.knownOppCards
+          .filter((c) => c.max > 0)
+          .map((c) => Object.assign({ name: c.name, count: c.max, assumedMax: ASSUMED_MAX_COPIES }, oppCardEstimate(c))),
         updatedAt: Date.now()
       };
     }
@@ -436,26 +555,22 @@
       return 'other'; // spectator chat, etc.
     }
 
-    function addKnownOppCard(name) {
-      const existing = state.knownOppCards.find((c) => c.name === name);
-      if (existing) existing.count++;
-      else state.knownOppCards.push({ name, count: 1 });
-    }
-
     // Extracts a real card name from a log line, when one is actually
     // present. "Drew <Name>" is handled on its own since the name runs to
     // the end of the line with nothing after it; every other recognized
     // action always has a zone reference or parenthetical stat block right
     // after the name, so those require seeing one — deliberately no
     // end-of-string fallback (a earlier version that had one silently
-    // absorbed trailing words like "in S-3" into the name).
+    // absorbed trailing words like "in S-3" into the name). "Revealed " is
+    // included so a card shown but left in the deck is still recognized (it
+    // just doesn't move the opponent's copy-record count — see classifyOppCardAction).
     function extractRevealedCardName(text) {
       const drewM = /^Drew (.+)$/.exec(text);
       if (drewM) {
         const n = drewM[1].trim();
         return /^a card$/i.test(n) ? null : n;
       }
-      const m = /^(?:Set |Activated |Normal Summoned |Special Summoned |Flip Summoned |Flipped (?:Set )?|Sent |Banished |Declared effect of |Returned |Moved |Changed )([A-Za-z0-9 ,.'\-:]+?)(?: from| to| in| on| \()/.exec(text);
+      const m = /^(?:Set |Activated |Normal Summoned |Special Summoned |Flip Summoned |Flipped (?:Set )?|Sent |Discarded |Banished |Revealed |Declared effect of |Returned |Moved |Changed )([A-Za-z0-9 ,.'\-:]+?)(?: from| to| in| on| \()/.exec(text);
       const n = m && m[1] && m[1].trim();
       return (n && !/^card$/i.test(n)) ? n : null;
     }
@@ -482,30 +597,26 @@
       }
 
       // Known-card accumulation for the opponent (feeds the YDK export and
-      // the probability engine once that's wired in) — covers every way a
-      // card of theirs becomes visible to you.
+      // the draw-probability estimate) — covers every way a card of theirs
+      // becomes visible to you. Tracks actual per-copy records (see
+      // addKnownOppCard above) using the same "don't inflate past the real
+      // peak copy count" philosophy as the site's own replay parser, so a
+      // card that returns to hand/deck and gets reused (Jar of Greed,
+      // Thunder Dragon, ...) doesn't inflate past its real copy count.
       const revealedName = extractRevealedCardName(ev.text);
       if (side === 'opp' && revealedName) {
-        addKnownOppCard(revealedName);
+        addKnownOppCard(revealedName, ev.text);
       }
 
-      // Your OWN deck's remaining-copy count — only actions that actually
-      // pull a card OUT of your deck should decrement it: being drawn, or
-      // an effect that moves it from Deck to somewhere else. Everything
-      // else (Set/Activated/Summoned/Sent from hand or a zone, etc.) is the
-      // SAME physical card continuing to act, not a new copy leaving the
-      // deck, so those must NOT double-count it. Conversely, an effect that
-      // RETURNS the card to the deck puts it back — it goes back to "unseen"
-      // (and the red "out of deck" tint on the site/decklist image reverts).
+      // Your OWN deck's cards: which zone each revealed copy is currently
+      // sitting in (hand/field, graveyard, or banished) — a label sticks
+      // until another recognized move happens, it never clears on its own.
+      // "NOT IN DECK" is deliberately not something this ever sets — that
+      // status is manual-only, reserved for the click-to-cycle UI.
       if (side === 'me' && state.myDeckRemaining && revealedName) {
-        const leftDeck = /^Drew /.test(ev.text) || / from Deck\b/.test(ev.text);
-        const returnedToDeck = /^Returned .+ to (?:the )?Deck\b/i.test(ev.text);
         const entry = state.myDeckRemaining.find((c) => c.name.toLowerCase() === revealedName.toLowerCase());
-        if (leftDeck && entry && entry.seen < entry.total) {
-          entry.seen++;
-          renderMyDeck();
-        } else if (returnedToDeck && entry && entry.seen > 0) {
-          entry.seen--;
+        if (entry) {
+          applyZoneTransition(entry, ev.text);
           renderMyDeck();
         }
       }
@@ -652,13 +763,14 @@
     panel.querySelector('#dt-tr-ydk-btn').onclick = function () {
       const btn = panel.querySelector('#dt-tr-ydk-btn');
       const status = panel.querySelector('#dt-tr-ydk-status');
-      if (!state.knownOppCards.length) {
+      const provenCards = state.knownOppCards.filter((c) => c.max > 0);
+      if (!provenCards.length) {
         status.textContent = 'No opponent cards seen yet this game.';
         return;
       }
       btn.disabled = true;
       btn.textContent = 'Resolving card names…';
-      buildYdkFromKnownCards(state.knownOppCards, function (i, total, name) {
+      buildYdkFromKnownCards(provenCards, function (i, total, name) {
         status.textContent = 'Looking up ' + i + '/' + total + ': ' + name;
       }).then(function (result) {
         btn.disabled = false;
@@ -726,10 +838,11 @@
     }
     function renderOppCards() {
       const el = panel.querySelector('#dt-tr-oppcards');
-      panel.querySelector('#dt-tr-oppcount').textContent = state.knownOppCards.reduce((s, c) => s + c.count, 0);
-      el.innerHTML = state.knownOppCards.map((c) => {
+      const visible = state.knownOppCards.filter((c) => c.max > 0); // a card only ever "Revealed ... from Deck" (never drawn) has max 0 — nothing proven to have left the deck yet
+      panel.querySelector('#dt-tr-oppcount').textContent = visible.reduce((s, c) => s + c.max, 0);
+      el.innerHTML = visible.map((c) => {
         const est = oppCardEstimate(c);
-        const base = c.name + (c.count > 1 ? ' ×' + c.count : '');
+        const base = c.name + (c.max > 1 ? ' ×' + c.max : '');
         const tail = est.unseenCopies > 0
           ? ' <span style="color:#665">(' + est.unseenCopies + ' unseen, ~' + est.pctNextDraw + '% next draw)</span>'
           : ' <span style="color:#544">(none left of ' + ASSUMED_MAX_COPIES + ' assumed)</span>';
@@ -745,11 +858,17 @@
         return;
       }
       const totalAll = state.myDeckRemaining.reduce((s, c) => s + c.total, 0);
-      const totalSeen = state.myDeckRemaining.reduce((s, c) => s + c.seen, 0);
-      summaryEl.textContent = (totalAll - totalSeen) + '/' + totalAll + ' unseen';
+      const totalOut = state.myDeckRemaining.reduce((s, c) => s + c.zones.hand + c.zones.grave + c.zones.banish, 0);
+      summaryEl.textContent = (totalAll - totalOut) + '/' + totalAll + ' unseen';
       el.innerHTML = state.myDeckRemaining
-        .filter((c) => c.seen > 0)
-        .map((c) => c.name + ': ' + c.seen + '/' + c.total + ' seen')
+        .filter((c) => c.zones.hand + c.zones.grave + c.zones.banish > 0)
+        .map((c) => {
+          const parts = [];
+          if (c.zones.hand)   parts.push(c.zones.hand + ' in hand');
+          if (c.zones.grave)  parts.push(c.zones.grave + ' in GY');
+          if (c.zones.banish) parts.push(c.zones.banish + ' banished');
+          return c.name + ': ' + parts.join(', ');
+        })
         .join('<br/>');
     }
     function renderFeed() {
