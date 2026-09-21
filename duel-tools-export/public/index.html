@@ -15739,7 +15739,9 @@ function igtLiveRenderOppTracker(data) {
   const el = document.getElementById('igt-ot-tiles');
   const countEl = document.getElementById('igt-ot-deck-count');
   if (!el) return;
-  const autoCards = (data.oppCards || []).map(c => ({ name: c.name, count: Math.min(c.count, banLimit(c.name)) })).filter(c => c.count > 0);
+  const autoCards = (data.oppCards || [])
+    .map(c => ({ name: c.name, count: Math.min(c.count, banLimit(c.name)), zones: c.zones || null }))
+    .filter(c => c.count > 0);
   // Manually-marked-as-seen cards (Trap Dustshoot-style hand reveals, a card
   // shown during a search effect, etc.) are shown as EXTRA tiles on top of
   // whatever the tracker has independently confirmed for that name — so a
@@ -15749,7 +15751,7 @@ function igtLiveRenderOppTracker(data) {
   Object.values(_igtLiveManualOpp).forEach(m => {
     const autoCount = (autoCards.find(c => c.name.toLowerCase() === m.name.toLowerCase()) || {}).count || 0;
     const extra = Math.min(m.count, banLimit(m.name)) - autoCount;
-    if (extra > 0) manualExtra.push({ name: m.name, count: extra });
+    if (extra > 0) manualExtra.push({ name: m.name, count: extra, zones: null });
   });
   const cards = autoCards.concat(manualExtra);
   if (countEl) countEl.textContent = '(' + cards.reduce((s, c) => s + c.count, 0) + ' revealed)';
@@ -15758,19 +15760,36 @@ function igtLiveRenderOppTracker(data) {
     const cached = _igtLiveNameIdCache[c.name.toLowerCase()];
     return Object.assign({}, c, { id: cached && cached.id, type: (cached && cached.type) || '' });
   });
+  // Same zone look My Tracker uses (see igtLiveRenderMyTracker) — a copy the
+  // tracker has confirmed is still in hand/field/GY/banished gets tagged
+  // accordingly; a copy that's since gone back to the deck (or a manually
+  // marked one, which has no zone data at all) renders as a plain untagged
+  // tile, same as "still in deck" does there.
+  const ZONE_LABEL = { hand: 'IN HAND', field: 'ON FIELD', grave: 'GRAVEYARD', banish: 'BANISHED' };
+  const ZONE_COLOR = { hand: 'rgba(230,170,30,.9)', field: 'rgba(30,150,90,.9)', grave: 'rgba(30,30,30,.92)', banish: 'rgba(80,100,200,.9)' };
+  const ZONE_BORDER = { hand: 'var(--amber)', field: 'var(--green)', grave: '#666', banish: 'var(--blue)' };
   igtSortCards(sortable).forEach(c => {
     const isManual = manualExtra.some(m => m.name.toLowerCase() === c.name.toLowerCase());
-    for (let i = 0; i < c.count; i++) {
+    const zones = c.zones || {};
+    const tags = isManual ? Array(c.count).fill(null) : [
+      ...Array(zones.hand || 0).fill('hand'),
+      ...Array(zones.field || 0).fill('field'),
+      ...Array(zones.grave || 0).fill('grave'),
+      ...Array(zones.banish || 0).fill('banish'),
+      ...Array(Math.max(0, c.count - (zones.hand || 0) - (zones.field || 0) - (zones.grave || 0) - (zones.banish || 0))).fill(null)
+    ];
+    tags.forEach(zone => {
       const tile = igtCardTile({ id: c.id, name: c.name }, {
         size: 78,
-        borderColor: isManual ? 'var(--amber)' : 'var(--blue)',
-        label: isManual ? 'MANUAL' : null,
-        labelColor: isManual ? 'rgba(230,170,30,.9)' : null,
+        tint: isManual ? null : zone,
+        label: isManual ? 'MANUAL' : (zone ? ZONE_LABEL[zone] : null),
+        labelColor: isManual ? 'rgba(230,170,30,.9)' : (zone ? ZONE_COLOR[zone] : null),
+        borderColor: isManual ? 'var(--amber)' : (zone ? ZONE_BORDER[zone] : 'var(--blue)'),
         onClick: isManual ? () => igtLiveRemoveManualOppCard(c.name) : null
       });
-      tile.title = c.name + (isManual ? ' — manually marked seen (click to remove)' : '');
+      tile.title = c.name + (isManual ? ' — manually marked seen (click to remove)' : (zone ? ' — ' + ZONE_LABEL[zone].toLowerCase() : ''));
       el.appendChild(tile);
-    }
+    });
   });
 }
 

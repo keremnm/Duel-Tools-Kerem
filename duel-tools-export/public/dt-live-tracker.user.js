@@ -405,8 +405,19 @@
     // tracking correctly in a real match, the fix is almost certainly
     // widening these regexes — the exact log line text is what's needed to
     // do that precisely, so please paste it if you spot a miss.
-    function classifyCardAction(text) {
+    function classifyCardAction(text, cardType) {
       if (/^Revealed .+ from Deck\b/i.test(text)) return null; // stays in the deck — nothing to track yet
+
+      // A bare reveal with nothing else stated (e.g. a Trap Dustshoot-style
+      // hand reveal) is NOT a zone move at all — the card doesn't leave
+      // wherever it already was, it just becomes visible. Handled as its
+      // own case, separate from the normal to/from machinery below (which
+      // always assumes something actually moved), via the `reveal` flag —
+      // see addKnownOppCard for how that's applied (reuse any existing
+      // record for this name rather than assuming a new copy appeared).
+      if (/^Revealed ([A-Za-z0-9 ,.'\-:]+)$/i.test(text)) {
+        return { from: null, to: 'hand', reveal: true };
+      }
 
       const toGrave  = /\bto (?:the )?(?:GY|Graveyard)\b/i.test(text);
       const toBanish = /^(?:Banished|Removed) /i.test(text) ||
@@ -451,7 +462,27 @@
         // across every zone. Only to-grave/to-banish with truly no stated
         // source is left ambiguous (see applyZoneTransition's fallback).
         if (to === 'hand') from = 'deck';
-        else if (to === 'field') from = 'hand';
+        else if (to === 'field') {
+          // Still ambiguous in general (a Spell is usually played straight
+          // from hand) — EXCEPT for a Trap Card, which by the game's own
+          // rules can only ever be activated from an already-Set position
+          // on the field, never straight from hand. Without this, activating
+          // a Set trap wrongly "borrowed" a copy that was really a separate
+          // one still sitting in hand — reported as two Trap Dustshoots
+          // showing "on field" when one had actually already resolved to
+          // the Graveyard and the other was a second, untouched copy.
+          const isTrapActivation = /^Activated /i.test(text) && cardType && /trap/i.test(cardType);
+          // A more direct signal that doesn't need cardType at all (so it
+          // also covers the OPPONENT's side, where card type is never known
+          // synchronously): DuelingBook's own wording often spells out that
+          // the card was already Set/face-down right in the verb itself —
+          // "Activated Set <Name> ...", "Flip Summoned Set <Name> ...",
+          // "Flipped Set <Name> ...". Any of those means the source is
+          // unambiguously the field, never hand, for a monster or a
+          // Spell/Trap alike.
+          const textSaysFromSet = /^(?:Activated|Flip Summoned|Flipped) Set /i.test(text);
+          from = (textSaysFromSet || isTrapActivation) ? 'field' : 'hand';
+        }
         else from = null;
       }
 
@@ -465,8 +496,13 @@
     // move happens, it does NOT clear itself just because a copy sits on
     // the field being used for a while.
     function applyZoneTransition(entry, text) {
-      const action = classifyCardAction(text);
+      const action = classifyCardAction(text, entry.type);
       if (!action) return;
+      // A bare reveal never means a move — it's meaningful for the opponent
+      // (addKnownOppCard uses it to note "now confirmed in hand"), but for
+      // your OWN deck it doesn't tell us anything your exact draw/play
+      // tracking doesn't already know, so it's a deliberate no-op here.
+      if (action.reveal) return;
       function take(zone) {
         if (entry.zones[zone] > 0) { entry.zones[zone]--; return true; }
         return false;
@@ -527,19 +563,35 @@
       if (!entry) { entry = { name, records: [], max: 0 }; state.knownOppCards.push(entry); }
       const action = classifyCardAction(text);
       if (action) {
-        if (action.to === null) {
+        if (action.reveal) {
+          // A bare reveal (e.g. Trap Dustshoot showing their hand) never
+          // means a new copy just appeared — it's the same physical card
+          // still sitting wherever it already was. Only when we have NO
+          // existing record at all does this count as a genuinely new copy
+          // being seen for the first time, in which case it's confirmed in
+          // hand. An already-tracked copy's zone is left exactly as-is
+          // (trust the more specific move that put it there over a bare
+          // reveal, and this is also what lets it correctly "fall off" once
+          // a later real move — sent back, played, discarded — is logged).
+          if (entry.records.length === 0) entry.records.push(action.to);
+        } else if (action.to === null) {
           // returning to deck — one fewer copy out. Prefer removing from the
           // named source zone; otherwise drop the most recently tracked one.
           const idx = (action.from && action.from !== 'deck') ? entry.records.lastIndexOf(action.from) : entry.records.length - 1;
           if (idx >= 0) entry.records.splice(idx, 1);
         } else if (action.from === 'deck' || !action.from) {
           // Fresh from the deck, or no source named — try to reuse an
-          // existing record first (covers e.g. Set/Activated of a card we
-          // already know is in their hand); only counts as a NEW copy if
-          // nothing matches.
+          // existing record first (covers e.g. a card already known to be
+          // in their hand now being Set/Activated), but NEVER reuse a
+          // record already sitting in the SAME zone this move is heading
+          // to — that's not a move at all, so it must be a genuinely
+          // different, previously-unseen copy landing there directly (e.g.
+          // a 2nd copy of a card being banished straight from the field
+          // while the 1st copy is already banished — reusing the 1st copy's
+          // record here silently ate the 2nd copy instead of counting it).
           let idx = -1;
           if (!action.from) {
-            const order = ['field', 'hand', 'grave', 'banish'];
+            const order = ['field', 'hand', 'grave', 'banish'].filter((z) => z !== action.to);
             for (let i = 0; i < order.length && idx < 0; i++) idx = entry.records.lastIndexOf(order[i]);
           }
           if (idx >= 0) entry.records[idx] = action.to;
@@ -583,9 +635,18 @@
         // Factual only — a card's count is exactly how many distinct copies
         // we've actually seen leave the deck (see addKnownOppCard above), no
         // guess at how many more might be left unseen in their deck/hand.
+        // zones summarizes each CURRENTLY tracked copy's records (a copy
+        // that's since returned to deck is no longer in any zone here, even
+        // though it still counts toward the peak `count` above) — this is
+        // what lets the site show "IN HAND"/"GRAVEYARD"/etc. on opponent
+        // tiles the same way it already does for your own deck.
         oppCards: state.knownOppCards
           .filter((c) => c.max > 0)
-          .map((c) => ({ name: c.name, count: c.max })),
+          .map((c) => {
+            const zones = { hand: 0, field: 0, grave: 0, banish: 0 };
+            c.records.forEach((z) => { if (zones[z] !== undefined) zones[z]++; });
+            return { name: c.name, count: c.max, zones };
+          }),
         updatedAt: Date.now()
       };
     }
@@ -682,7 +743,28 @@
         const n = drewM[1].trim();
         return /^a card$/i.test(n) ? null : n;
       }
-      const m = /^(?:Set |Activated |Normal Summoned |Special Summoned |Flip Summoned |Flipped (?:Set )?|Sent |Discarded |Banished |Removed |Added |Revealed |Declared effect of |Returned |Moved |Changed )([A-Za-z0-9 ,.'\-:]+?)(?: from| to| in| on| \()/.exec(text);
+      // A bare "Revealed <Name>" with nothing else in the line (e.g. a Trap
+      // Dustshoot-style hand reveal) — same "runs to the end of the line"
+      // shape as "Drew X" above, and just as easy to otherwise miss
+      // entirely, since the general regex below requires a trailing zone/
+      // stat clause that a plain reveal never has.
+      const revealedM = /^Revealed ([A-Za-z0-9 ,.'\-:]+)$/.exec(text);
+      if (revealedM) {
+        const n = revealedM[1].trim();
+        return /^a card$/i.test(n) ? null : n;
+      }
+      // DuelingBook's own log text often says "Activated Set <Name> ..." or
+      // "Flip Summoned Set <Name> ..." / "Flipped Set <Name> ..." to spell
+      // out that the card was already sitting face-down before this action
+      // — the literal word "Set" shows up a SECOND time, right after the
+      // leading verb, not just when "Set" is itself the verb. Without
+      // stripping that redundant "Set " too, it got swallowed into the
+      // capture group and came out the other end as a broken "Set Book of
+      // Moon"-style name — a real, systemic bug, not a one-off (confirmed
+      // by live-match screenshots showing it on essentially every Set/flip/
+      // trap-from-Set reveal for the opponent). The optional (?:Set )? right
+      // after the verb alternation strips it wherever it shows up.
+      const m = /^(?:Set |Activated |Normal Summoned |Special Summoned |Flip Summoned |Flipped |Sent |Discarded |Banished |Removed |Added |Revealed |Declared effect of |Returned |Moved |Changed )(?:Set )?([A-Za-z0-9 ,.'\-:]+?)(?: from| to| in| on| \()/.exec(text);
       const n = m && m[1] && m[1].trim();
       return (n && !/^card$/i.test(n)) ? n : null;
     }
