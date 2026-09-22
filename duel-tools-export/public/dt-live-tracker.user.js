@@ -306,9 +306,14 @@
   // class name first; keep the old nearby-text check as a fallback in case
   // any filter doesn't follow that pattern.
   const CHECKBOX_KEYWORDS = ['chat', 'duel', 'game', 'private', 'username'];
-  function enableLogCheckboxes(duelLogEl) {
+  // `quiet` skips the routine console.log on a re-verify pass that found
+  // nothing to fix (still logs if it actually had to click something) —
+  // see the periodic re-check in armLogWatcher below for why this runs
+  // more than once per match.
+  function enableLogCheckboxes(duelLogEl, quiet) {
     const checkboxes = duelLogEl.querySelectorAll('input[type=checkbox]');
     let matchedCount = 0;
+    let clickedCount = 0;
     checkboxes.forEach((cb) => {
       const classStr = (cb.className || '').toLowerCase();
       const context = ((cb.parentElement && cb.parentElement.textContent) || '').toLowerCase();
@@ -322,30 +327,69 @@
           // firing 'click'/'change' in native order), so whatever listener
           // DuelingBook itself wired up sees an entirely ordinary click.
           cb.click();
+          clickedCount++;
         }
       }
     });
-    console.log('[Duel Tools Tracker] checkboxes: found', checkboxes.length, 'total,', matchedCount, 'matched a wanted filter (expected 5)');
-    if (matchedCount < CHECKBOX_KEYWORDS.length) {
+    if (!quiet || clickedCount > 0) {
+      console.log('[Duel Tools Tracker] checkboxes: found', checkboxes.length, 'total,', matchedCount, 'matched a wanted filter (expected 5)'
+        + (clickedCount ? ', clicked ' + clickedCount + ' that had drifted back to unchecked' : ''));
+    }
+    if (matchedCount < CHECKBOX_KEYWORDS.length && !quiet) {
       console.warn('[Duel Tools Tracker] not all 5 log filters were found/checked — you may need to check them yourself (Chat, Duel, Game, Private Info, Usernames) in the Duel Log panel.');
     }
   }
 
   // ── Parse one log line ──────────────────────────────────────────────────
+  // DuelingBook's real duel log actually has TWO shapes on the same page,
+  // not one: "[m:ss] Username: text" for the OPPONENT's actions (and
+  // neutral system lines like "X joined pool"/"X automatically paired via
+  // pool") — but the account owner's OWN actions are logged completely
+  // bare, "[m:ss] text" with no username at all, since DuelingBook doesn't
+  // bother naming "you" in your own log. Confirmed against a real match's
+  // console output: "[0:09] Drew Magician of Faith", "[0:52] Set Dekoichi
+  // the Battlechanted Locomotive from hand (3/7) to M-3", etc. — every one
+  // of the player's own lines, none with a username. LINE_RE alone only
+  // ever matched the first shape, so literally every own-side action line
+  // silently failed to parse (returning null, never reaching applyEvent)
+  // while the opponent's username-prefixed lines kept parsing fine — this
+  // is exactly why live testing showed tracking working, then stopping,
+  // then working again in lockstep with whose turn it was. LINE_RE_BARE is
+  // the fallback for that un-prefixed shape, attributed to the account
+  // owner via SELF_LINE_SENTINEL (see who() below) since there's no real
+  // username in the text to read.
   const LINE_RE = /^\[(\d+):(\d+)\]\s*([^:]+):\s*(.*)$/;
+  const LINE_RE_BARE = /^\[(\d+):(\d+)\]\s*(.*)$/;
+  const SELF_LINE_SENTINEL = '__dt_self__';
   function parseLine(rawText) {
-    const m = LINE_RE.exec(rawText.trim());
-    if (!m) return null;
-    const [, min, sec, username, text] = m;
-    // Chat / typed messages render as quoted text ("gl hf", "/draw13") —
-    // everything else (Drew X, Entered Main Phase 1, ...) is unquoted.
-    const isChat = /^".*"$/.test(text.trim());
-    return {
-      seconds: parseInt(min, 10) * 60 + parseInt(sec, 10),
-      username: username.trim(),
-      text: text.trim(),
-      isChat
-    };
+    const trimmed = rawText.trim();
+    let m = LINE_RE.exec(trimmed);
+    if (m) {
+      const [, min, sec, username, text] = m;
+      // Chat / typed messages render as quoted text ("gl hf", "/draw13") —
+      // everything else (Drew X, Entered Main Phase 1, ...) is unquoted.
+      const isChat = /^".*"$/.test(text.trim());
+      return {
+        seconds: parseInt(min, 10) * 60 + parseInt(sec, 10),
+        username: username.trim(),
+        text: text.trim(),
+        isChat
+      };
+    }
+    m = LINE_RE_BARE.exec(trimmed);
+    if (m) {
+      const [, min, sec, text] = m;
+      const trimmedText = text.trim();
+      if (!trimmedText) return null; // just a bare timestamp with nothing after it — not a real line
+      const isChat = /^".*"$/.test(trimmedText);
+      return {
+        seconds: parseInt(min, 10) * 60 + parseInt(sec, 10),
+        username: SELF_LINE_SENTINEL,
+        text: trimmedText,
+        isChat
+      };
+    }
+    return null;
   }
 
   // ── Main tracker state + UI ─────────────────────────────────────────────
@@ -721,6 +765,9 @@
     }
 
     function who(username) {
+      // A bare, un-prefixed line (see LINE_RE_BARE in parseLine) is always
+      // the account owner's own action — DuelingBook just never names "you".
+      if (username === SELF_LINE_SENTINEL) return 'me';
       if (username.toLowerCase() === state.myUsername.toLowerCase()) return 'me';
       // First "other" username we see becomes "the opponent" for this match
       if (!state.oppUsername) state.oppUsername = username;
@@ -1285,7 +1332,30 @@
     const observer = new MutationObserver(scheduleScan);
     observer.observe(duelLogEl, { childList: true, subtree: true, characterData: true });
     scan();
-    return observer; // caller keeps this so it can disconnect() when the duel ends
+
+    // DuelingBook's "Usernames" log filter defaults to UNCHECKED at the
+    // start of every match, and confirmed via a real live match, clicking
+    // it once here at arm time doesn't reliably make it stick for the rest
+    // of the game — every one of the account owner's own action lines kept
+    // rendering bare with no username the whole match even though this
+    // exact click ran and matched all 5 filters. Re-verifying every couple
+    // seconds for as long as this duel is being watched is cheap insurance
+    // against that (it only logs anything when it actually finds one
+    // unchecked and has to re-click it — see enableLogCheckboxes' `quiet`
+    // param). This is on top of, not instead of, parseLine's own
+    // LINE_RE_BARE fallback — that one doesn't depend on this checkbox's
+    // state at all, so tracking keeps working correctly either way.
+    const checkboxInterval = setInterval(() => enableLogCheckboxes(duelLogEl, true), 2000);
+
+    // caller keeps this so it can disconnect() when the duel ends — same
+    // shape as the raw MutationObserver it used to return, plus cleanup
+    // for the interval above.
+    return {
+      disconnect() {
+        observer.disconnect();
+        clearInterval(checkboxInterval);
+      }
+    };
   }
 
   function waitFor(selector, cb) {
