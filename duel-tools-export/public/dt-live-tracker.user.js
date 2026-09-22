@@ -1231,7 +1231,18 @@
     let pending = false;
 
     let loggedZeroCandidatesOnce = false;
-    let loggedParseFailOnce = false;
+    // DIAGNOSTIC: confirmed via a real match's console output that DuelingBook's
+    // actual duel log does NOT put "Username: " in front of ordinary action
+    // lines the way LINE_RE (above) assumes — it's bare "[m:ss] action text"
+    // for BOTH players, with no textual way to tell whose action it is (proven
+    // by a real line where "Activated Delinquent Duo" was the opponent's move
+    // but the very next randomly-discarded card belonged to the other side —
+    // same bare shape, opposite owners). So the missing signal has to be in
+    // the DOM (a class/color DuelingBook applies per side), not the text.
+    // Capped at 20 (not the old 1) so a real session yields enough samples —
+    // ideally at least one from each player — to spot that signal from a
+    // single console paste instead of guessing at it blind again.
+    let parseFailLogged = 0;
     function scan() {
       // Every entry rendered so far, in order — we only process ones past
       // the `seen` count so this stays cheap even as the log grows long.
@@ -1248,9 +1259,19 @@
         const ev = parseLine(all[i].textContent);
         if (ev) {
           tracker.applyEvent(ev);
-        } else if (!loggedParseFailOnce) {
-          loggedParseFailOnce = true;
-          console.warn('[Duel Tools Tracker] found a candidate line but could not parse it:', JSON.stringify(all[i].textContent));
+        } else if (parseFailLogged < 20) {
+          parseFailLogged++;
+          const el = all[i];
+          let styleInfo = '(no computed style available)';
+          try {
+            const view = (el.ownerDocument && el.ownerDocument.defaultView) || window;
+            const cs = view.getComputedStyle(el);
+            styleInfo = 'color=' + cs.color + ' class=' + JSON.stringify(el.className);
+          } catch (e) { styleInfo = '(getComputedStyle failed: ' + e.message + ')'; }
+          console.warn(
+            '[Duel Tools Tracker] DIAGNOSTIC (' + parseFailLogged + '/20) — candidate line without the expected "[m:ss] Username: text" shape, ' + styleInfo + ' — outerHTML:',
+            (el.outerHTML || '').slice(0, 500)
+          );
         }
       }
       if (all.length > seen) console.log('[Duel Tools Tracker] processed', all.length - seen, 'new log line(s), total seen:', all.length, JSON.stringify(all.slice(seen).map(e => e.textContent)));
