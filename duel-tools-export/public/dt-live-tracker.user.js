@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         Duel Tools — Live Tracker
 // @namespace    http://tampermonkey.net/
-// @version      0.3
+// @version      0.11
 // @description  Watches the in-page Duel Log during a live match to drive dual action timers, known-card tracking, a YDK export of the opponent's revealed cards, and live sync to the Duel Tools website's My Tracker / Opp Tracker.
 // @author       Kerem's Duel Tools
 // @match        https://www.duelingbook.com/*
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
 // @connect      db.ygoprodeck.com
 // @connect      duel-tools-kerem-production.up.railway.app
 // @run-at       document-idle
@@ -54,6 +55,47 @@
     /^Flipped /, /^Declared effect/
   ];
   const isResetAction = (text) => RESET_WORDS.some((re) => re.test(text));
+
+  // Lines that mean timer credit should follow whoever needs to act/decide
+  // right now, overriding plain turn-order for a bounded window. Two shapes:
+  //   'other' — the SPEAKING side's action leaves the OTHER side needing to
+  //             resolve something. Reported case: activating a card that
+  //             forces a random discard logs as the activator's own
+  //             "Requested to discard a random card" line, but the actual
+  //             card selection/discard is the opponent's side to make.
+  //   'self'  — the SPEAKING side is themselves the one taking the time.
+  //             DuelingBook's "Thinking" button (confirmed via a real match
+  //             log) prints a bare "Thinking" line for whichever side clicks
+  //             it — that's their own decision time, credited to them even
+  //             if it's technically not their turn (e.g. deciding whether to
+  //             respond during the opponent's turn). Matched as an exact
+  //             line (not `\bThinking\b`) so it can't collide with a CHAT
+  //             message that happens to say the same word — DuelingBook
+  //             quotes chat lines ("Thinking") and isChat already routes
+  //             those away before this ever runs (see applyEvent).
+  // Best-effort on wording, same as RESET_WORDS/opponent reveal detection
+  // elsewhere in this file — widen this list if another "someone needs to
+  // act" line is spotted with different phrasing. Each entry can carry its
+  // own timeoutMs (default AWAIT_TIMEOUT_MS below) — "Showed hand" gets a
+  // much longer one, since reading through a revealed hand plausibly takes
+  // a lot longer than resolving a forced discard or one Thinking pause, and
+  // reason lets other code (the hand-viewing DOM scan, see installSidingHook
+  // sibling installHandViewScan below) tell exactly WHY timer credit is
+  // currently flipped, not just which side it's flipped to.
+  const AWAIT_WORDS = [
+    { re: /^Requested to discard a random card\b/i, credit: 'other', reason: 'discardWait' },
+    { re: /^Thinking$/i, credit: 'self', reason: 'thinking' },
+    // "Showed hand" is the line DuelingBook logs for the SENDER of a hand
+    // reveal (via the Show Hand button) — credit: 'other' because it's the
+    // OTHER player (the one now looking at the revealed hand) who's
+    // actually spending time on it, not the person who clicked the button.
+    { re: /^Showed hand$/i, credit: 'other', reason: 'handView', timeoutMs: 120000 }
+  ];
+  function matchAwaitWord(text) {
+    for (let i = 0; i < AWAIT_WORDS.length; i++) { if (AWAIT_WORDS[i].re.test(text)) return AWAIT_WORDS[i]; }
+    return null;
+  }
+  const AWAIT_TIMEOUT_MS = 8000; // default cap on how long timer credit stays flipped if no further line ever arrives (e.g. the other side disconnects mid-resolution) — overridden per-entry via AWAIT_WORDS[i].timeoutMs
 
   // ── Live sync to the Duel Tools website ─────────────────────────────────
   // Pushes a snapshot of the current match to a short-lived "pairing code"
@@ -215,12 +257,28 @@
     return ids;
   }
 
+  // Side-deck section only (everything after !side). This used to be
+  // discarded entirely — a YDK's side list never made it anywhere, which
+  // meant the website's My Tracker Side Deck panel had no live-sync source
+  // of truth at all and just showed whatever was last imported manually
+  // there (if anything), stale from the moment a real match started siding.
+  function parseYdkSideDeck(text) {
+    const lines = text.split(/\r?\n/).map((l) => l.trim());
+    const sideIdx = lines.indexOf('!side');
+    if (sideIdx === -1) return [];
+    const ids = [];
+    for (let i = sideIdx + 1; i < lines.length; i++) {
+      if (/^\d+$/.test(lines[i])) ids.push(lines[i]);
+    }
+    return ids;
+  }
+
   // Groups a flat id list into [{id, name, type, total}], resolving each
   // UNIQUE id to a name+type sequentially (same politeness reasoning as the
   // opponent-card resolver above — a deck is at most ~15-20 unique cards
-  // even with duplicates grouped, so this stays quick).
-  async function buildDeckListFromYdk(text, onProgress) {
-    const ids = parseYdkMainDeck(text);
+  // even with duplicates grouped, so this stays quick). Shared by both the
+  // main-deck and side-deck builders below.
+  async function buildGroupedListFromIds(ids, onProgress) {
     const counts = {};
     ids.forEach((id) => { counts[id] = (counts[id] || 0) + 1; });
     const uniqueIds = Object.keys(counts);
@@ -233,7 +291,24 @@
     }
     return list;
   }
+  function buildDeckListFromYdk(text, onProgress) {
+    return buildGroupedListFromIds(parseYdkMainDeck(text), onProgress);
+  }
+  function buildSideListFromYdk(text, onProgress) {
+    return buildGroupedListFromIds(parseYdkSideDeck(text), onProgress);
+  }
 
+  // NOTE on what these two persist: dt_tracker_my_deck / dt_tracker_my_side
+  // hold the ORIGINAL, as-uploaded decklist — i.e. what game 1 starts from —
+  // and are written ONLY by a fresh YDK upload (see the file-input handler
+  // below), never by a siding swap. That used to not be true: a siding swap
+  // used to call saveMyDeckList() too, which meant the "original" persisted
+  // here silently drifted to whatever you last sided to, and the only way
+  // back to your real decklist for a new match's game 1 was to re-upload the
+  // YDK by hand. state.myDeckList/state.mySideList (the CURRENT, possibly-
+  // sided-this-match composition) are seeded FROM these originals fresh at
+  // the start of every match (see startTracker below) and then diverge from
+  // them in memory only, via real-time siding — never written back here.
   function loadMyDeckList() {
     const raw = safeGetValue('dt_tracker_my_deck', '');
     if (!raw) return null;
@@ -241,6 +316,14 @@
   }
   function saveMyDeckList(list) {
     safeSetValue('dt_tracker_my_deck', JSON.stringify(list));
+  }
+  function loadMySideList() {
+    const raw = safeGetValue('dt_tracker_my_side', '');
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch (e) { return null; }
+  }
+  function saveMySideList(list) {
+    safeSetValue('dt_tracker_my_side', JSON.stringify(list));
   }
 
   // ── One-time setup: your own username, so "everyone else" = opponent ───
@@ -393,7 +476,7 @@
   }
 
   // ── Main tracker state + UI ─────────────────────────────────────────────
-  function startTracker(myUsername, deckList) {
+  function startTracker(myUsername, deckList, sideList) {
     const state = {
       myUsername,
       oppUsername: null,
@@ -403,10 +486,23 @@
       myTimer: 0, oppTimer: 0,
       myTimerRunning: true, oppTimerRunning: false,
       oppInterruptUntil: 0, // ms timestamp — opponent's timer stays live until this passes, when it's not their turn
+      awaitingSide: null, // 'me' | 'opp' | null — set when someone needs to act/decide right now (a forced random discard resolving on the other side, either side clicking "Thinking", or either side viewing a revealed hand) even though it may not be their turn; while set, timer credit follows awaitingSide instead of turnHolder — see applyEvent's AWAIT_WORDS handling and the tick loop below
+      awaitingUntil: 0, // ms timestamp safety-net cap on awaitingSide — cleared as soon as the next real log line arrives, but this bounds it in case one never does (e.g. the opponent disconnects mid-resolution)
+      awaitingReason: null, // 'discardWait' | 'thinking' | 'handView' | null — WHY awaitingSide is set, from the matched AWAIT_WORDS entry; 'handView' specifically is what tells installHandViewScan's tick-loop check it's safe to keep refreshing this rather than something unrelated
       knownOppCards: [], // [{name, records, max}] — records tracks currently-out copies by guessed zone, max is the peak count reached (see addKnownOppCard below); persists across games within a match, reset only on a new match
       feed: [], // last N parsed events for the debug view
       paused: false,
-      myDeckList: deckList || null, // [{id, name, type, total}] — the uploaded YDK, persists indefinitely once set
+      // myDeckList/mySideList are this MATCH's working copies — real-time
+      // siding mutates these in memory as you actually swap cards in-game.
+      // myDeckListOriginal/mySideListOriginal are a separate, untouched
+      // reference to what was actually uploaded (deckList/sideList as
+      // passed in), kept around ONLY to report "what game 1 started from"
+      // in the live-sync payload (see buildSnapshot) — never mutated here,
+      // so the website can always offer a real way back to it.
+      myDeckList: deckList ? JSON.parse(JSON.stringify(deckList)) : null, // [{id, name, type, total}]
+      myDeckListOriginal: deckList || null,
+      mySideList: sideList ? JSON.parse(JSON.stringify(sideList)) : null, // [{id, name, type, total}] — never zone-tracked, just the current side-pile composition
+      mySideListOriginal: sideList || null,
       myDeckRemaining: null, // [{id, name, type, total, zones:{hand,field,grave,banish}}] — rebuilt fresh every GAME (the deck reshuffles each game)
       game: 1, // which game of this MATCH we're on — 1 unless resetForNewGame() has bumped it
       matchConcluded: false, // set true once "View Replay" appears — mirrors the outer matchConcluded flag, for the live-sync payload
@@ -499,13 +595,24 @@
         // from hand (since it already had a copy) and immediately give it
         // right back, net zero — the genuinely new copy was never counted.
         // Inferring the source from the DESTINATION instead avoids that: an
-        // unqualified draw/return-to-hand is always a fresh copy off the
-        // deck (DuelingBook's plain "Drew X" never spells out "from Deck"),
-        // and an unqualified summon/set/activation is overwhelmingly played
-        // straight from hand — both are near-certainties, unlike guessing
-        // across every zone. Only to-grave/to-banish with truly no stated
-        // source is left ambiguous (see applyZoneTransition's fallback).
-        if (to === 'hand') from = 'deck';
+        // unqualified DRAW is always a fresh copy off the deck (DuelingBook's
+        // plain "Drew X" never spells out "from Deck"), and an unqualified
+        // summon/set/activation is overwhelmingly played straight from hand
+        // — both are near-certainties, unlike guessing across every zone.
+        //
+        // Only the literal "Drew " verb gets that deck assumption — NOT
+        // every unqualified move that happens to land in hand. "Returned X
+        // to hand" (a bounce effect on your own field card, the common case)
+        // also matches toHand with no "from" clause, but it is never a fresh
+        // deck copy; wrongly assuming deck here left the field's tally
+        // uncleared and added a second, phantom copy in hand — a real card
+        // moving field→hand got double-counted as if a brand-new copy had
+        // appeared. Falling through to `from = null` instead routes it
+        // through applyZoneTransition's general fallback (field first, then
+        // hand/grave/banish), the same ambiguous-source handling already
+        // used for to-grave/to-banish with no stated source — and field
+        // being checked first is exactly right for a bounce return.
+        if (/^Drew /i.test(text)) from = 'deck';
         else if (to === 'field') {
           // Still ambiguous in general (a Spell is usually played straight
           // from hand) — EXCEPT for a Trap Card, which by the game's own
@@ -676,6 +783,19 @@
         oppTimer: Math.floor(state.oppTimer),
         edgePct: computeEdgePct(),
         myDeck: state.myDeckRemaining || [],
+        // Current side-pile composition — [{id, name, type, total}], no zone
+        // tracking (a side card never gets drawn/played, it just sits there
+        // until it's swapped in). Updated live by the real-time siding hook
+        // the same instant myDeck is, so My Tracker's Side Deck panel can
+        // finally mirror actual in-duel siding instead of staying frozen on
+        // whatever was last imported manually on the website.
+        mySide: state.mySideList || [],
+        // The untouched, as-uploaded decklist/side list — i.e. what this
+        // match's game 1 actually started from, before any siding. Lets the
+        // website offer a real "back to my original decklist" instead of
+        // just clearing to nothing when you disconnect Live Sync.
+        myDeckOriginal: state.myDeckListOriginal || [],
+        mySideOriginal: state.mySideListOriginal || [],
         // Factual only — a card's count is exactly how many distinct copies
         // we've actually seen leave the deck (see addKnownOppCard above), no
         // guess at how many more might be left unseen in their deck/hand.
@@ -711,18 +831,27 @@
       });
     }
 
-    // ── Side Practice → Live Tracker siding sync ────────────────────────────
-    // DuelingBook's actual in-duel siding screen never shows up in #duel_log
-    // (it's a separate deck-editor UI, not a logged duel action) — there's no
-    // event this tracker could watch to see what got swapped in/out on the
-    // real DuelingBook siding step. The practical alternative: the website's
-    // own Side Practice tab already lets you build the post-side deck by
-    // hand, and its "Push to Live Tracker" button (index.html) sends that
-    // composition here via the same pairing-code relay, one-shot, under
-    // POST /api/live/:code/side. This just polls for it periodically and,
-    // once one shows up, applies it as this match's new myDeckList (kept
-    // for every future game of the match, exactly like a re-uploaded YDK)
-    // and clears the pending slot so it isn't re-applied on the next game.
+    // ── Real-time siding sync ────────────────────────────────────────────────
+    // The in-duel siding screen (#siding) never logs to #duel_log — it's a
+    // separate deck-editor UI reusing the site's deck-builder code, not a
+    // logged duel action — so there's nothing in the log stream to watch.
+    // BUT: every change to that screen's main/side/extra composition, no
+    // matter the cause (the initial population, a confirmed "Swap cards"
+    // from the server, the "Reset" button, an error-recovery repair), funnels
+    // through one shared function the site itself defines: utils.js's
+    // initializeDeckCards(). It's called right after deck_filled_arr /
+    // side_filled_arr / extra_filled_arr are mutated, every time, with no
+    // other code path that redraws those arrays without going through it —
+    // confirmed by reading the site's own utils.js/main.js. Wrapping that
+    // one global function (installSidingHook, below) gives a reliable,
+    // real-time signal the instant DuelingBook itself applies a siding swap,
+    // with zero polling and zero manual step needed.
+    //
+    // The older Side Practice → "Push to Live Tracker" relay (POST
+    // /api/live/:code/side, polled below) stays in place as a manual
+    // fallback in case the hook above ever fails to attach — e.g. the site
+    // changes initializeDeckCards's name/shape, or unsafeWindow isn't
+    // available under some engine's sandboxing.
     function fetchPendingSideUpdate(cb) {
       try {
         GM_xmlhttpRequest({
@@ -740,16 +869,24 @@
       try { GM_xmlhttpRequest({ method: 'DELETE', url: SITE_API_BASE + '/live/' + PAIR_CODE + '/side' }); }
       catch (e) { /* best-effort — a stale pending update just gets re-applied harmlessly next poll, same list */ }
     }
-    function applyPendingSideUpdate(mainList) {
-      // mainList: [{id, name, type, total}] — already grouped by the site
+    function applyPendingSideUpdate(mainList, source, sideList) {
+      // mainList/sideList: [{id, name, type, total}] — already grouped by
+      // caller. This only ever updates the CURRENT (this-match) working
+      // copies, in memory — it deliberately does NOT persist mainList as
+      // the "original" decklist (see the NOTE above loadMyDeckList): a
+      // siding swap is per-match, scratch state, not a new baseline to
+      // remember for next time. sideList is optional — the older Side
+      // Practice fallback below doesn't currently have side-deck data to
+      // send, so a call without it just leaves mySideList as-is.
       state.myDeckList = mainList;
-      saveMyDeckList(mainList);
       state.myDeckRemaining = freshDeckRemaining();
+      if (sideList) state.mySideList = sideList;
       renderMyDeck();
       maybePushLive(true);
+      const label = source || 'Side Practice';
       const status = panel.querySelector('#dt-tr-ydk-status');
-      if (status) status.textContent = 'Decklist updated from Side Practice (' + mainList.reduce((s, c) => s + c.total, 0) + ' cards) — applies starting now';
-      console.log('[Duel Tools Tracker] applied a pending side-deck update from Side Practice:', mainList);
+      if (status) status.textContent = 'Decklist updated from ' + label + ' (' + mainList.reduce((s, c) => s + c.total, 0) + ' cards) — applies starting now';
+      console.log('[Duel Tools Tracker] applied a deck update from ' + label + ':', mainList, sideList ? { side: sideList } : '');
     }
     let lastSideCheck = Date.now(); // starts the 5s throttle from tracker init, not an immediate first check
     function maybeCheckPendingSide() {
@@ -758,10 +895,227 @@
       lastSideCheck = now;
       fetchPendingSideUpdate(function (payload) {
         if (payload && Array.isArray(payload.main) && payload.main.length) {
-          applyPendingSideUpdate(payload.main);
+          applyPendingSideUpdate(payload.main, 'Side Practice', Array.isArray(payload.side) ? payload.side : null);
           clearPendingSideUpdate();
         }
       });
+    }
+
+    // ── Real-time siding hook (see the block comment above) ────────────────
+    // deck_filled_arr / side_filled_arr entries are the site's own jQuery
+    // "CardFront" objects — initializeFromData() stashes the full card
+    // record onto each one via jQuery .data(), so reading it back the same
+    // way is exact, with no name-lookup or API call needed.
+    //
+    // IMPORTANT: .data('id') is DuelingBook's own internal database row id
+    // for that card — NOT the Konami/ygoprodeck passcode myDeckList uses
+    // everywhere else (the YDK-upload path sets `id` to the passcode
+    // straight out of the .ydk file, and My Tracker's card art is fetched as
+    // images.ygoprodeck.com/.../{id}.jpg from that same field). The site's
+    // own exportDeckXML() in utils.js proves these are two different values
+    // by writing them as separate id="" / passcode="" attributes read from
+    // .data('id') and .data('serial_number') respectively. The real
+    // passcode — matching exactly what toURL()/passcodesToBase64() use for
+    // YDKE export — is .data('alt_passcode'), falling back to
+    // .data('serial_number') when a card has no errata'd alt passcode. Using
+    // .data('id') here silently fed the wrong number into myDeckList, which
+    // broke card art for every card touched by a live siding swap (art
+    // request 404s, falls back to the name-only tile) without breaking
+    // anything else — nothing else in this file keys off myDeckList's `id`.
+    function jqCardMeta(el) {
+      try {
+        if (!el || typeof el.data !== 'function') return null;
+        const name = el.data('name');
+        if (!name) return null;
+        const passcode = el.data('alt_passcode') || el.data('serial_number');
+        return { id: passcode, name: name, type: el.data('card_type') || '' };
+      } catch (e) { return null; }
+    }
+    function namesMultisetEqual(a, b) {
+      if (a.length !== b.length) return false;
+      const sa = a.slice().sort(), sb = b.slice().sort();
+      for (let i = 0; i < sa.length; i++) if (sa[i] !== sb[i]) return false;
+      return true;
+    }
+    function groupCardArrByName(arr) {
+      const out = [];
+      const byName = new Map();
+      for (const el of arr) {
+        const meta = jqCardMeta(el);
+        if (!meta) continue;
+        let entry = byName.get(meta.name);
+        if (!entry) { entry = { id: meta.id, name: meta.name, type: meta.type, total: 0 }; byName.set(meta.name, entry); out.push(entry); }
+        entry.total++;
+      }
+      return out;
+    }
+    let sidingBaselineNames = null; // null = no baseline recorded yet for the siding session currently on screen
+    function onDeckArraysReinitialized() {
+      const uw = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+      if (uw.currentLabel !== 'siding' || !Array.isArray(uw.deck_filled_arr)) {
+        sidingBaselineNames = null; // not on the siding screen (any more) — re-baseline next time we are
+        return;
+      }
+      const mainNames = uw.deck_filled_arr.map(function (el) { const m = jqCardMeta(el); return m ? m.name : null; }).filter(Boolean);
+      if (sidingBaselineNames === null) {
+        // The siding screen just populated for the first time this session —
+        // that's the match's current (pre-swap) deck, not a swap the player
+        // made. Record it as the baseline and wait for it to actually change.
+        sidingBaselineNames = mainNames;
+        return;
+      }
+      if (namesMultisetEqual(mainNames, sidingBaselineNames)) return; // initializeDeckCards can fire without a real composition change
+      // side_filled_arr is the exact same kind of array as deck_filled_arr,
+      // just for the side pile — grouping it the same way keeps mySide
+      // accurate the instant a real swap happens, not just myDeck.
+      const sideGrouped = Array.isArray(uw.side_filled_arr) ? groupCardArrByName(uw.side_filled_arr) : null;
+      applyPendingSideUpdate(groupCardArrByName(uw.deck_filled_arr), 'a live siding swap', sideGrouped);
+      sidingBaselineNames = mainNames;
+    }
+    // NOTE: startTracker() (and everything inside it, including this closure)
+    // re-runs fresh for every new match, but window.initializeDeckCards is a
+    // page-global that persists for the whole browser session across many
+    // matches (DuelingBook is a single-page app — the page never reloads
+    // between duels), AND the previous match's tick loop (setInterval below)
+    // is never stopped when a new match starts — it just keeps running
+    // forever alongside every later match's own tick loop. Two bugs follow
+    // from that, both producing the reported "changing back and forth":
+    //
+    // 1) A closure-scoped "already installed" guard would only stop THIS
+    //    instance from double-wrapping; it can't see that a PRIOR match's
+    //    instance already wrapped the page-global function, so every new
+    //    match would re-wrap an already-wrapped function and stack another
+    //    layer on top. After N matches, one real call would fire N stacked
+    //    handlers, each pushing its own (stale) applyPendingSideUpdate —
+    //    several inconsistent live-pushes for one genuine composition change.
+    //    Fixed by wrapping the underlying function ONLY ONCE per page
+    //    session, via a flag on the page global (uw) itself rather than in
+    //    this closure, so it survives every startTracker() re-run.
+    //
+    // 2) Even with the function wrapped only once, if EVERY instance's tick
+    //    loop kept repointing a shared "which instance handles this" slot on
+    //    every single tick (200ms), the old (superseded) instances' still-
+    //    running tick loops and the current instance's tick loop would keep
+    //    racing to overwrite that slot forever — the actual handler in
+    //    effect would flip-flop from tick to tick depending on scheduling
+    //    jitter, not stay pinned to the current match. Fixed by having each
+    //    instance repoint the slot to itself only ONCE, the first time its
+    //    own tick loop finds initializeDeckCards ready — never again after
+    //    that. Instance-start order is always chronological (a new match's
+    //    instance is always created after the previous one), so the LAST
+    //    instance to do its one-time claim is always the newest match, and
+    //    since older instances never claim a second time, nothing overwrites
+    //    it again afterward.
+    let sidingHookHandlerClaimed = false; // per-instance: has THIS instance taken over the shared handler slot yet?
+    function installSidingHook() {
+      const uw = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+      if (typeof uw.initializeDeckCards !== 'function') return; // page's own scripts not loaded yet — retried every tick below
+      if (!sidingHookHandlerClaimed) {
+        sidingHookHandlerClaimed = true;
+        // One-time takeover: this instance becomes the active handler and
+        // stays so — it will never touch this slot again, so an older
+        // instance's tick loop can't win it back later, and this instance
+        // won't fight a NEWER instance that claims after it either.
+        uw.__dtTrackerSidingHandler = onDeckArraysReinitialized;
+      }
+      if (uw.__dtTrackerInitDeckCardsWrapped) return; // underlying function already wrapped by an earlier match this session — don't stack another layer
+      uw.__dtTrackerInitDeckCardsWrapped = true;
+      const orig = uw.initializeDeckCards;
+      uw.initializeDeckCards = function () {
+        const ret = orig.apply(this, arguments);
+        try { if (uw.__dtTrackerSidingHandler) uw.__dtTrackerSidingHandler(); } catch (e) { console.log('[Duel Tools Tracker] siding hook error:', e); }
+        return ret;
+      };
+      console.log('[Duel Tools Tracker] real-time siding sync hook installed');
+    }
+
+    // ── "Viewing Opponent's Hand" — timer credit + known-card visibility ────
+    // DuelingBook's Show Hand button reveals a player's ENTIRE hand to the
+    // other player in a panel titled "Viewing Opponent's Hand" (id="view" —
+    // the same generic overlay the site reuses for "View Deck", Xyz
+    // materials, etc., distinguished only by this title text). Confirmed
+    // against real matches: every card shown there is a full, real
+    // CardFront element — its name is plain text in .name_txt and its real
+    // Konami passcode is plain text in .passcode_txt, both already present
+    // in the DOM (no click-through, no jQuery .data() needed this time,
+    // unlike the siding arrays — these are readable straight off the page).
+    //
+    // This only ever finds anything on the VIEWING player's own client — if
+    // I'm the one looking at my opponent's revealed hand, this panel is on
+    // MY screen and I can read it; if my opponent is viewing MINE, it's on
+    // THEIR screen, not mine, so there's nothing for me to scan (and
+    // nothing new to learn — I already know my own hand exactly). That
+    // asymmetric case is still covered for TIMER CREDIT though, purely from
+    // the "Showed hand" log line both players see (AWAIT_WORDS above) —
+    // just not for card visibility, which only I can provide when I'm the
+    // one doing the viewing.
+    function findViewingHandPanel() {
+      const panel = document.getElementById('view');
+      if (!panel || panel.style.display === 'none') return null;
+      const title = panel.querySelector('.title_txt');
+      if (!title || title.textContent.trim() !== "Viewing Opponent's Hand") return null;
+      return panel;
+    }
+    // Keeps knownOppCards' 'hand' records in sync with exactly what's
+    // currently shown in the panel — idempotent across repeated scans of
+    // the same still-open panel (only tops up a name's hand-record count up
+    // to what's actually visible right now, never re-adds what's already
+    // there), and safe to call every tick. Deliberately bypasses
+    // classifyCardAction (which expects a LOG LINE's verb text to infer a
+    // zone move) since here the zone is just a direct, visually-confirmed
+    // fact — "this exact card is in their hand right now" — not something
+    // that needs to be inferred from wording.
+    // Returns true if this call actually added any new 'hand' records, so
+    // the caller knows whether there's anything new worth pushing live —
+    // false on every repeat scan of an unchanged, still-open panel.
+    function syncKnownHandFromViewingPanel(names) {
+      let changed = false;
+      const counts = {};
+      names.forEach((n) => { counts[n] = (counts[n] || 0) + 1; });
+      Object.keys(counts).forEach((name) => {
+        let entry = state.knownOppCards.find((c) => c.name === name);
+        if (!entry) { entry = { name, records: [], max: 0 }; state.knownOppCards.push(entry); }
+        const currentHandCount = entry.records.filter((z) => z === 'hand').length;
+        const needed = counts[name] - currentHandCount;
+        for (let i = 0; i < needed; i++) { entry.records.push('hand'); changed = true; }
+        entry.max = Math.max(entry.max, entry.records.length);
+      });
+      return changed;
+    }
+    let handViewWasOpen = false; // edge-detects the panel closing, so credit can clear immediately instead of riding out handView's full 2-minute safety timeout
+    function installHandViewScan() {
+      const panel = findViewingHandPanel();
+      if (!panel) {
+        if (handViewWasOpen && state.awaitingReason === 'handView') {
+          // The panel just closed — end the credit window right now rather
+          // than waiting out the rest of its safety-net timeout, same
+          // snappiness as a real log line normally provides for the other
+          // AWAIT_WORDS cases.
+          state.awaitingSide = null; state.awaitingUntil = 0; state.awaitingReason = null;
+        }
+        handViewWasOpen = false;
+        return;
+      }
+      handViewWasOpen = true;
+      // Re-assert every tick the panel stays open — this is what lets
+      // credit survive real log lines that happen mid-view (see the
+      // comment on the AWAIT_WORDS match in applyEvent above), since that
+      // per-line clear only removes what THIS function puts right back on
+      // the very next 200ms tick, for as long as the panel is genuinely
+      // still on screen.
+      state.awaitingSide = 'me';
+      state.awaitingReason = 'handView';
+      state.awaitingUntil = Date.now() + 120000;
+      const names = Array.from(panel.querySelectorAll('.card.target .cardfront_content .name_txt'))
+        .map((el) => el.textContent.trim())
+        .filter(Boolean);
+      if (names.length && syncKnownHandFromViewingPanel(names)) {
+        // Force an immediate (unthrottled) push the moment new cards are
+        // actually revealed, rather than waiting on the normal 3s throttle
+        // — the whole point is the site showing "IN HAND — KNOWN" right
+        // when it happens, not up to 3s later.
+        maybePushLive(true);
+      }
     }
 
     function who(username) {
@@ -817,12 +1171,42 @@
     }
 
     function applyEvent(ev) {
+      // Any new line at all means whatever the LAST line put us on hold for
+      // has moved past — clear it here, before anything else, so the
+      // window closes the instant real progress is observed instead of
+      // riding out its full safety-net timeout. This only ever clears state
+      // set by an EARLIER line (see the trigger below, which sets it after
+      // this point runs for the line that triggers it).
+      if (state.awaitingSide) { state.awaitingSide = null; state.awaitingUntil = 0; state.awaitingReason = null; }
+
       const side = who(ev.username);
       if (side === 'other' || ev.isChat) { pushFeed(side, ev.text, true); return; }
 
       // Turn tracking
       if (/^Entered Draw Phase$/.test(ev.text) || /^Chose to go first$/.test(ev.text)) {
         state.turnHolder = side;
+      }
+
+      // Someone needs to act/decide right now (see AWAIT_WORDS above) —
+      // flip timer credit to whoever it is, for a bounded window, whether or
+      // not it's their turn. Set AFTER the clear above so it isn't
+      // immediately wiped by its own line. A repeat of the same trigger
+      // (e.g. clicking "Thinking" again before playing) just re-arms the
+      // same side's window instead of ending it. Note this clears on EVERY
+      // new real line (above) before this recomputes it — for 'handView'
+      // specifically, that's fine even though a hand-viewing session can
+      // outlast several real lines: the tick loop's DOM-based scan (see
+      // installHandViewScan below) re-asserts it every 200ms for as long as
+      // the "Viewing Opponent's Hand" panel is actually still open on
+      // screen, independent of whether any log lines happened in between —
+      // this line-driven path only matters for detecting when it STARTS, or
+      // for the side that can't see the panel at all (see that function's
+      // comment for why).
+      const awaitWord = matchAwaitWord(ev.text);
+      if (awaitWord && (side === 'me' || side === 'opp')) {
+        state.awaitingSide = awaitWord.credit === 'self' ? side : (side === 'me' ? 'opp' : 'me');
+        state.awaitingUntil = Date.now() + (awaitWord.timeoutMs || AWAIT_TIMEOUT_MS);
+        state.awaitingReason = awaitWord.reason || null;
       }
 
       // LP tracking
@@ -939,24 +1323,57 @@
     }
 
     // ── Timer tick loop ────────────────────────────────────────────────
+    // `stopped` lets teardownPreviousDuel() (see below) actually silence this
+    // instance's tick loop once a new match starts. Without this, an old
+    // match's loop just kept running forever in the background — nothing
+    // ever called clearInterval on it — even though its own panel had
+    // already been removed from the page. Since panel/timer/status elements
+    // are looked up fresh by id on every tick (see renderTimers etc.), and
+    // the NEW match's instance creates its own elements with those SAME
+    // ids, the old instance's stale tick loop kept writing its own frozen
+    // timer/feed/siding state into the new match's live DOM every 200ms —
+    // contributing to the reported flashing/changing-back-and-forth on top
+    // of the siding-hook stacking bug fixed above.
+    let stopped = false;
     let lastTick = Date.now();
     setInterval(() => {
+      if (stopped) return; // this instance was superseded by a newer match — do nothing, forever
       const now = Date.now();
       const dt = (now - lastTick) / 1000;
       lastTick = now;
 
       if (state.paused) { renderTimers(); return; }
 
-      state.myTimerRunning = (state.turnHolder === 'me') || (state.turnHolder === null);
+      // Re-asserts awaitingSide='me'/'handView' every tick for as long as
+      // "Viewing Opponent's Hand" is actually still open on screen, and
+      // scans the revealed cards into knownOppCards — see its own comment
+      // for why this needs to run before the awaitingLive check below.
+      installHandViewScan();
+
+      // A pending "someone needs to act/decide right now" window (see
+      // AWAIT_WORDS / applyEvent) overrides normal turn-based timer credit
+      // entirely while it's live — whoever needs to act gets the clock,
+      // regardless of whose turn it nominally is — and expires on its own
+      // via awaitingUntil if applyEvent's own clear-on-next-line never fires
+      // (e.g. the other side disconnects mid-resolution).
+      const awaitingLive = state.awaitingSide && now < state.awaitingUntil;
+      if (!awaitingLive && state.awaitingSide) { state.awaitingSide = null; state.awaitingUntil = 0; state.awaitingReason = null; }
+
+      state.myTimerRunning = awaitingLive
+        ? state.awaitingSide === 'me'
+        : ((state.turnHolder === 'me') || (state.turnHolder === null));
       if (state.myTimerRunning) state.myTimer += dt;
 
-      const oppLive = (state.turnHolder === 'opp') || (now < state.oppInterruptUntil);
+      const oppLive = awaitingLive
+        ? state.awaitingSide === 'opp'
+        : ((state.turnHolder === 'opp') || (now < state.oppInterruptUntil));
       state.oppTimerRunning = oppLive;
       if (oppLive) state.oppTimer += dt;
 
       renderTimers();
       maybePushLive(); // throttled to once/3s inside
       maybeCheckPendingSide(); // throttled to once/5s inside
+      installSidingHook(); // no-op once installed; retries cheaply until the page's own scripts define initializeDeckCards
     }, 200);
 
     // ── Overlay UI ───────────────────────────────────────────────────────
@@ -1106,16 +1523,26 @@
       reader.onload = function () {
         btn.disabled = true;
         btn.textContent = 'Resolving card names…';
-        buildDeckListFromYdk(String(reader.result), function (i, total) {
-          status.textContent = 'Looking up ' + i + '/' + total;
-        }).then(function (list) {
+        const ydkText = String(reader.result);
+        Promise.all([
+          buildDeckListFromYdk(ydkText, function (i, total) { status.textContent = 'Looking up ' + i + '/' + total + ' (main)'; }),
+          buildSideListFromYdk(ydkText, function (i, total) { status.textContent = 'Looking up ' + i + '/' + total + ' (side)'; })
+        ]).then(function (results) {
+          const list = results[0];
+          const sideList = results[1];
           btn.disabled = false;
           btn.textContent = '📤 Upload your deck (YDK)';
           state.myDeckList = list;
+          state.myDeckListOriginal = list; // this upload IS the new "original" — see the NOTE above loadMyDeckList
+          state.mySideList = sideList;
+          state.mySideListOriginal = sideList;
           state.myDeckRemaining = freshDeckRemaining();
           saveMyDeckList(list);
+          saveMySideList(sideList);
           const totalCards = list.reduce((s, c) => s + c.total, 0);
-          status.textContent = 'Loaded ' + list.length + ' unique card(s), ' + totalCards + ' total in main deck.';
+          const totalSide = sideList.reduce((s, c) => s + c.total, 0);
+          status.textContent = 'Loaded ' + list.length + ' unique card(s), ' + totalCards + ' total in main deck, '
+            + sideList.length + ' unique (' + totalSide + ' total) in side deck.';
           renderMyDeck();
           maybePushLive(true);
         }).catch(function (err) {
@@ -1199,9 +1626,25 @@
     // Called when a new GAME starts within the SAME match (e.g. game 2/3 of
     // a Bo3, or a replay after a draw) — resets everything that's specific
     // to one game (LP, timers, turn tracking, feed, and your own deck's
-    // remaining-copy counts, since the deck reshuffles every game) but
-    // deliberately leaves knownOppCards/oppUsername/myDeckList alone, since
-    // those describe the whole match, not one game of it.
+    // remaining-copy counts, since the deck reshuffles every game). The
+    // opponent's known-card LIST (which names have been seen at all, and
+    // each one's `max` — the highest count ever proven simultaneously out)
+    // deliberately survives, since that describes the whole match, not one
+    // game of it — same rule the site's own replay parser already uses: a
+    // card seen once across G1/G2/G3 counts once, and a card seen 2 at once
+    // in G1 plus 1 more in G3 counts 2 at most, never summed across games.
+    //
+    // What must NOT survive is each card's per-copy `records` (which zone
+    // each currently-tracked copy is guessed to be sitting in) — a new game
+    // is a freshly shuffled deck, so nothing from G1's board state is still
+    // "out" once G2 starts. Leaving `records` untouched here was a real bug:
+    // a copy still sitting in a leftover zone from the previous game could
+    // get treated as still-out and stack on top of a genuinely new reveal
+    // next game, inflating `max` past what was ever actually proven at once
+    // in any ONE game (the exact "2 Jar of Greed in G1 + 1 more in G3 must
+    // stay at 2, not reach 3" case). Clearing `records` while keeping `max`
+    // is what makes the running max correctly reflect "highest simultaneous
+    // count in a single game," never a cross-game sum.
     function resetForNewGame() {
       state.game = (state.game || 1) + 1;
       state.myLP = 8000;
@@ -1210,9 +1653,11 @@
       state.myTimer = 0; state.oppTimer = 0;
       state.myTimerRunning = true; state.oppTimerRunning = false;
       state.oppInterruptUntil = 0;
+      state.awaitingSide = null; state.awaitingUntil = 0; state.awaitingReason = null;
       state.feed = [];
       state.paused = false;
       state.myDeckRemaining = freshDeckRemaining();
+      state.knownOppCards.forEach((c) => { c.records = []; });
       // Creature Swap's control change doesn't survive a reshuffle — a new
       // game starts everyone back with their own deck.
       state.controlSwappedNames = new Set();
@@ -1237,7 +1682,10 @@
       return state.myWins >= 2 || state.oppWins >= 2;
     }
 
-    return { applyEvent, resetForNewGame, setPaused, setMatchConcluded, isMatchDecided };
+    return {
+      applyEvent, resetForNewGame, setPaused, setMatchConcluded, isMatchDecided,
+      stop: () => { stopped = true; }, // called by teardownPreviousDuel() when a newer match instance takes over
+    };
   }
 
   // ── Wire the log watcher up to a #duel_log element ──────────────────────
@@ -1417,13 +1865,17 @@
     const oldPanel = document.getElementById('dt-live-tracker-panel');
     if (oldPanel) oldPanel.remove();
     if (activeLogObserver) { activeLogObserver.disconnect(); activeLogObserver = null; }
+    // Actually stop the previous match's tick loop (timers/render/siding-hook
+    // poll) instead of just removing its panel — otherwise it keeps running
+    // forever in the background and stomping the new match's live DOM/state.
+    if (activeTracker && activeTracker.stop) activeTracker.stop();
   }
 
   function beginTrackingForNewDuel(myUsername, opts) {
     matchConcluded = false;
     teardownPreviousDuel();
     console.log('[Duel Tools Tracker] starting a fresh tracker for this match, as', myUsername);
-    const tracker = startTracker(myUsername, loadMyDeckList());
+    const tracker = startTracker(myUsername, loadMyDeckList(), loadMySideList());
     activeTracker = tracker;
     ensureDuelLogOpen(function (duelLogEl) {
       // baselineCount, when the caller captured one up front (see

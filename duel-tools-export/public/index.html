@@ -15191,21 +15191,25 @@ function igtSpReset() {
 // send it — the tracker picks it up within a few seconds and applies it as
 // this match's decklist from then on (kept for every future game, exactly
 // like a re-uploaded YDK, until pushed again or the match ends).
-function igtSpPushToTracker() {
-  if (!_igtLiveCode) { st('Connect to Live Sync first (on the My Tracker or Opp Tracker tab)', 'var(--amber)'); return; }
-  if (!_igtSpState) igtSpInit();
+function igtSpGroupCards(cards) {
   const grouped = {};
-  _igtSpState.main.forEach(c => {
+  cards.forEach(c => {
     const key = (c.id || '') + '|' + c.name;
     if (!grouped[key]) grouped[key] = { id: c.id, name: c.name, type: c.type || '', total: 0 };
     grouped[key].total++;
   });
-  const main = Object.values(grouped);
+  return Object.values(grouped);
+}
+function igtSpPushToTracker() {
+  if (!_igtLiveCode) { st('Connect to Live Sync first (on the My Tracker or Opp Tracker tab)', 'var(--amber)'); return; }
+  if (!_igtSpState) igtSpInit();
+  const main = igtSpGroupCards(_igtSpState.main);
+  const side = igtSpGroupCards(_igtSpState.side); // sent alongside main so the Side Deck panel stays accurate too, not just Main
   if (!main.length) { st('Nothing in MAIN DECK (POST-SIDE) to push', 'var(--amber)'); return; }
   fetch(`${API}/live/${_igtLiveCode}/side`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ main })
+    body: JSON.stringify({ main, side })
   }).then(res => {
     if (!res.ok) throw new Error('bad status');
     st('Sent to Live Tracker — applies automatically within a few seconds, in time for the next game', 'var(--green)');
@@ -15454,6 +15458,7 @@ let _igtLiveNameIdCache = {};  // lowercased card name -> ygoprodeck id, or null
 let _igtLiveLastData = null;   // most recent snapshot, kept around for igtExportImage()
 let _igtLiveMatchStartedAt = null; // the tracker's matchStartedAt we last saw — a change means a brand-new match
 let _igtLiveResultsRecorded = 0;   // how many of data.gameResults we've already copied into _igtMtResults
+let _igtLiveOriginalDeck = null;   // {main, side} — the as-uploaded G1 decklist, from data.myDeckOriginal/mySideOriginal, kept fresh every poll so disconnect can actually restore it (see igtLiveDisconnect)
 
 // Manual overrides layered on top of Live Sync's own data — for the cases
 // the DuelingBook log genuinely can't tell us (a card revealed by an effect
@@ -15517,6 +15522,17 @@ function igtLiveDisconnect() {
   localStorage.removeItem('dt_live_pair_code');
   igtLiveSetButtons(false);
   igtLiveSetStatus('Disconnected', 'var(--muted)');
+  // Put Main/Side back to the actual as-uploaded G1 decklist instead of
+  // leaving them stuck on whatever the last live snapshot showed (which,
+  // mid-siding, is the POST-swap composition) — previously the only way
+  // back was re-uploading the YDK in the tracker itself. _igtLiveOriginalDeck
+  // is kept fresh every poll straight from the tracker's own untouched
+  // upload, so this is the real G1 decklist, not a guess.
+  if (_igtLiveOriginalDeck) {
+    _igtDeck.main = _igtLiveOriginalDeck.main;
+    _igtDeck.side = _igtLiveOriginalDeck.side;
+    _igtLiveOriginalDeck = null;
+  }
   igtMtRender();      // fall back to manual state for both tabs
   igtOtRenderTiles();
 }
@@ -15544,8 +15560,17 @@ async function igtLivePoll() {
   // straight from your uploaded YDK), so it renders immediately and never
   // waits on — or gets blocked by — opponent name resolution below.
   try {
-    igtLiveSyncMyDeckIntoBuilder(data.myDeck || []);
+    igtLiveSyncMyDeckIntoBuilder(data.myDeck || [], data.mySide || []);
     igtLiveRenderMyTracker(data);
+    igtLiveRenderMySide(data);
+    // Keep the "actual G1 decklist" snapshot fresh every poll (not just at
+    // connect time) so a disconnect at ANY point in the match — mid-siding,
+    // mid-G2, whenever — still has a real target to restore to. Only
+    // replaced once both arrays are non-empty, so a hiccuped/older-tracker
+    // poll that's missing these fields can't wipe out a good snapshot.
+    if ((data.myDeckOriginal && data.myDeckOriginal.length) || (data.mySideOriginal && data.mySideOriginal.length)) {
+      _igtLiveOriginalDeck = { main: data.myDeckOriginal || [], side: data.mySideOriginal || [] };
+    }
   } catch (e) { console.warn('[Live Sync] My Tracker render failed:', e); }
   // Keeps the G1/G2/G3(+) tab and WIN/LOSS history following the match
   // automatically — own try/catch so a hiccup here never blocks a render.
@@ -15659,11 +15684,28 @@ async function igtLiveResolveNames(cards) {
   }));
 }
 
-// Keeps _igtDeck.main mirroring the live-tracked decklist so other features
-// that read from it (Decklist Image export in particular) stay in sync
-// without a separate manual YDK import.
-function igtLiveSyncMyDeckIntoBuilder(deck) {
+// Keeps _igtDeck.main/.side mirroring the live-tracked decklist so other
+// features that read from it (Decklist Image export in particular) stay in
+// sync without a separate manual YDK import. side used to be silently
+// skipped here — the tracker never sent side-deck data at all — which is
+// why the Side Deck panel never reflected an actual in-duel siding swap and
+// just stayed frozen on whatever a manual import last put there.
+function igtLiveSyncMyDeckIntoBuilder(deck, side) {
   _igtDeck.main = deck.map(c => ({ id: c.id, name: c.name, type: c.type || '', qty: c.total }));
+  _igtDeck.side = (side || []).map(c => ({ id: c.id, name: c.name, type: c.type || '', qty: c.total }));
+}
+
+// Renders the Side Deck section from Live Sync's own data — reuses the same
+// flat one-tile-per-copy look igtMtRenderSection already gives the manual
+// (Deck Builder import) path, so a side-deck tile reads the same whichever
+// source put it there. Deliberately simpler than igtLiveRenderMyTracker:
+// side cards are never zone-tagged (they just sit in the side pile — never
+// drawn, played, or sent to the graveyard while they're still there).
+function igtLiveRenderMySide(data) {
+  if (!document.getElementById('igt-mt-side-tiles')) return;
+  const side = data.mySide || [];
+  const flat = side.flatMap(c => Array(c.total).fill(null).map(() => ({ id: c.id, name: c.name, type: c.type || '' })));
+  igtMtRenderSection(flat, 'igt-mt-side-tiles', 'igt-mt-side-count', _igtMtStates[_igtMtGame] || {});
 }
 
 // Renders one tile per copy, tagged with whichever zone the tracker last saw
