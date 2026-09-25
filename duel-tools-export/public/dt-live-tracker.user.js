@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Duel Tools — Live Tracker
 // @namespace    http://tampermonkey.net/
-// @version      0.11
+// @version      0.13
 // @description  Watches the in-page Duel Log during a live match to drive dual action timers, known-card tracking, a YDK export of the opponent's revealed cards, and live sync to the Duel Tools website's My Tracker / Opp Tracker.
 // @author       Kerem's Duel Tools
 // @match        https://www.duelingbook.com/*
@@ -757,6 +757,27 @@
       return entry;
     }
 
+    // Trap Dustshoot failsafe — see the chat-parsing hook in applyEvent for
+    // the full explanation. Removes exactly one 'hand' record for the named
+    // card (case-insensitive: this comes from someone typing it by hand),
+    // leaving `max` untouched — the peak copy count already proved this
+    // exact card exists, this just corrects WHERE the last known copy went
+    // (back to a shuffled deck, no longer a hand secret). Returns false
+    // (and changes nothing) if there's no matching name, or the matching
+    // entry has no 'hand' record to remove — e.g. a typo, or the card was
+    // already reconciled some other way — so a bad manual note can't
+    // silently corrupt a DIFFERENT zone's count.
+    function removeKnownOppHandCard(rawName) {
+      const name = rawName.trim();
+      if (!name) return false;
+      const entry = state.knownOppCards.find((c) => c.name.toLowerCase() === name.toLowerCase());
+      if (!entry) return false;
+      const idx = entry.records.lastIndexOf('hand');
+      if (idx < 0) return false;
+      entry.records.splice(idx, 1);
+      return true;
+    }
+
     // Rough LP-based "who's ahead" estimate — NOT a real win probability
     // (that would need board state, hand size, resources, etc.), just a
     // clearly-labeled edge indicator: 50/50 at even LP, saturating toward
@@ -1083,6 +1104,7 @@
       return changed;
     }
     let handViewWasOpen = false; // edge-detects the panel closing, so credit can clear immediately instead of riding out handView's full 2-minute safety timeout
+    let handViewOpenedAt = 0;
     function installHandViewScan() {
       const panel = findViewingHandPanel();
       if (!panel) {
@@ -1096,7 +1118,8 @@
         handViewWasOpen = false;
         return;
       }
-      handViewWasOpen = true;
+      const now = Date.now();
+      if (!handViewWasOpen) { handViewWasOpen = true; handViewOpenedAt = now; }
       // Re-assert every tick the panel stays open — this is what lets
       // credit survive real log lines that happen mid-view (see the
       // comment on the AWAIT_WORDS match in applyEvent above), since that
@@ -1105,7 +1128,25 @@
       // still on screen.
       state.awaitingSide = 'me';
       state.awaitingReason = 'handView';
-      state.awaitingUntil = Date.now() + 120000;
+      state.awaitingUntil = now + 120000;
+      // CONFIRMED BUG (reported live): the panel's card list is a REVEAL —
+      // a one-time snapshot of what was in hand at the moment it opened —
+      // not a live view that tracks the hand afterward. Re-scanning it every
+      // tick for as long as it's visually still open used to blindly
+      // re-assert "still in hand" for every name still rendered there, even
+      // after a REAL log line (e.g. a Normal Summon) had already moved that
+      // exact copy to another zone moments later — because DuelingBook
+      // doesn't retroactively remove a card from this panel's DOM just
+      // because it was subsequently played. That produced exactly the
+      // reported duplicate: a card correctly flipped hand->field by the
+      // Summon line, then silently flipped BACK to an extra 'hand' record on
+      // the very next 200ms tick, since the (now stale) panel still listed
+      // its name. Scanning only once, in a short window right after the
+      // panel is first detected open (covers the DOM's cards populating a
+      // beat after the panel itself appears), fixes this: later real zone
+      // moves for the same name are never stomped by this stale snapshot
+      // again for the rest of that same open/close cycle.
+      if (now - handViewOpenedAt > 1000) return;
       const names = Array.from(panel.querySelectorAll('.card.target .cardfront_content .name_txt'))
         .map((el) => el.textContent.trim())
         .filter(Boolean);
@@ -1180,6 +1221,47 @@
       if (state.awaitingSide) { state.awaitingSide = null; state.awaitingUntil = 0; state.awaitingReason = null; }
 
       const side = who(ev.username);
+
+      // Trap Dustshoot failsafe: "You can activate this card only when your
+      // opponent has 4 or more cards in their hand. Look at your opponent's
+      // hand, then select 1 Monster Card and return it to its owner's Deck.
+      // The Deck is then shuffled." DuelingBook's log spells out a clean
+      // "Discarded X to GY" for a NORMAL Dustshoot resolution, but when the
+      // chosen card instead goes back to the deck, there's no equivalent
+      // "Returned X to Deck (shuffled)"-with-a-name line to auto-parse —
+      // just the shuffle itself, with no card name attached. Without some
+      // way to say which card it was, that copy stays stuck showing
+      // "IN HAND — KNOWN" forever even though it's back in a shuffled deck
+      // and no longer knowable at all.
+      //
+      // The fix is a manual failsafe: whoever activated Dustshoot (always
+      // ME here — Dustshoot only ever targets MY opponent's hand from this
+      // client's point of view, never my own) types the exact chosen name
+      // in chat as "<Name>" back (quotes included) once they've made the
+      // choice. Only MY OWN chat is ever eligible (an opponent typing this
+      // about their own view of MY hand has nothing to correct here — my
+      // own hand/deck is already tracked exactly via real draw/play lines,
+      // never guesswork).
+      if (ev.isChat && side === 'me') {
+        // ev.text for a chat line is the RAW logged text, and DuelingBook
+        // itself wraps the whole thing in its own outer pair of quotes
+        // (that's literally what isChat's own /^".*"$/ test detects) — so
+        // typing "<Name>" back in the chat box actually logs as
+        // '"' + '"<Name>" back' + '"', i.e. a leading and trailing quote
+        // from DuelingBook wrapped AROUND the player's own quotes. Strip
+        // that outer DuelingBook wrapper first so the inner "<Name>" back
+        // pattern below is matched against what the player actually typed,
+        // not against a string starting with two consecutive quote marks.
+        const raw = ev.text.trim();
+        const chatBody = (raw.length >= 2 && raw[0] === '"' && raw[raw.length - 1] === '"')
+          ? raw.slice(1, -1).trim()
+          : raw;
+        const backM = /^"([^"]+)"\s*back\b/i.exec(chatBody);
+        if (backM && removeKnownOppHandCard(backM[1])) {
+          maybePushLive(true);
+        }
+      }
+
       if (side === 'other' || ev.isChat) { pushFeed(side, ev.text, true); return; }
 
       // Turn tracking

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Duel Tools — Privacy Policy</title>
+<style>
+  :root{
+    --bg:#06060c;--panel:#0e0e1a;--card:#131320;
+    --border:#252538;--text:#ffffff;--muted:#ccccdd;--dim:#6a6a8a;--green:#00e596;
+  }
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--text);font-family:'Courier New',monospace}
+  body{line-height:1.6;padding:40px 20px 80px}
+  .wrap{max-width:760px;margin:0 auto}
+  h1{color:var(--green);font-size:22px;letter-spacing:.06em;margin-bottom:6px}
+  .updated{color:var(--dim);font-size:12px;margin-bottom:32px}
+  h2{color:var(--green);font-size:15px;letter-spacing:.05em;margin:32px 0 10px;text-transform:uppercase}
+  p,li{color:var(--muted);font-size:14px;margin-bottom:10px}
+  ul{margin-left:20px;margin-bottom:10px}
+  a{color:var(--green)}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:16px 20px;margin-bottom:10px}
+  .foot{color:var(--dim);font-size:12px;margin-top:40px;border-top:1px solid var(--border);padding-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>DUEL TOOLS — PRIVACY POLICY</h1>
+  <div class="updated">Last updated: September 25, 2026</div>
+
+  <p>Duel Tools (the "Live Tracker" browser extension and this companion site) is a fan-made
+  tool for tracking Yu-Gi-Oh! Goat Format duels on DuelingBook.com. This page explains what
+  data it touches, where it goes, and what it's used for.</p>
+
+  <h2>What stays on your device</h2>
+  <div class="card">
+    <p>Your DuelingBook username, deck/side lists, and tracker preferences are stored locally
+    in your browser (via <code>chrome.storage</code>). This data never leaves your device
+    unless Live Sync (below) is turned on, and is cleared if you remove the extension.</p>
+  </div>
+
+  <h2>What Live Sync sends to our server</h2>
+  <div class="card">
+    <p>When you turn on Live Sync, the extension reads the duel page you're already looking
+    at — the game log, and which zone each card is in (hand, field, graveyard, banished,
+    etc.) — and sends that match state to our own server
+    (<code>duel-tools-kerem-production.up.railway.app</code>) so it can power the live
+    tracker view on this site. This is the same information already visible on your screen
+    during the duel; nothing is read from anywhere else.</p>
+    <p>Live match data is used only to display your tracker and your opponent's tracker
+    while a duel is in progress. It is not sold, shared with advertisers, or used for
+    anything beyond that feature.</p>
+  </div>
+
+  <h2>What we never see or collect</h2>
+  <ul>
+    <li>Your DuelingBook password, account settings, or login credentials</li>
+    <li>Any activity outside DuelingBook.com — the extension does nothing on other sites</li>
+    <li>Payment information, real names, or other personal identifiers</li>
+    <li>Analytics, advertising trackers, or any data sold to third parties</li>
+  </ul>
+
+  <h2>Third-party lookups</h2>
+  <p>The extension looks up card details (name, type, etc.) from the public
+  <a href="https://db.ygoprodeck.com" target="_blank" rel="noopener">YGOPRODeck</a> card
+  database by card name only. No personal or account data is attached to these requests.</p>
+
+  <h2>Access</h2>
+  <p>This extension is distributed privately to a specific group of approved players and is
+  not available to the general public.</p>
+
+  <h2>Changes</h2>
+  <p>If this policy changes, the update will be posted on this page with a revised date
+  above.</p>
+
+  <div class="foot">
+    Questions about this policy or your data? Contact
+    <a href="mailto:arinakkent@gmail.com">arinakkent@gmail.com</a>.
+  </div>
+</div>
+</body>
+</html>
