@@ -5,6 +5,7 @@ const http   = require('http');
 const fs     = require('fs');
 const path   = require('path');
 const crypto = require('crypto');
+const zlib   = require('zlib');
 
 const PORT    = process.env.PORT || 8000;
 const DB_FILE = path.join(__dirname, 'duel-tools.db.json');
@@ -546,9 +547,31 @@ const MIME = {
   '.html':'text/html','.js':'application/javascript','.css':'text/css',
   '.json':'application/json','.png':'image/png','.ico':'image/x-icon','.svg':'image/svg+xml'
 };
+// Response bodies here can run from a few bytes ({ok:true}) up to several
+// MB (a full batch with many un-migrated legacy replays). Gzip cuts JSON
+// text by roughly 70-85%, which matters most on exactly the big payloads
+// that were making pages feel slow — so compress whenever the client
+// supports it, skipping only trivially small bodies where gzip's own
+// overhead isn't worth it.
+function acceptsGzip(res) {
+  try { return /gzip/.test((res.req && res.req.headers['accept-encoding']) || ''); }
+  catch(e) { return false; }
+}
 function json(res, status, data) {
-  res.writeHead(status, { 'Content-Type':'application/json','Access-Control-Allow-Origin':'*' });
-  res.end(JSON.stringify(data));
+  const body = Buffer.from(JSON.stringify(data));
+  const headers = { 'Content-Type':'application/json','Access-Control-Allow-Origin':'*' };
+  if (body.length > 800 && acceptsGzip(res)) {
+    zlib.gzip(body, (err, compressed) => {
+      if (err) { res.writeHead(status, headers); res.end(body); return; }
+      headers['Content-Encoding'] = 'gzip';
+      headers['Vary'] = 'Accept-Encoding';
+      res.writeHead(status, headers);
+      res.end(compressed);
+    });
+  } else {
+    res.writeHead(status, headers);
+    res.end(body);
+  }
 }
 function readBody(req, cb) {
   let raw = '';
@@ -835,6 +858,7 @@ setInterval(() => {
 
 // ── HTTP server ───────────────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {
+  res.req = req; // lets json()/static serving check this request's Accept-Encoding
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
@@ -848,16 +872,29 @@ const server = http.createServer(async (req, res) => {
   if (!url.pathname.startsWith('/api/')) {
     let filePath = path.join(PUB_DIR, url.pathname === '/' ? 'index.html' : url.pathname);
     if (!filePath.startsWith(PUB_DIR)) { res.writeHead(403); res.end(); return; }
+    const sendFile = (data, contentType) => {
+      // index.html alone is ~900KB of HTML/JS served fresh on every visit —
+      // gzip shrinks text like this by 70%+, which is most of what made
+      // the page feel slow to even start loading right after sign-in.
+      if (data.length > 800 && acceptsGzip(res)) {
+        zlib.gzip(data, (err, compressed) => {
+          if (err) { res.writeHead(200, { 'Content-Type': contentType }); res.end(data); return; }
+          res.writeHead(200, { 'Content-Type': contentType, 'Content-Encoding': 'gzip', 'Vary': 'Accept-Encoding' });
+          res.end(compressed);
+        });
+      } else {
+        res.writeHead(200, { 'Content-Type': contentType });
+        res.end(data);
+      }
+    };
     try {
       const data = fs.readFileSync(filePath);
       const ext  = path.extname(filePath);
-      res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
-      res.end(data);
+      sendFile(data, MIME[ext] || 'application/octet-stream');
     } catch(e) {
       try {
         const data = fs.readFileSync(path.join(PUB_DIR, 'index.html'));
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end(data);
+        sendFile(data, 'text/html');
       } catch(e2) { res.writeHead(404); res.end('Not found'); }
     }
     return;

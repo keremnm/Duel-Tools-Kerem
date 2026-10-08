@@ -10396,7 +10396,7 @@ async function migrateReplayToParseFormat(r, parsedMatch, batch) {
   } catch(e) { console.warn('[migrate] Failed to save parsed for', r.replayId, e.message); }
 }
 
-function buildMatchRecord(replayResult, player, aliases) {
+function buildMatchRecord(replayResult, player, aliases, batch) {
   const replayId = replayResult.replayId || '';
 
   // Check event decklist for deck type override (works even without myDeckOverride)
@@ -10472,6 +10472,15 @@ function buildMatchRecord(replayResult, player, aliases) {
     return null;
   }
   const parsed = parseMatch(replayResult.replayId, plays, player, aliases, replayResult.player1||null, replayResult.player2||null);
+  // Self-heal: this replay is still in the old raw-allPlays format (no
+  // .parsed saved), so every future load would re-run the expensive parse
+  // above all over again. Persist the parsed result now (same mechanism the
+  // single-replay "re-parse" action and the active-batch matchup view already
+  // use) so subsequent loads — including other users' — hit the fast path.
+  // Fire-and-forget: never block rendering on this, and only when the caller
+  // actually has the batch this replay lives in (most buildMatchRecord call
+  // sites don't pass one, and that's fine — they just don't self-heal).
+  if (parsed && batch && batch.id) migrateReplayToParseFormat(replayResult, parsed, batch);
   // Even if parse fails, try to build a basic record from play data
   if (!parsed) {
     // Try to extract basic match info from RPS plays
@@ -10628,7 +10637,7 @@ async function loadGlobalRecords() {
         const aliases = (window._playerRegistry && window._playerRegistry[player.toLowerCase()])
           ? (window._playerRegistry[player.toLowerCase()].aliases||[]) : (full.aliases||[]);
         for (const rep of (full.replays||[])) {
-          const rec = buildMatchRecord(rep, player, aliases);
+          const rec = buildMatchRecord(rep, player, aliases, full);
           if (rec) records.push(rec);
         }
       } catch(e) {}
@@ -16157,8 +16166,13 @@ async function initApp() {
   wireUrlsInput();
   renderTopPlayers();
   loadBatches();
-  // Pre-load global records for Deck Data tab
-  loadGlobalRecords().then(() => renderGlobalMatchups('All'));
+  // Deck Data tab's global records are loaded lazily — switchTab('deckdata')
+  // and ddSwitchTab() both already fetch them on first visit (see below).
+  // Eagerly fetching every saved batch's FULL contents here on every single
+  // page load (regardless of whether the user ever opens Deck Data) was the
+  // main cause of slow post-sign-in loads: it fires one GET /api/batches/:id
+  // per batch, in parallel, for everyone, every time — competing with
+  // loadBatches()/loadProfiles() for the same server and connection pool.
   // Profiles is the landing page
   const firstTab = document.querySelector('.ntab');
   switchTab('profiles', firstTab);
