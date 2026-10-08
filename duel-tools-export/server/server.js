@@ -20,7 +20,7 @@ const BOOTSTRAP_PASSWORD = process.env.ADMIN_PASSWORD || 'ilovesui';
 
 // ── DB ────────────────────────────────────────────────────────────────────────
 let pgClient = null;
-let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {} };
+let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {}, replayCache: {} };
 
 async function connectPostgres() {
   const { Client } = require('pg');
@@ -44,11 +44,25 @@ async function connectPostgres() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  // Caches the result of GET /api/proxy/replay (the CapSolver/Turnstile-solved
+  // DuelingBook fetch) by replay id, so re-analyzing or re-importing the same
+  // replay — by the same user or a different one — never has to pay the
+  // 5-90s CapSolver solve+poll dance twice. Best-effort only: see cacheReplay.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS duel_tools_replay_cache (
+      id TEXT PRIMARY KEY,
+      value JSONB NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
   const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('players','users','gfwl','eventDates')");
   for (const row of res.rows) { db[row.key] = row.value; }
   const batchRes = await client.query('SELECT id, value FROM duel_tools_batches');
   db.batches = {};
   for (const row of batchRes.rows) { db.batches[row.id] = row.value; }
+  const replayCacheRes = await client.query('SELECT id, value FROM duel_tools_replay_cache');
+  db.replayCache = {};
+  for (const row of replayCacheRes.rows) { db.replayCache[row.id] = row.value; }
   // Migrate any legacy batches still stored under the old single-blob key
   const legacyRes = await client.query("SELECT value FROM duel_tools_data WHERE key='batches'");
   if (legacyRes.rows.length && legacyRes.rows[0].value && Object.keys(legacyRes.rows[0].value).length) {
@@ -66,6 +80,7 @@ async function connectPostgres() {
   if (!db.users)   db.users   = {};
   if (!db.gfwl)    db.gfwl    = {};
   if (!db.eventDates) db.eventDates = {};
+  if (!db.replayCache) db.replayCache = {};
   pgClient = client;
   // Handle PG client-level errors (e.g. connection dropped by server)
   // Without this, 'error' events on the pg client crash Node
@@ -175,6 +190,7 @@ function loadFileDB() {
       if (!db.users)   db.users   = {};
       if (!db.gfwl)    db.gfwl    = {};
       if (!db.eventDates) db.eventDates = {};
+      if (!db.replayCache) db.replayCache = {};
     }
   } catch(e) { console.error('File DB load error:', e.message); }
 }
@@ -356,6 +372,32 @@ async function deleteBatchFromPostgres(batchId) {
   if (!pgClient) return;
   try { await pgClient.query('DELETE FROM duel_tools_batches WHERE id=$1', [batchId]); }
   catch(e) { console.error('[deleteBatch] Failed for', batchId, ':', e.message); }
+}
+
+// ── Replay cache — avoids re-running the CapSolver/Turnstile dance (often
+// 5-90s) for a replay id we've already fetched once, for ANY user. A cache
+// miss just falls back to the normal slow path, so this is best-effort: it
+// never blocks a response, and a failed write here is not a data-loss risk
+// the way a failed batch save would be — so it deliberately does NOT use the
+// heavier pending-flush/retry machinery batches use.
+async function cacheReplay(replayId, replayData) {
+  db.replayCache[replayId] = replayData;
+  if (pgClient) {
+    try {
+      const serialized = JSON.stringify(replayData);
+      if (serialized.length > 8*1024*1024) {
+        console.warn('[replayCache] Replay', replayId, 'too large to cache:', Math.round(serialized.length/1024)+'KB — skipped');
+        return;
+      }
+      await pgClient.query(
+        'INSERT INTO duel_tools_replay_cache (id, value, updated_at) VALUES ($1,$2,NOW()) ON CONFLICT (id) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()',
+        [replayId, serialized]
+      );
+    } catch(e) { console.warn('[replayCache] Failed to persist', replayId, ':', e.message); }
+  }
+  // File-DB mode (local dev only — Railway always sets DATABASE_URL): no
+  // separate write needed. db.replayCache rides along inside the full `db`
+  // object the next time anything calls saveDB() and writes the json file.
 }
 
 async function saveDB(keys) {
@@ -2008,6 +2050,17 @@ const server = http.createServer(async (req, res) => {
     const replayId = url.searchParams.get('id');
     if (!replayId) return json(res, 400, { error: 'id required' });
 
+    // Serve from cache if we've already solved Turnstile and fetched this
+    // exact replay before — for anyone. This is the single biggest win for
+    // "loading in new parsed replays" feeling slow: a fresh CapSolver solve
+    // can take anywhere from 5 to 90 seconds, and the same replay id often
+    // gets fetched more than once (re-analysis, a different user importing
+    // the same match, a retry after an unrelated error).
+    const _cachedReplay = db.replayCache[replayId];
+    if (_cachedReplay && (_cachedReplay.plays||[]).length) {
+      return json(res, 200, { ok: true, replay: _cachedReplay, cached: true });
+    }
+
     const CAPSOLVER_API_KEY = process.env.CAPSOLVER_API_KEY;
     const TURNSTILE_SITE_KEY = '0x4AAAAAAC17T9xSOtcacJq5';
     const DUELINGBOOK_URL = 'https://www.duelingbook.com';
@@ -2172,6 +2225,7 @@ ${value}
         if (retryData.action === 'Error') throw new Error('Duelingbook error (after retry): ' + retryData.message);
         if (!retryData.plays && !retryData.action) throw new Error('Duelingbook returned unexpected response on retry');
         console.log(`[proxy/replay] Retry succeeded for ${replayId}`);
+        if ((retryData.plays||[]).length) cacheReplay(replayId, retryData);
         return json(res, 200, { ok: true, replay: retryData });
       }
 
@@ -2210,6 +2264,7 @@ ${value}
         });
         console.log(`[proxy/replay] master=true retry for ${replayId} — ${(masterData.plays||[]).length} plays. Keys:`, Object.keys(masterData));
         if ((masterData.plays||[]).length > 0) {
+          cacheReplay(replayId, masterData);
           return json(res, 200, { ok: true, replay: masterData });
         }
         // Still 0 plays — return what we have (may have other useful fields)
@@ -2217,6 +2272,7 @@ ${value}
         return json(res, 200, { ok: true, replay: replayData });
       }
 
+      cacheReplay(replayId, replayData);
       return json(res, 200, { ok: true, replay: replayData });
 
     } catch(e) {

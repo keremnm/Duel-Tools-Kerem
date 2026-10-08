@@ -12599,7 +12599,7 @@ async function loadStats() {
       })();
       for (const r of (batch.replays||[])) {
         try {
-          const rec = buildMatchRecord(r, player, _batchAliases);
+          const rec = buildMatchRecord(r, player, _batchAliases, batch);
           if (rec) allRecords.push(rec);
         } catch(e) { console.warn('buildMatchRecord failed for', r.replayId, e.message); }
       }
@@ -12698,7 +12698,7 @@ async function loadPlayerStats(player, batches) {
           return (window._playerRegistry && window._playerRegistry[key])
             ? (window._playerRegistry[key].aliases||[]) : (batch.aliases||[]);
         })();
-        const m=buildMatchRecord(r,player,_lpsAliases); if(m) records.push(m);
+        const m=buildMatchRecord(r,player,_lpsAliases,batch); if(m) records.push(m);
       }
     }
   }
@@ -13443,7 +13443,12 @@ async function openProfile(player, batches, records) {
     })();
     for (const batch of batches) {
       for (const r of (batch.replays||[])) {
-        const m = buildMatchRecord(r, player, _openAliases);
+        // Pass the batch so any still-legacy (raw allPlays, un-migrated)
+        // replay gets self-healed to the fast pre-parsed format right here —
+        // same mechanism as loadGlobalRecords(). Without this, a profile
+        // with old data re-pays the full parse cost on every single open,
+        // by every user, forever.
+        const m = buildMatchRecord(r, player, _openAliases, batch);
         if (m) records.push(m);
       }
     }
