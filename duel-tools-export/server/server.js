@@ -2044,6 +2044,120 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // ── Format Library scraper (miner+) ─────────────────────────────────────────
+  // Uses a bearer token copied from a logged-in formatlibrary.com session
+  // (FORMATLIBRARY_TOKEN env var on Railway — FL_TOKEN also accepted as an
+  // alias) — same idea as DUELINGBOOK_SESSION_COOKIE, and it expires the
+  // same way. Every FL call below returns a distinct, visible error (not
+  // just a server log line) the moment FL responds 401, so a dead token is
+  // obvious to whoever is running the import, not just to whoever happens
+  // to check Railway logs.
+  function flToken() { return process.env.FORMATLIBRARY_TOKEN || process.env.FL_TOKEN; }
+  function flApiRequest(path) {
+    return new Promise((resolve, reject) => {
+      const https = require('https');
+      const req2 = https.request({
+        hostname: 'formatlibrary.com', path, method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer ' + flToken(),
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36',
+          'Referer': 'https://formatlibrary.com/replays/',
+          'Origin': 'https://formatlibrary.com',
+        }
+      }, (r2) => {
+        let buf = ''; r2.on('data', d => buf += d);
+        r2.on('end', () => resolve({ status: r2.statusCode, body: buf }));
+      });
+      req2.on('error', reject);
+      req2.setTimeout(15000, () => { req2.destroy(); reject(new Error('timeout')); });
+      req2.end();
+    });
+  }
+  const FL_EXPIRED_MSG = 'Format Library token expired or invalid — log back into formatlibrary.com, grab a fresh Authorization header (F12 → Network → any subscriber request → copy the header value), and update FORMATLIBRARY_TOKEN on Railway.';
+
+  // ── GET /api/proxy/fl-replays?player=:name ──────────────────────────────────
+  // Paginates FL's own replay-subscriber API exactly like the standalone
+  // Python scraper did, filtered down to GOAT-format rows.
+  if (parts[0]==='proxy' && parts[1]==='fl-replays' && method==='GET') {
+    if (!isMiner(req)) return json(res, 403, { error: 'Miners and above only' });
+    if (!flToken()) return json(res, 500, { error: 'FORMATLIBRARY_TOKEN not set in environment' });
+    const player = url.searchParams.get('player');
+    if (!player) return json(res, 400, { error: 'player required' });
+    try {
+      const replays = [];
+      let page = 1;
+      while (true) {
+        const qs = new URLSearchParams({ page: String(page), limit: '10', sort: 'publishDate:desc,display:desc,roundAbs:desc', filter: 'player:or:' + player });
+        const { status, body } = await flApiRequest('/api/replays/subscriber?' + qs.toString());
+        if (status === 401) return json(res, 401, { error: FL_EXPIRED_MSG });
+        if (status !== 200) return json(res, 502, { error: 'Format Library returned status ' + status });
+        let rows;
+        try { rows = JSON.parse(body); } catch(e) { return json(res, 502, { error: 'Format Library returned a non-JSON response' }); }
+        if (!Array.isArray(rows) || !rows.length) break;
+        for (const row of rows) {
+          if ((row.formatName||'').toLowerCase() !== 'goat') continue;
+          replays.push({
+            eventId: row.eventAbbreviation || '',
+            replayLink: row.url || '',
+            round: row.roundName || '',
+            winningPlayer: row.winnerName || '', winningDeck: row.winningDeckTypeName || '',
+            losingPlayer: row.loserName || '', losingDeck: row.losingDeckTypeName || '',
+            date: (row.publishDate||'').slice(0, 10),
+          });
+        }
+        if (rows.length < 10) break;
+        page++;
+        await new Promise(r => setTimeout(r, 250));
+      }
+      return json(res, 200, { ok: true, replays });
+    } catch(e) {
+      return json(res, 502, { error: 'Format Library request failed: ' + e.message });
+    }
+  }
+
+  // ── GET /api/proxy/fl-event/:eventId?player=:name ───────────────────────────
+  // Looks up one event's top decks and returns the deck belonging to :player,
+  // if any (matched the same way the standalone script matched it — case
+  // insensitive, underscores treated as spaces).
+  if (parts[0]==='proxy' && parts[1]==='fl-event' && parts[2] && method==='GET') {
+    if (!isMiner(req)) return json(res, 403, { error: 'Miners and above only' });
+    if (!flToken()) return json(res, 500, { error: 'FORMATLIBRARY_TOKEN not set in environment' });
+    const eventId = decodeURIComponent(parts[2]);
+    const player = (url.searchParams.get('player')||'').toLowerCase().replace(/_/g, ' ');
+    try {
+      const { status, body } = await flApiRequest('/api/events/subscriber/' + encodeURIComponent(eventId));
+      if (status === 401) return json(res, 401, { error: FL_EXPIRED_MSG });
+      if (status !== 200) return json(res, 502, { error: 'Format Library returned status ' + status });
+      let data;
+      try { data = JSON.parse(body); } catch(e) { return json(res, 502, { error: 'Format Library returned a non-JSON response' }); }
+      const eventFormat = ((data.event && data.event.formatName) || '').toLowerCase();
+      if (eventFormat && eventFormat !== 'goat') return json(res, 200, { ok: true, deck: null });
+      const decks = data.topDecks || [];
+      const match = decks.find(d => ((d.builderName||'').toLowerCase().replace(/_/g, ' ')) === player);
+      if (!match) return json(res, 200, { ok: true, deck: null });
+      return json(res, 200, { ok: true, deck: { deckId: match.id, deckTypeName: match.deckTypeName || '', placement: match.placement || null } });
+    } catch(e) {
+      return json(res, 502, { error: 'Format Library request failed: ' + e.message });
+    }
+  }
+
+  // ── GET /api/proxy/fl-deck/:deckId — raw YDK text from Format Library ───────
+  if (parts[0]==='proxy' && parts[1]==='fl-deck' && parts[2] && method==='GET') {
+    if (!isMiner(req)) return json(res, 403, { error: 'Miners and above only' });
+    if (!flToken()) return json(res, 500, { error: 'FORMATLIBRARY_TOKEN not set in environment' });
+    const deckId = decodeURIComponent(parts[2]);
+    try {
+      const { status, body } = await flApiRequest('/api/decks/download/' + encodeURIComponent(deckId));
+      if (status === 401) return json(res, 401, { error: FL_EXPIRED_MSG });
+      if (status !== 200) return json(res, 502, { error: 'Format Library returned status ' + status });
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      return res.end(body);
+    } catch(e) {
+      return json(res, 502, { error: 'Format Library request failed: ' + e.message });
+    }
+  }
+
   // ── GET /api/proxy/replay?id=:replayId ──────────────────────────────────────
   // Solves Cloudflare Turnstile via CapSolver, then POSTs to duelingbook view-replay
   if (parts[0]==='proxy' && parts[1]==='replay' && method==='GET') {

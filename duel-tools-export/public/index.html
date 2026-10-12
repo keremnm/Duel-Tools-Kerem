@@ -587,6 +587,7 @@ select{cursor:pointer}
         <input id="gate-pass" type="password" placeholder="Password" autocomplete="current-password"
           style="background:#131320;border:1px solid #252538;border-radius:6px;color:#fff;font-family:monospace;font-size:14px;padding:10px 12px;outline:none;width:100%;box-sizing:border-box"/>
         <button id="gate-login-btn" onclick="gateLogin()" style="background:#00e596;color:#050508;border:none;border-radius:6px;font-family:monospace;font-weight:bold;font-size:14px;padding:11px;cursor:pointer;width:100%">Sign In</button>
+        <div style="text-align:center;font-size:11px;color:#55557a">Forgot your password? Contact your admin to have it reset.</div>
       </div>
     </div>
     <!-- Signup form -->
@@ -620,6 +621,7 @@ select{cursor:pointer}
       </div>
       <button class="ntab" id="ntab-ingame" onclick="switchTab('ingame',this)">In-Game Tools</button>
       <button class="ntab" id="gfwl-prep-tab" onclick="switchTab('gfwl',this)">GFWL Archive</button>
+      <button class="ntab" id="ntab-admin" onclick="switchTab('admin',this)" style="display:none">⚙ Admin</button>
     </div>
     <!-- Mobile nav dropdown — replaces tab row on small screens -->
     <div id="nav-mobile-wrap" style="display:none;padding:0 10px;flex-shrink:0;align-items:center;border-bottom:1px solid var(--border);background:var(--panel)">
@@ -635,7 +637,7 @@ select{cursor:pointer}
     </div>
     <div class="topbar-right">
       <button id="manual-save-btn" onclick="manualSave()" title="Force save all data to Postgres now" style="background:none;border:1px solid var(--green);color:var(--green);font-family:monospace;font-size:10px;padding:2px 10px;border-radius:4px;cursor:pointer">💾 Save</button>
-      <button id="admin-panel-btn" onclick="openAdminPanel()" style="display:none;background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-size:10px;padding:2px 10px;border-radius:4px;cursor:pointer">⚙ Users</button>
+      <button id="admin-panel-btn" onclick="switchTab('admin', document.getElementById('ntab-admin'))" style="display:none;background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-size:10px;padding:2px 10px;border-radius:4px;cursor:pointer">⚙ Users</button>
       <button id="error-log-btn" onclick="viewErrorLog()" style="display:none;background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:10px;padding:2px 10px;border-radius:4px;cursor:pointer" title="Server error log">⚠ Errors</button>
       <div id="dt-user-info" style="display:none;align-items:center;gap:6px;font-size:12px;color:var(--muted)">
         <span id="dt-user-name"></span>
@@ -691,6 +693,35 @@ select{cursor:pointer}
   <!-- Batch panel backdrop -->
   <div id="batch-panel-backdrop" onclick="closeBatchPanel()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:199"></div>
 
+  <!-- Format Library import modal -->
+  <div id="fl-import-backdrop" onclick="closeFLImport()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:998"></div>
+  <div id="fl-import-panel" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:22px;width:520px;max-width:92vw;max-height:85vh;overflow-y:auto;z-index:999;flex-direction:column;gap:14px">
+    <div style="display:flex;align-items:center;gap:10px">
+      <div style="font-size:16px;font-weight:bold;color:var(--text);flex:1">📥 Import from Format Library</div>
+      <button onclick="closeFLImport()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px">✕</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted);line-height:1.5">Fetches GOAT-format replays from Format Library, skips anything already saved, pulls any decklists found for the matching events, and imports both. This can take a little while — Format Library gets paged through politely rather than hammered.</div>
+    <div>
+      <div class="slbl" style="margin-bottom:4px">FORMAT LIBRARY USERNAME</div>
+      <input id="fl-username-inp" type="text" placeholder="e.g. ShavyesFL" oninput="flAutoFillAliases()" style="font-size:13px"/>
+      <div style="font-size:10px;color:var(--muted);margin-top:3px">Exactly as it appears on formatlibrary.com — this is what gets searched for.</div>
+    </div>
+    <div style="position:relative">
+      <div class="slbl" style="margin-bottom:4px">DUEL TOOLS PLAYER (who these attach to)</div>
+      <input id="fl-dtplayer-inp" type="text" placeholder="e.g. Shavyes" autocomplete="off"
+        oninput="flOnDtPlayerSearch(this.value); flAutoFillAliases();" onfocus="flOnDtPlayerSearch(this.value)" style="font-size:13px"/>
+      <div id="fl-dtplayer-dropdown" style="display:none;position:absolute;left:0;right:0;top:100%;background:var(--card);border:1px solid var(--border2);border-radius:6px;z-index:1000;max-height:160px;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,.5)"></div>
+      <div style="font-size:10px;color:var(--muted);margin-top:3px">Existing (search below) or new Duel Tools profile these replays/decks get saved under — can differ from the Format Library name/spelling above.</div>
+    </div>
+    <div>
+      <div class="slbl" style="margin-bottom:4px">ALIASES (comma-separated — auto-filled, edit as needed)</div>
+      <input id="fl-aliases-inp" type="text" placeholder="e.g. shav, shavy" style="font-size:13px"/>
+    </div>
+    <button id="fl-fetch-btn" class="btn-go" onclick="flFetchPreview()" style="font-size:13px;padding:10px">Fetch from Format Library</button>
+    <div id="fl-import-status" style="font-size:12px;color:var(--muted);min-height:18px;line-height:1.5"></div>
+    <div id="fl-import-preview" style="display:none;flex-direction:column;gap:10px"></div>
+  </div>
+
   <aside class="sidebar">
     <!-- Top action buttons -->
     <div style="padding:10px 12px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:6px;flex-shrink:0">
@@ -699,6 +730,7 @@ select{cursor:pointer}
       <button id="add-to-batch-btn" onclick="openBatchPanel('add')" style="display:block;width:100%;background:var(--card);color:var(--blue);border:1px solid var(--blue);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">➕ Add to Existing Batch</button>
       <button onclick="importEventData()" style="display:none;width:100%;background:var(--card);color:var(--purple,#a78bfa);border:1px solid var(--purple,#a78bfa);border-radius:6px;font-family:monospace;font-weight:bold;font-size:11px;padding:7px;cursor:pointer;text-align:left" id="import-event-data-btn">📥 Add Full Event Data</button>
       <button onclick="importEventDecks()" style="display:none;width:100%;background:var(--card);color:var(--purple,#a78bfa);border:1px solid var(--purple,#a78bfa);border-radius:6px;font-family:monospace;font-weight:bold;font-size:11px;padding:7px;cursor:pointer;text-align:left" id="import-event-decks-btn">📥 Add Full Event Decks</button>
+      <button onclick="openFLImport()" style="display:none;width:100%;background:var(--card);color:var(--purple,#a78bfa);border:1px solid var(--purple,#a78bfa);border-radius:6px;font-family:monospace;font-weight:bold;font-size:11px;padding:7px;cursor:pointer;text-align:left" id="fl-import-btn">📥 Import from Format Library</button>
       <button id="clean-batch-btn" onclick="cleanBatch()" style="display:none;width:100%;background:var(--card);color:var(--red);border:1px solid var(--red);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">🧹 Clean Invalid Replays</button>
       <div id="sidebar-export-import-row" style="display:flex;gap:5px">
         <button class="btn-sec" onclick="exportBatch()" style="flex:1;font-size:11px;padding:5px">⬇ Export</button>
@@ -1496,6 +1528,19 @@ select{cursor:pointer}
     </div>
   </div>
 
+  <!-- Admin / User Management page -->
+  <div class="page" id="pg-admin">
+    <div style="flex:1;overflow-y:auto;padding:26px 30px;display:flex;flex-direction:column;gap:22px;max-width:1300px;margin:0 auto;width:100%;box-sizing:border-box">
+      <div style="font-size:21px;font-weight:bold;color:var(--text);letter-spacing:.04em">⚙ User Management</div>
+
+      <div id="admin-tab-bar" style="display:flex;gap:10px;border-bottom:1px solid var(--border);padding-bottom:12px"></div>
+
+      <div id="admin-users-section" style="display:flex;flex-direction:column;gap:16px"></div>
+      <div id="admin-perms-section" style="display:none"></div>
+      <div id="admin-sessions-section" style="display:none;flex-direction:column;gap:12px"></div>
+      <div id="admin-crosslinks-section" style="display:none"></div>
+    </div>
+  </div>
 
   </main>
 </div>
@@ -2438,6 +2483,7 @@ function switchTab(name, btn) {
   if (name === 'gfwl') gfwlInit();
   if (name === 'stats')    loadStats();
   if (name === 'profiles') loadProfiles();
+  if (name === 'admin')    renderAdminPage();
   // Deck Data tab always shows ALL saved batches — never filtered by active batch
   if (name === 'deckdata') {
     if (!_globalRecords.length) {
@@ -6662,6 +6708,261 @@ function clearForm() {
   document.getElementById('extracted-ids-list').innerHTML = '';
   document.getElementById('extracted-ids-label').style.display = 'none';
   pb(0); qi('');
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// FORMAT LIBRARY IMPORT (miner+)
+// Pulls a player's GOAT replays + event decklists from Format Library
+// (via the server-side proxy, which holds the FL_TOKEN) and feeds them
+// into the existing replay-import (go()) and decklist-save pipelines.
+// Skips anything already present rather than overwriting it.
+// ══════════════════════════════════════════════════════════════════════
+let _flPreviewData = null;
+
+function openFLImport() {
+  const backdrop = document.getElementById('fl-import-backdrop');
+  const panel    = document.getElementById('fl-import-panel');
+  if (!backdrop || !panel) return;
+  backdrop.style.display = 'block';
+  panel.style.display    = 'flex';
+  const _prefill = (_activeProfile && _activeProfile.player) || (_activeBatch && _activeBatch.player) || '';
+  document.getElementById('fl-username-inp').value = _prefill;
+  document.getElementById('fl-dtplayer-inp').value  = _prefill;
+  document.getElementById('fl-aliases-inp').value   = '';
+  document.getElementById('fl-import-status').textContent = '';
+  const dd = document.getElementById('fl-dtplayer-dropdown'); if (dd) dd.style.display = 'none';
+  const previewEl = document.getElementById('fl-import-preview');
+  previewEl.style.display = 'none';
+  previewEl.innerHTML = '';
+  _flPreviewData = null;
+  if (_prefill) flAutoFillAliases();
+}
+
+function closeFLImport() {
+  const backdrop = document.getElementById('fl-import-backdrop');
+  const panel    = document.getElementById('fl-import-panel');
+  if (backdrop) backdrop.style.display = 'none';
+  if (panel)    panel.style.display    = 'none';
+  const dd = document.getElementById('fl-dtplayer-dropdown'); if (dd) dd.style.display = 'none';
+}
+
+// Autocomplete dropdown for the "Duel Tools player" field — searches the
+// existing player registry by name or known alias, same pattern as the
+// sidebar's global player search.
+function flOnDtPlayerSearch(val) {
+  const dropdown = document.getElementById('fl-dtplayer-dropdown');
+  if (!dropdown) return;
+  const q = (val||'').trim().toLowerCase();
+  if (!q) { dropdown.style.display = 'none'; return; }
+  const matches = Object.values(window._playerRegistry||{})
+    .filter(p => p.name && (p.name.toLowerCase().includes(q) || (p.aliases||[]).some(a=>a.toLowerCase().includes(q))))
+    .slice(0, 10);
+  if (!matches.length) { dropdown.style.display = 'none'; return; }
+  dropdown.innerHTML = '';
+  dropdown.style.display = 'block';
+  matches.forEach(p => {
+    const item = document.createElement('div');
+    item.style.cssText = 'padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border)';
+    item.onmouseover = () => item.style.background = 'var(--card2)';
+    item.onmouseout  = () => item.style.background = '';
+    const aliases = p.aliases||[];
+    item.innerHTML = '<span style="color:var(--text);font-weight:bold">'+p.name+'</span>'+(aliases.length?'<span style="color:var(--muted);font-size:11px"> aka '+aliases.join(', ')+'</span>':'');
+    item.onclick = () => {
+      document.getElementById('fl-dtplayer-inp').value = p.name;
+      dropdown.style.display = 'none';
+      flAutoFillAliases();
+    };
+    dropdown.appendChild(item);
+  });
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('#fl-dtplayer-inp') && !e.target.closest('#fl-dtplayer-dropdown')) {
+    const dd = document.getElementById('fl-dtplayer-dropdown');
+    if (dd) dd.style.display = 'none';
+  }
+});
+
+function flAutoFillAliases() {
+  const dtPlayer = (document.getElementById('fl-dtplayer-inp').value||'').trim();
+  const flUser   = (document.getElementById('fl-username-inp').value||'').trim();
+  if (!dtPlayer && !flUser) return;
+  const reg = dtPlayer && window._playerRegistry && window._playerRegistry[dtPlayer.toLowerCase()];
+  const known = [];
+  const seen = new Set();
+  if (reg && Array.isArray(reg.aliases)) {
+    reg.aliases.forEach(a => { if (a && !seen.has(a.toLowerCase())) { seen.add(a.toLowerCase()); known.push(a); } });
+  }
+  // The Format Library username is often the exact spelling DuelingBook replays
+  // carry, which can differ from the Duel Tools player name — make sure it's
+  // included as an alias whenever it's not already the same name.
+  if (flUser && flUser.toLowerCase() !== dtPlayer.toLowerCase() && !seen.has(flUser.toLowerCase())) {
+    known.push(flUser);
+  }
+  document.getElementById('fl-aliases-inp').value = known.join(', ');
+}
+
+async function flFetchPreview() {
+  const flUser   = (document.getElementById('fl-username-inp').value||'').trim();
+  const dtPlayer = (document.getElementById('fl-dtplayer-inp').value||'').trim();
+  const statusEl  = document.getElementById('fl-import-status');
+  const previewEl = document.getElementById('fl-import-preview');
+  const fetchBtn  = document.getElementById('fl-fetch-btn');
+  if (!flUser)   { statusEl.style.color='var(--red)'; statusEl.textContent = 'Enter the Format Library username first.'; return; }
+  if (!dtPlayer) { statusEl.style.color='var(--red)'; statusEl.textContent = 'Enter the Duel Tools player to attach these to.'; return; }
+
+  fetchBtn.disabled = true;
+  previewEl.style.display = 'none'; previewEl.innerHTML = '';
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = 'Fetching replay list from Format Library…';
+  _flPreviewData = null;
+
+  try {
+    const res = await fetch(API+'/proxy/fl-replays?player='+encodeURIComponent(flUser), { headers: authHeaders() });
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok) {
+      statusEl.style.color = 'var(--red)';
+      statusEl.textContent = data.error || ('Format Library request failed (HTTP '+res.status+')');
+      fetchBtn.disabled = false; return;
+    }
+    const flReplays = data.replays || [];
+    if (!flReplays.length) {
+      statusEl.style.color = 'var(--amber)';
+      statusEl.textContent = 'No GOAT-format replays found on Format Library for "'+flUser+'".';
+      fetchBtn.disabled = false; return;
+    }
+
+    // Collect replayIds already saved for the Duel Tools player so we can skip duplicates
+    const existingIds = new Set();
+    try {
+      const list = await fetch(API+'/batches').then(r=>r.json());
+      const mine = list.filter(b => (b.player||'').toLowerCase() === dtPlayer.toLowerCase());
+      const fulls = await Promise.all(mine.map(b => fetch(API+'/batches/'+b.id).then(r=>r.json()).catch(()=>b)));
+      for (const b of fulls) for (const r of (b.replays||[])) existingIds.add(r.replayId);
+    } catch(e) {}
+
+    const seen = new Set();
+    const newReplays = [];
+    let skippedExisting = 0;
+    for (const r of flReplays) {
+      const m = (r.replayLink||'').match(/id=([A-Za-z0-9_-]+)/);
+      const rid = m ? m[1] : null;
+      if (!rid || seen.has(rid)) continue;
+      seen.add(rid);
+      if (existingIds.has(rid)) { skippedExisting++; continue; }
+      newReplays.push({ ...r, replayId: rid });
+    }
+
+    // Look up decklists for events among the NEW replays, skipping events we already have a deck for
+    const eventIds = [...new Set(newReplays.map(r=>r.eventId).filter(Boolean))];
+    const existingDeckCodes = new Set(getEventDecks(dtPlayer).map(d => (d.code||'').toUpperCase()));
+    const deckCandidates = [];
+    if (eventIds.length) statusEl.textContent = 'Checking '+eventIds.length+' event(s) for decklists…';
+    for (const evId of eventIds) {
+      if (existingDeckCodes.has(evId.toUpperCase())) continue;
+      try {
+        const dres = await fetch(API+'/proxy/fl-event/'+encodeURIComponent(evId)+'?player='+encodeURIComponent(flUser), { headers: authHeaders() });
+        const ddata = await dres.json().catch(()=>({}));
+        if (dres.status === 401) {
+          statusEl.style.color = 'var(--red)';
+          statusEl.textContent = ddata.error || 'Format Library token expired.';
+          fetchBtn.disabled = false; return;
+        }
+        if (dres.ok && ddata.deck) deckCandidates.push({ eventId: evId, deckId: ddata.deck.deckId, deckTypeName: ddata.deck.deckTypeName });
+      } catch(e) {}
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    _flPreviewData = { flUser, dtPlayer, newReplays, deckCandidates };
+
+    statusEl.style.color = 'var(--green)';
+    statusEl.textContent = 'Found '+flReplays.length+' replay(s) on Format Library for "'+flUser+'".';
+
+    previewEl.style.display = 'flex';
+    const summary = document.createElement('div');
+    summary.style.cssText = 'background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:12px;line-height:1.7;color:var(--text)';
+    summary.innerHTML =
+      '<div><b>'+newReplays.length+'</b> new replay(s) to import'+(skippedExisting?' <span style="color:var(--muted)">('+skippedExisting+' already in '+dtPlayer+'’s batch, skipped)</span>':'')+'</div>'+
+      '<div><b>'+deckCandidates.length+'</b> new decklist(s) found on Format Library</div>'+
+      '<div style="color:var(--muted);margin-top:4px">Will be saved under Duel Tools player: <b>'+dtPlayer+'</b></div>';
+    previewEl.appendChild(summary);
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.className = 'btn-go';
+    confirmBtn.style.cssText = 'font-size:13px;padding:10px';
+    if (newReplays.length || deckCandidates.length) {
+      confirmBtn.textContent = 'Import '+newReplays.length+' replay(s) + '+deckCandidates.length+' decklist(s)';
+      confirmBtn.onclick = flConfirmImport;
+    } else {
+      confirmBtn.textContent = 'Nothing new to import';
+      confirmBtn.disabled = true;
+    }
+    previewEl.appendChild(confirmBtn);
+  } catch(e) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = 'Request failed: ' + e.message;
+  }
+  fetchBtn.disabled = false;
+}
+
+async function flConfirmImport() {
+  if (!_flPreviewData) return;
+  const { dtPlayer, newReplays, deckCandidates } = _flPreviewData;
+  const aliasRaw = (document.getElementById('fl-aliases-inp').value||'').trim();
+  _flPreviewData = null;
+  closeFLImport();
+
+  if (newReplays.length) {
+    document.getElementById('player-inp').value = dtPlayer;
+    document.getElementById('aliases-inp').value = aliasRaw;
+    const _eli = document.getElementById('batch-event-label-inp'); if (_eli) _eli.value = '';
+    document.getElementById('urls-inp').value = newReplays.map(r => (r.eventId||'')+'\t'+r.replayLink).join('\n');
+    _batchPanelMode = 'new';
+    // go() already builds a visible "N replay(s) skipped — PLAYER not found in
+    // them" report (with a Copy IDs button) in the sidebar for any replay where
+    // dtPlayer/aliases don't match the names actually in the replay — exactly
+    // the re-copy-and-retry-with-an-added-alias flow for Format Library name
+    // mismatches, so no separate popup is needed here.
+    await go();
+  }
+
+  if (deckCandidates.length) {
+    st('Importing '+deckCandidates.length+' decklist(s) from Format Library…', 'var(--amber)');
+    const decks = getEventDecks(dtPlayer);
+    let added = 0;
+    for (const { eventId, deckId, deckTypeName } of deckCandidates) {
+      if (decks.find(d => (d.code||'').toUpperCase() === eventId.toUpperCase())) continue; // skip duplicate codes
+      const entry = { code: eventId, year: null, deckId, deckUrl: 'https://www.formatlibrary.com/decks/'+deckId, addedAt: Date.now() };
+      try {
+        const dres = await fetch(API+'/proxy/fl-deck/'+encodeURIComponent(deckId), { headers: authHeaders() });
+        if (dres.status === 401) {
+          const d = await dres.json().catch(()=>({}));
+          alert(d.error || 'Format Library token expired — decklist import stopped partway through.');
+          break;
+        }
+        if (dres.ok) {
+          const ydkText = await dres.text();
+          const passcodes = parseYDK(ydkText);
+          if (passcodes.length) {
+            await lookupPasscodeNames(passcodes);
+            const cardObjects = buildCardObjectsFromPasscodes(passcodes);
+            const deckClass = cardObjects.length ? classifyFromCards(cardObjects) : null;
+            entry.deckTypeOverride = (deckClass && deckClass.dc) || deckTypeName || undefined;
+            try { entry.ydkData = btoa(unescape(encodeURIComponent(ydkText))); } catch(e) { entry.ydkData = btoa(ydkText); }
+            entry.ydkFileName = eventId + '.ydk';
+          } else if (deckTypeName) {
+            entry.deckTypeOverride = deckTypeName;
+          }
+        }
+      } catch(e) { console.warn('Could not fetch FL deck', deckId, e.message); }
+      decks.push(entry);
+      added++;
+    }
+    if (added) {
+      saveEventDecks(dtPlayer, decks);
+      if (_activeProfile && _activeProfile.player === dtPlayer) renderEventDecks(dtPlayer, _activeProfile.batches||[], _activeProfile.records||[]);
+    }
+    st('Format Library import complete — '+added+' decklist(s) added.', 'var(--green)');
+  }
 }
 
 // ── Auto-import from DuelingBook save prompt (deep link) ─────────────────────
@@ -13476,6 +13777,9 @@ async function openProfile(player, batches, records) {
       const _ied = document.getElementById('import-event-data-btn'); if (_ied) _ied.style.display = 'block';
       const _idk = document.getElementById('import-event-decks-btn'); if (_idk) _idk.style.display = 'block';
     }
+    if (isMinerRole(_userRole)) {
+      const _flb = document.getElementById('fl-import-btn'); if (_flb) _flb.style.display = 'block';
+    }
     loadBatches();
   }
 
@@ -16310,6 +16614,20 @@ function applyRoleUI() {
     if (adminBtn) adminBtn.style.display = isAdminRole(_userRole) ? 'inline-block' : 'none';
     const errBtn = document.getElementById('error-log-btn');
     if (errBtn) errBtn.style.display = isAdminRole(_userRole) ? 'inline-block' : 'none';
+    const adminTab = document.getElementById('ntab-admin');
+    if (adminTab) adminTab.style.display = isAdminRole(_userRole) ? 'inline-block' : 'none';
+    // Mobile nav dropdown — admin option only added for admins
+    const mobileSel = document.getElementById('nav-mobile-sel');
+    if (mobileSel) {
+      const existingOpt = mobileSel.querySelector('option[value="admin"]');
+      if (isAdminRole(_userRole) && !existingOpt) {
+        const opt = document.createElement('option');
+        opt.value = 'admin'; opt.textContent = '⚙ Admin';
+        mobileSel.appendChild(opt);
+      } else if (!isAdminRole(_userRole) && existingOpt) {
+        existingOpt.remove();
+      }
+    }
   }
   // Users cannot create new batches (only miners and above can)
   if (!isMinerRole(_userRole)) {
@@ -16321,6 +16639,7 @@ function applyRoleUI() {
     document.querySelectorAll('[onclick*="openBatchPanel"]').forEach(el => { el.style.display = 'block'; });
     const _ied = document.getElementById('import-event-data-btn'); if (_ied) _ied.style.display = 'block';
     const _idk = document.getElementById('import-event-decks-btn'); if (_idk) _idk.style.display = 'block';
+    const _flb = document.getElementById('fl-import-btn'); if (_flb) _flb.style.display = 'block';
   }
   // Admins only: show admin panel buttons
   if (!isAdminRole(_userRole)) {
@@ -16344,7 +16663,7 @@ function applyRoleUI() {
     document.querySelectorAll('[onclick*="openBatchPanel"]').forEach(el => {
       if (el.id !== 'temp-batch-btn') el.style.display = 'none';
     });
-    ['import-event-data-btn','import-event-decks-btn','clean-batch-btn',
+    ['import-event-data-btn','import-event-decks-btn','fl-import-btn','clean-batch-btn',
      'sidebar-export-import-row','sidebar-player-search'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.style.display = 'none';
@@ -16472,34 +16791,46 @@ async function adminForceLogout(userId, btn) {
   } catch(e) { alert('Error: '+e.message); }
 }
 
-async function openAdminPanel() {
-  const res   = await fetch(API+'/admin/users', { headers: authHeaders() });
-  const users = await res.json();
-  const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center';
-  const box = document.createElement('div');
-  box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:20px;width:620px;max-width:95vw;max-height:85vh;display:flex;flex-direction:column;gap:12px';
+// Back-compat alias — anything still calling the old modal entry point
+// just lands on the dedicated Admin page instead.
+function openAdminPanel() {
+  switchTab('admin', document.getElementById('ntab-admin'));
+}
 
-  const hdr = document.createElement('div');
-  hdr.style.cssText = 'display:flex;align-items:center;gap:10px';
+async function renderAdminPage() {
+  const tabBar          = document.getElementById('admin-tab-bar');
+  const usersSection    = document.getElementById('admin-users-section');
+  const permsSection    = document.getElementById('admin-perms-section');
+  const sessionsSection = document.getElementById('admin-sessions-section');
+  const crosslinksSection = document.getElementById('admin-crosslinks-section');
+  if (!tabBar || !usersSection) return;
+
+  usersSection.innerHTML = '<div style="color:var(--muted);font-size:14px;padding:16px">Loading users...</div>';
+  let users = [];
+  try {
+    const res = await fetch(API+'/admin/users', { headers: authHeaders() });
+    users = await res.json();
+  } catch(e) {
+    usersSection.innerHTML = '<div style="color:var(--red);font-size:14px;padding:16px">Failed to load users: '+e.message+'</div>';
+    return;
+  }
+
   // Tab state
   let _adminTab = 'users';
-  const title = document.createElement('div'); title.style.cssText='font-size:14px;font-weight:bold;color:var(--text);flex:1'; title.textContent='USER MANAGEMENT';
 
-  // Tab buttons
-  const tabBar = document.createElement('div');
-  tabBar.style.cssText = 'display:flex;gap:6px;padding-bottom:4px;border-bottom:1px solid var(--border);margin-bottom:4px';
+  // Tab buttons — bigger, roomier than the old modal's
+  tabBar.innerHTML = '';
   ['Users','Roles & Permissions','Sessions','Cross-Links'].forEach(tab => {
     const tb = document.createElement('button');
     tb.textContent = tab;
-    tb.style.cssText = 'background:none;border:none;font-family:monospace;font-size:12px;cursor:pointer;padding:4px 12px;border-radius:4px;color:var(--muted)';
+    tb.style.cssText = 'background:none;border:none;font-family:monospace;font-size:15px;cursor:pointer;padding:9px 18px;border-radius:6px;color:var(--muted)';
     tb.onclick = () => {
       _adminTab = tab === 'Users' ? 'users' : tab === 'Sessions' ? 'sessions' : tab === 'Cross-Links' ? 'crosslinks' : 'perms';
       tabBar.querySelectorAll('button').forEach(b => { b.style.background='none'; b.style.color='var(--muted)'; });
       tb.style.background = 'var(--card2)'; tb.style.color = 'var(--text)';
       usersSection.style.display = _adminTab === 'users' ? 'flex' : 'none';
       permsSection.style.display  = _adminTab === 'perms' ? 'block' : 'none';
-      if (_adminTab === 'sessions') { sessionsSection.style.display='block'; loadSessionsSection(sessionsSection); }
+      if (_adminTab === 'sessions') { sessionsSection.style.display='flex'; loadSessionsSection(sessionsSection); }
       else sessionsSection.style.display = 'none';
       if (_adminTab === 'crosslinks') { crosslinksSection.style.display='block'; loadCrosslinksSection(crosslinksSection); }
       else crosslinksSection.style.display = 'none';
@@ -16507,40 +16838,31 @@ async function openAdminPanel() {
     if (tab === 'Users') { tb.style.background='var(--card2)'; tb.style.color='var(--text)'; }
     tabBar.appendChild(tb);
   });
-  const closeBtn = document.createElement('button'); closeBtn.textContent='✕'; closeBtn.style.cssText='background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px'; closeBtn.onclick=()=>overlay.remove();
-  hdr.appendChild(title); hdr.appendChild(closeBtn);
 
   // Add user form
   const addRow = document.createElement('div');
-  addRow.style.cssText = 'display:flex;gap:7px;flex-wrap:wrap;padding:10px;background:var(--card);border:1px solid var(--border);border-radius:7px';
-  addRow.innerHTML = '<input id="au-name" placeholder="Name" style="flex:1;min-width:90px"/><input id="au-email" placeholder="Email" type="email" style="flex:2;min-width:140px"/><input id="au-pass" placeholder="Password" type="password" style="flex:1;min-width:90px"/><select id="au-role" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px;border-radius:5px;outline:none"><option value="user">User</option><option value="limited">Limited</option><option value="miner">Miner</option><option value="admin">Admin</option></select><button class="btn-go" onclick="adminAddUser()" style="font-size:12px;padding:6px 12px;white-space:nowrap">+ Add</button>';
+  addRow.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap;padding:16px;background:var(--card);border:1px solid var(--border);border-radius:9px;font-size:14px';
+  addRow.innerHTML = '<input id="au-name" placeholder="Name" style="flex:1;min-width:120px;font-size:14px;padding:10px 12px"/><input id="au-email" placeholder="Email" type="email" style="flex:2;min-width:180px;font-size:14px;padding:10px 12px"/><input id="au-pass" placeholder="Password" type="password" style="flex:1;min-width:120px;font-size:14px;padding:10px 12px"/><select id="au-role" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:14px;padding:10px;border-radius:6px;outline:none;width:auto"><option value="user">User</option><option value="limited">Limited</option><option value="miner">Miner</option><option value="admin">Admin</option></select><button class="btn-go" onclick="adminAddUser()" style="font-size:14px;padding:10px 18px;white-space:nowrap;flex:0">+ Add User</button>';
 
   // User list
-  const usersSection = document.createElement('div');
-  usersSection.style.cssText = 'display:flex;flex-direction:column;gap:8px;flex:1;overflow:hidden';
-
-  const permsSection = document.createElement('div');
-  permsSection.style.display = 'none';
-  permsSection.style.cssText = 'display:none;flex:1;overflow-y:auto';
-
   const listEl = document.createElement('div');
-  listEl.style.cssText = 'flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:5px';
+  listEl.style.cssText = 'display:flex;flex-direction:column;gap:8px';
   users.sort((a,b)=>(a.email||'').localeCompare(b.email||'')).forEach(u => {
     const row = document.createElement('div');
     row.id = 'urow-'+u.id;
-    row.style.cssText = 'display:grid;grid-template-columns:1fr auto auto auto auto;align-items:center;gap:10px;padding:10px 12px;background:var(--card);border:1px solid var(--border);border-radius:6px;font-size:12px';
+    row.style.cssText = 'display:grid;grid-template-columns:1fr auto auto auto auto auto;align-items:center;gap:16px;padding:14px 16px;background:var(--card);border:1px solid var(--border);border-radius:8px;font-size:14px';
     const approvedCol = u.approved ? 'var(--green)' : 'var(--amber)';
 
     // Identity column
     const identity = document.createElement('div');
-    identity.style.cssText = 'display:flex;flex-direction:column;gap:2px;min-width:0';
+    identity.style.cssText = 'display:flex;flex-direction:column;gap:3px;min-width:0';
     const emailEl = document.createElement('div');
-    emailEl.style.cssText = 'color:var(--text);font-weight:bold;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    emailEl.style.cssText = 'color:var(--text);font-weight:bold;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
     emailEl.textContent = u.email || '(no email)';
     identity.appendChild(emailEl);
     if (u.name) {
       const nameEl = document.createElement('div');
-      nameEl.style.cssText = 'color:var(--muted);font-size:10px';
+      nameEl.style.cssText = 'color:var(--muted);font-size:12.5px';
       nameEl.textContent = u.name;
       identity.appendChild(nameEl);
     }
@@ -16548,7 +16870,7 @@ async function openAdminPanel() {
 
     // Status
     const statusEl = document.createElement('span');
-    statusEl.style.cssText = 'color:'+approvedCol+';font-size:11px;white-space:nowrap';
+    statusEl.style.cssText = 'color:'+approvedCol+';font-size:13px;white-space:nowrap';
     statusEl.textContent = u.approved ? 'Active' : 'Pending';
     row.appendChild(statusEl);
 
@@ -16557,7 +16879,7 @@ async function openAdminPanel() {
     if (!u.approved) {
       const appBtn = document.createElement('button');
       appBtn.className = 'dd-btn-sec';
-      appBtn.style.cssText = 'font-size:10px;padding:2px 8px;white-space:nowrap';
+      appBtn.style.cssText = 'font-size:13px;padding:6px 14px;white-space:nowrap';
       appBtn.textContent = 'Approve';
       appBtn.onclick = () => adminApprove(u.id, true);
       approveEl.appendChild(appBtn);
@@ -16566,7 +16888,7 @@ async function openAdminPanel() {
 
     // Role select
     const sel = document.createElement('select');
-    sel.style.cssText = 'background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:3px 6px;border-radius:4px;outline:none';
+    sel.style.cssText = 'background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:13.5px;padding:7px 10px;border-radius:5px;outline:none;width:auto';
     [['user','User'],['limited','Limited'],['miner','Miner'],['admin','Admin']].forEach(([val,label]) => {
       const opt = document.createElement('option');
       opt.value = val; opt.textContent = label;
@@ -16576,17 +16898,28 @@ async function openAdminPanel() {
     sel.onchange = () => adminSetRole(u.id, sel.value);
     row.appendChild(sel);
 
+    // Reset password — no email required. Admin sets it directly (or
+    // generates a random one to hand the user), since there's no email
+    // delivery configured for this app to self-serve a reset code.
+    const resetBtn = document.createElement('button');
+    resetBtn.className = 'dd-btn-sec';
+    resetBtn.textContent = '🔑 Reset PW';
+    resetBtn.style.cssText = 'font-size:13px;padding:6px 14px;white-space:nowrap';
+    resetBtn.onclick = () => adminResetPassword(u.id, u.email);
+    row.appendChild(resetBtn);
+
     // Delete
     const delBtn = document.createElement('button');
     delBtn.textContent = '✕';
-    delBtn.style.cssText = 'background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:0';
+    delBtn.title = 'Delete user';
+    delBtn.style.cssText = 'background:none;border:none;color:var(--red);cursor:pointer;font-size:18px;padding:0 4px';
     delBtn.onclick = () => adminDeleteUser(u.id);
     row.appendChild(delBtn);
 
     listEl.appendChild(row);
   });
 
-  // Assemble users section
+  usersSection.innerHTML = '';
   usersSection.appendChild(addRow);
   usersSection.appendChild(listEl);
 
@@ -16601,31 +16934,31 @@ async function openAdminPanel() {
     { key:'canExport',      label:'Export Data' },
   ];
   async function renderPerms() {
-    permsSection.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:8px">Loading...</div>';
+    permsSection.innerHTML = '<div style="color:var(--muted);font-size:14px;padding:16px">Loading...</div>';
     try {
       const perms = await fetch(API+'/admin/permissions', { headers:authHeaders() }).then(r=>r.json());
       permsSection.innerHTML = '';
       const tbl = document.createElement('table');
-      tbl.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
+      tbl.style.cssText = 'width:100%;border-collapse:collapse;font-size:14px';
       const hRow = document.createElement('tr');
-      hRow.innerHTML = '<th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:normal;font-size:10px;border-bottom:1px solid var(--border)">PERMISSION</th>'
-        + ['User','Moderator','Admin'].map(r=>`<th style="text-align:center;padding:6px 12px;color:var(--muted);font-weight:normal;font-size:10px;border-bottom:1px solid var(--border)">${r.toUpperCase()}</th>`).join('');
+      hRow.innerHTML = '<th style="text-align:left;padding:10px 12px;color:var(--muted);font-weight:normal;font-size:12.5px;border-bottom:1px solid var(--border)">PERMISSION</th>'
+        + ['User','Moderator','Admin'].map(r=>`<th style="text-align:center;padding:10px 18px;color:var(--muted);font-weight:normal;font-size:12.5px;border-bottom:1px solid var(--border)">${r.toUpperCase()}</th>`).join('');
       tbl.appendChild(hRow);
       permKeys.forEach(({key, label}) => {
         const tr = document.createElement('tr');
         tr.style.borderBottom = '1px solid var(--border2)';
         const labelTd = document.createElement('td');
-        labelTd.style.cssText = 'padding:8px;color:var(--text)';
+        labelTd.style.cssText = 'padding:12px;color:var(--text)';
         labelTd.textContent = label;
         tr.appendChild(labelTd);
         ['user','moderator','admin'].forEach(role => {
           const td = document.createElement('td');
-          td.style.cssText = 'padding:8px;text-align:center';
+          td.style.cssText = 'padding:12px;text-align:center';
           const cb = document.createElement('input');
           cb.type = 'checkbox';
           cb.checked = !!(perms[role] && perms[role][key]);
           cb.disabled = role === 'admin';
-          cb.style.cssText = 'width:16px;height:16px;cursor:'+(role==='admin'?'not-allowed':'pointer');
+          cb.style.cssText = 'width:20px;height:20px;cursor:'+(role==='admin'?'not-allowed':'pointer');
           cb.onchange = async () => {
             try {
               await fetch(`${API}/admin/permissions/${role}`, {
@@ -16642,11 +16975,11 @@ async function openAdminPanel() {
       });
       permsSection.appendChild(tbl);
       const note = document.createElement('div');
-      note.style.cssText = 'font-size:10px;color:var(--dim);margin-top:12px;padding:8px;background:var(--card);border-radius:4px';
+      note.style.cssText = 'font-size:12.5px;color:var(--dim);margin-top:14px;padding:12px;background:var(--card);border-radius:6px';
       note.textContent = 'Admin always has all permissions. Changes take effect on next login.';
       permsSection.appendChild(note);
     } catch(e) {
-      permsSection.innerHTML = '<div style="color:var(--red);padding:8px">Failed: '+e.message+'</div>';
+      permsSection.innerHTML = '<div style="color:var(--red);font-size:14px;padding:16px">Failed: '+e.message+'</div>';
     }
   }
 
@@ -16654,54 +16987,32 @@ async function openAdminPanel() {
   const permTab = tabBar.querySelectorAll('button')[1];
   const origPermClick = permTab.onclick;
   permTab.onclick = () => { origPermClick && origPermClick(); renderPerms(); };
-
-  // Assemble
-  box.appendChild(hdr);
-  box.appendChild(tabBar);
-  box.appendChild(usersSection);
-  box.appendChild(permsSection);
-  box.appendChild(permsSection);
-
-  // ── Sessions section ──────────────────────────────────────────────────────
-  const sessionsSection = document.createElement('div');
-  sessionsSection.style.cssText = 'display:none;overflow-y:auto;max-height:55vh;flex-direction:column;gap:8px';
-  box.appendChild(sessionsSection);
-
-  // ── Cross-links section ───────────────────────────────────────────────────
-  const crosslinksSection = document.createElement('div');
-  crosslinksSection.style.cssText = 'display:none;padding:8px';
-  box.appendChild(crosslinksSection);
-
-  overlay.appendChild(box);
-  document.body.appendChild(overlay);
-  overlay.onclick = e => { if(e.target===overlay) overlay.remove(); };
-  window._adminOverlay = overlay;
 }
 
 async function loadCrosslinksSection(el) {
   el.innerHTML =
-    '<div style="font-size:13px;color:var(--text);margin-bottom:12px">' +
+    '<div style="font-size:15px;color:var(--text);margin-bottom:14px">' +
       '<b>Retroactive Cross-Link Scan</b>' +
-      '<div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5">' +
+      '<div style="font-size:13px;color:var(--muted);margin-top:8px;line-height:1.6">' +
         'Scans all existing replays in all batches and links them to any known player profile ' +
         'where the opponent name matches a username or alias. Safe to run multiple times -- ' +
         'duplicates are always detected and skipped.' +
       '</div>' +
     '</div>' +
-    '<div id="cl-scan-result" style="font-size:12px;color:var(--muted);min-height:20px;margin:10px 0"></div>' +
-    '<button id="cl-scan-btn" onclick="runCrosslinkScan()" style="background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:12px;padding:8px 20px;border-radius:6px;cursor:pointer">' +
+    '<div id="cl-scan-result" style="font-size:13.5px;color:var(--muted);min-height:22px;margin:12px 0"></div>' +
+    '<button id="cl-scan-btn" onclick="runCrosslinkScan()" style="background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:14px;padding:11px 24px;border-radius:6px;cursor:pointer">' +
       'Scan + Link All Replays' +
     '</button>' +
-    '<div style="font-size:13px;color:var(--text);margin:22px 0 12px;border-top:1px solid var(--border);padding-top:16px">' +
+    '<div style="font-size:15px;color:var(--text);margin:26px 0 14px;border-top:1px solid var(--border);padding-top:18px">' +
       '<b>Repair Cross-Linked Game Data</b>' +
-      '<div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5">' +
+      '<div style="font-size:13px;color:var(--muted);margin-top:8px;line-height:1.6">' +
         'One-time fix for a bug where a mirrored replay\'s G1/G2/G3 card lists showed the ' +
         'original player\'s cards instead of the mirrored player\'s own. Re-derives each ' +
         'cross-linked replay\'s per-game cards from its original. Safe to run multiple times.' +
       '</div>' +
     '</div>' +
-    '<div id="cl-repair-result" style="font-size:12px;color:var(--muted);min-height:20px;margin:10px 0"></div>' +
-    '<button id="cl-repair-btn" onclick="runCrosslinkGameRepair()" style="background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:12px;padding:8px 20px;border-radius:6px;cursor:pointer">' +
+    '<div id="cl-repair-result" style="font-size:13.5px;color:var(--muted);min-height:22px;margin:12px 0"></div>' +
+    '<button id="cl-repair-btn" onclick="runCrosslinkGameRepair()" style="background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:14px;padding:11px 24px;border-radius:6px;cursor:pointer">' +
       'Repair Game Data' +
     '</button>';
 }
@@ -16753,7 +17064,7 @@ async function runCrosslinkScan() {
 }
 
 async function loadSessionsSection(el) {
-  el.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:8px">Loading...</div>';
+  el.innerHTML = '<div style="color:var(--muted);font-size:14px;padding:16px">Loading...</div>';
   try {
     const data = await fetch(API+'/auth/sessions', { headers: authHeaders() }).then(r=>r.json());
     const sessions = data.sessions || [];
@@ -16762,7 +17073,7 @@ async function loadSessionsSection(el) {
     // Summary
     const active = sessions.filter(s=>s.isCurrent);
     const summ = document.createElement('div');
-    summ.style.cssText = 'font-size:11px;color:var(--muted);padding:4px 0 8px;border-bottom:1px solid var(--border);margin-bottom:8px';
+    summ.style.cssText = 'font-size:14px;color:var(--muted);padding:6px 0 10px;border-bottom:1px solid var(--border);margin-bottom:10px';
     summ.innerHTML = `<b style="color:var(--text)">${active.length}</b> users currently active · <b style="color:var(--text)">${sessions.length}</b> sessions in history`;
     el.appendChild(summ);
 
@@ -16774,19 +17085,19 @@ async function loadSessionsSection(el) {
       const u = userSessions[0];
       const isActive = userSessions.some(s=>s.isCurrent);
       const card = document.createElement('div');
-      card.style.cssText = 'background:var(--card);border:1px solid '+(isActive?'var(--green)':'var(--border)')+';border-radius:6px;padding:10px;margin-bottom:6px';
+      card.style.cssText = 'background:var(--card);border:1px solid '+(isActive?'var(--green)':'var(--border)')+';border-radius:8px;padding:14px;margin-bottom:8px';
 
       const cardHdr = document.createElement('div');
-      cardHdr.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px';
+      cardHdr.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:14px';
       cardHdr.innerHTML = `<b style="color:var(--text)">${u.name}</b>`
-        + `<span style="font-size:10px;color:var(--muted)">${u.email}</span>`
-        + `<span style="font-size:9px;padding:1px 6px;border-radius:3px;border:1px solid var(--border);color:var(--muted)">${u.role}</span>`
-        + (isActive ? '<span style="font-size:10px;color:var(--green);margin-left:auto">● ONLINE</span>' : '<span style="font-size:10px;color:var(--dim);margin-left:auto">○ offline</span>');
+        + `<span style="font-size:13px;color:var(--muted)">${u.email}</span>`
+        + `<span style="font-size:11.5px;padding:2px 8px;border-radius:3px;border:1px solid var(--border);color:var(--muted)">${u.role}</span>`
+        + (isActive ? '<span style="font-size:12.5px;color:var(--green);margin-left:auto">● ONLINE</span>' : '<span style="font-size:12.5px;color:var(--dim);margin-left:auto">○ offline</span>');
 
       if (isActive) {
         const kickBtn = document.createElement('button');
         kickBtn.textContent = '⏏ Force Logout';
-        kickBtn.style.cssText = 'background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:8px';
+        kickBtn.style.cssText = 'background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:12.5px;padding:5px 12px;border-radius:5px;cursor:pointer;margin-left:10px';
         kickBtn.onclick = async () => {
           if (!confirm('Force-logout ' + u.name + '?')) return;
           const r = await fetch(API+'/auth/sessions/'+uid, { method:'DELETE', headers:authHeaders() });
@@ -16802,7 +17113,7 @@ async function loadSessionsSection(el) {
         const status = sess.isCurrent ? '🟢' : sess.loggedOutAt ? '⚪' : sess.kickedAt ? '🔴' : '⚫';
         const statusTxt = sess.isCurrent ? 'Active' : sess.loggedOutAt ? 'Signed out' : sess.kickedAt ? 'Kicked' : 'Ended';
         const row = document.createElement('div');
-        row.style.cssText = 'font-size:10px;color:var(--muted);padding:3px 0;border-top:1px solid var(--border2);display:flex;gap:8px;flex-wrap:wrap';
+        row.style.cssText = 'font-size:12.5px;color:var(--muted);padding:5px 0;border-top:1px solid var(--border2);display:flex;gap:10px;flex-wrap:wrap';
         row.innerHTML = `<span>${status} ${statusTxt}</span><span>${time}</span><span style="color:var(--amber)">${sess.ip||'?'}</span><span style="opacity:.6">${(sess.ua||'').slice(0,50)}</span>`;
         card.appendChild(row);
       });
@@ -16811,10 +17122,10 @@ async function loadSessionsSection(el) {
     }
 
     if (!sessions.length) {
-      el.innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">No session history yet. Sessions are recorded after the next login.</div>';
+      el.innerHTML = '<div style="color:var(--muted);font-size:14px;padding:24px;text-align:center">No session history yet. Sessions are recorded after the next login.</div>';
     }
   } catch(e) {
-    el.innerHTML = '<div style="color:var(--red);padding:8px">Failed to load sessions: '+e.message+'</div>';
+    el.innerHTML = '<div style="color:var(--red);font-size:14px;padding:16px">Failed to load sessions: '+e.message+'</div>';
   }
 }
 
@@ -16828,12 +17139,12 @@ async function adminAddUser() {
   const data = await res.json();
   if (!res.ok) { st(data.error||'Failed','var(--red)'); return; }
   st('User added','var(--green)');
-  if (window._adminOverlay) { window._adminOverlay.remove(); openAdminPanel(); }
+  renderAdminPage();
 }
 
 async function adminApprove(id, approved) {
   await fetch(API+'/admin/users/'+id, { method:'PATCH', headers:authHeaders(), body:JSON.stringify({approved}) });
-  if (window._adminOverlay) { window._adminOverlay.remove(); openAdminPanel(); }
+  renderAdminPage();
 }
 
 async function adminSetRole(id, role) {
@@ -16841,10 +17152,19 @@ async function adminSetRole(id, role) {
   st('Role updated','var(--green)');
 }
 
+async function adminResetPassword(id, email) {
+  const newPw = prompt('New password for '+email+' (min 6 characters):');
+  if (newPw === null) return; // cancelled
+  if (newPw.trim().length < 6) { alert('Password must be at least 6 characters.'); return; }
+  const res = await fetch(API+'/admin/users/'+id, { method:'PATCH', headers:authHeaders(), body:JSON.stringify({password:newPw.trim()}) });
+  if (res.ok) { st('Password reset for '+email+' — let them know their new password', 'var(--green)'); }
+  else { const d = await res.json().catch(()=>({})); alert('Failed: '+(d.error||'unknown error')); }
+}
+
 async function adminDeleteUser(id) {
   if (!confirm('Delete this user?')) return;
   await fetch(API+'/admin/users/'+id, { method:'DELETE', headers:authHeaders() });
-  if (window._adminOverlay) { window._adminOverlay.remove(); openAdminPanel(); }
+  renderAdminPage();
 }
 
 // ── Init auth ─────────────────────────────────────────────────────────────────
