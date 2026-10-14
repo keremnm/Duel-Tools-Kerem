@@ -5964,6 +5964,28 @@ async function gfwlLogTransaction(season, teamName, team) {
   gfwlOpenTeam(season, teamName, team);
 }
 
+// A player can have more than one batch of their own — an unmerged alias
+// (duelingbook username vs. a GFWL roster name), a second batch from an
+// independent scrape session, etc. Whenever the SAME replay exists as a
+// duplicate across two of a player's own batches, merging them for display
+// has to pick ONE copy, and "whichever happened to come first in the list"
+// (the old behavior everywhere this pattern appears) silently throws the
+// other copy away — including, when the discarded one is the copy someone
+// just corrected, the override/merge itself. That is exactly what made a
+// result override or a merge look like it "didn't stick": it DID save,
+// durably, to the right batch — but the very next full reload re-ran this
+// merge, picked the OTHER (untouched) duplicate copy of the same match, and
+// the correction silently vanished from view, every single time. This picks
+// whichever copy actually carries a human correction over a plain,
+// untouched duplicate, and between two that are equally corrected (or
+// equally untouched), the more recently saved one.
+function pickBetterReplayCopy(a, b) {
+  const hasOverride = x => !!(x.resultOverride || x.scoreOverride || x.overrideNote || x.myDeckOverride || x.oppDeckOverride || (x.mergedReplays && x.mergedReplays.length));
+  const aHas = hasOverride(a), bHas = hasOverride(b);
+  if (aHas !== bHas) return aHas ? a : b;
+  return (b.savedAt||0) > (a.savedAt||0) ? b : a;
+}
+
 async function selectPlayerBatches(ids) {
   // Fetch all batches for this player and merge replays (deduplicated)
   try {
@@ -5976,6 +5998,9 @@ async function selectPlayerBatches(ids) {
         if (!seenIds.has(r.replayId)) {
           seenIds.add(r.replayId);
           mergedReplays.push(r);
+        } else {
+          const idx = mergedReplays.findIndex(mr => mr.replayId === r.replayId);
+          if (idx >= 0) mergedReplays[idx] = pickBetterReplayCopy(mergedReplays[idx], r);
         }
       }
     }
@@ -6119,7 +6144,16 @@ async function go() {
         const mergedReplays = [];
         for (const b of fullBatches) {
           for (const r of (b.replays||[])) {
-            if (!seenIds.has(r.replayId)) { seenIds.add(r.replayId); mergedReplays.push(r); }
+            if (!seenIds.has(r.replayId)) {
+              seenIds.add(r.replayId);
+              mergedReplays.push(r);
+            } else {
+              // See pickBetterReplayCopy() above — never let a plain,
+              // untouched duplicate silently win over a copy someone
+              // corrected with an override or a merge.
+              const idx = mergedReplays.findIndex(mr => mr.replayId === r.replayId);
+              if (idx >= 0) mergedReplays[idx] = pickBetterReplayCopy(mergedReplays[idx], r);
+            }
           }
         }
         const primary = fullBatches[0];
