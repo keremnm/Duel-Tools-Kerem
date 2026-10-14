@@ -9810,6 +9810,7 @@ async function editDeckType(m, isOpp, badgeEl, refreshFn) {
     // then scan all loaded batches in memory
     const overrideBody = JSON.stringify({ myDeckOverride: m.myDeckOverride||null, oppDeckOverride: m.oppDeckOverride||null });
     let savedToServer = false;
+    const hardFailures = []; // real server-side save errors (DB unreachable, batch too large, ...) — never silently dropped
     const batchesToTry = new Set();
     if (_activeBatch && _activeBatch.id && !_activeBatch.isTemp) batchesToTry.add(_activeBatch.id);
     (_allProfileBatches||[]).filter(b=>b.id&&!b.isTemp).forEach(b=>batchesToTry.add(b.id));
@@ -9827,7 +9828,16 @@ async function editDeckType(m, isOpp, badgeEl, refreshFn) {
         const res = await fetch(`${API}/batches/${bid}/replay/${encodeURIComponent(m.replayId)}/override`, {
           method:'PATCH', headers: authHeaders(), body: overrideBody
         });
-        if (res.ok) { const d = await res.json(); if (d.ok && d.found) { savedToServer = true; console.log('[Override] Saved to', bid); } }
+        // Read the body on BOTH success and failure — a 500 here means the
+        // server applied the change in memory but could NOT durably save it
+        // (DB unreachable, batch too large, etc.) and says so in d.error.
+        // Previously this only read the body when res.ok, so that real
+        // failure message was silently thrown away and the generic "not
+        // found" toast showed instead — actively misleading when the actual
+        // problem was "this did not save," not "this replay doesn't exist."
+        const d = await res.json().catch(()=>null);
+        if (res.ok && d && d.ok && d.found) { savedToServer = true; console.log('[Override] Saved to', bid); }
+        else if (d && d.error) { hardFailures.push(d.error); console.error('[Override] Save FAILED for', bid, ':', d.error); }
       } catch(e) {}
     }
     // Also keep any cached GFWL batch snapshot in sync, so Archive stats
@@ -9861,7 +9871,14 @@ async function editDeckType(m, isOpp, badgeEl, refreshFn) {
         }
       }
     }
-    if (!savedToServer) {
+    if (hardFailures.length) {
+      // A real save failure is a much more specific, more actionable problem
+      // than "not found" — always show it, even if some OTHER batch in
+      // batchesToTry did save successfully, since a partial save still means
+      // this match disagrees with itself across batches until it's retried.
+      st('NOT SAVED: ' + hardFailures[0], 'var(--red)');
+      console.error('[Override] Deck type change did NOT durably save:', hardFailures);
+    } else if (!savedToServer) {
       st('Could not find this replay in any saved batch — deck type change not saved.', 'var(--red)');
       console.warn('[Override] Not found in any known batch for', m.replayId);
     } else {
@@ -10399,6 +10416,7 @@ async function applyResultOverride(m, payload) {
 
   const body = JSON.stringify(payload);
   let savedToServer = false;
+  const hardFailures = []; // real server-side save errors (DB unreachable, batch too large, ...) — never silently dropped
   for (const bid of batchesToTry) {
     const bMem = [_activeBatch, ...(_allProfileBatches||[]), ...(_activeProfile?.batches||[])].find(b=>b&&b.id===bid);
     const rep = bMem && bMem.replays && bMem.replays.find(r => r.replayId === m.replayId);
@@ -10418,7 +10436,17 @@ async function applyResultOverride(m, payload) {
       const res = await fetch(API+'/batches/'+bid+'/replay/'+encodeURIComponent(m.replayId)+'/override', {
         method:'PATCH', headers: authHeaders(), body
       });
-      if (res.ok) { const d = await res.json(); if (d.ok && d.found) savedToServer = true; }
+      // Read the body on BOTH success and failure — a 500 here means the
+      // server applied the override in memory but could NOT durably save it
+      // (DB unreachable, batch too large, etc.) and says so in d.error.
+      // Previously this only read the body when res.ok, so a real save
+      // failure was silently thrown away and the generic "not found" toast
+      // showed instead, which actively hid the real problem — this is the
+      // exact class of bug that made overrides look like they "saved" when
+      // they hadn't.
+      const d = await res.json().catch(()=>null);
+      if (res.ok && d && d.ok && d.found) savedToServer = true;
+      else if (d && d.error) { hardFailures.push(d.error); console.error('[Override] Save FAILED for', bid, ':', d.error); }
     } catch(e) {}
   }
 
@@ -10463,7 +10491,14 @@ async function applyResultOverride(m, payload) {
     }
   }
 
-  if (!savedToServer) {
+  if (hardFailures.length) {
+    // A real save failure is far more specific and actionable than "not
+    // found" — always surface it, loudly, even if some OTHER batch in
+    // batchesToTry did save, since a partial save still leaves this match
+    // disagreeing with itself across batches until it's retried.
+    st('NOT SAVED: ' + hardFailures[0], 'var(--red)');
+    console.error('[Override] Result override did NOT durably save:', hardFailures);
+  } else if (!savedToServer) {
     st('Could not find this replay in any saved batch — override not saved.', 'var(--red)');
   } else {
     st(payload.resultOverride ? 'Result override saved' : 'Override cleared', 'var(--green)');
@@ -10926,7 +10961,15 @@ async function mergeReplayIntoMatch(m, newId, gameNums) {
       method:'PATCH', headers: authHeaders(),
       body: JSON.stringify({ parsed: r.parsed, mergedReplays: r.mergedReplays })
     });
-    if (!saveRes.ok) return { ok:false, error:'Merged locally but failed to save to the server.' };
+    // A failure here means the server applied the merge in memory but could
+    // NOT durably save it (DB unreachable, batch too large, etc.) and says
+    // exactly why in the response body's `error` field — surface THAT
+    // specific reason instead of a generic message, so a real persistence
+    // failure is never mistaken for "it saved fine."
+    if (!saveRes.ok) {
+      const saveErrD = await saveRes.json().catch(()=>null);
+      return { ok:false, error: (saveErrD && saveErrD.error) ? ('NOT SAVED: ' + saveErrD.error) : 'Merged locally but failed to save to the server.' };
+    }
 
     // Keep any cached GFWL batch snapshot in sync, same as retryOneReplay/overrides.
     // This has to walk EVERY cached batch, not just ownerBatch — the server
