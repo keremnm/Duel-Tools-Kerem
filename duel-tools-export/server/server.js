@@ -351,6 +351,63 @@ async function saveBatchToPostgres(batchId) {
   _batchSaveTimer = setTimeout(_flushBatchSaveQueue, BATCH_SAVE_DEBOUNCE_MS);
 }
 
+// Write ONE batch to persistent storage RIGHT NOW and report whether it
+// actually landed — unlike saveBatchToPostgres/markBatchDirty above, which
+// only ever schedule a debounced write 1.5s in the future and return
+// immediately no matter what happens to it. That fire-and-forget design is
+// fine for routine scrape saves, but it is exactly why a manual correction
+// (a result override, a merge) could come back from the API as `{ok:true}`
+// while the actual write to Postgres silently failed or simply hadn't
+// happened yet — every GET in the SAME server process still reads the
+// correct value straight out of the in-memory `db.batches`, which is why it
+// looked saved right up until something reloaded that data from scratch
+// (a redeploy, a crash, a dyno restart) and came back with whatever was last
+// actually committed, i.e. the pre-override value. Call this — and check its
+// result — from any route where "the client was told this saved" needs to
+// be true, not just "a save was scheduled."
+async function flushBatchNow(batchId) {
+  const batch = db.batches[batchId];
+  if (!batch) return { ok: false, error: 'Batch not found' };
+  markBatchDirty(batchId);
+  if (!pgClient) {
+    if (process.env.DATABASE_URL) {
+      // Postgres is configured but currently disconnected — there is
+      // nowhere safe to write this synchronously. Buffer it for the
+      // reconnect-triggered flush, but tell the CALLER this did not durably
+      // save yet, instead of silently claiming success.
+      _pendingFlushKeys.add('batches:'+batchId);
+      scheduleFlushRetry();
+      return { ok: false, error: 'Database is temporarily unreachable — change is held in memory and will sync once it reconnects, but is not safely saved yet. Try again in a moment.' };
+    }
+    // File-DB mode (local dev only — Railway always sets DATABASE_URL)
+    try { fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2)); return { ok: true }; }
+    catch(e) { return { ok: false, error: e.message }; }
+  }
+  try {
+    const serialized = JSON.stringify(batch);
+    if (serialized.length > 50*1024*1024) {
+      return { ok: false, error: 'This batch is too large to save (over 50MB) — the change was NOT persisted.' };
+    }
+    await pgClient.query(
+      'INSERT INTO duel_tools_batches (id, value, updated_at) VALUES ($1,$2,NOW()) ON CONFLICT (id) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()',
+      [batchId, serialized]
+    );
+    _pendingFlushKeys.delete('batches:'+batchId);
+    _dirtyBatches.delete(batchId);
+    _batchSaveQueue.delete(batchId); // already durably saved — no need for the debounced flush to redo it
+    return { ok: true };
+  } catch(e) {
+    console.error('[flushBatchNow] Failed for', batchId, ':', e.message);
+    _pendingFlushKeys.add('batches:'+batchId);
+    if (e.message.includes('connect') || e.message.includes('Connection') || e.code === 'ECONNRESET') {
+      pgClient = null;
+      setTimeout(async () => { try { await connectPostgres(); } catch(e2) {} }, 2000);
+    }
+    scheduleFlushRetry();
+    return { ok: false, error: e.message };
+  }
+}
+
 // Save every batch currently in memory — used by manual Save button and migration.
 async function saveAllBatchesToPostgres(forceAll = false) {
   if (!pgClient) { Object.keys(db.batches).forEach(id => _pendingFlushKeys.add('batches:'+id)); scheduleFlushRetry(); return; }
@@ -1675,7 +1732,30 @@ const server = http.createServer(async (req, res) => {
       for (const f of fields) { if (data[f] !== undefined) r[f] = data[f]; }
       if (data.parsed) { r.allPlays = []; reapplyOverridesToParsed(r); } // fresh parse means we no longer need the raw plays stored
       r.savedAt = Date.now();
-      await saveBatchToPostgres(b.id);
+
+      // A Merge Replay save is a deliberate, infrequent, correction a person
+      // made on purpose — it must be confirmed durably saved before this
+      // responds "ok", not just handed to the normal debounced save (which
+      // schedules a write ~1.5s out and returns immediately regardless of
+      // whether that write ever actually lands). Under the debounced path,
+      // every read in THIS server process still sees the merge correctly
+      // (it's reading the same in-memory object), so it looks saved right up
+      // until something reloads that data from scratch — a redeploy, a
+      // crash, a restart — and comes back with whatever was last actually
+      // committed to Postgres, which is the pre-merge replay. That is
+      // exactly what "it's not staying after refresh" looks like whenever
+      // the refresh happens to land after one of those reloads. A routine
+      // retry (no mergedReplays in the body) keeps the fast debounced path,
+      // since it isn't the thing that was reported broken and retries can
+      // happen in bulk.
+      const isDeliberateMerge = data.mergedReplays !== undefined;
+      let primarySave = { ok: true };
+      if (isDeliberateMerge) {
+        primarySave = await flushBatchNow(b.id);
+        if (!primarySave.ok) console.error(`[merge] FAILED to durably save replay ${r.replayId} in batch ${b.id}:`, primarySave.error);
+      } else {
+        await saveBatchToPostgres(b.id);
+      }
       console.log(`[replay retry] Updated replay ${r.replayId} in batch ${b.id}`);
 
       // Merge Replay must trump cross-linking too, same reasoning as the
@@ -1688,8 +1768,8 @@ const server = http.createServer(async (req, res) => {
       // it) so an ordinary retry — which also PATCHes `parsed` here but
       // isn't a merge — doesn't unexpectedly start mirroring itself onto
       // the opponent's copy too.
-      let twinsUpdated = 0;
-      if (data.parsed && data.mergedReplays !== undefined) {
+      let twinsUpdated = 0, twinsFailed = 0;
+      if (data.parsed && isDeliberateMerge) {
         const twinBatchIds = [];
         for (const ob of Object.values(db.batches)) {
           if (ob.id === b.id) continue;
@@ -1711,12 +1791,18 @@ const server = http.createServer(async (req, res) => {
           twin.savedAt = Date.now();
           twinBatchIds.push(ob.id);
         }
-        for (const bid of twinBatchIds) await saveBatchToPostgres(bid);
+        for (const bid of twinBatchIds) {
+          const tRes = await flushBatchNow(bid);
+          if (!tRes.ok) { twinsFailed++; console.error(`[merge] FAILED to durably save twin batch ${bid}:`, tRes.error); }
+        }
         twinsUpdated = twinBatchIds.length;
         if (twinsUpdated) console.log(`[merge] Propagated merged replay to ${twinsUpdated} cross-linked twin batch(es) for ${replayId}`);
       }
 
-      return json(res, 200, { ok:true, twinsUpdated });
+      if (!primarySave.ok) {
+        return json(res, 500, { ok:false, error: 'Merge was applied but FAILED TO SAVE: ' + primarySave.error, twinsUpdated, twinsFailed });
+      }
+      return json(res, 200, { ok:true, twinsUpdated, twinsFailed });
     });
   }
 
@@ -1732,7 +1818,21 @@ const server = http.createServer(async (req, res) => {
         if (data.resultOverride !== undefined) {
           console.log(`[override] Result override for ${r.replayId}: ${data.resultOverride||'cleared'}`);
         }
-        await saveBatchToPostgres(b.id);
+        // An override is a deliberate, infrequent, rules-correction a person
+        // made on purpose — it must be CONFIRMED durably saved before this
+        // responds "ok", not just handed to the normal debounced save (which
+        // schedules a write ~1.5s out and returns `ok:true` immediately
+        // regardless of whether that write ever actually lands in Postgres).
+        // Under the debounced path, every read in THIS server process still
+        // sees the override correctly — it's reading the same in-memory
+        // object the write didn't finish updating storage for yet — so it
+        // looks saved right up until something reloads that data from
+        // scratch (a redeploy, a crash, a restart) and comes back with
+        // whatever was last actually committed, i.e. the pre-override value.
+        // That is exactly what "it's not staying after refresh" looks like
+        // whenever the refresh happens to land after one of those reloads.
+        const primarySave = await flushBatchNow(b.id);
+        if (!primarySave.ok) console.error(`[override] FAILED to durably save replay ${r.replayId} in batch ${b.id}:`, primarySave.error);
 
         // A result override must trump cross-linking: this same replay may
         // already exist as a mirrored copy in the opponent's own batch (from
@@ -1752,17 +1852,24 @@ const server = http.createServer(async (req, res) => {
         // then looked exactly like "the override doesn't stick" whenever
         // Deck Viewer/Profile/GFWL happened to load that sibling instead.
         const twinBatchIds = [];
+        let twinsFailed = 0;
         for (const ob of Object.values(db.batches)) {
           if (ob.id === b.id) continue;
           const twin = (ob.replays||[]).find(tr => tr.replayId === replayId);
           if (twin) { applyOverrideToReplay(twin, data, !isSamePlayerAsBatch(b, ob)); twinBatchIds.push(ob.id); }
         }
-        for (const bid of twinBatchIds) await saveBatchToPostgres(bid);
+        for (const bid of twinBatchIds) {
+          const tRes = await flushBatchNow(bid);
+          if (!tRes.ok) { twinsFailed++; console.error(`[override] FAILED to durably save twin batch ${bid}:`, tRes.error); }
+        }
         if (twinBatchIds.length) {
           console.log(`[override] Propagated to ${twinBatchIds.length} cross-linked twin batch(es) for ${replayId}`);
         }
 
-        return json(res, 200, { ok:true, found:true, twinsUpdated: twinBatchIds.length });
+        if (!primarySave.ok) {
+          return json(res, 500, { ok:false, found:true, error: 'Override was applied but FAILED TO SAVE: ' + primarySave.error, twinsUpdated: twinBatchIds.length, twinsFailed });
+        }
+        return json(res, 200, { ok:true, found:true, twinsUpdated: twinBatchIds.length, twinsFailed });
       }
       return json(res, 200, { ok:true, found:false });
     });
