@@ -1630,8 +1630,42 @@ const server = http.createServer(async (req, res) => {
     });
   }
   // ── GET /api/batches/:id ────────────────────────────────────────────────────
+  // This is the exact call Deck Viewer makes every time a batch is opened or
+  // the page is reloaded — which is why it re-reads the row straight from
+  // Postgres instead of trusting whatever this process already has sitting
+  // in db.batches. The in-memory copy is only guaranteed current for THIS
+  // one server process; if Railway is ever running more than one instance
+  // of this app at the same time (a second replica, or the brief overlap
+  // during a rolling/zero-downtime deploy, or even an old instance that
+  // hasn't fully shut down yet), each instance has ALWAYS had its own
+  // separate `db.batches` loaded at ITS startup and mutated only by requests
+  // THAT instance happened to handle — there has never been a mechanism for
+  // one instance to learn about a save another instance made. An override
+  // saved via whichever instance handled that PATCH would be correctly and
+  // durably written to Postgres, and then a refresh landing on a DIFFERENT
+  // instance a moment later would show the old value forever, because that
+  // instance's memory was never updated and never asked Postgres again —
+  // which is indistinguishable, from the browser, from "it didn't save."
+  // Re-reading the row here removes that blind spot regardless of how many
+  // instances exist or why: this always answers with whatever was last
+  // actually committed, never a stale copy.
   if (parts[0]==='batches' && parts[1] && !parts[2] && method==='GET') {
     if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot view saved batches' });
+    if (pgClient) {
+      try {
+        const freshRes = await pgClient.query('SELECT value FROM duel_tools_batches WHERE id=$1', [parts[1]]);
+        if (freshRes.rows.length) {
+          db.batches[parts[1]] = freshRes.rows[0].value;
+        } else if (!db.batches[parts[1]]) {
+          return json(res, 404, { error:'Not found' });
+        }
+        // If Postgres has no row but this process's memory does, fall
+        // through and serve the in-memory copy (e.g. a brand new batch
+        // whose very first save is still mid-flight) rather than 404ing.
+      } catch(e) {
+        console.error('[GET batch] Fresh re-read failed, falling back to in-memory copy:', e.message);
+      }
+    }
     const b = db.batches[parts[1]];
     if (!b) return json(res, 404, { error:'Not found' });
     return json(res, 200, b);
