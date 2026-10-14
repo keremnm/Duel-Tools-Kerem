@@ -1492,6 +1492,19 @@ const server = http.createServer(async (req, res) => {
     const list = Object.values(db.batches).map(b => ({ id:b.id, name:b.name, player:b.player, replayCount:(b.replays||[]).length, createdAt:b.createdAt }));
     return json(res, 200, list.sort((a,b)=>b.createdAt-a.createdAt));
   }
+  // ── GET /api/batches/all-full — every saved batch WITH its full replay
+  // array, in ONE response. Format Data (and anything else that needs every
+  // replay system-wide) used to fetch the lightweight list above and then
+  // fetch each non-empty batch individually (1 + N round trips) just to
+  // build aggregate stats across every saved replay — slow once there are
+  // more than a handful of batches, and purely a network-latency cost since
+  // every batch is already sitting in memory (db.batches) either way. This
+  // is the same data, pre-joined, in a single pass.
+  if (parts[0]==='batches' && parts[1]==='all-full' && !parts[2] && method==='GET') {
+    if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot browse saved batches' });
+    const list = Object.values(db.batches).filter(b => (b.replays||[]).length);
+    return json(res, 200, list);
+  }
   // ── POST /api/batches ───────────────────────────────────────────────────────
   if (parts[0]==='batches' && !parts[1] && method==='POST') {
     if (!isMiner(req)) return json(res, 403, { error: 'Miners and above can create batches' });
@@ -1589,14 +1602,19 @@ const server = http.createServer(async (req, res) => {
   // `data.parsed` replaces r.parsed wholesale and has no idea an override
   // exists, so reapplyOverridesToParsed() re-stamps it afterward — otherwise
   // the override field itself survives while the value every view actually
-  // reads (r.parsed.*) would silently revert to the raw re-parse.
+  // reads (r.parsed.*) would silently revert to the raw re-parse. This is
+  // also the save path for the Deck Viewer's "Merge Replay" feature: a
+  // disconnect-continuation replay's games get folded into `data.parsed`
+  // client-side, and `mergedReplays` (which replay IDs make up this match,
+  // and which game number(s) each one covers) is stored alongside it so the
+  // UI can list every linked replay later.
   if (parts[0]==='batches' && parts[1] && parts[2]==='replay' && parts[3] && !parts[4] && method==='PATCH') {
     const b = db.batches[parts[1]];
     if (!b) return json(res, 404, { error:'Not found' });
     return readBody(req, async data => {
       const r = (b.replays||[]).find(r => r.replayId === decodeURIComponent(parts[3]));
       if (!r) return json(res, 404, { error:'Replay not found in batch' });
-      const fields = ['plays','allPlays','parsed','timedOut','oppName','player1','player2','eventLabel'];
+      const fields = ['plays','allPlays','parsed','timedOut','oppName','player1','player2','eventLabel','mergedReplays'];
       for (const f of fields) { if (data[f] !== undefined) r[f] = data[f]; }
       if (data.parsed) { r.allPlays = []; reapplyOverridesToParsed(r); } // fresh parse means we no longer need the raw plays stored
       r.savedAt = Date.now();

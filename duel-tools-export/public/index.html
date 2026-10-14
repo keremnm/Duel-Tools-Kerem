@@ -2168,6 +2168,31 @@ function gfwlPlayoffWaveNum(label) {
   return 1;
 }
 
+// ── Match result override resolution — single source of truth ──────────────
+// A manually-applied result/score override (see applyResultOverride, the
+// Deck Viewer's "Override Result" action) must win over the raw parsed
+// outcome EVERYWHERE a replay's result or score gets read back — not just
+// the screen it was set from. Player Profiles and Format Data already get
+// this for free (they're built through buildMatchRecord, which applies this
+// same precedence internally) — this pair is for every other place in the
+// GFWL Archive (team roster records, week/round scores, deck-usage pies,
+// week/round reports) that reads a raw replay object directly instead.
+function gfwlEffResult(r) {
+  if (!r) return null;
+  const p = r.parsed || null;
+  return r.resultOverride || (p && p.resultOverride) || (p && p.result) || r.result || null;
+}
+function gfwlEffScore(r) {
+  if (!r) return '';
+  const p = r.parsed || null;
+  const ov = r.scoreOverride || (p && p.scoreOverride) || null;
+  if (ov) {
+    const draws = (p && p.draws) || 0;
+    return draws > 0 ? `${ov.my}-${ov.opp}-${draws}` : `${ov.my}-${ov.opp}`;
+  }
+  return (p && p.score) || r.score || '';
+}
+
 // Given ONE team's replays for a single playoff round (array of
 // {player, replay, label} — same shape used by seasonReplays / rdReplays
 // throughout the GFWL pages), derives the actual elimination-based outcome:
@@ -2191,8 +2216,7 @@ function gfwlPlayoffOutcome(roundReplays) {
   const wave1Players = new Set(wave1.map(x => x.player.toLowerCase()));
   const eliminated = new Set();
   list.forEach(x => {
-    const r = x.replay || {};
-    const effRes = r.resultOverride || (r.parsed && r.parsed.resultOverride) || (r.parsed && r.parsed.result) || r.result || null;
+    const effRes = gfwlEffResult(x.replay || {});
     if (effRes === 'l') eliminated.add(x.player.toLowerCase());
   });
   const remaining = [...wave1Players].filter(p => !eliminated.has(p));
@@ -3501,7 +3525,7 @@ function computeTeamRecord(season, teamName, team) {
     for (const r of (batch.replays||[])) {
       const lbl = (r.eventLabel||'').toUpperCase();
       if (!gfwlLabelInSeason(lbl, seasonKey)) continue;
-      const effResult = r.resultOverride || (r.parsed && r.parsed.resultOverride) || (r.parsed && r.parsed.result) || null;
+      const effResult = gfwlEffResult(r);
       if (effResult === 'w') w++;
       else if (effResult === 'l') l++;
     }
@@ -3527,7 +3551,7 @@ function computeTeamRegularSeasonRecord(season, teamName, team) {
       const isSeasonPrefixed = lbl.startsWith(seasonKey+':') || lbl.startsWith(seasonKey+' ') || lbl===seasonKey;
       if (!isSeasonPrefixed) continue;
       if (gfwlPlayoffRoundFromLabel(lbl) !== null) continue; // playoff match — exclude
-      const effResult = r.resultOverride || (r.parsed && r.parsed.resultOverride) || (r.parsed && r.parsed.result) || null;
+      const effResult = gfwlEffResult(r);
       if (effResult === 'w') w++;
       else if (effResult === 'l') l++;
     }
@@ -4418,17 +4442,41 @@ async function gfwlOpenTeam(season, teamName, team) {
 
   function addRosterRow(p, isDropped) {
     const playerReplays = seasonReplays.filter(x => x.player.toLowerCase() === p.player.toLowerCase());
-    const w = playerReplays.filter(x => x.replay.parsed?.result==='w').length;
-    const l = playerReplays.filter(x => x.replay.parsed?.result==='l').length;
+    // Result overrides (see gfwlEffResult above) trump the raw parsed result
+    // here too — a manually-corrected match must count correctly in this
+    // player's roster W-L record, not just on the replay it was set from.
+    const w = playerReplays.filter(x => gfwlEffResult(x.replay)==='w').length;
+    const l = playerReplays.filter(x => gfwlEffResult(x.replay)==='l').length;
     const total = w+l;
     const winPct = total ? Math.round(w/total*100) : null;
 
-    // Get main deck from event decklists or replay classification
+    // Main Deck = the deck type majority used by this player across this
+    // season's replays — a manual roster override (p.mainDeck) or a saved
+    // event decklist for this season still wins when present (both are an
+    // explicit, deliberate statement of what the player played), but the
+    // default is computed, not left blank: each replay's deck is resolved
+    // the same override-aware way buildMatchRecord resolves it everywhere
+    // else (override → saved event-decklist type → card classification),
+    // 'Unknown'/unclassified replays are excluded from the vote so they
+    // can't win a plurality by being the most common NON-answer, and the
+    // most-frequent real deck type wins.
     const playerReg = window._playerRegistry && window._playerRegistry[p.player.toLowerCase()];
     const evDecks = playerReg ? (playerReg.eventDecklists||[]) : [];
     const seasonDecks = evDecks.filter(d => /^S\d+$/i.test(d.code) && gfwlNormalizeSeason(d.code)===seasonKey);
     const mainDeck = p.mainDeck || seasonDecks[0]?.deckTypeOverride ||
-      (() => { const decks={}; playerReplays.forEach(x=>{const d=x.replay.parsed?.myDeck||x.replay.myDeckOverride; if(d)decks[d]=(decks[d]||0)+1;}); return Object.entries(decks).sort((a,b)=>b[1]-a[1])[0]?.[0]||'—'; })();
+      (() => {
+        const decks = {};
+        playerReplays.forEach(x => {
+          const r = x.replay;
+          let d = r.myDeckOverride;
+          if (!d || d === '—' || d === '-' || d === 'Unknown') {
+            const rec = buildMatchRecord(r, p.player, []);
+            d = (rec && rec.myDeck && rec.myDeck !== 'Unknown') ? rec.myDeck : null;
+          }
+          if (d && d !== 'Unknown') decks[d] = (decks[d]||0)+1;
+        });
+        return Object.entries(decks).sort((a,b)=>b[1]-a[1])[0]?.[0] || '—';
+      })();
 
     const tr = document.createElement('tr');
     tr.style.cssText = 'border-bottom:1px solid var(--border2);'+(isDropped?'opacity:.5':'');
@@ -4511,21 +4559,24 @@ async function gfwlOpenTeam(season, teamName, team) {
       const oppName = ((x.replay.parsed && x.replay.parsed.oppName) || x.replay.oppName || '').toLowerCase().trim();
       return !!oppRosterMapWk[oppName];
     });
-    // Count unique players who won vs lost their match that week
+    // Count unique players who won vs lost their match that week. Result
+    // overrides (gfwlEffResult) trump the raw parsed result — a manually
+    // corrected match must flip the week score too, not just its own row.
     const playerResults = {};
     wkReplays.forEach(x => {
       const p = x.player.toLowerCase();
       if (!playerResults[p]) playerResults[p] = { w:0, l:0 };
-      if (x.replay.parsed?.result==='w') playerResults[p].w++;
-      else if (x.replay.parsed?.result==='l') playerResults[p].l++;
+      const res = gfwlEffResult(x.replay);
+      if (res==='w') playerResults[p].w++;
+      else if (res==='l') playerResults[p].l++;
     });
     let teamW=0, teamL=0;
     Object.values(playerResults).forEach(r => {
       if (r.w > r.l) teamW++;
       else if (r.l > r.w) teamL++;
     });
-    const matchW = wkReplays.filter(x=>x.replay.parsed?.result==='w').length;
-    const matchL = wkReplays.filter(x=>x.replay.parsed?.result==='l').length;
+    const matchW = wkReplays.filter(x=>gfwlEffResult(x.replay)==='w').length;
+    const matchL = wkReplays.filter(x=>gfwlEffResult(x.replay)==='l').length;
     return { teamW, teamL, matchW, matchL, hasData: wkReplays.length > 0 };
   }
 
@@ -4557,16 +4608,17 @@ async function gfwlOpenTeam(season, teamName, team) {
     roundReplays.forEach(x => {
       const p = x.player.toLowerCase();
       if (!playerResults[p]) playerResults[p] = { w:0, l:0 };
-      if (x.replay.parsed?.result==='w') playerResults[p].w++;
-      else if (x.replay.parsed?.result==='l') playerResults[p].l++;
+      const res = gfwlEffResult(x.replay);
+      if (res==='w') playerResults[p].w++;
+      else if (res==='l') playerResults[p].l++;
     });
     let teamW=0, teamL=0;
     Object.values(playerResults).forEach(r => {
       if (r.w > r.l) teamW++;
       else if (r.l > r.w) teamL++;
     });
-    const matchW = roundReplays.filter(x=>x.replay.parsed?.result==='w').length;
-    const matchL = roundReplays.filter(x=>x.replay.parsed?.result==='l').length;
+    const matchW = roundReplays.filter(x=>gfwlEffResult(x.replay)==='w').length;
+    const matchL = roundReplays.filter(x=>gfwlEffResult(x.replay)==='l').length;
     // Wave-based elimination outcome — this, not the raw per-player tally
     // above, is what should actually decide whether the round was won/lost.
     const outcome = gfwlPlayoffOutcome(roundReplays);
@@ -4864,15 +4916,21 @@ async function gfwlOpenTeam(season, teamName, team) {
       const r = x.replay || x;
       const player = x.player || '';
       // Use buildMatchRecord for full deck classification (handles allMine/allOpp card arrays)
-      // Fall back to event decklist type, then stored parsed myDeck if already classified
+      // Fall back to event decklist type, then stored parsed myDeck if already classified.
+      // my/opp are classified INDEPENDENTLY of each other — previously opp
+      // classification only ran when my ALSO needed it (nested inside the
+      // `if (!my...)` block), so any replay with an explicit myDeckOverride
+      // (e.g. from a saved event decklist) but no oppDeckOverride silently
+      // never got its opponent's deck classified at all, undercounting the
+      // "Matchups vs Opp Decks" chart below.
       let my = r.myDeckOverride;
       let opp = r.oppDeckOverride;
-      if (!my || my === '—' || my === '-') {
+      const myNeedsClass = !my || my === '—' || my === '-';
+      const oppNeedsClass = !opp || opp === '—' || opp === '-';
+      if (myNeedsClass || oppNeedsClass) {
         const rec = buildMatchRecord(r, player, []);
-        my = (rec && rec.myDeck && rec.myDeck !== 'Unknown') ? rec.myDeck : null;
-        if (!opp || opp === '—' || opp === '-') {
-          opp = (rec && rec.oppDeck && rec.oppDeck !== 'Unknown') ? rec.oppDeck : null;
-        }
+        if (myNeedsClass)  my  = (rec && rec.myDeck  && rec.myDeck  !== 'Unknown') ? rec.myDeck  : null;
+        if (oppNeedsClass) opp = (rec && rec.oppDeck && rec.oppDeck !== 'Unknown') ? rec.oppDeck : null;
       }
       if (!my || my === '—' || my === '-') my = (r.parsed && r.parsed.myDeck !== '—' && r.parsed.myDeck !== '-') ? r.parsed.myDeck : null;
       if (!opp || opp === '—' || opp === '-') opp = (r.parsed && r.parsed.oppDeck !== '—' && r.parsed.oppDeck !== '-') ? r.parsed.oppDeck : null;
@@ -4975,8 +5033,8 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
     ? _freshPlayerReplays
     : (seasonReplays||[]).filter(x => x.player.toLowerCase() === playerName.toLowerCase());
 
-  const w = playerReplays.filter(x=>x.replay.parsed?.result==='w').length;
-  const l = playerReplays.filter(x=>x.replay.parsed?.result==='l').length;
+  const w = playerReplays.filter(x=>gfwlEffResult(x.replay)==='w').length;
+  const l = playerReplays.filter(x=>gfwlEffResult(x.replay)==='l').length;
   const total = w+l;
 
   // Stats row
@@ -5023,7 +5081,7 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
     played++;
     wkReplays.forEach(x => {
       const r = x.replay;
-      const result = r.parsed?.result;
+      const result = gfwlEffResult(r);
       // Use buildMatchRecord for proper deck classification
       const _wkRec = buildMatchRecord(r, playerName, []);
       const myDeck = r.myDeckOverride ||
@@ -5039,7 +5097,7 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
       const vsTeam = wkSchEntry ? wkSchEntry.opponent : '<i style="color:var(--dim)">Missing — Check Schedule</i>';
       const tr = document.createElement('tr');
       tr.style.cssText = 'border-bottom:1px solid var(--border2)';
-      const scoreStr = (r.parsed&&r.parsed.score)||'';
+      const scoreStr = gfwlEffScore(r);
       tr.innerHTML = `
         <td style="padding:5px 8px;color:var(--amber);font-family:monospace">WK${wk}</td>
         <td style="padding:5px 8px;color:var(--dim);font-size:10px">${vsTeam}</td>
@@ -5149,8 +5207,8 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
     wkLabel.style.cssText = 'color:var(--amber);font-family:monospace;font-size:11px;font-weight:bold';
     wkLabel.textContent = wkKey;
     const wkRecord = (() => {
-      const w = grp.replays.filter(r=>(r.parsed&&r.parsed.result)==='w').length;
-      const l = grp.replays.filter(r=>(r.parsed&&r.parsed.result)==='l').length;
+      const w = grp.replays.filter(r=>gfwlEffResult(r)==='w').length;
+      const l = grp.replays.filter(r=>gfwlEffResult(r)==='l').length;
       return w+l ? `${w}W — ${l}L` : '';
     })();
     const wkRec = document.createElement('span');
@@ -5165,11 +5223,11 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
     // Match cards
     grp.replays.forEach(r => {
       const parsed = r.parsed || {};
-      const result = parsed.result;
+      const result = gfwlEffResult(r);
       const oppName = parsed.oppName || r.oppName || '—';
       const myDeck = r.myDeckOverride || parsed.myDeck || '—';
       const oppDeck = r.oppDeckOverride || parsed.oppDeck || '—';
-      const score = parsed.score || '';
+      const score = gfwlEffScore(r);
 
       const card = document.createElement('div');
       card.style.cssText = 'display:flex;align-items:center;gap:6px;padding:5px 8px;margin:2px 0;border-radius:5px;cursor:pointer;background:var(--card2);border:1px solid var(--border2);transition:border-color .1s';
@@ -5305,13 +5363,16 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
   freshReplays.forEach(r => {
     let my = r.myDeckOverride;
     let opp = r.oppDeckOverride;
-    // Use buildMatchRecord for proper classification if stored value is empty/dash
-    if (!my || my === '—' || my === '-') {
+    // Use buildMatchRecord for proper classification if stored value is empty/dash.
+    // my/opp classified independently — see the matching fix in renderGFWLPies
+    // above for why nesting the opp check inside the my check silently drops
+    // opponent-deck classification for any replay with a myDeckOverride set.
+    const myNeedsClass = !my || my === '—' || my === '-';
+    const oppNeedsClass = !opp || opp === '—' || opp === '-';
+    if (myNeedsClass || oppNeedsClass) {
       const rec = buildMatchRecord(r, playerName, []);
-      my = (rec && rec.myDeck && rec.myDeck !== 'Unknown') ? rec.myDeck : null;
-      if (!opp || opp === '—' || opp === '-') {
-        opp = (rec && rec.oppDeck && rec.oppDeck !== 'Unknown') ? rec.oppDeck : null;
-      }
+      if (myNeedsClass)  my  = (rec && rec.myDeck  && rec.myDeck  !== 'Unknown') ? rec.myDeck  : null;
+      if (oppNeedsClass) opp = (rec && rec.oppDeck && rec.oppDeck !== 'Unknown') ? rec.oppDeck : null;
     }
     if (!my || my === '—' || my === '-') my = (r.parsed && r.parsed.myDeck !== '—' && r.parsed.myDeck !== '-') ? r.parsed.myDeck : null;
     if (!opp || opp === '—' || opp === '-') opp = (r.parsed && r.parsed.oppDeck !== '—' && r.parsed.oppDeck !== '-') ? r.parsed.oppDeck : null;
@@ -5474,13 +5535,13 @@ async function gfwlOpenWeekReport(season, teamName, wk, oppTeamName, seasonRepla
     const tbody = document.createElement('tbody');
     Object.entries(byPlayer).forEach(([player, reps]) => {
       const r = reps[0];
-      const result = r.parsed?.result||r.result;
+      const result = gfwlEffResult(r);
       // Use buildMatchRecord for proper deck classification
       const rec = buildMatchRecord(r, player, []);
       const myDeck = r.myDeckOverride || (rec&&rec.myDeck) || (r.parsed&&r.parsed.myDeck) || '—';
       const oppDeck = r.oppDeckOverride || (rec&&rec.oppDeck) || (r.parsed&&r.parsed.oppDeck) || '—';
       const oppName = (r.parsed&&r.parsed.oppName)||r.oppName||'—';
-      const score = (r.parsed&&r.parsed.score)||'';
+      const score = gfwlEffScore(r);
       const tr = document.createElement('tr');
       tr.style.cssText='border-bottom:1px solid var(--border2)';
       const won = result==='w';
@@ -5500,20 +5561,21 @@ async function gfwlOpenWeekReport(season, teamName, wk, oppTeamName, seasonRepla
   const oppColors = oppTeam ? (CONF_COLORS[oppTeam.conference||'']||{text:'var(--muted)'}) : {text:'var(--muted)'};
   makeTeamLineup(rightCol, oppTeamName||'Opponent', oppColors.text, oppWkReplays);
 
-  // Week score summary
+  // Week score summary — result overrides (gfwlEffResult) trump the raw
+  // parsed result here too, same as everywhere else this score is derived.
   const myW = Object.values(Object.fromEntries(
     [...new Set(wkReplays.map(x=>x.player))].map(p=>{
       const reps=wkReplays.filter(x=>x.player===p);
-      const w=reps.filter(x=>x.replay.parsed?.result==='w').length;
-      const l=reps.filter(x=>x.replay.parsed?.result==='l').length;
+      const w=reps.filter(x=>gfwlEffResult(x.replay)==='w').length;
+      const l=reps.filter(x=>gfwlEffResult(x.replay)==='l').length;
       return [p,w>l?'w':l>w?'l':'d'];
     })
   )).filter(v=>v==='w').length;
   const myL = Object.values(Object.fromEntries(
     [...new Set(wkReplays.map(x=>x.player))].map(p=>{
       const reps=wkReplays.filter(x=>x.player===p);
-      const w=reps.filter(x=>x.replay.parsed?.result==='w').length;
-      const l=reps.filter(x=>x.replay.parsed?.result==='l').length;
+      const w=reps.filter(x=>gfwlEffResult(x.replay)==='w').length;
+      const l=reps.filter(x=>gfwlEffResult(x.replay)==='l').length;
       return [p,w>l?'w':l>w?'l':'d'];
     })
   )).filter(v=>v==='l').length;
@@ -5746,12 +5808,12 @@ async function gfwlOpenRoundReport(season, teamName, round, oppTeamName, seasonR
     const tbody = document.createElement('tbody');
     Object.entries(byPlayer).forEach(([player, reps]) => {
       reps.forEach(r => {
-        const result = r.resultOverride || (r.parsed && r.parsed.resultOverride) || (r.parsed && r.parsed.result) || r.result;
+        const result = gfwlEffResult(r);
         const rec = buildMatchRecord(r, player, []);
         const myDeck = r.myDeckOverride || (rec&&rec.myDeck) || (r.parsed&&r.parsed.myDeck) || '—';
         const oppDeck = r.oppDeckOverride || (rec&&rec.oppDeck) || (r.parsed&&r.parsed.oppDeck) || '—';
         const oppName = (r.parsed&&r.parsed.oppName)||r.oppName||'—';
-        const score = (r.parsed&&r.parsed.score)||'';
+        const score = gfwlEffScore(r);
         const tr = document.createElement('tr');
         tr.style.cssText='border-bottom:1px solid var(--border2)';
         const won = result==='w';
@@ -7391,14 +7453,18 @@ function renderRPS() {
       const playerWonRPS = seqResult === 'win';
       if (playerWonRPS) {
         rpsWonCount++;
+        // A manual result override trumps the raw parsed outcome here too —
+        // see gfwlEffResult above — so a corrected match counts correctly in
+        // this win-rate stat, not just on the replay it was corrected from.
+        const effRes = gfwlEffResult(r);
         const g1 = r.parsed && r.parsed.games && r.parsed.games.find(g => g.gameNum === 1);
         if (g1 && typeof g1.myWon === 'boolean') {
           if (g1.myWon) rpsWonThenGameWin++;
         } else if (r.parsed && r.parsed.score) {
           const sc = r.parsed.score;
-          if (sc === '2-0' && r.parsed.result === 'w') rpsWonThenGameWin++;
+          if (sc === '2-0' && effRes === 'w') rpsWonThenGameWin++;
         }
-        if (r.parsed && r.parsed.result === 'w') rpsWonThenMatchWin++;
+        if (effRes === 'w') rpsWonThenMatchWin++;
       }
     }
 
@@ -7635,13 +7701,36 @@ async function retryOneReplay(r) {
     const _rpa = (result.allPlays||result.plays||[]).filter(p=>p.play==='RPS').map(p=>({game:p.game||null,player1:p.player1||null,player2:p.player2||null,player1_choice:p.player1_choice||p.p1pick||null,player2_choice:p.player2_choice||p.p2pick||null,pick:p.pick||null}));
     const _ppa = parseMatch(rid, result.allPlays||result.plays||[], _activeBatch.player||'', _activeBatch.aliases||[], result.player1, result.player2);
     if (!_ppa) return { ok:false, error:'Could not parse (name/alias mismatch?)' };
-    const _psa = { games:_ppa.games, allMine:_ppa.allMine, allOpp:_ppa.allOpp, oppName:_ppa.oppName, myW:_ppa.myW, oppW:_ppa.oppW, draws:_ppa.draws, score:_ppa.score, result:_ppa.result };
-    const updateFields = { plays:_rpa, allPlays:[], timedOut:false, player1:result.player1||null, player2:result.player2||null, oppName:_ppa.oppName||'', parsed:_psa };
+    let _psa = { games:_ppa.games, allMine:_ppa.allMine, allOpp:_ppa.allOpp, oppName:_ppa.oppName, myW:_ppa.myW, oppW:_ppa.oppW, draws:_ppa.draws, score:_ppa.score, result:_ppa.result };
 
     // Mutate the existing entry in place (rather than rebuilding it) so any
     // fields this function doesn't know about — manual deck/result overrides
     // in particular — are left untouched instead of being silently dropped.
     const localReplay = (_activeBatch.replays||[]).find(rep => rep.replayId === rid);
+
+    // A retry re-fetches and re-parses THIS replay from scratch, which would
+    // otherwise silently wipe out any continuation replay(s) previously
+    // folded in via Merge Replay (see mergeReplayIntoMatch below) — it has
+    // no way to know they existed unless they're re-applied here, the same
+    // way a manual override gets re-stamped onto a fresh parse.
+    const existingMerges = (localReplay && localReplay.mergedReplays) || [];
+    if (existingMerges.length) {
+      const mergePlayer = _activeBatch.player || '';
+      const mergeAliases = (window._playerRegistry && window._playerRegistry[mergePlayer.toLowerCase()])
+        ? (window._playerRegistry[mergePlayer.toLowerCase()].aliases||[]) : (_activeBatch.aliases||[]);
+      for (const mr of existingMerges) {
+        try {
+          const mergedFetch = await loadReplay(mr.replayId);
+          if (mergedFetch.timedOut) continue;
+          const mergedParse = parseMatchWithContinuationFallback(mr.replayId, mergedFetch.allPlays||mergedFetch.plays||[], mergePlayer, mergeAliases, mergedFetch.player1, mergedFetch.player2);
+          if (!mergedParse || !mergedParse.games || !mergedParse.games.length) continue;
+          const remapped = remapMergedGameNums(mergedParse.games, mr.gameNums);
+          _psa = buildMergedParsed(_psa, remapped, mergePlayer, mergeAliases);
+        } catch(e) { console.warn('[Retry] Could not re-apply merged replay', mr.replayId, e.message); }
+      }
+    }
+
+    const updateFields = { plays:_rpa, allPlays:[], timedOut:false, player1:result.player1||null, player2:result.player2||null, oppName:_ppa.oppName||'', parsed:_psa };
     if (localReplay) Object.assign(localReplay, updateFields);
 
     if (_activeBatch.id) {
@@ -7742,6 +7831,11 @@ function buildDeck() {
       m.eventLabel       = r.eventLabel       || '';
       m.myDeckOverride   = r.myDeckOverride   || null;
       m.oppDeckOverride  = r.oppDeckOverride  || null;
+      // Which continuation replay(s) have been stitched into this match
+      // (see mergeReplayIntoMatch) — games/allMine/allOpp/score are already
+      // the combined result (that's folded into r.parsed at merge time), so
+      // this is purely for the "other replay links" list in the match header.
+      m.mergedReplays    = r.mergedReplays    || [];
 
       // Apply event decklist type if no explicit override exists.
       // This is how e.g. "FLC30" replays get the deck type from the uploaded
@@ -9791,13 +9885,42 @@ async function renderMatchDisplay(m) {
   const _displayResult = _resultOverride || m.result;
   mhd.textContent = `${player} vs ${m.oppName} (${_displayResult==='w'?'W':_displayResult==='l'?'L':'D'} ${m.draws>0?m.score:`${m.myW}-${m.oppW}`})${_resultOverride?' ⚠ overridden':''}`;
   if (_resultOverride) mhd.title = 'Result manually overridden (original: '+(m.origResult==='w'?'W':m.origResult==='l'?'L':(m.result==='w'?'W':'L'))+' '+(m.origScore||'')+')';
+  // Replay link row(s) — one per replay ID that makes up this match. A
+  // merged match (see Merge Replay below) shows the original replay plus
+  // every continuation replay stitched into it, each tagged with the
+  // game(s) it covers, so all of them stay copyable/clickable from here.
   const mlr = document.createElement('div');
-  mlr.style.cssText = 'display:flex;align-items:center;gap:8px';
-  const ml = document.createElement('a');
-  ml.className='match-link'; ml.href=`https://www.duelingbook.com/replay?id=${m.replayId}`; ml.target='_blank'; ml.textContent=`https://www.duelingbook.com/replay?id=${m.replayId}`;
-  const mc = document.createElement('button'); mc.className='copy-link'; mc.textContent='[copy]';
-  mc.onclick=()=>{ navigator.clipboard.writeText(ml.href).then(()=>{ mc.textContent='[copied!]'; setTimeout(()=>mc.textContent='[copy]',1500); }); };
-  mlr.appendChild(ml); mlr.appendChild(mc);
+  mlr.style.cssText = 'display:flex;flex-direction:column;gap:3px';
+  function addReplayLinkRow(id, tag) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px';
+    const a = document.createElement('a');
+    a.className='match-link'; a.href=`https://www.duelingbook.com/replay?id=${id}`; a.target='_blank'; a.textContent=`https://www.duelingbook.com/replay?id=${id}`;
+    const c = document.createElement('button'); c.className='copy-link'; c.textContent='[copy]';
+    c.onclick=()=>{ navigator.clipboard.writeText(a.href).then(()=>{ c.textContent='[copied!]'; setTimeout(()=>c.textContent='[copy]',1500); }); };
+    row.appendChild(a); row.appendChild(c);
+    if (tag) {
+      const t = document.createElement('span');
+      t.style.cssText = 'font-size:10px;color:var(--blue);border:1px solid var(--blue);border-radius:3px;padding:0 6px';
+      t.textContent = tag;
+      row.appendChild(t);
+    }
+    mlr.appendChild(row);
+  }
+  if ((m.mergedReplays||[]).length) {
+    // Label the original replay with whichever game number(s) it still
+    // covers (everything NOT claimed by a merged continuation replay),
+    // rather than assuming it's always "Game 1" — a merge can replace any
+    // game slot, not just add a later one.
+    const mergedNums = new Set((m.mergedReplays||[]).flatMap(mr=>mr.gameNums));
+    const originalNums = (m.games||[]).map(g=>g.gameNum).filter(gn=>!mergedNums.has(gn));
+    addReplayLinkRow(m.replayId, 'Game '+(originalNums.length?originalNums.join('/'):'?'));
+    [...(m.mergedReplays||[])].sort((a,b)=>Math.min(...a.gameNums)-Math.min(...b.gameNums)).forEach(mr => {
+      addReplayLinkRow(mr.replayId, 'Game '+mr.gameNums.join('/'));
+    });
+  } else {
+    addReplayLinkRow(m.replayId, null);
+  }
   const mtb = document.createElement('div');
   mtb.appendChild(mhd); mtb.appendChild(mlr);
   mh.appendChild(mtb);
@@ -9840,6 +9963,18 @@ async function renderMatchDisplay(m) {
       overrideBtn.onclick = () => showResultOverrideModal(m);
       overrideBar.appendChild(overrideBtn);
     }
+
+    // Merge Replay — available regardless of override state. For when a
+    // disconnect forced DuelingBook to record the rest of this match under
+    // a separate replay ID; stitches that continuation in as additional
+    // game(s) of THIS match (see mergeReplayIntoMatch above).
+    const mergeBtn = document.createElement('button');
+    mergeBtn.textContent = '🔗 Merge Replay';
+    mergeBtn.title = 'Stitch in a continuation replay (e.g. after a disconnect) as additional game(s) of this same match';
+    mergeBtn.style.cssText = 'background:none;border:1px solid var(--blue);color:var(--blue);font-family:monospace;font-size:9px;padding:1px 8px;border-radius:3px;cursor:pointer';
+    mergeBtn.onclick = () => showMergeReplayModal(m);
+    overrideBar.appendChild(mergeBtn);
+
     mtb.appendChild(overrideBar);
   }
 
@@ -10529,6 +10664,256 @@ function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlaye
   return { replayId, player, oppName, games: gamesOut, allMine, allOpp, myW, oppW, draws, score, result, eventLabel: '' };
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// MERGE REPLAY — stitches a continuation replay (DuelingBook gives a
+// disconnect-forced reconnect its own replay ID) into an EXISTING match's
+// stored r.parsed. Because buildDeck()'s fast path and buildMatchRecord()
+// both read games/allMine/allOpp/myW/oppW/draws/score/result straight off
+// r.parsed, updating r.parsed here is the whole propagation mechanism — no
+// other reader (GFWL Archive, Player Profiles, Format Data, win-loss
+// records) needs separate merge-awareness, the exact same way a result
+// override already works by living on the one object every view reads.
+// A manual result override, if one is already set, still applies on top of
+// this merged base afterward (unchanged — merge only rewrites the base).
+// ══════════════════════════════════════════════════════════════════════
+
+// Loose username match — the same rule parseMatch()'s internal _isPlayer
+// uses above, pulled out standalone so the merged-game winner recount below
+// can use it without needing a whole parseMatch() closure.
+function matchesPlayerName(name, player, aliases) {
+  if (!name) return false;
+  const names = new Set([String(player||'').toLowerCase(), ...(aliases||[]).filter(a=>a&&typeof a==='string').map(a=>a.toLowerCase())].filter(Boolean));
+  const nl = String(name).toLowerCase().trim();
+  if (names.has(nl)) return true;
+  for (const n of names) {
+    if (n.length >= 4 && nl.length >= 4) {
+      if (nl === n) return true;
+      if (nl.startsWith(n+' ') || nl.startsWith(n+'_') || n.startsWith(nl+' ') || n.startsWith(nl+'_')) return true;
+    }
+  }
+  return false;
+}
+
+// parseMatch() only recognizes a game's cards once it sees a "Chose to go
+// first" boundary in the logs — exactly right for a normal replay, but a
+// continuation replay from a mid-duel disconnect/reconnect may never have
+// one at all (DuelingBook just keeps recording the SAME still-in-progress
+// game under the new ID, with no fresh RPS/"choose to go" to mark a new
+// game start). Parsed normally, that replay's games would come back empty
+// and every card in it would be silently discarded. This retries once with
+// a synthetic leading "Chose to go first" marker spliced in — enough to
+// give parseMatch's game-boundary counter something to count game 1 from —
+// so a bare continuation's cards still get picked up as that one game's
+// data, instead of only working when the continuation happens to start a
+// brand new game of its own.
+function parseMatchWithContinuationFallback(replayId, plays, player, aliases, p1, p2) {
+  const direct = parseMatch(replayId, plays, player, aliases, p1, p2);
+  if (direct && direct.games && direct.games.length) return direct;
+  const padded = [{ play:'Chose to go', public_log:'Chose to go first', owner:'' }, ...(plays||[])];
+  return parseMatch(replayId, padded, player, aliases, p1, p2);
+}
+
+// Rebuilds the "entire match" card lists (max count seen for each card
+// across every game) from a combined games array — needed here because
+// merging folds in games parsed from a SEPARATE replay, so the all-match
+// lists have to be recomputed from scratch rather than just concatenated
+// with the original replay's existing allMine/allOpp.
+function combineGameCardLists(games) {
+  function combine(key) {
+    const combined = {};
+    (games||[]).forEach(g => {
+      (g[key]||[]).forEach(card => {
+        const raw = card.raw != null ? card.raw : card.displayCount;
+        const exRaw = combined[card.name] ? (combined[card.name].raw != null ? combined[card.name].raw : combined[card.name].displayCount) : -1;
+        if (!combined[card.name] || raw > exRaw) combined[card.name] = { ...card };
+      });
+    });
+    return sortCardsByTypeThenName(Object.values(combined), c => (c.id && window._cardDataCache && window._cardDataCache[c.id]) ? window._cardDataCache[c.id].card_type : '');
+  }
+  return { allMine: combine('mine'), allOpp: combine('opp') };
+}
+
+// Maps a freshly-parsed continuation replay's own games (numbered 1, 2, ...
+// relative to THAT replay alone — it has no idea it's really "Game 2" of a
+// bigger match) onto the real game slot(s) the user says it covers, in the
+// order given. If the replay yielded more games than numbers were given,
+// the extra ones continue sequentially past the last given number; if it
+// yielded fewer, only that many numbers get used.
+function remapMergedGameNums(games, targetNums) {
+  const sorted = [...(games||[])].sort((a,b)=>a.gameNum-b.gameNum);
+  return sorted.map((g, i) => {
+    const num = i < targetNums.length ? targetNums[i] : (targetNums[targetNums.length-1]||0) + (i - targetNums.length + 1);
+    return { ...g, gameNum: num };
+  });
+}
+
+// Builds the new combined r.parsed after folding in a continuation
+// replay's remapped games. An existing game already occupying one of the
+// target slot(s) is REPLACED, not duplicated — merging is also how you fix
+// a bad/partial game entry, not only how you add a missing one.
+function buildMergedParsed(origParsed, remappedGames, player, aliases) {
+  const targetNums = new Set(remappedGames.map(g=>g.gameNum));
+  const keptGames = (origParsed.games||[]).filter(g => !targetNums.has(g.gameNum));
+  const combinedGames = [...keptGames, ...remappedGames].sort((a,b)=>a.gameNum-b.gameNum);
+  const { allMine, allOpp } = combineGameCardLists(combinedGames);
+  let myW = 0, oppW = 0;
+  combinedGames.forEach(g => {
+    if (!g.winner) return;
+    if (matchesPlayerName(g.winner, player, aliases)) myW++; else oppW++;
+  });
+  const draws = combinedGames.filter(g => !g.winner).length;
+  const score = draws > 0 ? `${myW}-${oppW}-${draws}` : `${myW}-${oppW}`;
+  const result = myW >= 2 ? 'w' : oppW >= 2 ? 'l' : myW > oppW ? 'w' : oppW > myW ? 'l' : 'n';
+  return { ...origParsed, games: combinedGames, allMine, allOpp, myW, oppW, draws, score, result };
+}
+
+// Main merge action — fetches + parses the continuation replay the same
+// way any replay gets imported/retried, remaps its game number(s), folds it
+// into the owning batch's stored r.parsed, and persists. Searches every
+// batch this session knows about for the one that actually owns the
+// replay, same multi-batch lookup applyResultOverride uses above, since
+// Deck Viewer can be reached via a Profile where _activeBatch isn't it.
+async function mergeReplayIntoMatch(m, newId, gameNums) {
+  try {
+    const batchesToTry = new Set();
+    if (_activeBatch && _activeBatch.id && !_activeBatch.isTemp) batchesToTry.add(_activeBatch.id);
+    (_allProfileBatches||[]).filter(b=>b.id&&!b.isTemp).forEach(b=>batchesToTry.add(b.id));
+    (_activeProfile?.batches||[]).filter(b=>b.id&&!b.isTemp).forEach(b=>batchesToTry.add(b.id));
+
+    let ownerBatch = null, r = null;
+    for (const bid of batchesToTry) {
+      const bMem = [_activeBatch, ...(_allProfileBatches||[]), ...(_activeProfile?.batches||[])].find(b=>b&&b.id===bid);
+      const rep = bMem && bMem.replays && bMem.replays.find(x => x.replayId === m.replayId);
+      if (rep) { ownerBatch = bMem; r = rep; break; }
+    }
+    if (!r || !ownerBatch) return { ok:false, error:'Could not find this replay in any saved batch.' };
+    if (!r.parsed || !r.parsed.games || !r.parsed.games.length) return { ok:false, error:'This replay has no parsed game data yet — use "Retry this replay" first.' };
+
+    const fetched = await loadReplay(newId);
+    if (fetched.timedOut) return { ok:false, error: 'Could not fetch that replay: ' + (fetched._error||'unknown error') };
+    const player = m.player || ownerBatch.player || '';
+    const aliases = (window._playerRegistry && window._playerRegistry[player.toLowerCase()])
+      ? (window._playerRegistry[player.toLowerCase()].aliases||[]) : (ownerBatch.aliases||[]);
+    const newParsed = parseMatchWithContinuationFallback(newId, fetched.allPlays||fetched.plays||[], player, aliases, fetched.player1, fetched.player2);
+    if (!newParsed || !newParsed.games || !newParsed.games.length) return { ok:false, error:'Could not parse any games out of that replay.' };
+
+    const remapped = remapMergedGameNums(newParsed.games, gameNums);
+    r.parsed = buildMergedParsed(r.parsed, remapped, player, aliases);
+    r.mergedReplays = [
+      ...(r.mergedReplays||[]).filter(mr => !mr.gameNums.some(gn => gameNums.includes(gn))),
+      { replayId:newId, gameNums, mergedAt: Date.now() },
+    ];
+
+    const saveRes = await fetch(`${API}/batches/${ownerBatch.id}/replay/${encodeURIComponent(m.replayId)}`, {
+      method:'PATCH', headers: authHeaders(),
+      body: JSON.stringify({ parsed: r.parsed, mergedReplays: r.mergedReplays })
+    });
+    if (!saveRes.ok) return { ok:false, error:'Merged locally but failed to save to the server.' };
+
+    // Keep any cached GFWL batch snapshot in sync, same as retryOneReplay/overrides.
+    if (window._gfwlBatchCache && window._gfwlBatchCache[ownerBatch.id]) {
+      const cached = window._gfwlBatchCache[ownerBatch.id];
+      const crep = cached.replays && cached.replays.find(x=>x.replayId===m.replayId);
+      if (crep) { crep.parsed = r.parsed; crep.mergedReplays = r.mergedReplays; }
+    }
+
+    st('Replay merged — ' + remapped.length + ' game(s) added', 'var(--green)');
+    buildDeck();
+    renderMatchSidebar((document.getElementById('dsearch')||{value:''}).value||'');
+    const newIdx = _matches.findIndex(x => x.replayId === m.replayId);
+    if (newIdx >= 0) selectMatch(newIdx);
+    return { ok:true };
+  } catch(e) {
+    return { ok:false, error: e.message };
+  }
+}
+
+function showMergeReplayModal(m) {
+  const existing = document.getElementById('merge-replay-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'merge-replay-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:420px;width:100%;display:flex;flex-direction:column;gap:12px';
+
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;gap:8px';
+  hdr.innerHTML = '<span style="font-family:monospace;font-weight:bold;font-size:13px;color:var(--blue)">Merge Replay</span>';
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = 'margin-left:auto;background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer';
+  closeBtn.onclick = () => overlay.remove();
+  hdr.appendChild(closeBtn);
+  box.appendChild(hdr);
+
+  const desc = document.createElement('div');
+  desc.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace;line-height:1.5';
+  desc.textContent = 'Use this when a disconnect forced a continuation replay with its own ID. Paste that replay below and say which game(s) it covers, in order — it gets stitched into this match\'s combined card list, YDK export, and result everywhere this replay is used.';
+  box.appendChild(desc);
+
+  const urlLbl = document.createElement('div');
+  urlLbl.textContent = 'Replay URL or ID:';
+  urlLbl.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace';
+  box.appendChild(urlLbl);
+  const urlInput = document.createElement('input');
+  urlInput.type = 'text';
+  urlInput.placeholder = 'https://www.duelingbook.com/replay?id=...';
+  urlInput.style.cssText = 'width:100%;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:8px;border-radius:6px;outline:none;box-sizing:border-box';
+  box.appendChild(urlInput);
+
+  const gameLbl = document.createElement('div');
+  gameLbl.textContent = 'Game number(s) this replay covers, in order (e.g. "2" or "2,3"):';
+  gameLbl.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace';
+  box.appendChild(gameLbl);
+  const gameInput = document.createElement('input');
+  gameInput.type = 'text';
+  gameInput.placeholder = 'e.g. 2';
+  gameInput.style.cssText = 'width:100%;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:8px;border-radius:6px;outline:none;box-sizing:border-box';
+  box.appendChild(gameInput);
+
+  const errEl = document.createElement('div');
+  errEl.style.cssText = 'font-size:11px;color:var(--red);min-height:14px;font-family:monospace';
+  box.appendChild(errEl);
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px';
+  const saveBtn = document.createElement('button');
+  saveBtn.textContent = 'Merge';
+  saveBtn.style.cssText = 'flex:1;background:var(--blue);color:#fff;border:none;font-family:monospace;font-weight:bold;font-size:13px;padding:10px;border-radius:6px;cursor:pointer';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:13px;padding:10px 16px;border-radius:6px;cursor:pointer';
+  cancelBtn.onclick = () => overlay.remove();
+  btnRow.appendChild(saveBtn); btnRow.appendChild(cancelBtn);
+  box.appendChild(btnRow);
+
+  saveBtn.onclick = async () => {
+    errEl.textContent = '';
+    const raw = urlInput.value.trim();
+    const ids = extractIds(raw);
+    const newId = ids.length ? ids[0] : (/^[0-9]{4,9}-[0-9]{5,10}$/.test(raw) ? raw : null);
+    if (!newId) { errEl.textContent = 'Enter a valid DuelingBook replay URL or ID.'; return; }
+    if (newId === m.replayId) { errEl.textContent = "That's this same replay — enter the OTHER (continuation) replay's ID."; return; }
+    const gameNums = gameInput.value.split(',').map(s=>parseInt(s.trim(),10)).filter(n=>Number.isInteger(n) && n>0);
+    if (!gameNums.length) { errEl.textContent = 'Enter at least one game number (e.g. "2" or "2,3").'; return; }
+    saveBtn.disabled = true; saveBtn.textContent = 'Merging...';
+    const res = await mergeReplayIntoMatch(m, newId, gameNums);
+    if (!res.ok) {
+      saveBtn.disabled = false; saveBtn.textContent = 'Merge';
+      errEl.textContent = res.error || 'Merge failed.';
+      return;
+    }
+    overlay.remove();
+  };
+
+  overlay.appendChild(box);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+  setTimeout(() => urlInput.focus(), 50);
+}
 
 // ── Background migration: converts legacy allPlays replay to parsed format ────
 async function migrateReplayToParseFormat(r, parsedMatch, batch) {
@@ -10625,6 +11010,12 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
       allMine:   p.allMine || [],
       allOpp:    p.allOpp  || [],
       allMyCards: (p.allMine||[]).map(c=>c.name.toLowerCase()),
+      // Which continuation replay(s), if any, have been merged into this
+      // one (see mergeReplayIntoMatch above) — games/allMine/allOpp/score
+      // above are already the COMBINED result, so no other field here needs
+      // adjusting for a merge; this is purely so the UI can list every
+      // replay ID that makes up this match.
+      mergedReplays: replayResult.mergedReplays || [],
     };
   }
 
@@ -10781,8 +11172,39 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
 
 let _globalRecords = []; // all records from all batches
 
+function buildGlobalRecordsFromBatches(batchList) {
+  const records = [];
+  for (const full of batchList) {
+    if (!full || !(full.replays||[]).length) continue;
+    const player = full.player||'';
+    const aliases = (window._playerRegistry && window._playerRegistry[player.toLowerCase()])
+      ? (window._playerRegistry[player.toLowerCase()].aliases||[]) : (full.aliases||[]);
+    for (const rep of full.replays) {
+      const rec = buildMatchRecord(rep, player, aliases, full);
+      if (rec) records.push(rec);
+    }
+  }
+  return records;
+}
+
 async function loadGlobalRecords() {
-  // Build records from all saved batches
+  // Fast path: one request for every batch's full replay data, pre-joined
+  // server-side (see GET /api/batches/all-full). This is what used to take
+  // 1 + N requests — one for the batch list, then one more per non-empty
+  // batch — just to populate the Format Data tab, which visibly crawled
+  // once there were more than a handful of saved batches.
+  try {
+    const res = await fetch(API+'/batches/all-full');
+    if (res.ok) {
+      const list = await res.json();
+      if (Array.isArray(list)) {
+        _globalRecords = buildGlobalRecordsFromBatches(list);
+        return _globalRecords;
+      }
+    }
+  } catch(e) { console.warn('[GlobalRecords] /batches/all-full failed, falling back:', e.message); }
+
+  // Fallback — older deployed server without the combined endpoint yet.
   const records = [];
   try {
     const res  = await fetch(API+'/batches');
@@ -10792,13 +11214,7 @@ async function loadGlobalRecords() {
       try {
         const r    = await fetch(API+'/batches/'+b.id);
         const full = await r.json();
-        const player = full.player||'';
-        const aliases = (window._playerRegistry && window._playerRegistry[player.toLowerCase()])
-          ? (window._playerRegistry[player.toLowerCase()].aliases||[]) : (full.aliases||[]);
-        for (const rep of (full.replays||[])) {
-          const rec = buildMatchRecord(rep, player, aliases, full);
-          if (rec) records.push(rec);
-        }
+        records.push(...buildGlobalRecordsFromBatches([full]));
       } catch(e) {}
     }));
   } catch(e) {}
