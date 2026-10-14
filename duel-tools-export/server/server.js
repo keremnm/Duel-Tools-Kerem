@@ -765,6 +765,32 @@ function flipGames(games) {
   }));
 }
 
+// Flips a parsed match's BASE game data (games/cards/score/result) to the
+// opponent's perspective — the same swap crossLinkReplay's first-time
+// mirroring does below, pulled out standalone so Merge Replay propagation
+// can re-apply it to an ALREADY cross-linked twin without redoing all of
+// crossLinkReplay's first-time-link bookkeeping. Deliberately does NOT touch
+// resultOverride/scoreOverride/overrideNote — the twin's own override, if it
+// has one, is re-stamped on top afterward by reapplyOverridesToParsed(),
+// same "each side's own override always wins" rule the override endpoint
+// below already follows.
+function flipParsedBaseForTwin(parsed, twinOppName) {
+  if (!parsed) return null;
+  const draws = Number(parsed.draws) || 0;
+  const flippedMyW = parsed.oppW, flippedOppW = parsed.myW;
+  return {
+    oppName: twinOppName || parsed.oppName || null,
+    myDeck:  parsed.oppDeck || 'Unknown',
+    oppDeck: parsed.myDeck  || 'Unknown',
+    games:   flipGames(parsed.games),
+    allMine: parsed.allOpp || [],
+    allOpp:  parsed.allMine || [],
+    myW: flippedMyW, oppW: flippedOppW, draws,
+    score: draws > 0 ? `${flippedMyW}-${flippedOppW}-${draws}` : `${flippedMyW}-${flippedOppW}`,
+    result: flipResult(parsed.result),
+  };
+}
+
 function crossLinkReplay(replayData, opponentUsername, originalBatchPlayer) {
   const opponentEntry = findPlayerByUsername(opponentUsername);
   if (!opponentEntry) return null;
@@ -1612,7 +1638,8 @@ const server = http.createServer(async (req, res) => {
     const b = db.batches[parts[1]];
     if (!b) return json(res, 404, { error:'Not found' });
     return readBody(req, async data => {
-      const r = (b.replays||[]).find(r => r.replayId === decodeURIComponent(parts[3]));
+      const replayId = decodeURIComponent(parts[3]);
+      const r = (b.replays||[]).find(r => r.replayId === replayId);
       if (!r) return json(res, 404, { error:'Replay not found in batch' });
       const fields = ['plays','allPlays','parsed','timedOut','oppName','player1','player2','eventLabel','mergedReplays'];
       for (const f of fields) { if (data[f] !== undefined) r[f] = data[f]; }
@@ -1620,7 +1647,38 @@ const server = http.createServer(async (req, res) => {
       r.savedAt = Date.now();
       await saveBatchToPostgres(b.id);
       console.log(`[replay retry] Updated replay ${r.replayId} in batch ${b.id}`);
-      return json(res, 200, { ok:true });
+
+      // Merge Replay must trump cross-linking too, same reasoning as the
+      // override endpoint below: this same replayId may already exist as a
+      // mirrored copy in the opponent's own batch (from an earlier
+      // cross-link), and that twin copy would otherwise keep showing the
+      // pre-merge, incomplete match forever — in ITS Deck Viewer, and in
+      // every GFWL/Profile/Format-Data stat that reads it. Gated on
+      // `data.mergedReplays` specifically (only the Merge Replay flow sends
+      // it) so an ordinary retry — which also PATCHes `parsed` here but
+      // isn't a merge — doesn't unexpectedly start mirroring itself onto
+      // the opponent's copy too.
+      let twinsUpdated = 0;
+      if (data.parsed && data.mergedReplays !== undefined) {
+        const twinBatchIds = [];
+        for (const ob of Object.values(db.batches)) {
+          if (ob.id === b.id) continue;
+          const twin = (ob.replays||[]).find(tr => tr.replayId === replayId);
+          if (!twin) continue;
+          const flippedBase = flipParsedBaseForTwin(r.parsed, b.player || null);
+          twin.parsed = { ...(twin.parsed||{}), ...flippedBase };
+          twin.mergedReplays = data.mergedReplays; // replay IDs/game numbers are absolute, not perspective-dependent
+          twin.allPlays = [];
+          reapplyOverridesToParsed(twin); // twin's OWN override (if any) still wins, same rule as everywhere else
+          twin.savedAt = Date.now();
+          twinBatchIds.push(ob.id);
+        }
+        for (const bid of twinBatchIds) await saveBatchToPostgres(bid);
+        twinsUpdated = twinBatchIds.length;
+        if (twinsUpdated) console.log(`[merge] Propagated merged replay to ${twinsUpdated} cross-linked twin batch(es) for ${replayId}`);
+      }
+
+      return json(res, 200, { ok:true, twinsUpdated });
     });
   }
 
