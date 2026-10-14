@@ -9832,13 +9832,27 @@ async function editDeckType(m, isOpp, badgeEl, refreshFn) {
     }
     // Also keep any cached GFWL batch snapshot in sync, so Archive stats
     // (deck charts, round reports) reflect the fix immediately if that
-    // season is re-opened this session, without needing a full reload.
+    // season is re-opened this session, without needing a full reload. This
+    // walks EVERY cached batch, not just batchesToTry, because the
+    // opponent's cross-linked twin (my deck <-> their opp deck, flipped)
+    // usually lives in a batch this Deck Viewer session never loaded
+    // directly — only GFWL Archive did, earlier — so a batch outside
+    // batchesToTry is assumed to be that twin and gets the swapped fields,
+    // same rule applyOverrideToReplay(r, data, true) uses server-side.
     if (window._gfwlBatchCache) {
-      for (const bid of batchesToTry) {
-        const cached = window._gfwlBatchCache[bid];
-        if (cached && cached.replays) {
-          const rep = cached.replays.find(r => r.replayId === m.replayId);
-          if (rep) { rep.myDeckOverride = m.myDeckOverride||null; rep.oppDeckOverride = m.oppDeckOverride||null; }
+      for (const cached of Object.values(window._gfwlBatchCache)) {
+        if (!cached || !cached.id || !cached.replays) continue;
+        const rep = cached.replays.find(r => r.replayId === m.replayId);
+        if (!rep) continue;
+        const isTwin = !batchesToTry.has(cached.id);
+        const myOv  = m.myDeckOverride  || null;
+        const oppOv = m.oppDeckOverride || null;
+        if (isTwin) {
+          rep.myDeckOverride = oppOv; rep.oppDeckOverride = myOv;
+          if (rep.parsed) { if (oppOv) rep.parsed.myDeck = oppOv; if (myOv) rep.parsed.oppDeck = myOv; }
+        } else {
+          rep.myDeckOverride = myOv; rep.oppDeckOverride = oppOv;
+          if (rep.parsed) { if (myOv) rep.parsed.myDeck = myOv; if (oppOv) rep.parsed.oppDeck = oppOv; }
         }
       }
     }
@@ -10312,6 +10326,38 @@ function showOverrideNoteModal(m) {
   document.body.appendChild(overlay);
 }
 
+// W/L flip for the client side of the override/merge propagation — mirrors
+// flipResult() on the server, needed here because syncing a cross-linked
+// twin's CACHED copy (see applyResultOverride below) has to mirror the same
+// flip the server already applied when it saved that twin, not reapply the
+// override as-is.
+function flipResultClient(r) { return r === 'w' ? 'l' : r === 'l' ? 'w' : r; }
+
+// Mirrors flipGames()/flipParsedBaseForTwin() on the server — used to keep a
+// cross-linked twin's CACHED copy (window._gfwlBatchCache) in sync with a
+// merge saved from the other side, without waiting on a page reload to
+// re-fetch it. See the comment on mergeReplayIntoMatch's cache-sync block.
+function flipGamesClient(games) {
+  if (!games) return games;
+  return games.map(g => ({ ...g, mine: g.opp, opp: g.mine, mineRaw: g.oppRaw, oppRaw: g.mineRaw }));
+}
+function flipParsedBaseForTwinClient(parsed, twinOppName) {
+  if (!parsed) return null;
+  const draws = Number(parsed.draws) || 0;
+  const flippedMyW = parsed.oppW, flippedOppW = parsed.myW;
+  return {
+    oppName: twinOppName || parsed.oppName || null,
+    myDeck:  parsed.oppDeck || 'Unknown',
+    oppDeck: parsed.myDeck  || 'Unknown',
+    games:   flipGamesClient(parsed.games),
+    allMine: parsed.allOpp || [],
+    allOpp:  parsed.allMine || [],
+    myW: flippedMyW, oppW: flippedOppW, draws,
+    score: draws > 0 ? `${flippedMyW}-${flippedOppW}-${draws}` : `${flippedMyW}-${flippedOppW}`,
+    result: flipResultClient(parsed.result),
+  };
+}
+
 // ── Persist a result/score override (or clear one), searching every batch this
 // session knows about for the one that actually owns the replay — mirrors the
 // same multi-batch lookup used by editDeckType, since when viewing matches via
@@ -10335,6 +10381,8 @@ async function applyResultOverride(m, payload) {
         rep.parsed.resultOverride = payload.resultOverride;
         rep.parsed.scoreOverride  = payload.scoreOverride;
         rep.parsed.overrideNote   = payload.overrideNote;
+        if (payload.resultOverride) rep.parsed.resultEffective = payload.resultOverride;
+        else delete rep.parsed.resultEffective;
       }
     }
     try {
@@ -10343,6 +10391,42 @@ async function applyResultOverride(m, payload) {
       });
       if (res.ok) { const d = await res.json(); if (d.ok && d.found) savedToServer = true; }
     } catch(e) {}
+  }
+
+  // Also keep any cached GFWL Archive batch snapshot in sync. GFWL Archive
+  // (team pages, player profiles, week/round reports) reads match data from
+  // window._gfwlBatchCache, which is only fetched once per batch per session
+  // and is never invalidated on its own — so without this, the server-side
+  // save above (and its own propagation to the opponent's cross-linked twin,
+  // done server-side by the /override route) would be completely correct,
+  // but Archive would keep showing the OLD pre-override result for both
+  // players until a full page reload. That looked exactly like "the override
+  // isn't saving" even though it had actually saved fine.
+  // This has to walk EVERY cached batch, not just batchesToTry — the
+  // opponent's cross-linked twin almost always lives in a batch this Deck
+  // Viewer session never loaded directly, only GFWL Archive did, earlier.
+  // A batch NOT in batchesToTry is assumed to be that twin, so the override
+  // is flipped for it — same rule applyOverrideToReplay(r, data, true) uses
+  // server-side.
+  if (window._gfwlBatchCache) {
+    for (const cached of Object.values(window._gfwlBatchCache)) {
+      if (!cached || !cached.id || !cached.replays) continue;
+      const rep = cached.replays.find(r => r.replayId === m.replayId);
+      if (!rep) continue;
+      const isTwin = !batchesToTry.has(cached.id);
+      const ro = payload.resultOverride ? (isTwin ? flipResultClient(payload.resultOverride) : payload.resultOverride) : null;
+      const so = payload.scoreOverride ? (isTwin ? { my: payload.scoreOverride.opp, opp: payload.scoreOverride.my } : payload.scoreOverride) : null;
+      rep.resultOverride = ro;
+      rep.scoreOverride  = so;
+      rep.overrideNote   = payload.overrideNote;
+      if (rep.parsed) {
+        rep.parsed.resultOverride = ro;
+        rep.parsed.scoreOverride  = so;
+        rep.parsed.overrideNote   = payload.overrideNote;
+        if (ro) rep.parsed.resultEffective = ro;
+        else delete rep.parsed.resultEffective;
+      }
+    }
   }
 
   if (!savedToServer) {
@@ -10811,10 +10895,30 @@ async function mergeReplayIntoMatch(m, newId, gameNums) {
     if (!saveRes.ok) return { ok:false, error:'Merged locally but failed to save to the server.' };
 
     // Keep any cached GFWL batch snapshot in sync, same as retryOneReplay/overrides.
-    if (window._gfwlBatchCache && window._gfwlBatchCache[ownerBatch.id]) {
-      const cached = window._gfwlBatchCache[ownerBatch.id];
-      const crep = cached.replays && cached.replays.find(x=>x.replayId===m.replayId);
-      if (crep) { crep.parsed = r.parsed; crep.mergedReplays = r.mergedReplays; }
+    // This has to walk EVERY cached batch, not just ownerBatch — the server
+    // (see the PATCH /api/batches/:id/replay/:replayId route) also just
+    // propagated this merge to the opponent's cross-linked twin batch,
+    // flipped to their perspective, and that twin's own GFWL Archive cache
+    // entry needs the same flip applied here so Archive reflects the merge
+    // on BOTH players immediately, without a reload. A cached batch that
+    // isn't ownerBatch is assumed to be that twin.
+    if (window._gfwlBatchCache) {
+      for (const cached of Object.values(window._gfwlBatchCache)) {
+        if (!cached || !cached.id || !cached.replays) continue;
+        const crep = cached.replays.find(x => x.replayId === m.replayId);
+        if (!crep) continue;
+        if (cached.id === ownerBatch.id) {
+          crep.parsed = r.parsed; crep.mergedReplays = r.mergedReplays;
+        } else {
+          crep.parsed = { ...(crep.parsed||{}), ...flipParsedBaseForTwinClient(r.parsed, ownerBatch.player || null) };
+          crep.mergedReplays = r.mergedReplays; // replay IDs/game numbers are absolute, not perspective-dependent
+          // The twin's OWN override (if any) still wins, same rule as everywhere else.
+          if (crep.resultOverride) { crep.parsed.resultOverride = crep.resultOverride; crep.parsed.resultEffective = crep.resultOverride; }
+          else { crep.parsed.resultOverride = null; delete crep.parsed.resultEffective; }
+          crep.parsed.scoreOverride = crep.scoreOverride || null;
+          if (crep.overrideNote) crep.parsed.overrideNote = crep.overrideNote;
+        }
+      }
     }
 
     st('Replay merged — ' + remapped.length + ' game(s) added', 'var(--green)');
