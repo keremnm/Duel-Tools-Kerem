@@ -208,9 +208,8 @@ select{cursor:pointer}
 .card-grid.sm .cth{max-width:60px;margin:0 auto}
 .card-grid.lg .cth{max-width:130px;margin:0 auto}
 
-/* ── Deck Data tab ── */
-#pg-deckdata{flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:18px 20px;scrollbar-width:thin;scrollbar-color:var(--border) var(--bg)}
-#pg-stats{flex-direction:column;overflow-y:auto;overflow-x:hidden}
+/* ── Format Data tab ── */
+#pg-formatdata{flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:18px 20px;scrollbar-width:thin;scrollbar-color:var(--border) var(--bg)}
 #pg-profiles{flex-direction:column;overflow:hidden}
 .dd-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px}
 .dd-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
@@ -517,7 +516,7 @@ select{cursor:pointer}
   /* ══════════════════════════════════════════════════════════════
      DECK DATA + STATS (secondary — just make scrollable)
      ══════════════════════════════════════════════════════════════ */
-  #pg-deckdata, #pg-stats { padding: 10px !important; }
+  #pg-formatdata { padding: 10px !important; }
   .dd-tabs { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
   .dd-tabs::-webkit-scrollbar { display: none; }
   .dd-table { font-size: 11px; }
@@ -531,7 +530,6 @@ select{cursor:pointer}
     font-size: 10px !important; padding: 3px 8px !important;
     white-space: nowrap; flex-shrink: 0; min-height: 36px;
   }
-  #pg-stats .stats-grid { grid-template-columns: 1fr !important; }
 
   /* ══════════════════════════════════════════════════════════════
      IN-GAME TOOLS (deprioritised — just keep it functional)
@@ -612,13 +610,7 @@ select{cursor:pointer}
       <button class="ntab on" id="ntab-profiles" onclick="switchTab('profiles',this)">Profiles</button>
       <button class="ntab" id="ntab-deck" onclick="switchTab('deck',this)">Deck Viewer</button>
       <button class="ntab" id="ntab-rps" onclick="switchTab('rps',this)">RPS Analysis</button>
-      <div style="position:relative;display:inline-block" id="deckdata-nav-wrap">
-        <button class="ntab" onclick="toggleDeckDataMenu(this)" id="deckdata-nav-btn">Deck Data ▾</button>
-        <div id="deckdata-dropdown" style="display:none;position:absolute;top:100%;left:0;background:var(--panel);border:1px solid var(--border);border-radius:6px;z-index:999;min-width:140px;box-shadow:0 4px 16px rgba(0,0,0,.5)">
-          <button onclick="switchTab('deckdata',document.getElementById('deckdata-nav-btn'));toggleDeckDataMenu()" style="display:block;width:100%;background:none;border:none;color:var(--text);font-family:monospace;font-size:12px;padding:8px 16px;cursor:pointer;text-align:left">Deck Data</button>
-          <button onclick="switchTab('stats',document.getElementById('deckdata-nav-btn'));toggleDeckDataMenu()" style="display:block;width:100%;background:none;border:none;color:var(--text);font-family:monospace;font-size:12px;padding:8px 16px;cursor:pointer;text-align:left">Stats</button>
-        </div>
-      </div>
+      <button class="ntab" id="ntab-formatdata" onclick="switchTab('formatdata',this)">Format Data</button>
       <button class="ntab" id="ntab-ingame" onclick="switchTab('ingame',this)">In-Game Tools</button>
       <button class="ntab" id="gfwl-prep-tab" onclick="switchTab('gfwl',this)">GFWL Archive</button>
       <button class="ntab" id="ntab-admin" onclick="switchTab('admin',this)" style="display:none">⚙ Admin</button>
@@ -630,8 +622,7 @@ select{cursor:pointer}
         <option value="profiles">Profiles</option>
         <option value="deck">Deck Viewer</option>
         <option value="rps">RPS Analysis</option>
-        <option value="deckdata">Deck Data</option>
-        <option value="stats">Stats</option>
+        <option value="formatdata">Format Data</option>
         <option value="gfwl">GFWL Archive</option>
       </select>
     </div>
@@ -781,6 +772,9 @@ select{cursor:pointer}
             <select id="deck-year-filter" onchange="buildDeck()" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 6px;border-radius:4px;outline:none;width:68px">
               <option value="">All</option>
             </select>
+            <select id="deck-season-filter" onchange="buildDeck()" title="GFWL Season" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:2px 6px;border-radius:4px;outline:none;width:68px">
+              <option value="">All S#</option>
+            </select>
           </div>
         </div>
         <div class="match-list" id="match-list"><div class="dno">Select a batch first.</div></div>
@@ -795,166 +789,31 @@ select{cursor:pointer}
       </div>
     </div>
 
-    <div class="page" id="pg-deckdata">
-      <div class="sec" style="flex-shrink:0;padding:18px 20px;overflow-y:auto;flex:1">
-        <div class="dd-tabs">
-          <button class="dd-tab on" onclick="ddSwitchTab('matchups',this)">Deck Matchups</button>
-          <button class="dd-tab" onclick="ddSwitchTab('cardwr',this)">Card Win Rate</button>
-          <button class="dd-tab" onclick="ddSwitchTab('classifier',this)">Deck Classifier</button>
+    <!-- Format Data page -->
+    <div class="page" id="pg-formatdata">
+      <div style="max-width:980px;margin:0 auto;width:100%;display:flex;flex-direction:column;gap:18px">
+        <div>
+          <div style="font-size:16px;font-weight:bold;color:var(--text);margin-bottom:4px">Format Data</div>
+          <div style="font-size:12px;color:var(--muted)">Matchup win rates across every saved replay in Duel Tools. Pick a deck type to see how it performs against the field.</div>
         </div>
-        <div id="dd-matchups">
-          <div class="dd-section-title">Deck Matchup Win Rates — All Batches</div>
-          <div class="dd-section-sub">Combined data from all saved batches. Filter by player deck type using the buttons below.</div>
-          <!-- Deck filter hotkeys -->
-          <div style="margin:12px 0 8px;display:flex;flex-wrap:wrap;gap:5px" id="dd-deck-hotkeys">
-            <button class="dd-btn on" onclick="ddSetDeckFilter('All',this)">All Decks</button>
-            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Chaos Turbo',this)">Chaos Turbo</button>
-            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Chaos Control',this)">Chaos Control</button>
-            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Warrior',this)">Warrior</button>
-            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Chaos Warrior',this)">Chaos Warrior</button>
-            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Thunder Clap',this)">Thunder Clap</button>
-            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Gearfried Warriors',this)">Gearfried</button>
-            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Zombie',this)">Zombie</button>
-            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Goat Control',this)">Goat Control</button>
-            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Earth Aggro',this)">Earth Aggro</button>
-            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Panda Burn',this)">Panda Burn</button>
-            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Reasoning Gate Turbo',this)">Reasoning Gate Turbo</button>
-            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Reasoning Gate Machine',this)">Reasoning Gate Machine</button>
-            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Chaos Return',this)">Chaos Return</button>
-            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Chaos Relinquished',this)">Chaos Relinquished</button>
-            <button class="dd-btn-sec" onclick="ddSetDeckFilter('Chaos Recruiter',this)">Chaos Recruiter</button>
-          </div>
-          <!-- Custom deck filter dropdown -->
-          <div style="margin-bottom:12px;display:flex;align-items:center;gap:8px">
-            <label class="lbl" style="margin:0;white-space:nowrap">OR FILTER BY DECK:</label>
-            <select id="dd-matchup-deck-select" onchange="ddSetDeckFilterFromSelect(this.value)"
-              style="background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;outline:none;cursor:pointer;flex:1;max-width:300px">
-              <option value="All">All Decks</option>
-            </select>
-          </div>
-          <div id="dd-matchup-out"><div class="dd-empty">Loading all batch data...</div></div>
-        </div>
-        <div id="dd-cardwr" style="display:none">
-          <div class="dd-section-title">Card Win Rate — All Batches</div>
-          <div class="dd-section-sub">Win rate impact of cards across all saved batches combined. Filter by deck type.</div>
-          <!-- Deck filter hotkeys (same set, separate instance) -->
-          <div style="margin:12px 0 8px;display:flex;flex-wrap:wrap;gap:5px" id="dd-cwr-hotkeys">
-            <button class="dd-btn on" onclick="ddSetCWRFilter('All',this)">All Decks</button>
-            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Chaos Turbo',this)">Chaos Turbo</button>
-            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Chaos Control',this)">Chaos Control</button>
-            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Warrior',this)">Warrior</button>
-            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Chaos Warrior',this)">Chaos Warrior</button>
-            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Thunder Clap',this)">Thunder Clap</button>
-            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Gearfried Warriors',this)">Gearfried</button>
-            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Zombie',this)">Zombie</button>
-            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Goat Control',this)">Goat Control</button>
-            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Earth Aggro',this)">Earth Aggro</button>
-            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Panda Burn',this)">Panda Burn</button>
-            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Reasoning Gate Turbo',this)">Reasoning Gate Turbo</button>
-            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Reasoning Gate Machine',this)">Reasoning Gate Machine</button>
-            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Chaos Return',this)">Chaos Return</button>
-            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Chaos Relinquished',this)">Chaos Relinquished</button>
-            <button class="dd-btn-sec" onclick="ddSetCWRFilter('Chaos Recruiter',this)">Chaos Recruiter</button>
-          </div>
-          <div id="dd-quick-picks" style="margin-bottom:10px"></div>
-          <!-- Custom deck filter dropdown for decks not in hotkeys -->
-          <div style="margin-bottom:12px;display:flex;align-items:center;gap:8px">
-            <label class="lbl" style="margin:0;white-space:nowrap">OR FILTER BY DECK:</label>
-            <select id="dd-cwr-deck-select" onchange="ddSetCWRFilterFromSelect(this.value)"
-              style="background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;outline:none;cursor:pointer;flex:1;max-width:300px">
-              <option value="All">All Decks</option>
-            </select>
-          </div>
-          <div style="margin-bottom:10px">
-            <label class="lbl">CARD NAME (partial match ok)</label>
-            <input id="dd-card-name" type="text" placeholder="e.g. Night Assailant, Scapegoat, Thunder Dragon..."/>
-          </div>
-          <!-- Hidden selects kept for JS compatibility -->
-          <select id="dd-cwr-my-deck" style="display:none"><option value="All">All My Decks</option></select>
-          <select id="dd-cwr-opp-deck" style="display:none"><option value="All">All Opponents</option></select>
-          <div style="display:flex;gap:8px;margin-bottom:16px">
-            <button class="dd-btn" onclick="ddCardWRGlobal()">▶ Calculate</button>
-            <button class="dd-btn-sec" onclick="document.getElementById('dd-card-name').value='';document.getElementById('dd-cardwr-out').innerHTML=''">↺ Clear</button>
-          </div>
-          <div id="dd-cardwr-out"><div class="dd-empty">Select a deck filter and enter a card name.</div></div>
-        </div>
-        <div id="dd-classifier" style="display:none">
-          <div class="dd-section-title">Deck Type Classifier</div>
-          <div class="dd-section-sub">Paste a YDK file or card list to identify the deck type using the GFWL model.</div>
-          <textarea id="dd-ydk" style="min-height:110px;margin-top:10px;margin-bottom:8px" placeholder="Paste YDK file contents, card names, or card IDs (one per line)..."></textarea>
-          <div style="display:flex;gap:8px;margin-bottom:14px">
-            <button class="dd-btn" onclick="ddClassifyDeck()">▶ Classify Deck</button>
-            <button class="dd-btn-sec" onclick="document.getElementById('dd-ydk').value='';document.getElementById('dd-class-out').innerHTML=''">↺ Clear</button>
-          </div>
-          <div id="dd-class-out"></div>
-        </div>
-      </div>
-    </div>
-    <!-- Stats page -->
-    <div class="page" id="pg-stats">
-      <div style="flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:20px">
-
-        <!-- Top bar: player selector + search + global toggle -->
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-          <div class="slbl" style="margin:0;flex-shrink:0">SELECT PLAYER</div>
-          <input id="stats-player-search" type="text" placeholder="Search player..."
-            oninput="filterStatsPills(this.value)"
-            style="width:160px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:12px;padding:5px 9px;outline:none;flex-shrink:0"/>
-          <div id="stats-player-pills" style="display:flex;gap:6px;flex-wrap:wrap;flex:1"></div>
-          <button class="dd-btn-sec" onclick="loadStatsGlobal()" id="stats-global-btn"
-            style="margin-left:auto;font-size:12px;padding:6px 16px;flex-shrink:0">🌐 Global View</button>
+          <div class="slbl" style="margin:0">DECK TYPE</div>
+          <select id="fd-deck-select" onchange="renderFormatDataTable(this.value)"
+            style="background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--green);font-family:monospace;font-weight:bold;font-size:13px;padding:7px 12px;outline:none;cursor:pointer;min-width:240px">
+            <option value="">Loading…</option>
+          </select>
+          <div class="slbl" style="margin:0">YEAR</div>
+          <select id="fd-year-filter" onchange="renderFormatDataTable()"
+            style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;width:84px">
+            <option value="">All</option>
+          </select>
+          <div class="slbl" style="margin:0">GFWL S#</div>
+          <select id="fd-season-filter" onchange="renderFormatDataTable()"
+            style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;width:84px">
+            <option value="">All</option>
+          </select>
         </div>
-
-        <!-- Two-column: global stats + player stats -->
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
-
-          <!-- Left: Global Deck Usage -->
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px">
-            <div style="font-size:14px;font-weight:bold;color:var(--text);margin-bottom:14px">Global Deck Usage</div>
-            <canvas id="chart-global-usage" style="max-height:260px"></canvas>
-            <div id="chart-global-usage-legend" style="margin-top:12px;display:flex;flex-wrap:wrap;gap:6px"></div>
-          </div>
-
-          <!-- Right: Player Deck Usage -->
-          <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px">
-            <div id="stats-player-heading" style="font-size:14px;font-weight:bold;color:var(--text);margin-bottom:14px">Select a player</div>
-            <canvas id="chart-player-usage" style="max-height:260px"></canvas>
-            <div id="chart-player-usage-legend" style="margin-top:12px;display:flex;flex-wrap:wrap;gap:6px"></div>
-          </div>
-
-        </div>
-
-        <!-- Global totals row -->
-        <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px">
-          <div style="font-size:14px;font-weight:bold;color:var(--text);margin-bottom:14px">🌐 Total Batch Data — All Players, All Batches</div>
-          <div id="stats-global-chips" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px"></div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-            <div>
-              <div class="slbl" style="margin-bottom:8px">Total Deck Win %</div>
-              <div id="stats-deck-winrate" style="display:flex;flex-direction:column;gap:6px"></div>
-            </div>
-            <div>
-              <div class="slbl" style="margin-bottom:8px">Top Card Win % (all batches)</div>
-              <div id="stats-card-winrate" style="display:flex;flex-direction:column;gap:6px"></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Player detail: deck win% + card win% -->
-        <div id="stats-player-detail" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px">
-          <div id="stats-player-detail-heading" style="font-size:14px;font-weight:bold;color:var(--text);margin-bottom:14px"></div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-            <div>
-              <div class="slbl" style="margin-bottom:8px">Deck Win %</div>
-              <div id="stats-player-deckwr"></div>
-            </div>
-            <div>
-              <div class="slbl" style="margin-bottom:8px">Top Cards Seen</div>
-              <div id="stats-player-cards"></div>
-            </div>
-          </div>
-        </div>
-
+        <div id="fd-output"><div class="dd-empty">Loading replay data…</div></div>
       </div>
     </div>
 
@@ -2481,21 +2340,10 @@ function switchTab(name, btn) {
   if (pg) pg.classList.add('on');
   if (name === 'ingame') igtTimerUpdate();
   if (name === 'gfwl') gfwlInit();
-  if (name === 'stats')    loadStats();
   if (name === 'profiles') loadProfiles();
   if (name === 'admin')    renderAdminPage();
-  // Deck Data tab always shows ALL saved batches — never filtered by active batch
-  if (name === 'deckdata') {
-    if (!_globalRecords.length) {
-      loadGlobalRecords().then(() => {
-        renderGlobalMatchups(_ddDeckFilter);
-        populateCWRDeckDropdown();
-        populateMatchupDeckDropdown();
-      });
-    } else {
-      renderGlobalMatchups(_ddDeckFilter);
-    }
-  }
+  // Format Data tab always shows ALL saved replays — never filtered by active batch
+  if (name === 'formatdata') loadFormatData();
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -6925,6 +6773,13 @@ async function flConfirmImport() {
     await go();
   }
 
+  // Importing a player's replays also teaches the server the real event date
+  // for each event code involved (see upsertEventDateFromFL on the server) —
+  // refresh the client-side cache so Year/Season filters and chronological
+  // sorting everywhere else pick up any newly-learned or corrected dates
+  // without needing a page reload.
+  loadEventDates();
+
   if (deckCandidates.length) {
     st('Importing '+deckCandidates.length+' decklist(s) from Format Library…', 'var(--amber)');
     const decks = getEventDecks(dtPlayer);
@@ -7959,6 +7814,26 @@ function buildDeck() {
       });
     }
   }
+
+  // Populate GFWL season filter dropdown from match event labels (e.g. "S8: WK 1" -> "S8")
+  const seasonSel = document.getElementById('deck-season-filter');
+  if (seasonSel) {
+    const curSeason = seasonSel.value;
+    const seasonsSet = new Set();
+    _matches.forEach(m => {
+      const code = eventGroupKey(m.eventLabel||'');
+      if (code && isGFWLSeason(code)) seasonsSet.add(code.toUpperCase());
+    });
+    const seasons = [...seasonsSet].sort((a,b) => {
+      const na = parseInt(a.replace(/^S/i,''),10) || 0, nb = parseInt(b.replace(/^S/i,''),10) || 0;
+      return nb - na;
+    });
+    seasonSel.innerHTML = '<option value="">All S#</option>' + seasons.map(s=>`<option value="${s}"${s===curSeason?'selected':''}>${s}</option>`).join('');
+    const filterSeason = seasonSel.value;
+    if (filterSeason) {
+      _matches = _matches.filter(m => eventGroupKey(m.eventLabel||'') === filterSeason);
+    }
+  }
   renderMatchSidebar('');
 
   // Render failed/suspect replays panel (timedOut / no data / score-vs-parsed
@@ -8840,19 +8715,6 @@ async function analyzeSlowPlay() {
     resultsEl.innerHTML = '<div style="color:var(--red);font-family:monospace;font-size:12px">Error: '+e.message+'</div>';
   }
 }
-
-// ── Deck Data nav dropdown ────────────────────────────────────────────────────
-function toggleDeckDataMenu() {
-  const dd = document.getElementById('deckdata-dropdown');
-  if (dd) dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
-}
-document.addEventListener('click', e => {
-  const wrap = document.getElementById('deckdata-nav-wrap');
-  if (wrap && !wrap.contains(e.target)) {
-    const dd = document.getElementById('deckdata-dropdown');
-    if (dd) dd.style.display = 'none';
-  }
-});
 
 // ── Build YDK from Event (with replay selection) ─────────────────────────────
 function showBuildEventYDKModal(eventId, matches) {
@@ -10917,10 +10779,6 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
   };
 }
 
-// ── Matchups from batch ────────────────────────────────────────────────
-// ── Global state for deck data filters ───────────────────────────────────────
-let _ddDeckFilter = 'All';
-let _ddCWRFilter  = 'All';
 let _globalRecords = []; // all records from all batches
 
 async function loadGlobalRecords() {
@@ -10945,86 +10803,208 @@ async function loadGlobalRecords() {
     }));
   } catch(e) {}
   _globalRecords = records;
-  populateCWRDeckDropdown();
-  populateMatchupDeckDropdown();
   return records;
 }
 
-function ddSetDeckFilter(deck, btn) {
-  _ddDeckFilter = deck;
-  document.querySelectorAll('#dd-deck-hotkeys button').forEach(b => {
-    b.className = b === btn ? 'dd-btn on' : 'dd-btn-sec';
-  });
-  const sel = document.getElementById('dd-matchup-deck-select');
-  if (sel) sel.value = deck;
-  renderGlobalMatchups(_ddDeckFilter);
+// ══════════════════════════════════════════════════════════════════════
+// FORMAT DATA — matchup win rates across every saved replay, by deck type
+// ══════════════════════════════════════════════════════════════════════
+
+// Wilson score interval — gives a sane confidence range even for small
+// sample sizes (unlike a naive normal approximation, which can blow up
+// past 0%/100% when n is small).
+function wilsonCI(wins, n) {
+  if (!n) return { low: 0, high: 0 };
+  const z = 1.96; // 95%
+  const p = wins / n;
+  const denom = 1 + (z*z)/n;
+  const center = p + (z*z)/(2*n);
+  const margin = z * Math.sqrt((p*(1-p) + (z*z)/(4*n)) / n);
+  const low  = Math.max(0, (center - margin) / denom) * 100;
+  const high = Math.min(1, (center + margin) / denom) * 100;
+  return { low: Math.round(low), high: Math.round(high) };
 }
 
-function ddSetDeckFilterFromSelect(deck) {
-  _ddDeckFilter = deck;
-  document.querySelectorAll('#dd-deck-hotkeys button').forEach(b => b.className = 'dd-btn-sec');
-  renderGlobalMatchups(_ddDeckFilter);
-}
-
-function populateMatchupDeckDropdown() {
-  const sel = document.getElementById('dd-matchup-deck-select');
-  if (!sel || !_globalRecords.length) return;
-  const decks = ['All', ...[...new Set(_globalRecords.map(r => r.myDeck).filter(Boolean))].sort()];
-  sel.innerHTML = decks.map(d => `<option value="${d}">${d === 'All' ? 'All Decks' : d}</option>`).join('');
-  sel.value = _ddDeckFilter;
-}
-
-function ddSetCWRFilter(deck, btn) {
-  _ddCWRFilter = deck;
-  // Update hotkey buttons
-  document.querySelectorAll('#dd-cwr-hotkeys button').forEach(b => {
-    b.className = b === btn ? 'dd-btn on' : 'dd-btn-sec';
-  });
-  // Sync dropdown
-  const sel = document.getElementById('dd-cwr-deck-select');
-  if (sel) sel.value = deck;
-  // Update quick picks
-  const filtered = _ddCWRFilter === 'All' ? _globalRecords : _globalRecords.filter(r => r.myDeck === _ddCWRFilter);
-  renderQuickPicks(buildQuickPicks(filtered, _ddCWRFilter));
-}
-
-function ddSetCWRFilterFromSelect(deck) {
-  _ddCWRFilter = deck;
-  // Deactivate all hotkey buttons (dropdown picked something custom)
-  document.querySelectorAll('#dd-cwr-hotkeys button').forEach(b => b.className = 'dd-btn-sec');
-  const filtered = _ddCWRFilter === 'All' ? _globalRecords : _globalRecords.filter(r => r.myDeck === _ddCWRFilter);
-  renderQuickPicks(buildQuickPicks(filtered, _ddCWRFilter));
-}
-
-function populateCWRDeckDropdown() {
-  const sel = document.getElementById('dd-cwr-deck-select');
-  if (!sel || !_globalRecords.length) return;
-  const decks = ['All', ...[...new Set(_globalRecords.map(r => r.myDeck).filter(Boolean))].sort()];
-  sel.innerHTML = decks.map(d => `<option value="${d}">${d === 'All' ? 'All Decks' : d}</option>`).join('');
-  sel.value = _ddCWRFilter;
-}
-
-async function renderGlobalMatchups(deckFilter) {
-  const out = document.getElementById('dd-matchup-out');
-  if (!out) return;
+async function loadFormatData() {
+  const out = document.getElementById('fd-output');
   if (!_globalRecords.length) {
-    out.innerHTML = '<div class="dd-empty">Loading...</div>';
+    out.innerHTML = '<div class="dd-empty">Loading replay data…</div>';
     await loadGlobalRecords();
   }
-  const records = deckFilter === 'All' ? _globalRecords : _globalRecords.filter(r => r.myDeck === deckFilter);
-  if (!records.length) {
-    out.innerHTML = `<div class="dd-empty">No replays found${deckFilter!=='All'?' for '+deckFilter:''}.</div>`;
-    return;
-  }
-  renderMatchupResults(records, deckFilter === 'All' ? 'All Players' : deckFilter);
+  populateFormatDataYearSeasonFilters();
+  populateFormatDataDropdown();
+  const sel = document.getElementById('fd-deck-select');
+  renderFormatDataTable(sel ? sel.value : '');
 }
 
-function ddCardWRGlobal() {
-  const cardName = (document.getElementById('dd-card-name').value||'').trim().toLowerCase();
-  if (!cardName) { st('Enter a card name', 'var(--red)'); return; }
-  const filtered = _ddCWRFilter === 'All' ? _globalRecords : _globalRecords.filter(r => r.myDeck === _ddCWRFilter);
-  if (!filtered.length) { document.getElementById('dd-cardwr-out').innerHTML = '<div class="dd-empty">No records. Check deck filter.</div>'; return; }
-  renderCardWinRate(filtered, cardName, document.getElementById('dd-cardwr-out'));
+// Year + GFWL Season filter dropdowns, populated from every saved replay
+// system-wide (not just the currently-selected deck type), so the options
+// stay available even if the chosen deck has no matches in a given year.
+function populateFormatDataYearSeasonFilters() {
+  const yearSel = document.getElementById('fd-year-filter');
+  const seasonSel = document.getElementById('fd-season-filter');
+  const yearsSet = new Set(), seasonsSet = new Set();
+  _globalRecords.forEach(r => {
+    const code = eventGroupKey(r.eventLabel||'');
+    if (!code) return;
+    if (isGFWLSeason(code)) { seasonsSet.add(code.toUpperCase()); return; }
+    const d = getEventDate(code);
+    if (d) yearsSet.add(d.slice(0,4));
+    const y = (r.eventLabel||'').match(/(20\d{2})/);
+    if (y) yearsSet.add(y[1]);
+  });
+  if (yearSel) {
+    const cur = yearSel.value;
+    const years = [...yearsSet].sort((a,b)=>b-a);
+    yearSel.innerHTML = '<option value="">All</option>' + years.map(y=>`<option value="${y}"${y===cur?'selected':''}>${y}</option>`).join('');
+  }
+  if (seasonSel) {
+    const cur = seasonSel.value;
+    const seasons = [...seasonsSet].sort((a,b) => {
+      const na = parseInt(a.replace(/^S/i,''),10) || 0, nb = parseInt(b.replace(/^S/i,''),10) || 0;
+      return nb - na;
+    });
+    seasonSel.innerHTML = '<option value="">All</option>' + seasons.map(s=>`<option value="${s}"${s===cur?'selected':''}>${s}</option>`).join('');
+  }
+}
+
+// Applies the Year + GFWL Season filter dropdowns to a list of global match
+// records. A record matches the year filter if its event resolves (via the
+// server-synced event-dates cache, or a literal year in the label) to that
+// year; it matches the season filter if its event's group code IS that
+// GFWL season code.
+function filterFormatDataRecords(records) {
+  const yearSel = document.getElementById('fd-year-filter');
+  const seasonSel = document.getElementById('fd-season-filter');
+  const filterYear = yearSel ? yearSel.value : '';
+  const filterSeason = seasonSel ? seasonSel.value : '';
+  let out = records;
+  if (filterYear) {
+    out = out.filter(r => {
+      const code = eventGroupKey(r.eventLabel||'');
+      const d = code ? getEventDate(code) : null;
+      if (d) return d.startsWith(filterYear);
+      return (r.eventLabel||'').includes(filterYear);
+    });
+  }
+  if (filterSeason) {
+    out = out.filter(r => eventGroupKey(r.eventLabel||'') === filterSeason);
+  }
+  return out;
+}
+
+function populateFormatDataDropdown() {
+  const sel = document.getElementById('fd-deck-select');
+  if (!sel) return;
+  const filtered = filterFormatDataRecords(_globalRecords);
+  const counts = {};
+  filtered.forEach(r => { const k = r.myDeck||'Unknown'; counts[k] = (counts[k]||0)+1; });
+  const decks = Object.keys(counts).sort((a,b) => counts[b]-counts[a]);
+  const cur = sel.value;
+  if (!decks.length) {
+    sel.innerHTML = '<option value="">No replays yet</option>';
+    return;
+  }
+  sel.innerHTML = decks.map(d => `<option value="${d}">${d} (${counts[d]})</option>`).join('');
+  sel.value = decks.includes(cur) ? cur : decks[0];
+}
+
+function renderFormatDataTable(deckType) {
+  const out = document.getElementById('fd-output');
+  if (!out) return;
+  if (!_globalRecords.length) {
+    out.innerHTML = '<div class="dd-empty">No replays found. Import or analyze a batch first.</div>';
+    return;
+  }
+  // Re-populate the deck dropdown (and its counts) whenever the year/season
+  // filter changes, since the set of decks with data can shrink.
+  populateFormatDataDropdown();
+  const sel = document.getElementById('fd-deck-select');
+  const deck = deckType || (sel ? sel.value : '');
+  const records = filterFormatDataRecords(_globalRecords).filter(r => (r.myDeck||'Unknown') === deck);
+  if (!records.length) {
+    out.innerHTML = `<div class="dd-empty">No replays found for ${deck||'this deck'}.</div>`;
+    return;
+  }
+
+  const mirrors = records.filter(r => (r.oppDeck||'Unknown') === deck);
+  const nonMirrors = records.filter(r => (r.oppDeck||'Unknown') !== deck);
+
+  const byOpp = {};
+  nonMirrors.forEach(r => {
+    const k = r.oppDeck || 'Unknown';
+    if (!byOpp[k]) byOpp[k] = { w:0, l:0 };
+    if (r.matchWon) byOpp[k].w++; else if (r.matchLost) byOpp[k].l++;
+  });
+  const rows = Object.entries(byOpp).sort((a,b) => (b[1].w+b[1].l)-(a[1].w+a[1].l));
+
+  const mirrorW = mirrors.filter(r=>r.matchWon).length;
+  const mirrorL = mirrors.filter(r=>r.matchLost).length;
+  const fieldW = nonMirrors.filter(r=>r.matchWon).length;
+  const fieldL = nonMirrors.filter(r=>r.matchLost).length;
+  const fieldTot = fieldW + fieldL;
+  const fieldWP = pct(fieldW, fieldTot);
+  const fieldCI = wilsonCI(fieldW, fieldTot);
+
+  out.innerHTML = '';
+
+  // Header chips
+  const chipsRow = document.createElement('div');
+  chipsRow.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap';
+  function chip(val, lbl, color) {
+    const ch = document.createElement('div');
+    ch.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:9px;padding:10px 16px;min-width:110px';
+    ch.innerHTML = `<span style="font-size:20px;font-weight:bold;color:${color||'var(--blue)'};display:block;line-height:1.2;margin-bottom:2px">${val}</span><span style="font-size:11px;color:var(--muted)">${lbl}</span>`;
+    return ch;
+  }
+  chipsRow.appendChild(chip(records.length, deck+' — Total Matches'));
+  chipsRow.appendChild(chip(mirrors.length, 'Mirror Matches ('+mirrorW+'-'+mirrorL+')', 'var(--purple,#a78bfa)'));
+  chipsRow.appendChild(chip(fieldWP+'%', 'Win Rate vs Field', fieldWP>=50?'var(--green)':'var(--red)'));
+  out.appendChild(chipsRow);
+
+  // Matchup table
+  const table = document.createElement('table');
+  table.className = 'dd-table';
+  table.style.marginTop = '4px';
+  table.innerHTML = '<thead><tr><th>Opponent Deck</th><th>N</th><th>W-L</th><th>Win %</th><th>95% CI</th><th style="min-width:90px"></th></tr></thead>';
+  const tbody = document.createElement('tbody');
+
+  rows.forEach(([opp, rec]) => {
+    const tot = rec.w + rec.l;
+    const wp = pct(rec.w, tot);
+    const ci = wilsonCI(rec.w, tot);
+    const tr = document.createElement('tr');
+    tr.style.cursor = 'pointer';
+    tr.title = 'Click to see these replays in the Deck Viewer';
+    tr.innerHTML = `
+      <td style="font-weight:bold;color:var(--text)">${opp}</td>
+      <td class="dd-record">${tot}</td>
+      <td><span class="dd-pct-w">${rec.w}</span>-<span class="dd-pct-l">${rec.l}</span></td>
+      <td style="font-weight:bold;color:${wp>=50?'var(--green)':'var(--red)'}">${wp}%</td>
+      <td style="color:var(--muted);font-size:11px">${ci.low}–${ci.high}%</td>
+      <td><div class="dd-winbar"><div class="dd-winbar-w" style="width:${tot?rec.w/tot*100:0}%"></div><div class="dd-winbar-l" style="width:${tot?rec.l/tot*100:0}%"></div></div></td>`;
+    tbody.appendChild(tr);
+  });
+
+  // Summary row — all non-mirror opponents combined
+  const sumTr = document.createElement('tr');
+  sumTr.style.cssText = 'background:var(--card2);font-weight:bold';
+  sumTr.innerHTML = `
+    <td style="color:var(--text)">(vs Field)</td>
+    <td class="dd-record">${fieldTot}</td>
+    <td><span class="dd-pct-w">${fieldW}</span>-<span class="dd-pct-l">${fieldL}</span></td>
+    <td style="color:${fieldWP>=50?'var(--green)':'var(--red)'}">${fieldWP}%</td>
+    <td style="color:var(--muted);font-size:11px;font-weight:normal">${fieldCI.low}–${fieldCI.high}%</td>
+    <td><div class="dd-winbar"><div class="dd-winbar-w" style="width:${fieldTot?fieldW/fieldTot*100:0}%"></div><div class="dd-winbar-l" style="width:${fieldTot?fieldL/fieldTot*100:0}%"></div></div></td>`;
+  tbody.appendChild(sumTr);
+
+  table.appendChild(tbody);
+  out.appendChild(table);
+
+  const note = document.createElement('div');
+  note.style.cssText = 'font-size:10px;color:var(--dim);margin-top:4px';
+  note.textContent = 'Deck types auto-classified by TF-IDF model. 95% CI via Wilson score interval. Mirror matches excluded from the opponent breakdown above.';
+  out.appendChild(note);
 }
 
 // ── Profile sub-tabs ─────────────────────────────────────────────────────────
@@ -11411,190 +11391,6 @@ function renderProfileCardWR(records, cardName, out) {
   }
 }
 
-function ddMatchupsFromBatch() {
-  if (!_activeBatch || !_activeBatch.replays || !_activeBatch.replays.length) {
-    alert('No batch loaded. Run an analysis first.');
-    return;
-  }
-  const player  = _activeBatch.player;
-  // Use _matches (already parsed, has deck types) if available
-  // otherwise fall back to building from raw replay data
-  let records = [];
-  if (_matches && _matches.length) {
-    records = _matches.map(m => ({
-      replayId:  m.replayId,
-      player,
-      oppName:   m.oppName,
-      eventLabel: m.eventLabel||'',
-      myDeck:    (classifyFromCards(m.allMine)||{dc:'Unknown'}).dc,
-      oppDeck:   (classifyFromCards(m.allOpp)||{dc:'Unknown'}).dc,
-      matchWon:  m.result === 'w',
-      matchLost: m.result === 'l',
-      result:    m.result,
-      score:     m.score,
-      myW:       m.myW,
-      oppW:      m.oppW,
-      draws:     m.draws,
-      games:     m.games,
-      allMine:   m.allMine,
-      allOpp:    m.allOpp,
-      allMyCards: m.allMine.map(c => c.name.toLowerCase()),
-    }));
-  } else {
-    records = _activeBatch.replays
-      .map(r => buildMatchRecord(r, player, (() => {
-        const key = (_activeBatch.player||'').toLowerCase();
-        return (window._playerRegistry && window._playerRegistry[key])
-          ? (window._playerRegistry[key].aliases||[]) : (_activeBatch.aliases||[]);
-      })()))
-      .filter(Boolean);
-  }
-  // Also pre-populate Card Win Rate deck dropdowns
-  const myDecks  = ['All', ...[...new Set(records.map(r=>r.myDeck).filter(Boolean))].sort()];
-  const oppDecks = ['All', ...[...new Set(records.map(r=>r.oppDeck).filter(Boolean))].sort()];
-  const mySelEl  = document.getElementById('dd-cwr-my-deck');
-  const oppSelEl = document.getElementById('dd-cwr-opp-deck');
-  if (mySelEl)  mySelEl.innerHTML  = myDecks.map(d=>`<option value="${d}">${d==='All'?'All My Decks':d}</option>`).join('');
-  if (oppSelEl) oppSelEl.innerHTML = oppDecks.map(d=>`<option value="${d}">${d==='All'?'All Opponents':d}</option>`).join('');
-  // Pre-populate Card Win Rate quick picks when matchups calculated
-  setTimeout(() => renderQuickPicks(buildQuickPicks(records, 'All')), 100);
-  if (mySelEl) mySelEl.addEventListener('change', function() { renderQuickPicks(buildQuickPicks(records, this.value)); });
-  // Pre-populate quick picks
-  renderQuickPicks(buildQuickPicks(records, 'All'));
-  if (mySelEl) mySelEl.addEventListener('change', () => renderQuickPicks(buildQuickPicks(records, mySelEl.value)));
-  // Pre-populate quick picks with all my cards
-  renderQuickPicks(buildQuickPicks(records, 'All'));
-  // Update quick picks when my deck type dropdown changes
-  if (mySelEl) mySelEl.onchange = () => renderQuickPicks(buildQuickPicks(records, mySelEl.value));
-
-  if (!records.length) {
-    document.getElementById('dd-matchup-out').innerHTML =
-      '<div class="dd-empty">No processable replays in this batch.</div>';
-    return;
-  }
-
-  renderMatchupResults(records, player);
-}
-
-function renderMatchupResults(records, player) {
-  const out = document.getElementById('dd-matchup-out');
-  out.innerHTML = '';
-  // Apply year filter
-  const ddYrSel = document.getElementById('deckdata-year-filter');
-  if (ddYrSel) {
-    const cur = ddYrSel.value;
-
-    // Build unified options: All Data, GFWL Only, then years descending
-    const yrs = [...new Set(records.map(r => {
-      const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
-      if (isGFWLSeason(code)) return null;
-      const d = getEventDate(code);
-      return d ? d.slice(0,4) : null;
-    }).filter(Boolean))].sort((a,b) => b-a);
-
-    const hasGFWL = records.some(r => isGFWLSeason((r.eventLabel||'').split(':')[0].trim().toUpperCase()));
-
-    ddYrSel.innerHTML =
-      '<option value="">All Data</option>' +
-      (hasGFWL ? '<option value="__gfwl__">GFWL Only</option>' : '') +
-      yrs.map(y => `<option value="${y}"${y===cur?' selected':''}>${y}</option>`).join('');
-
-    // Restore selection if it still exists
-    if (cur && ddYrSel.querySelector(`option[value="${cur}"]`)) ddYrSel.value = cur;
-
-    // Apply filter
-    if (cur === '__gfwl__') {
-      records = records.filter(r => isGFWLSeason((r.eventLabel||'').split(':')[0].trim().toUpperCase()));
-    } else if (cur && cur !== '') {
-      records = records.filter(r => {
-        const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
-        if (isGFWLSeason(code)) return false;
-        const d = getEventDate(code);
-        return d && d.startsWith(cur);
-      });
-    }
-  }
-  // Remove old GFWL filter if it exists (replaced by unified dropdown)
-  const gfwlSel = document.getElementById('deckdata-gfwl-filter');
-  if (gfwlSel) gfwlSel.style.display = 'none';
-  if (!records.length) {
-    out.innerHTML = '<div class="dd-empty">No processable replays in this batch.</div>';
-    return;
-  }
-
-  // ── Deck type counts for dropdown ─────────────────────────────────────────
-  const deckCounts = {};
-  records.forEach(r => { deckCounts[r.myDeck||'Unknown'] = (deckCounts[r.myDeck||'Unknown']||0)+1; });
-  const myDeckTypes = Object.keys(deckCounts).sort((a,b)=>deckCounts[b]-deckCounts[a]);
-
-  // ── Layout: two sections side by side on wide screens ─────────────────────
-  // Section 1: Entire Batch (always shown, never changes)
-  // Section 2: Filtered by selected deck type (updates on dropdown change)
-
-  // Header row: batch total chips + dropdown
-  const headerRow = document.createElement('div');
-  headerRow.style.cssText = 'display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:20px';
-
-  function makeChip(val, lbl, color) {
-    const ch = document.createElement('div');
-    ch.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:9px;padding:10px 16px;min-width:100px';
-    ch.innerHTML = `<span style="font-size:22px;font-weight:bold;color:${color||'var(--blue)'};display:block;line-height:1.2;margin-bottom:3px">${val}</span><span style="font-size:11px;color:var(--muted)">${lbl}</span>`;
-    return ch;
-  }
-
-  // Batch total chips (static)
-  const batchW = records.filter(r=>r.matchWon).length;
-  const batchL = records.filter(r=>r.matchLost).length;
-  const batchWR = pct(batchW, records.length);
-  const batchLbl = document.createElement('div');
-  batchLbl.style.cssText = 'font-size:10px;color:var(--muted);letter-spacing:.15em;text-transform:uppercase;margin-bottom:6px;width:100%';
-  batchLbl.textContent = 'Entire Batch';
-  headerRow.appendChild(batchLbl);
-  headerRow.appendChild(makeChip(records.length, 'Matches', 'var(--blue)'));
-  headerRow.appendChild(makeChip(batchW+'-'+batchL, 'W — L Record', batchWR>=50?'var(--green)':'var(--red)'));
-  headerRow.appendChild(makeChip(batchWR+'%', 'Win Rate', batchWR>=50?'var(--green)':'var(--red)'));
-
-  // Your Deck dropdown
-  const deckChip = document.createElement('div');
-  deckChip.style.cssText = 'background:var(--card);border:1px solid var(--border2);border-radius:9px;padding:8px 14px;min-width:180px;margin-left:auto';
-  const deckLbl = document.createElement('div');
-  deckLbl.style.cssText = 'font-size:10px;color:var(--muted);letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px';
-  deckLbl.textContent = 'Filter by Your Deck';
-  const sel = document.createElement('select');
-  sel.style.cssText = 'background:var(--card2);border:1px solid var(--border2);color:var(--green);font-family:monospace;font-size:13px;font-weight:bold;padding:4px 8px;border-radius:5px;cursor:pointer;width:100%;outline:none';
-  const allOpt = document.createElement('option');
-  allOpt.value = 'All'; allOpt.textContent = 'All Decks';
-  sel.appendChild(allOpt);
-  myDeckTypes.forEach(dt => {
-    const opt = document.createElement('option');
-    opt.value = dt;
-    opt.textContent = dt + ' (' + deckCounts[dt] + ')';
-    sel.appendChild(opt);
-  });
-  deckChip.appendChild(deckLbl);
-  deckChip.appendChild(sel);
-  headerRow.appendChild(deckChip);
-  out.appendChild(headerRow);
-
-  // ── Single matchup table (filtered by hotkey or dropdown) ─────────────────
-  const tableContainer = document.createElement('div');
-  tableContainer.id = 'dd-table-all';
-  out.appendChild(tableContainer);
-  buildMatchupTable(records, tableContainer, player);
-
-  // Note
-  const note = document.createElement('div');
-  note.style.cssText = 'font-size:10px;color:var(--dim);margin-top:10px';
-  note.textContent = 'Deck types auto-classified by TF-IDF model. Click a row to see individual replays.';
-  out.appendChild(note);
-
-  // Dropdown change still works (hidden but used by old code paths)
-  sel.onchange = () => {
-    const filtered = sel.value === 'All' ? records : records.filter(r => r.myDeck === sel.value);
-    buildMatchupTable(filtered, tableContainer, player);
-  };
-}
-
 // Build a matchup table inside a container div
 function buildMatchupTable(records, container, player) {
   container.innerHTML = '';
@@ -11664,74 +11460,6 @@ function buildMatchupTable(records, container, player) {
     });
   table.appendChild(tbody);
   container.appendChild(table);
-}
-
-
-// ── Card Win Rate from ALL batches ─────────────────────────────────────
-async function ddCardWRFromBatch() {
-  const cardInput = document.getElementById('dd-card-name').value.trim().toLowerCase();
-  if (!cardInput) { alert('Enter a card name to search for.'); return; }
-
-  // Load all batches (same as Stats tab)
-  let allBatches = [];
-  try {
-    const res = await fetch(API+'/batches');
-    const list = await res.json();
-    const fetched = await Promise.all(list.map(async b => {
-      if (!b.replayCount) return null;
-      if (_activeBatch && b.id === _activeBatch.id) return _activeBatch;
-      try { const r = await fetch(API+'/batches/'+b.id); return await r.json(); } catch(e) { return null; }
-    }));
-    allBatches = fetched.filter(Boolean);
-  } catch(e) { if (_activeBatch) allBatches = [_activeBatch]; }
-  if (_activeBatch && !allBatches.find(b => b.id === _activeBatch.id)) allBatches.unshift(_activeBatch);
-
-  // Build records from all batches
-  let allRecords = [];
-  for (const batch of allBatches) {
-    const player = batch.player;
-    if (_activeBatch && batch.id === _activeBatch.id && _matches && _matches.length) {
-      _matches.forEach(m => allRecords.push({
-        replayId: m.replayId, player, oppName: m.oppName, eventLabel: m.eventLabel||'',
-        myDeck: (classifyFromCards(m.allMine)||{dc:'Unknown'}).dc,
-        oppDeck: (classifyFromCards(m.allOpp)||{dc:'Unknown'}).dc,
-        matchWon: m.result==='w', matchLost: m.result==='l',
-        result: m.result, score: m.score, myW: m.myW, oppW: m.oppW, draws: m.draws,
-        allMine: m.allMine, allOpp: m.allOpp,
-        allMyCards: m.allMine.map(x=>x.name.toLowerCase()),
-      }));
-    } else {
-      const _cwrAliases = (batch.aliases||[]);
-      for (const r of (batch.replays||[])) {
-        try { const rec = buildMatchRecord(r, player, _cwrAliases); if (rec) allRecords.push(rec); } catch(e) {}
-      }
-    }
-  }
-  const qpDeckFilter = (document.getElementById('dd-cwr-my-deck')||{value:'All'}).value;
-  renderQuickPicks(buildQuickPicks(allRecords, qpDeckFilter));
-  if (!allRecords.length) {
-    document.getElementById('dd-cardwr-out').innerHTML = '<div class="dd-empty">No processable replays — load a batch first.</div>';
-    return;
-  }
-
-  // Populate dropdowns with detected deck types
-  const myDecks  = ['All', ...[...new Set(allRecords.map(r=>r.myDeck).filter(Boolean))].sort()];
-  const oppDecks = ['All', ...[...new Set(allRecords.map(r=>r.oppDeck).filter(Boolean))].sort()];
-  const mySelEl  = document.getElementById('dd-cwr-my-deck');
-  const oppSelEl = document.getElementById('dd-cwr-opp-deck');
-  const curMy  = mySelEl.value;
-  const curOpp = oppSelEl.value;
-  mySelEl.innerHTML  = myDecks.map(d=>`<option value="${d}"${d===curMy?' selected':''}>${d==='All'?'All My Decks':d}</option>`).join('');
-  oppSelEl.innerHTML = oppDecks.map(d=>`<option value="${d}"${d===curOpp?' selected':''}>${d==='All'?'All Opponents':d}</option>`).join('');
-
-  // Filter by selected deck types
-  let records = allRecords;
-  const myFilter  = mySelEl.value;
-  const oppFilter = oppSelEl.value;
-  if (myFilter  !== 'All') records = records.filter(r => r.myDeck  === myFilter);
-  if (oppFilter !== 'All') records = records.filter(r => r.oppDeck === oppFilter);
-
-  renderCardWinRate(records, cardInput, document.getElementById('dd-cardwr-out'));
 }
 
 function renderCardWinRate(records, cardName, outEl) {
@@ -11856,167 +11584,6 @@ function renderCardWinRate(records, cardName, outEl) {
   out.appendChild(note);
 }
 
-
-// ── Matchup analysis ───────────────────────────────────────────────────
-function ddAnalyzeMatchups() {
-  const text = (document.getElementById('dd-paste')||{value:''}).value.trim();
-  if (!text) { alert('Paste some match data first.'); return; }
-  const matches = parseMatchLines(text);
-  if (!matches.length) { alert('No valid match lines found. Check the format.'); return; }
-
-  const out = existingOut || document.getElementById('dd-matchup-out');
-  out.innerHTML = '';
-
-  // Group by myDeck then oppDeck
-  const byMyDeck = {};
-  for (const m of matches) {
-    if (!byMyDeck[m.myDeck]) byMyDeck[m.myDeck] = {};
-    if (!byMyDeck[m.myDeck][m.oppDeck]) byMyDeck[m.myDeck][m.oppDeck] = { w:0, l:0 };
-    if (m.win) byMyDeck[m.myDeck][m.oppDeck].w++;
-    else byMyDeck[m.myDeck][m.oppDeck].l++;
-  }
-
-  // Overall summary card
-  const overallW = matches.filter(m=>m.win).length;
-  const overallL = matches.length - overallW;
-  const overallPct = pct(overallW, matches.length);
-  const summaryDiv = document.createElement('div');
-  summaryDiv.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px';
-  [[matches.length,'Total Matches'],[overallW+'-'+overallL,'Record'],[overallPct+'%','Win Rate']].forEach(([v,l])=>{
-    const ch = document.createElement('div');
-    ch.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:9px;padding:10px 16px';
-    ch.innerHTML = `<span style="font-size:20px;font-weight:bold;color:var(--blue);display:block">${v}</span><span style="font-size:11px;color:var(--muted)">${l}</span>`;
-    summaryDiv.appendChild(ch);
-  });
-  out.appendChild(summaryDiv);
-
-  // Per deck section
-  for (const [myDeck, opps] of Object.entries(byMyDeck)) {
-    const section = document.createElement('div');
-    section.style.cssText = 'margin-bottom:18px';
-    const heading = document.createElement('div');
-    heading.style.cssText = 'font-size:12px;font-weight:bold;color:var(--text);margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid var(--border)';
-    heading.textContent = myDeck;
-    section.appendChild(heading);
-
-    // Table
-    const table = document.createElement('table');
-    table.className = 'dd-table';
-    table.innerHTML = '<thead><tr><th>Opponent Deck</th><th>W</th><th>L</th><th>Games</th><th>Win %</th><th style="min-width:100px"></th></tr></thead>';
-    const tbody = document.createElement('tbody');
-
-    // Sort by games played desc
-    const sorted = Object.entries(opps).sort((a,b)=>(b[1].w+b[1].l)-(a[1].w+a[1].l));
-    for (const [opp, rec] of sorted) {
-      const total = rec.w + rec.l;
-      const wp = pct(rec.w, total);
-      const tr = document.createElement('tr');
-      const barW = rec.w/total*100, barL = rec.l/total*100;
-      tr.innerHTML = `
-        <td style="font-weight:bold;color:var(--text)">${opp}</td>
-        <td class="dd-pct-w">${rec.w}</td>
-        <td class="dd-pct-l">${rec.l}</td>
-        <td class="dd-record">${total}</td>
-        <td style="font-weight:bold;color:${wp>50?'var(--green)':wp<50?'var(--red)':'var(--muted)'}">${wp}%</td>
-        <td>
-          <div class="dd-winbar">
-            <div class="dd-winbar-w" style="width:${barW}%"></div>
-            <div class="dd-winbar-l" style="width:${barL}%"></div>
-          </div>
-        </td>`;
-      tbody.appendChild(tr);
-    }
-    table.appendChild(tbody);
-    section.appendChild(table);
-    out.appendChild(section);
-  }
-}
-
-// ── Card Win Rate analysis ─────────────────────────────────────────────
-// Format: W/L [sep] OppDeck [sep] Card,Card,Card
-function ddAnalyzeCardWR() {
-  const cardName = document.getElementById('dd-card-name').value.trim().toLowerCase();
-  const text     = (document.getElementById('dd-card-paste')||{value:''}).value.trim();
-  if (!cardName) { alert('Enter a card name.'); return; }
-  if (!text)     { alert('Paste match+card data.'); return; }
-
-  const lines = text.split('\n').map(l=>l.trim()).filter(Boolean);
-  const rows  = [];
-  for (const line of lines) {
-    const parts = line.split(/\t|\|{1}|  +/).map(p=>p.trim()).filter(Boolean);
-    if (parts.length < 2) continue;
-    const result = parts[0].toUpperCase();
-    if (result !== 'W' && result !== 'L') continue;
-    const win     = result === 'W';
-    const oppDeck = parts.length >= 3 ? parts[1] : 'Unknown';
-    const cardsRaw= parts.length >= 3 ? parts[2] : parts[1];
-    const cards   = cardsRaw.split(',').map(c=>c.trim().toLowerCase());
-    const seen    = cards.some(c=>c.includes(cardName));
-    rows.push({ win, oppDeck, seen });
-  }
-
-  if (!rows.length) { alert('No valid rows found.'); return; }
-
-  const out = document.getElementById('dd-cardwr-out');
-  out.innerHTML = '';
-
-  // Overall: with card vs without
-  const withCard    = rows.filter(r=>r.seen);
-  const withoutCard = rows.filter(r=>!r.seen);
-  const wWith = withCard.filter(r=>r.win).length;
-  const wWithout = withoutCard.filter(r=>r.win).length;
-
-  // Summary
-  const sumDiv = document.createElement('div');
-  sumDiv.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px';
-
-  function makeWRCard(title, recs, wins) {
-    const total = recs.length;
-    const wp = pct(wins, total);
-    const d = document.createElement('div');
-    d.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px';
-    d.innerHTML = `<div style="font-size:11px;color:var(--muted);letter-spacing:.1em;margin-bottom:8px">${title}</div>
-      <div style="font-size:26px;font-weight:bold;color:${wp>=50?'var(--green)':'var(--red)'};margin-bottom:4px">${wp}%</div>
-      <div style="font-size:12px;color:var(--muted)">${wins}W - ${total-wins}L (${total} games)</div>
-      <div style="height:8px;background:var(--bg);border-radius:4px;overflow:hidden;margin-top:8px">
-        <div style="height:100%;width:${wp}%;background:${wp>=50?'var(--green)':'var(--red)'};border-radius:4px"></div>
-      </div>`;
-    return d;
-  }
-  sumDiv.appendChild(makeWRCard(`WITH "${cardName}"`, withCard, wWith));
-  sumDiv.appendChild(makeWRCard(`WITHOUT "${cardName}"`, withoutCard, wWithout));
-  out.appendChild(sumDiv);
-
-  // By opponent deck
-  if (withCard.length > 0) {
-    const byOpp = {};
-    withCard.forEach(r=>{
-      if(!byOpp[r.oppDeck]) byOpp[r.oppDeck]={w:0,l:0};
-      r.win ? byOpp[r.oppDeck].w++ : byOpp[r.oppDeck].l++;
-    });
-    const heading = document.createElement('div');
-    heading.style.cssText = 'font-size:11px;color:var(--muted);letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px';
-    heading.textContent = `Win rate WITH "${cardName}" by opponent deck`;
-    out.appendChild(heading);
-    const table = document.createElement('table');
-    table.className = 'dd-table';
-    table.innerHTML = '<thead><tr><th>Opponent Deck</th><th>W</th><th>L</th><th>Win %</th><th style="min-width:100px"></th></tr></thead>';
-    const tbody = document.createElement('tbody');
-    Object.entries(byOpp).sort((a,b)=>(b[1].w+b[1].l)-(a[1].w+a[1].l)).forEach(([opp,rec])=>{
-      const total=rec.w+rec.l, wp=pct(rec.w,total);
-      const tr=document.createElement('tr');
-      tr.innerHTML=`<td style="font-weight:bold;color:var(--text)">${opp}</td>
-        <td class="dd-pct-w">${rec.w}</td><td class="dd-pct-l">${rec.l}</td>
-        <td style="font-weight:bold;color:${wp>=50?'var(--green)':'var(--red)'}">${wp}%</td>
-        <td><div class="dd-winbar"><div class="dd-winbar-w" style="width:${rec.w/total*100}%"></div><div class="dd-winbar-l" style="width:${rec.l/total*100}%"></div></div></td>`;
-      tbody.appendChild(tr);
-    });
-    table.appendChild(tbody); out.appendChild(table);
-  }
-}
-
-
-
 // Cards too common to be useful as quick picks
 const COMMON_CARDS_EXCLUDE = new Set([
   'pot of greed','graceful charity','heavy storm','mystical space typhoon',
@@ -12026,55 +11593,6 @@ const COMMON_CARDS_EXCLUDE = new Set([
   'sakuretsu armor','dust tornado','solemn judgment','trap dustshoot',
   'monster reborn','dark hole','change of heart','lightning vortex',
 ]);
-
-// Build quick pick cards from current batch records filtered by my deck type
-function buildQuickPicks(records, myDeckFilter) {
-  const cardFreq = {};
-  const filtered = myDeckFilter && myDeckFilter !== 'All'
-    ? records.filter(r => r.myDeck === myDeckFilter)
-    : records;
-  
-  for (const rec of filtered) {
-    for (const card of (rec.allMyCards||[])) {
-      const n = card.toLowerCase().trim();
-      if (COMMON_CARDS_EXCLUDE.has(n)) continue;
-      if (n.length < 4) continue;
-      cardFreq[n] = (cardFreq[n]||0) + 1;
-    }
-  }
-  // Sort by frequency, take top 20
-  return Object.entries(cardFreq)
-    .sort((a,b) => b[1]-a[1])
-    .slice(0, 20)
-    .map(([name]) => name);
-}
-
-function renderQuickPicks(cards) {
-  const container = document.getElementById('dd-quick-picks');
-  if (!container) return;
-  container.innerHTML = '';
-  if (!cards.length) { container.style.display='none'; return; }
-  container.style.display = 'block';
-  const lbl = document.createElement('div');
-  lbl.style.cssText = 'font-size:11px;color:var(--muted);letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px';
-  lbl.textContent = 'Quick Picks (from your replays)';
-  container.appendChild(lbl);
-  const chips = document.createElement('div');
-  chips.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px';
-  cards.forEach(name => {
-    const chip = document.createElement('button');
-    chip.style.cssText = 'background:var(--card2);border:1px solid var(--border2);color:var(--text);font-family:monospace;font-size:11px;padding:4px 10px;border-radius:20px;cursor:pointer;transition:all .15s;text-transform:capitalize';
-    chip.textContent = name;
-    chip.onmouseover = () => { chip.style.borderColor='var(--green)'; chip.style.color='var(--green)'; };
-    chip.onmouseout  = () => { chip.style.borderColor='var(--border2)'; chip.style.color='var(--text)'; };
-    chip.onclick = () => {
-      document.getElementById('dd-card-name').value = name;
-      ddCardWRFromBatch();
-    };
-    chips.appendChild(chip);
-  });
-  container.appendChild(chips);
-}
 
 
 // ══════════════════════════════════════════════════════════════════════
@@ -12842,176 +12360,6 @@ async function saveEventDecklist() {
   st('Saved '+added+' decklist'+(added!==1?'s':''), 'var(--green)');
 }
 
-function filterStatsPills(query) {
-  const q = (query||'').toLowerCase().trim();
-  document.querySelectorAll('#stats-player-pills button').forEach(btn => {
-    btn.style.display = q && !btn.textContent.toLowerCase().includes(q) ? 'none' : '';
-  });
-}
-
-// ── Load stats tab ─────────────────────────────────────────────────────────
-async function loadStats() {
-  // Fetch all batches + their full replay data from server
-  let allBatches = [];
-  try {
-    const res = await fetch(API+'/batches');
-    const list = await res.json();
-    // Fetch full batch data for every batch that has replays
-    const fetched = await Promise.all(list.map(async b => {
-      if (!b.replayCount) return null;
-      // Use in-memory active batch (already fully parsed)
-      if (_activeBatch && b.id === _activeBatch.id) return _activeBatch;
-      try {
-        const r = await fetch(API+'/batches/'+b.id);
-        return await r.json();
-      } catch(e) { return b; }
-    }));
-    allBatches = fetched.filter(Boolean);
-  } catch(e) {
-    if (_activeBatch) allBatches = [_activeBatch];
-  }
-
-  // If active batch not yet saved to server, add it
-  if (_activeBatch && !allBatches.find(b => b.id === _activeBatch.id)) {
-    allBatches.unshift(_activeBatch);
-  }
-
-  // Build allRecords from every batch's replay data
-  const allRecords = [];
-  for (const batch of allBatches) {
-    const player = batch.player;
-    // Use _matches for active batch (already parsed, most accurate)
-    if (_activeBatch && batch.id === _activeBatch.id && _matches && _matches.length) {
-      _matches.forEach(m => allRecords.push({
-        replayId: m.replayId, player,
-        oppName:  m.oppName,
-        myDeck:   (classifyFromCards(m.allMine)||{dc:'Unknown'}).dc,
-        oppDeck:  (classifyFromCards(m.allOpp)||{dc:'Unknown'}).dc,
-        matchWon: m.result==='w', matchLost: m.result==='l',
-        result:   m.result, score: m.score,
-        allMyCards: m.allMine.map(x=>x.name.toLowerCase()),
-      }));
-    } else {
-      // Get aliases for this player from registry
-      const _batchAliases = (() => {
-        const key = (batch.player||'').toLowerCase();
-        return (window._playerRegistry && window._playerRegistry[key])
-          ? window._playerRegistry[key].aliases : (batch.aliases||[]);
-      })();
-      for (const r of (batch.replays||[])) {
-        try {
-          const rec = buildMatchRecord(r, player, _batchAliases, batch);
-          if (rec) allRecords.push(rec);
-        } catch(e) { console.warn('buildMatchRecord failed for', r.replayId, e.message); }
-      }
-    }
-  }
-
-  // Build player pills
-  const players = [...new Set(allBatches.map(b=>b.player).filter(Boolean))].sort();
-  const pillsEl = document.getElementById('stats-player-pills');
-  if (pillsEl) {
-    pillsEl.innerHTML = '';
-    players.forEach(p => {
-      const pill = document.createElement('button');
-      pill.style.cssText='background:var(--card);border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:5px 14px;border-radius:20px;cursor:pointer;transition:all .15s';
-      pill.textContent = p;
-      pill.onclick = () => {
-        document.querySelectorAll('#stats-player-pills button').forEach(b=>{
-          b.dataset.active=''; b.style.background='var(--card)'; b.style.borderColor='var(--border)'; b.style.color='var(--muted)';
-        });
-        pill.dataset.active='1'; pill.style.background='var(--green)'; pill.style.borderColor='var(--green)'; pill.style.color='#050508';
-        loadPlayerStats(p, allBatches.filter(b=>b.player===p));
-      };
-      pillsEl.appendChild(pill);
-    });
-  }
-
-  buildGlobalStats(allRecords, allBatches);
-}
-
-function buildGlobalStats(allRecords, allBatches) {
-  const chipsEl = document.getElementById('stats-global-chips');
-  if (!chipsEl) return;
-  chipsEl.innerHTML = '';
-
-  console.log('[Stats] buildGlobalStats: records=', allRecords.length, 'batches=', allBatches.length, allBatches.map(b=>b.player+'('+( b.replays||[]).length+'r)'));
-
-  if (!allRecords.length) {
-    // Show batch count even if records couldn't be parsed
-    const totalReplays = allBatches.reduce((a,b)=>a+(b.replays||[]).length,0);
-    if (totalReplays > 0) {
-      chipsEl.innerHTML = '<div style="color:var(--amber);font-size:12px">' + totalReplays + ' replays found but could not be parsed. Make sure at least one batch is analyzed (not just imported).</div>';
-    } else {
-      chipsEl.innerHTML = '<div style="color:var(--muted);font-size:12px">No replay data. Analyze or import a batch first.</div>';
-    }
-    return;
-  }
-
-  const totalW = allRecords.filter(r=>r.matchWon).length;
-  const totalL = allRecords.filter(r=>r.matchLost).length;
-  const players = new Set((allBatches||[]).map(b=>b.player).filter(Boolean));
-
-  [[allRecords.length,'Total Matches'],[totalW+'-'+totalL,'W — L Record'],
-   [pct(totalW,allRecords.length)+'%','Overall Win Rate'],
-   [(allBatches||[]).length,'Total Batches'],[players.size,'Players']
-  ].forEach(([v,l]) => {
-    const ch = document.createElement('div');
-    ch.style.cssText='background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:10px 16px';
-    ch.innerHTML=`<span style="font-size:20px;font-weight:bold;color:var(--blue);display:block;line-height:1.2;margin-bottom:2px">${v}</span><span style="font-size:11px;color:var(--muted)">${l}</span>`;
-    chipsEl.appendChild(ch);
-  });
-
-  // Global deck usage donut (MY decks)
-  const deckUsage = {};
-  allRecords.forEach(r=>{ deckUsage[r.myDeck||'Unknown']=(deckUsage[r.myDeck||'Unknown']||0)+1; });
-  const sortedDecks = Object.entries(deckUsage).sort((a,b)=>b[1]-a[1]).slice(0,12);
-  buildDonutChart('chart-global-usage','chart-global-usage-legend',sortedDecks);
-
-  buildDeckWinRateList('stats-deck-winrate', allRecords);
-  buildTopCardsList('stats-card-winrate', allRecords);
-}
-
-async function loadPlayerStats(player, batches) {
-  document.getElementById('stats-player-detail').style.display='block';
-  document.getElementById('stats-player-detail-heading').textContent = player+' • Stats';
-  document.getElementById('stats-player-heading').textContent = player+' • Deck Usage';
-
-  // Use _matches if active player
-  let records = [];
-  if (_matches && _matches.length && _activeBatch && _activeBatch.player===player) {
-    records = _matches.map(m=>({
-      replayId:m.replayId, player, oppName:m.oppName,
-      myDeck:(classifyFromCards(m.allMine)||{dc:'Unknown'}).dc,
-      oppDeck:(classifyFromCards(m.allOpp)||{dc:'Unknown'}).dc,
-      matchWon:m.result==='w', matchLost:m.result==='l',
-      result:m.result, score:m.score,
-      allMyCards:m.allMine.map(x=>x.name.toLowerCase()),
-    }));
-  } else {
-    for (const batch of batches) {
-      if (!batch.replays) {
-        try { const r=await fetch(API+'/batches/'+batch.id); const full=await r.json(); batch.replays=full.replays||[]; } catch(e){}
-      }
-      for (const r of (batch.replays||[])) {
-        const _lpsAliases = (() => {
-          const key = (batch.player||player).toLowerCase();
-          return (window._playerRegistry && window._playerRegistry[key])
-            ? (window._playerRegistry[key].aliases||[]) : (batch.aliases||[]);
-        })();
-        const m=buildMatchRecord(r,player,_lpsAliases,batch); if(m) records.push(m);
-      }
-    }
-  }
-
-  const myDeckUsage = {};
-  records.forEach(r=>{ myDeckUsage[r.myDeck||'Unknown']=(myDeckUsage[r.myDeck||'Unknown']||0)+1; });
-  const sortedMy = Object.entries(myDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,10);
-  buildDonutChart('chart-player-usage','chart-player-usage-legend',sortedMy);
-  buildDeckWinRateList('stats-player-deckwr', records, player);
-  buildTopCardsList('stats-player-cards', records);
-}
-
 // Build donut from element references directly (for dynamically created elements)
 function buildDonutChartEl(canvasEl, legendEl, entries, title) {
   if (!canvasEl) { console.warn('[DonutEl] no canvas'); return; }
@@ -13072,62 +12420,6 @@ function buildDonutChart(canvasId, legendId, entries, title) {
   }
 }
 
-function buildDeckWinRateList(elId, records) {
-  const el=document.getElementById(elId); if(!el)return; el.innerHTML='';
-  const byDeck={};
-  records.forEach(r=>{ const k=r.myDeck||'Unknown'; if(!byDeck[k])byDeck[k]={w:0,l:0}; if(r.matchWon)byDeck[k].w++; else if(r.matchLost)byDeck[k].l++; });
-  const sorted=Object.entries(byDeck).filter(([,v])=>(v.w+v.l)>0).sort((a,b)=>(b[1].w+b[1].l)-(a[1].w+a[1].l));
-  if(!sorted.length){el.innerHTML='<div style="font-size:12px;color:var(--muted)">No data</div>';return;}
-  sorted.forEach(([deck,rec],i)=>{
-    const tot=rec.w+rec.l, wp=pct(rec.w,tot), color=getDeckColor(deck,i);
-    const row=document.createElement('div'); row.style.cssText='display:flex;align-items:center;gap:8px;margin-bottom:7px';
-    row.innerHTML='<span style="width:8px;height:8px;border-radius:2px;background:'+color+';flex-shrink:0"></span>'
-      + '<span style="font-size:12px;color:var(--text);min-width:140px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+deck+'</span>'
-      + '<div style="flex:1;height:6px;background:var(--bg);border-radius:3px;overflow:hidden"><div style="height:100%;width:'+wp+'%;background:'+(wp>=50?'var(--green)':'var(--red)')+';border-radius:3px"></div></div>'
-      + '<span style="font-size:12px;font-weight:bold;color:'+(wp>=50?'var(--green)':'var(--red)')+';min-width:40px;text-align:right">'+wp+'%</span>'
-      + '<span style="font-size:10px;color:var(--muted)">'+rec.w+'W-'+rec.l+'L</span>';
-    el.appendChild(row);
-  });
-}
-
-function buildTopCardsList(elId, records) {
-  const el=document.getElementById(elId); if(!el)return; el.innerHTML='';
-  const cardStats={};
-  for(const rec of records){
-    const seen=new Set(rec.allMyCards||[]);
-    for(const card of seen){
-      if((COMMON_CARDS_EXCLUDE&&COMMON_CARDS_EXCLUDE.has(card))||card.length<4) continue;
-      if(!cardStats[card])cardStats[card]={seen:0,w:0,l:0};
-      cardStats[card].seen++;
-      if(rec.matchWon)cardStats[card].w++; else if(rec.matchLost)cardStats[card].l++;
-    }
-  }
-  const sorted=Object.entries(cardStats).filter(([,v])=>v.seen>=2)
-    .sort((a,b)=>pct(b[1].w,b[1].w+b[1].l)-pct(a[1].w,a[1].w+a[1].l)).slice(0,10);
-  if(!sorted.length){el.innerHTML='<div style="font-size:12px;color:var(--muted)">Not enough data (need 2+ appearances)</div>';return;}
-  sorted.forEach(([card,stat])=>{
-    const tot=stat.w+stat.l, wp=pct(stat.w,tot);
-    const row=document.createElement('div'); row.style.cssText='display:flex;align-items:center;gap:8px;margin-bottom:7px';
-        row.innerHTML='<span style="font-size:12px;color:var(--text);min-width:160px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:capitalize">' + card + '</span>'
-      + '<div style="flex:1;height:6px;background:var(--bg);border-radius:3px;overflow:hidden"><div style="height:100%;width:'+wp+'%;background:'+(wp>=50?'var(--green)':'var(--red)')+';border-radius:3px"></div></div>'
-      + '<span style="font-size:12px;font-weight:bold;color:'+(wp>=50?'var(--green)':'var(--red)')+';min-width:40px;text-align:right">'+wp+'%</span>'
-      + '<span style="font-size:10px;color:var(--muted)">×'+stat.seen+'</span>';
-    el.appendChild(row);
-  });
-}
-
-function loadStatsGlobal() {
-  // Deselect all player pills
-  document.querySelectorAll('#stats-player-pills button').forEach(b => {
-    b.dataset.active=''; b.style.background='var(--card)'; b.style.borderColor='var(--border)'; b.style.color='var(--muted)';
-  });
-  document.getElementById('stats-player-detail').style.display='none';
-  document.getElementById('stats-player-heading').textContent='Select a player';
-  const pc = document.getElementById('chart-player-usage');
-  if (pc && pc._chartInstance) { pc._chartInstance.destroy(); pc._chartInstance=null; }
-  const pl = document.getElementById('chart-player-usage-legend');
-  if (pl) pl.innerHTML='';
-}
 
 
 // ══════════════════════════════════════════════════════════════════════
@@ -13585,6 +12877,22 @@ function isGFWLSeason(groupKey) {
   return /^S\d+$/i.test(groupKey);
 }
 
+// Most recent real (non-GFWL-season) event date found among a batch's
+// replays, as a 'YYYY-MM-DD' string, or null if none of its events have a
+// resolvable date (e.g. a GFWL-season-only batch, or unrecognized codes).
+// Used to sort Profile's SAVED BATCHES list by actual tournament date
+// rather than by import time.
+function batchLatestEventDate(batch) {
+  let latest = null;
+  (batch.replays||[]).forEach(r => {
+    const code = eventGroupKey(r.eventLabel||'');
+    if (!code || isGFWLSeason(code)) return;
+    const d = getEventDate(code);
+    if (d && (!latest || d > latest)) latest = d;
+  });
+  return latest;
+}
+
 // ── GFWL Teams ────────────────────────────────────────────────────────────────
 function addTeamEntry() {
   document.getElementById('add-team-form').style.display = 'block';
@@ -13982,15 +13290,29 @@ async function openProfile(player, batches, records) {
     matchesSec.appendChild(matchList);
   }
 
-  // Batch list
+  // Batch list — sorted chronologically by the most recent real event date
+  // found among each batch's replays (not by when it happened to be
+  // imported into Duel Tools), so a batch covering an old tournament doesn't
+  // jump to the top just because it was imported today. GFWL season replays
+  // have no literal event date and are excluded from this comparison; a
+  // batch that's only GFWL season replays falls back to its import date.
   const batchList = document.getElementById('profile-batch-list');
   batchList.innerHTML = '';
-  batches.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)).forEach(b => {
+  batches.sort((a,b) => {
+    const da = batchLatestEventDate(a), db_ = batchLatestEventDate(b);
+    if (da && db_) return da > db_ ? -1 : da < db_ ? 1 : 0;
+    if (da && !db_) return -1;
+    if (!da && db_) return 1;
+    return (b.createdAt||0)-(a.createdAt||0);
+  }).forEach(b => {
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--card2);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:background .12s';
     row.onmouseover = () => row.style.background='var(--panel)';
     row.onmouseout  = () => row.style.background='var(--card2)';
-    const date = b.createdAt ? new Date(b.createdAt).toLocaleDateString() : '';
+    const _latestEvD = batchLatestEventDate(b);
+    const date = _latestEvD
+      ? new Date(_latestEvD+'T00:00:00').toLocaleDateString(undefined,{month:'short',year:'numeric'})
+      : (b.createdAt ? new Date(b.createdAt).toLocaleDateString() : '');
     const rCount = (b.replays||[]).length;
     row.innerHTML = `
       <div style="flex:1">
@@ -14814,152 +14136,6 @@ async function loadEventReplay(replayId) {
     }
   }
   alert('Could not find batch containing replay '+replayId);
-}
-
-
-// ── Deck Data tab switcher ────────────────────────────────────────────────────
-function ddSwitchTab(name, btn) {
-  // Auto-load global data when switching to matchups or card win rate
-  if ((name === 'matchups' || name === 'cardwr') && !_globalRecords.length) {
-    loadGlobalRecords().then(() => {
-      if (name === 'matchups') renderGlobalMatchups(_ddDeckFilter);
-      else {
-        const filtered = _ddCWRFilter === 'All' ? _globalRecords : _globalRecords.filter(r => r.myDeck === _ddCWRFilter);
-        renderQuickPicks(buildQuickPicks(filtered, _ddCWRFilter));
-      }
-    });
-  } else if (name === 'matchups') {
-    renderGlobalMatchups(_ddDeckFilter);
-  } else if (name === 'cardwr' && _globalRecords.length) {
-    const filtered = _ddCWRFilter === 'All' ? _globalRecords : _globalRecords.filter(r => r.myDeck === _ddCWRFilter);
-    renderQuickPicks(buildQuickPicks(filtered, _ddCWRFilter));
-  }
-  document.querySelectorAll('.dd-tab').forEach(b => b.classList.remove('on'));
-  if (btn) btn.classList.add('on');
-  document.getElementById('dd-matchups').style.display  = name==='matchups'  ? 'block' : 'none';
-  document.getElementById('dd-cardwr').style.display    = name==='cardwr'    ? 'block' : 'none';
-  document.getElementById('dd-classifier').style.display= name==='classifier'? 'block' : 'none';
-  // Auto-run matchups when switching to that tab if batch loaded
-  if (name === 'matchups' && _activeBatch && _activeBatch.replays && _activeBatch.replays.length) {
-    const out = document.getElementById('dd-matchup-out');
-    if (out && (out.innerHTML.includes('Load a batch') || out.innerHTML === ''))
-      ddMatchupsFromBatch();
-  }
-}
-
-// ── Deck Classifier ───────────────────────────────────────────────────────────
-function ddClassifyDeck() {
-  const raw = (document.getElementById('dd-ydk').value || '').trim();
-  if (!raw) { alert('Paste a YDK file or card names first.'); return; }
-  const out = document.getElementById('dd-class-out');
-  out.innerHTML = '';
-
-  // Parse input — handle YDK format, card names, or card IDs
-  const cards = [];
-  const lines = raw.split('\n');
-  let inMain = false;
-  for (const line of lines) {
-    const t = line.trim();
-    if (!t || t.startsWith('!') || t.startsWith('#extra')) { inMain = false; continue; }
-    if (t === '#main') { inMain = true; continue; }
-    if (t.startsWith('#')) { inMain = false; continue; }
-    if (/^\d{5,9}$/.test(t)) {
-      // Card ID — look up in CARD_ID_MAP
-      const name = CARD_ID_MAP[t];
-      if (name) {
-        const ex = cards.find(c => c.name === name);
-        if (ex) ex.displayCount++; else cards.push({ id:t, name, displayCount:1 });
-      } else {
-        const ex = cards.find(c => c.id === t);
-        if (ex) ex.displayCount++; else cards.push({ id:t, name:t, displayCount:1 });
-      }
-    } else if (t.length > 2) {
-      // Card name
-      const existing = cards.find(c => c.name.toLowerCase() === t.toLowerCase());
-      if (existing) existing.displayCount++;
-      else cards.push({ id:'', name:t, displayCount:1 });
-    }
-  }
-
-  if (!cards.length) { out.innerHTML = '<div class="dd-empty">No cards recognized.</div>'; return; }
-
-  const result = classifyFromCards(cards);
-  if (!result) { out.innerHTML = '<div class="dd-empty">Could not classify — not enough signal cards.</div>'; return; }
-
-  const catColor = {'High':'var(--green)','Medium':'var(--amber)','Low':'var(--red)'}[result.conf] || 'var(--muted)';
-  const catBg    = {'High':'rgba(0,229,150,.08)','Medium':'rgba(245,166,35,.08)','Low':'rgba(226,75,74,.08)'}[result.conf] || '';
-
-  const top = document.createElement('div');
-  top.style.cssText = `padding:14px;background:${catBg};border:1px solid ${catColor};border-radius:10px;margin-bottom:12px`;
-  top.innerHTML = `
-    <div style="font-size:22px;font-weight:bold;color:${catColor};margin-bottom:4px">${result.dc}</div>
-    <div style="font-size:12px;color:var(--muted)">
-      Confidence: <span style="color:${catColor}">${result.conf}</span>
-      &nbsp;·&nbsp; Score: ${result.score.toFixed(2)}
-      &nbsp;·&nbsp; Category: ${DECK_CATEGORY[result.dc]||'Other'}
-    </div>`;
-  out.appendChild(top);
-
-  // Top 5 candidates
-  if (result.top5 && result.top5.length > 1) {
-    const t5 = document.createElement('div');
-    t5.style.cssText = 'margin-bottom:12px';
-    t5.innerHTML = '<div style="font-size:10px;color:var(--muted);letter-spacing:.15em;text-transform:uppercase;margin-bottom:8px">Top Candidates</div>';
-    result.top5.forEach(([deck, score], i) => {
-      const maxScore = result.top5[0][1] || 1;
-      const pct = Math.round(score / maxScore * 100);
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px';
-      row.innerHTML = `
-        <span style="min-width:160px;color:${i===0?'var(--text)':'var(--muted)'};font-family:monospace">${deck}</span>
-        <div style="flex:1;height:6px;background:var(--bg);border-radius:3px;overflow:hidden">
-          <div style="height:100%;width:${pct}%;background:${i===0?catColor:'var(--border2)'};border-radius:3px"></div>
-        </div>
-        <span style="font-size:11px;color:var(--muted);min-width:40px;text-align:right">${score.toFixed(2)}</span>`;
-      t5.appendChild(row);
-    });
-    out.appendChild(t5);
-  }
-
-  // Card count footer
-  const footer = document.createElement('div');
-  footer.style.cssText = 'font-size:10px;color:var(--dim);margin-top:8px';
-  const total = cards.reduce((a,c)=>a+c.displayCount,0);
-  footer.textContent = `${cards.length} unique cards · ${total} total · TF-IDF classifier`;
-  out.appendChild(footer);
-
-  // Override input
-  const overrideDiv = document.createElement('div');
-  overrideDiv.style.cssText = 'margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap';
-  overrideDiv.innerHTML = `<span style="font-size:11px;color:var(--muted)">Wrong classification?</span>
-    <input id="dd-override-label" type="text" placeholder="Enter correct deck type..."
-      style="flex:1;min-width:160px;max-width:260px;font-size:11px;padding:5px 8px"/>
-    <button class="dd-btn-sec" style="font-size:11px;padding:5px 12px"
-      onclick="ddOverrideClass()">Label as Other</button>`;
-  out.appendChild(overrideDiv);
-}
-
-function ddOverrideClass() {
-  const label = (document.getElementById('dd-override-label').value||'').trim();
-  if (!label) { alert('Enter a deck type label.'); return; }
-  const out = document.getElementById('dd-class-out');
-  const existing = out.querySelector('.override-badge');
-  if (existing) existing.remove();
-  const badge = document.createElement('div');
-  badge.className = 'override-badge';
-  badge.style.cssText = 'margin-top:8px;padding:8px 12px;background:rgba(91,141,245,.12);border:1px solid var(--blue);border-radius:8px;font-size:12px;color:var(--blue)';
-  badge.textContent = '✓ Labeled as: ' + label;
-  out.appendChild(badge);
-}
-
-// ── renderMatchupsTable (called from renderMatchupResults) ────────────────────
-function renderMatchupsTable(records, out, player) {
-  const oldTable = out.querySelector('.matchup-table-section');
-  if (oldTable) oldTable.remove();
-  const section = document.createElement('div');
-  section.className = 'matchup-table-section';
-  buildMatchupTable(records, section, player);
-  out.appendChild(section);
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -16475,10 +15651,10 @@ async function initApp() {
   wireUrlsInput();
   renderTopPlayers();
   loadBatches();
-  // Deck Data tab's global records are loaded lazily — switchTab('deckdata')
-  // and ddSwitchTab() both already fetch them on first visit (see below).
+  // Format Data tab's global records are loaded lazily — switchTab('formatdata')
+  // already fetches them on first visit (see loadFormatData() above).
   // Eagerly fetching every saved batch's FULL contents here on every single
-  // page load (regardless of whether the user ever opens Deck Data) was the
+  // page load (regardless of whether the user ever opens Format Data) was the
   // main cause of slow post-sign-in loads: it fires one GET /api/batches/:id
   // per batch, in parallel, for everyone, every time — competing with
   // loadBatches()/loadProfiles() for the same server and connection pool.
@@ -16678,17 +15854,17 @@ function applyRoleUI() {
     const recentLbl = document.querySelector('#sidebar-recent-batches-label .sb-label');
     if (recentLbl) recentLbl.textContent = 'Your Temp Batches';
 
-    // Top nav — hide Profiles, RPS Analysis, Deck Data (+ Stats), GFWL
+    // Top nav — hide Profiles, RPS Analysis, Format Data, GFWL
     // Archive. Deck Viewer and In-Game Tools stay so they can look at the
     // parsed decks/cards from their temp batch.
-    ['ntab-profiles','ntab-rps','deckdata-nav-wrap','gfwl-prep-tab'].forEach(id => {
+    ['ntab-profiles','ntab-rps','ntab-formatdata','gfwl-prep-tab'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.style.display = 'none';
     });
     // Mobile nav dropdown — remove the same options
     const mobileSel = document.getElementById('nav-mobile-sel');
     if (mobileSel) {
-      ['profiles','rps','deckdata','stats','gfwl'].forEach(v => {
+      ['profiles','rps','formatdata','gfwl'].forEach(v => {
         const opt = mobileSel.querySelector(`option[value="${v}"]`);
         if (opt) opt.remove();
       });
@@ -16697,7 +15873,7 @@ function applyRoleUI() {
     // Profiles is the default active tab, but it's hidden for this role —
     // land on Deck Viewer instead so there's something to look at.
     const activePage = document.querySelector('.page.on');
-    const hiddenPages = ['pg-profiles','pg-rps','pg-deckdata','pg-stats','pg-gfwl'];
+    const hiddenPages = ['pg-profiles','pg-rps','pg-formatdata','pg-gfwl'];
     if (!activePage || hiddenPages.includes(activePage.id)) {
       const deckBtn = document.getElementById('ntab-deck');
       switchTab('deck', deckBtn);

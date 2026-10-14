@@ -2086,6 +2086,7 @@ const server = http.createServer(async (req, res) => {
     if (!player) return json(res, 400, { error: 'player required' });
     try {
       const replays = [];
+      let eventDatesChanged = false;
       let page = 1;
       while (true) {
         const qs = new URLSearchParams({ page: String(page), limit: '10', sort: 'publishDate:desc,display:desc,roundAbs:desc', filter: 'player:or:' + player });
@@ -2097,19 +2098,29 @@ const server = http.createServer(async (req, res) => {
         if (!Array.isArray(rows) || !rows.length) break;
         for (const row of rows) {
           if ((row.formatName||'').toLowerCase() !== 'goat') continue;
+          const eventId = row.eventAbbreviation || '';
+          const replayDate = (row.publishDate||'').slice(0, 10);
+          // Every replay carries its own event code + exact publish date, so
+          // importing a player's replays is also a (free, incidental) way to
+          // learn or correct that event's date in the shared catalog — the
+          // same db.eventDates store that getEventDate()/sortEventKeys() on
+          // the client use for the Year/Season filters and chronological
+          // sorting everywhere else in the app.
+          if (upsertEventDateFromFL(eventId, replayDate)) eventDatesChanged = true;
           replays.push({
-            eventId: row.eventAbbreviation || '',
+            eventId,
             replayLink: row.url || '',
             round: row.roundName || '',
             winningPlayer: row.winnerName || '', winningDeck: row.winningDeckTypeName || '',
             losingPlayer: row.loserName || '', losingDeck: row.losingDeckTypeName || '',
-            date: (row.publishDate||'').slice(0, 10),
+            date: replayDate,
           });
         }
         if (rows.length < 10) break;
         page++;
         await new Promise(r => setTimeout(r, 250));
       }
+      if (eventDatesChanged) { try { await saveDB('eventDates'); } catch(e) { console.warn('[EventDates] Save after FL import failed:', e.message); } }
       return json(res, 200, { ok: true, replays });
     } catch(e) {
       return json(res, 502, { error: 'Format Library request failed: ' + e.message });
@@ -2943,6 +2954,22 @@ const EVENT_DATE_CATALOG = {
   'SJCHOU05': '2005',
   'SJCPOM05': '2005',
 };
+
+// Record an event's date as learned from a real, individual FL replay (the
+// per-player replay scraper, not the admin-only events-list scrape below).
+// Only upgrades a missing or coarse 'catalog' entry — never clobbers an
+// entry we already trust more (a direct FL events-API or HTML scrape).
+function upsertEventDateFromFL(code, date) {
+  if (!db.eventDates) db.eventDates = {};
+  const c = (code||'').toUpperCase().trim();
+  if (!c || !date) return false;
+  const existing = db.eventDates[c];
+  if (!existing || existing.source === 'catalog') {
+    db.eventDates[c] = { date, name: (existing && existing.name) || '', source: 'fl-replay-import' };
+    return true;
+  }
+  return false;
+}
 
 // Build the event date catalog from CSV-sourced data into db.eventDates.
 // Catalog values are either a bare year ('2026') or an exact 'YYYY-MM-DD'.
