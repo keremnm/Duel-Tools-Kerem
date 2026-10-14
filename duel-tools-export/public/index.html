@@ -9844,7 +9844,12 @@ async function editDeckType(m, isOpp, badgeEl, refreshFn) {
         if (!cached || !cached.id || !cached.replays) continue;
         const rep = cached.replays.find(r => r.replayId === m.replayId);
         if (!rep) continue;
-        const isTwin = !batchesToTry.has(cached.id);
+        // Not just "not a batch we already knew about" — a batch outside
+        // batchesToTry can still be a SIBLING batch for this same player (an
+        // unmerged alias, a duplicate scrape), which must NOT be flipped.
+        // Only treat it as the opponent's twin when the player identity
+        // actually differs. See isSamePlayerClient() above for why.
+        const isTwin = !batchesToTry.has(cached.id) && !isSamePlayerClient(m.player, cached.player);
         const myOv  = m.myDeckOverride  || null;
         const oppOv = m.oppDeckOverride || null;
         if (isTwin) {
@@ -10333,6 +10338,30 @@ function showOverrideNoteModal(m) {
 // override as-is.
 function flipResultClient(r) { return r === 'w' ? 'l' : r === 'l' ? 'w' : r; }
 
+// Mirrors isSamePlayerAsBatch() on the server: a cached batch holding the
+// same replayId is NOT automatically the opponent's cross-linked mirror —
+// a player can have more than one batch of their own (an unmerged alias, a
+// duplicate scrape session), and that sibling batch holds the SAME player's
+// OWN perspective, not the opponent's. Flipping onto it by mistake writes
+// the opposite result into a cached batch that's really this same person,
+// which is exactly what made an override look like it "didn't stick" —
+// whichever of the two batches got reloaded next showed the mirror-image
+// value instead of the real one. This checks the shared player registry
+// (so known aliases count) before the cache-sync blocks below decide
+// whether a cached batch is really the opponent (flip) or a sibling batch
+// for the same person (copy as-is).
+function isSamePlayerClient(playerA, playerB) {
+  const a = (playerA||'').toLowerCase().trim();
+  const b = (playerB||'').toLowerCase().trim();
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const regA = window._playerRegistry && window._playerRegistry[a];
+  if (regA && [regA.name, ...(regA.aliases||[])].some(n => (n||'').toLowerCase() === b)) return true;
+  const regB = window._playerRegistry && window._playerRegistry[b];
+  if (regB && [regB.name, ...(regB.aliases||[])].some(n => (n||'').toLowerCase() === a)) return true;
+  return false;
+}
+
 // Mirrors flipGames()/flipParsedBaseForTwin() on the server — used to keep a
 // cross-linked twin's CACHED copy (window._gfwlBatchCache) in sync with a
 // merge saved from the other side, without waiting on a page reload to
@@ -10405,15 +10434,20 @@ async function applyResultOverride(m, payload) {
   // This has to walk EVERY cached batch, not just batchesToTry — the
   // opponent's cross-linked twin almost always lives in a batch this Deck
   // Viewer session never loaded directly, only GFWL Archive did, earlier.
-  // A batch NOT in batchesToTry is assumed to be that twin, so the override
-  // is flipped for it — same rule applyOverrideToReplay(r, data, true) uses
-  // server-side.
+  // A batch NOT in batchesToTry is usually that twin, so the override is
+  // flipped for it — same rule applyOverrideToReplay(r, data, true) uses
+  // server-side — UNLESS it's actually a SIBLING batch for this same player
+  // (an unmerged alias, a duplicate scrape), which must get the override
+  // copied as-is instead of flipped. See isSamePlayerClient() above: getting
+  // this wrong silently wrote the opposite result into that sibling batch's
+  // cache entry, which then looked exactly like "the override doesn't
+  // stick" whenever that sibling got loaded instead of the one just fixed.
   if (window._gfwlBatchCache) {
     for (const cached of Object.values(window._gfwlBatchCache)) {
       if (!cached || !cached.id || !cached.replays) continue;
       const rep = cached.replays.find(r => r.replayId === m.replayId);
       if (!rep) continue;
-      const isTwin = !batchesToTry.has(cached.id);
+      const isTwin = !batchesToTry.has(cached.id) && !isSamePlayerClient(m.player, cached.player);
       const ro = payload.resultOverride ? (isTwin ? flipResultClient(payload.resultOverride) : payload.resultOverride) : null;
       const so = payload.scoreOverride ? (isTwin ? { my: payload.scoreOverride.opp, opp: payload.scoreOverride.my } : payload.scoreOverride) : null;
       rep.resultOverride = ro;
@@ -10901,13 +10935,16 @@ async function mergeReplayIntoMatch(m, newId, gameNums) {
     // flipped to their perspective, and that twin's own GFWL Archive cache
     // entry needs the same flip applied here so Archive reflects the merge
     // on BOTH players immediately, without a reload. A cached batch that
-    // isn't ownerBatch is assumed to be that twin.
+    // isn't ownerBatch is usually that twin — but not always: a player can
+    // have more than one batch of their OWN (an unmerged alias, a duplicate
+    // scrape), and that sibling batch must get the merge copied as-is, not
+    // flipped. See isSamePlayerClient() above.
     if (window._gfwlBatchCache) {
       for (const cached of Object.values(window._gfwlBatchCache)) {
         if (!cached || !cached.id || !cached.replays) continue;
         const crep = cached.replays.find(x => x.replayId === m.replayId);
         if (!crep) continue;
-        if (cached.id === ownerBatch.id) {
+        if (cached.id === ownerBatch.id || isSamePlayerClient(ownerBatch.player, cached.player)) {
           crep.parsed = r.parsed; crep.mergedReplays = r.mergedReplays;
         } else {
           crep.parsed = { ...(crep.parsed||{}), ...flipParsedBaseForTwinClient(r.parsed, ownerBatch.player || null) };

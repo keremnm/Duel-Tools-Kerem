@@ -659,6 +659,36 @@ function findPlayerByUsername(username) {
   }
   return null;
 }
+// Whenever a replayId is found in some OTHER batch while propagating an
+// override or a merge, that other batch has always been assumed to be the
+// OPPONENT's cross-linked mirror — which is why the propagation flips the
+// result/score/decks onto it. That assumption breaks the moment a player has
+// more than one batch of their OWN (two aliases that were never merged into
+// a single batch record, e.g. a duelingbook username vs. a GFWL roster name,
+// or simply two separate scrape sessions that each created their own batch
+// for the same person): the "other batch" holding the same replayId is then
+// a second copy of the SAME player's OWN perspective, not the opponent's,
+// and flipping onto it silently writes the opposite result into it. Once
+// that happens, whichever of the two batches Deck Viewer/Profile/GFWL
+// happens to load next shows the override as if it had "reverted" — it
+// didn't; a sibling batch for the same player just got the mirror-image
+// value instead of the real one. This checks player identity (via the
+// shared player registry, so known aliases count) before deciding whether
+// a found batch is really the opponent (flip) or another batch for the same
+// person (copy as-is, no flip).
+function isSamePlayerAsBatch(batchA, batchB) {
+  if (!batchA || !batchB) return false;
+  const a = (batchA.player||'').toLowerCase().trim();
+  const b = (batchB.player||'').toLowerCase().trim();
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const entryA = findPlayerByUsername(batchA.player);
+  if (entryA && playerNames(entryA).includes(b)) return true;
+  const entryB = findPlayerByUsername(batchB.player);
+  if (entryB && playerNames(entryB).includes(a)) return true;
+  return false;
+}
+
 function findOrCreateBatchForPlayer(playerEntry) {
   const pBatches = Object.values(db.batches).filter(b =>
     b.player && playerNames(playerEntry).includes(b.player.toLowerCase())
@@ -1665,8 +1695,16 @@ const server = http.createServer(async (req, res) => {
           if (ob.id === b.id) continue;
           const twin = (ob.replays||[]).find(tr => tr.replayId === replayId);
           if (!twin) continue;
-          const flippedBase = flipParsedBaseForTwin(r.parsed, b.player || null);
-          twin.parsed = { ...(twin.parsed||{}), ...flippedBase };
+          // Only flip when the other batch is genuinely the OPPONENT's
+          // mirror — a second batch for the SAME player (an unmerged alias,
+          // a duplicate scrape) gets the merged data copied as-is instead.
+          // See isSamePlayerAsBatch() for why this check exists.
+          if (isSamePlayerAsBatch(b, ob)) {
+            twin.parsed = JSON.parse(JSON.stringify(r.parsed));
+          } else {
+            const flippedBase = flipParsedBaseForTwin(r.parsed, b.player || null);
+            twin.parsed = { ...(twin.parsed||{}), ...flippedBase };
+          }
           twin.mergedReplays = data.mergedReplays; // replay IDs/game numbers are absolute, not perspective-dependent
           twin.allPlays = [];
           reapplyOverridesToParsed(twin); // twin's OWN override (if any) still wins, same rule as everywhere else
@@ -1702,11 +1740,22 @@ const server = http.createServer(async (req, res) => {
         // the pre-override outcome forever. Propagate the override (flipped
         // to the opponent's perspective) to every other batch's copy of this
         // replayId so both sides of the match agree.
+        //
+        // But "every other batch holding this replayId" is NOT always the
+        // opponent — a player can have more than one batch of their OWN (an
+        // unmerged alias, e.g. a duelingbook username vs. a GFWL roster
+        // name, or two independent scrape sessions), and that second batch
+        // holds the SAME player's OWN perspective, not the opponent's. Only
+        // flip for a batch that's actually a different player; a same-player
+        // batch gets the override copied as-is. Skipping this check used to
+        // silently write the OPPOSITE result into that sibling batch, which
+        // then looked exactly like "the override doesn't stick" whenever
+        // Deck Viewer/Profile/GFWL happened to load that sibling instead.
         const twinBatchIds = [];
         for (const ob of Object.values(db.batches)) {
           if (ob.id === b.id) continue;
           const twin = (ob.replays||[]).find(tr => tr.replayId === replayId);
-          if (twin) { applyOverrideToReplay(twin, data, true); twinBatchIds.push(ob.id); }
+          if (twin) { applyOverrideToReplay(twin, data, !isSamePlayerAsBatch(b, ob)); twinBatchIds.push(ob.id); }
         }
         for (const bid of twinBatchIds) await saveBatchToPostgres(bid);
         if (twinBatchIds.length) {
