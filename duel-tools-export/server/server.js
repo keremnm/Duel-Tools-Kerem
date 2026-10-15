@@ -658,7 +658,20 @@ function acceptsGzip(res) {
 }
 function json(res, status, data) {
   const body = Buffer.from(JSON.stringify(data));
-  const headers = { 'Content-Type':'application/json','Access-Control-Allow-Origin':'*' };
+  // Every API response is dynamic data that can change from one moment to
+  // the next (an override, a merge, a retry) — none of it is safe for a
+  // browser (or anything sitting between the browser and this server) to
+  // cache and reuse. Without an explicit no-store, a GET response here has
+  // no Cache-Control or Last-Modified header at all, which does not mean
+  // "never cached" — browsers are allowed to cache a response like that
+  // heuristically and reuse it for a later identical GET on an ordinary
+  // page refresh (not just a hard reload), depending on browser and
+  // history-navigation behavior. That reuse happens entirely in the
+  // browser, before the request ever reaches this server, which is exactly
+  // why a save could be fully correct and durable here and still look like
+  // it "reset on refresh": the refresh may never have asked again in the
+  // first place. This header removes that possibility outright.
+  const headers = { 'Content-Type':'application/json','Access-Control-Allow-Origin':'*', 'Cache-Control':'no-store, no-cache, must-revalidate', 'Pragma':'no-cache' };
   if (body.length > 800 && acceptsGzip(res)) {
     zlib.gzip(body, (err, compressed) => {
       if (err) { res.writeHead(status, headers); res.end(body); return; }
@@ -1028,17 +1041,33 @@ const server = http.createServer(async (req, res) => {
     let filePath = path.join(PUB_DIR, url.pathname === '/' ? 'index.html' : url.pathname);
     if (!filePath.startsWith(PUB_DIR)) { res.writeHead(403); res.end(); return; }
     const sendFile = (data, contentType) => {
+      // This app ships as one unversioned index.html — there's no
+      // cache-busted filename (no index.abc123.html / ?v=...), so a browser
+      // has no way to tell a new deploy's HTML/JS apart from an old cached
+      // one except by actually asking again. Without an explicit no-store
+      // here, there was NOTHING stopping a browser (or anything sitting in
+      // front of this server) from serving this page out of its cache on an
+      // ordinary refresh — which, if it happened, meant every client-side
+      // fix in this file could be redeployed correctly and still never
+      // actually run in that browser, because the browser kept re-running
+      // the OLD index.html it already had instead of fetching the new one.
+      // That failure mode is invisible from the server's side: the server
+      // never even sees the request, so none of the server-side logging or
+      // behavior changes would show anything wrong either. This header
+      // removes that possibility for the page itself, the same way the API
+      // responses in json() above were already hardened against it.
+      const headers = { 'Content-Type': contentType, 'Cache-Control': 'no-store, no-cache, must-revalidate', 'Pragma': 'no-cache' };
       // index.html alone is ~900KB of HTML/JS served fresh on every visit —
       // gzip shrinks text like this by 70%+, which is most of what made
       // the page feel slow to even start loading right after sign-in.
       if (data.length > 800 && acceptsGzip(res)) {
         zlib.gzip(data, (err, compressed) => {
-          if (err) { res.writeHead(200, { 'Content-Type': contentType }); res.end(data); return; }
-          res.writeHead(200, { 'Content-Type': contentType, 'Content-Encoding': 'gzip', 'Vary': 'Accept-Encoding' });
+          if (err) { res.writeHead(200, headers); res.end(data); return; }
+          res.writeHead(200, { ...headers, 'Content-Encoding': 'gzip', 'Vary': 'Accept-Encoding' });
           res.end(compressed);
         });
       } else {
-        res.writeHead(200, { 'Content-Type': contentType });
+        res.writeHead(200, headers);
         res.end(data);
       }
     };
