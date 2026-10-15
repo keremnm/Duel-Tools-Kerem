@@ -20,7 +20,20 @@ const BOOTSTRAP_PASSWORD = process.env.ADMIN_PASSWORD || 'ilovesui';
 
 // ── DB ────────────────────────────────────────────────────────────────────────
 let pgClient = null;
-let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {}, replayCache: {} };
+// db.overrides: a SEPARATE, independent registry of result/score/deck
+// corrections, keyed ONLY by replayId — not by batch, not by player. Every
+// propagation bug chased in this file so far (cross-linked twins, unmerged
+// alias batches, duplicate scrapes, flip-direction mistakes) came from the
+// same root shape: the override lived as a copy INSIDE each batch's own
+// replay record, so "does this correction survive" depended on which
+// specific batch/copy a view happened to load. This table is the fix for
+// that whole class of bug: one record per replay, storing the ABSOLUTE
+// outcome ("Bobby Bodega won 2-0"), not a "my score vs. their score"
+// relative to whichever batch set it. Every batch that ever asks about this
+// replayId gets the SAME answer, re-derived from this one place, regardless
+// of how many copies of the replay exist or which one a page happens to
+// load. See applyGlobalOverrideToReplay() below.
+let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {}, replayCache: {}, overrides: {} };
 
 async function connectPostgres() {
   const { Client } = require('pg');
@@ -55,7 +68,7 @@ async function connectPostgres() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
-  const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('players','users','gfwl','eventDates')");
+  const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('players','users','gfwl','eventDates','overrides')");
   for (const row of res.rows) { db[row.key] = row.value; }
   const batchRes = await client.query('SELECT id, value FROM duel_tools_batches');
   db.batches = {};
@@ -81,6 +94,7 @@ async function connectPostgres() {
   if (!db.gfwl)    db.gfwl    = {};
   if (!db.eventDates) db.eventDates = {};
   if (!db.replayCache) db.replayCache = {};
+  if (!db.overrides) db.overrides = {};
   pgClient = client;
   // Handle PG client-level errors (e.g. connection dropped by server)
   // Without this, 'error' events on the pg client crash Node
@@ -135,6 +149,14 @@ async function initDB() {
     }
   } else {
     loadFileDB();
+  }
+  // Self-heal every batch's in-memory replay copies from the global
+  // override registry right now, at startup — before any request is ever
+  // served — so a redeploy/restart can never show a stale pre-override
+  // value even for a split second. See applyAllGlobalOverridesAtStartup().
+  const healedCount = applyAllGlobalOverridesAtStartup();
+  if (healedCount > 0) {
+    console.log(`[overrides] Startup: re-applied ${Object.keys(db.overrides||{}).length} global override(s) to ${healedCount} replay cop${healedCount===1?'y':'ies'} across all batches.`);
   }
   // Bootstrap admin — always ensure admin account exists and password matches env
   // Ensure secondary admin exists
@@ -191,6 +213,7 @@ function loadFileDB() {
       if (!db.gfwl)    db.gfwl    = {};
       if (!db.eventDates) db.eventDates = {};
       if (!db.replayCache) db.replayCache = {};
+      if (!db.overrides) db.overrides = {};
     }
   } catch(e) { console.error('File DB load error:', e.message); }
 }
@@ -207,7 +230,7 @@ function loadFileDB() {
 // change to player aliases/teams was silently never persisted again.
 // Always-save-everything is simpler and can't silently drop data — these
 // four keys are small enough that resaving all of them every time is cheap.
-const _ALWAYS_SAVE_KEYS = ['players','users','gfwl','eventDates'];
+const _ALWAYS_SAVE_KEYS = ['players','users','gfwl','eventDates','overrides'];
 const _dirtyKeys = new Set(_ALWAYS_SAVE_KEYS);
 
 // ── Write-ahead buffer — holds pending saves when Postgres is temporarily down ─
@@ -746,17 +769,24 @@ function findPlayerByUsername(username) {
 // shared player registry, so known aliases count) before deciding whether
 // a found batch is really the opponent (flip) or another batch for the same
 // person (copy as-is, no flip).
-function isSamePlayerAsBatch(batchA, batchB) {
-  if (!batchA || !batchB) return false;
-  const a = (batchA.player||'').toLowerCase().trim();
-  const b = (batchB.player||'').toLowerCase().trim();
+// Alias-aware name comparison, pulled out of isSamePlayerAsBatch so the new
+// global override registry (db.overrides, see applyGlobalOverrideToReplay
+// below) can reuse the exact same "is this the same person under a
+// different username" logic without going through a batch object.
+function isSameNameOrAlias(nameA, nameB) {
+  const a = (nameA||'').toLowerCase().trim();
+  const b = (nameB||'').toLowerCase().trim();
   if (!a || !b) return false;
   if (a === b) return true;
-  const entryA = findPlayerByUsername(batchA.player);
+  const entryA = findPlayerByUsername(nameA);
   if (entryA && playerNames(entryA).includes(b)) return true;
-  const entryB = findPlayerByUsername(batchB.player);
+  const entryB = findPlayerByUsername(nameB);
   if (entryB && playerNames(entryB).includes(a)) return true;
   return false;
+}
+function isSamePlayerAsBatch(batchA, batchB) {
+  if (!batchA || !batchB) return false;
+  return isSameNameOrAlias(batchA.player, batchB.player);
 }
 
 function findOrCreateBatchForPlayer(playerEntry) {
@@ -841,6 +871,164 @@ function applyOverrideToReplay(r, data, flip) {
     r.overrideNote = data.overrideNote || '';
     if (r.parsed) r.parsed.overrideNote = data.overrideNote || '';
   }
+}
+
+// Alias-aware lookup into a global override record's deckOverrides map
+// (keyed by lowercase player name). A plain `deckOverrides[name.toLowerCase()]`
+// lookup would miss when the caller passes a different alias of the same
+// person than whichever one was on-screen at save time.
+function lookupDeckOverride(deckOverrides, playerName) {
+  if (!deckOverrides || !playerName) return undefined;
+  const pl = playerName.toLowerCase().trim();
+  if (deckOverrides[pl] !== undefined) return deckOverrides[pl];
+  for (const key of Object.keys(deckOverrides)) {
+    if (isSameNameOrAlias(key, playerName)) return deckOverrides[key];
+  }
+  return undefined;
+}
+
+// ── Global, replayId-keyed override registry ────────────────────────────────
+// db.overrides[replayId] is the single source of truth for a manual
+// correction to a replay's result/score/notes/decks, stored in ABSOLUTE
+// terms (who actually won, by what score — not "my score vs. their score"
+// relative to whichever batch happened to set it). Every previous attempt to
+// fix "the override reverts after refresh" instead tried to keep every
+// per-batch COPY of the override in sync with every other copy (the
+// opponent's cross-linked twin, a same-player's unmerged alias batch, a
+// duplicate scrape) — and each of those sync paths turned out to have its
+// own edge case that could silently drop or flip the correction. This
+// sidesteps that whole class of bug: there is exactly one record per replay,
+// and applyGlobalOverrideToReplay() re-derives the correct relative
+// (my/opp) view of it fresh, every time a batch's replay data is read,
+// regardless of what (possibly stale) data sits in that batch's own copy of
+// the replay. It is purely additive and a no-op when no global record
+// exists for a given replayId, so replays nobody has ever overridden are
+// completely unaffected.
+function applyGlobalOverrideToReplay(r, batchPlayer) {
+  if (!r || !r.replayId) return;
+  const g = db.overrides[r.replayId];
+  if (!g) return; // nothing recorded for this replay — leave existing fields exactly as they are
+  const oppName = r.oppName || (r.parsed && r.parsed.oppName) || null;
+  if (g.winner) {
+    const amWinner = isSameNameOrAlias(batchPlayer, g.winner);
+    const resultOverride = amWinner ? 'w' : 'l';
+    r.resultOverride = resultOverride;
+    if (r.parsed) { r.parsed.resultOverride = resultOverride; r.parsed.resultEffective = resultOverride; }
+    if (g.winnerScore != null && g.loserScore != null) {
+      const scoreOverride = amWinner
+        ? { my: g.winnerScore, opp: g.loserScore }
+        : { my: g.loserScore, opp: g.winnerScore };
+      r.scoreOverride = scoreOverride;
+      if (r.parsed) r.parsed.scoreOverride = scoreOverride;
+    }
+  }
+  if (g.note) {
+    r.overrideNote = g.note;
+    if (r.parsed) r.parsed.overrideNote = g.note;
+  }
+  if (g.deckOverrides) {
+    const myDeck = lookupDeckOverride(g.deckOverrides, batchPlayer);
+    const oppDeck = oppName ? lookupDeckOverride(g.deckOverrides, oppName) : undefined;
+    if (myDeck) { r.myDeckOverride = myDeck; if (r.parsed) r.parsed.myDeck = myDeck; }
+    if (oppDeck) { r.oppDeckOverride = oppDeck; if (r.parsed) r.parsed.oppDeck = oppDeck; }
+  }
+}
+
+// Build/merge the absolute global override record for a replay from a
+// batch-relative override payload (the shape the PATCH .../override route
+// has always accepted: resultOverride 'w'/'l' relative to the batch that
+// sent it, scoreOverride {my,opp} same way). `batchPlayer` is whose
+// perspective `data` is relative to; `oppName` is that batch's opponent on
+// this specific replay, used so a winner can be recorded by an absolute
+// name even when the override is "my side lost" (so winner = opponent).
+// Returns the updated record, or null if the merge leaves it empty (no
+// winner, no note, no deck overrides) — callers should delete the key
+// entirely in that case so clearing an override actually removes it rather
+// than leaving an empty husk that a future read mistakes for "something is
+// recorded here."
+function mergeGlobalOverride(replayId, data, batchPlayer, oppName) {
+  const existing = db.overrides[replayId] || { replayId, winner: null, winnerScore: null, loserScore: null, note: '', deckOverrides: {} };
+  const g = { ...existing, deckOverrides: { ...(existing.deckOverrides||{}) } };
+
+  if (data.resultOverride !== undefined) {
+    if (!data.resultOverride) {
+      g.winner = null; g.winnerScore = null; g.loserScore = null;
+    } else if (data.resultOverride === 'w') {
+      g.winner = batchPlayer || g.winner;
+    } else if (data.resultOverride === 'l') {
+      g.winner = oppName || g.winner;
+    }
+  }
+  if (data.scoreOverride !== undefined) {
+    if (!data.scoreOverride) {
+      g.winnerScore = null; g.loserScore = null;
+    } else {
+      // scoreOverride is {my,opp} relative to batchPlayer. Re-derive
+      // winner/loser scores from whichever side g.winner now names, so a
+      // result-override and a score-override sent in the same payload (the
+      // normal case) always agree on who they're both describing.
+      const myIsWinner = g.winner ? isSameNameOrAlias(batchPlayer, g.winner) : (data.resultOverride === 'w');
+      g.winnerScore = myIsWinner ? data.scoreOverride.my : data.scoreOverride.opp;
+      g.loserScore  = myIsWinner ? data.scoreOverride.opp : data.scoreOverride.my;
+    }
+  }
+  if (data.overrideNote !== undefined) {
+    g.note = data.overrideNote || '';
+  }
+  if (data.myDeckOverride !== undefined && batchPlayer) {
+    if (data.myDeckOverride) g.deckOverrides[batchPlayer.toLowerCase()] = data.myDeckOverride;
+    else delete g.deckOverrides[batchPlayer.toLowerCase()];
+  }
+  if (data.oppDeckOverride !== undefined && oppName) {
+    if (data.oppDeckOverride) g.deckOverrides[oppName.toLowerCase()] = data.oppDeckOverride;
+    else delete g.deckOverrides[oppName.toLowerCase()];
+  }
+
+  const isEmpty = !g.winner && !g.note && Object.keys(g.deckOverrides).length === 0;
+  if (isEmpty) return null;
+  g.replayId = replayId;
+  g.updatedAt = Date.now();
+  return g;
+}
+
+// Re-derive override fields, from the global registry, on every IN-MEMORY
+// copy of a given replayId across EVERY batch — not just the batches an
+// alias-matching heuristic happens to find. This is what makes the global
+// registry the authority for the server's OWN aggregate endpoints too
+// (GFWL Archive, Format Data, Player Profiles, Player Win/Loss Records, and
+// anything else that reads db.batches directly rather than going through
+// GET /api/batches/:id or /all-full) — those endpoints read `r.resultOverride`
+// etc. straight off the in-memory replay object, so the correction has to
+// actually be written into that object, not merely computed on the fly by a
+// couple of specific GET routes. Returns the ids of every batch that holds
+// at least one copy of this replayId, so the caller can flush just those.
+function applyGlobalOverrideToAllBatchCopies(replayId) {
+  const touchedBatchIds = [];
+  for (const b of Object.values(db.batches)) {
+    const r = (b.replays||[]).find(rr => rr.replayId === replayId);
+    if (r) { applyGlobalOverrideToReplay(r, b.player || null); touchedBatchIds.push(b.id); }
+  }
+  return touchedBatchIds;
+}
+
+// Same as above but for every replayId that has a global override recorded
+// — run once at startup (right after both db.batches and db.overrides have
+// been loaded) so that a redeploy/restart immediately self-heals every
+// batch's in-memory replay copies from whatever is durably recorded in the
+// override registry, regardless of what (possibly stale) value was last
+// written into that specific batch's own copy. This is the literal
+// "replayIds that are given overridden instructions load the saved
+// overridden result after it loads, silently" behavior that was asked for.
+function applyAllGlobalOverridesAtStartup() {
+  const replayIds = Object.keys(db.overrides || {});
+  if (!replayIds.length) return 0;
+  let touched = 0;
+  for (const b of Object.values(db.batches)) {
+    for (const r of (b.replays||[])) {
+      if (db.overrides[r.replayId]) { applyGlobalOverrideToReplay(r, b.player || null); touched++; }
+    }
+  }
+  return touched;
 }
 
 // Per-game card lists inside parsed.games ({gameNum, winner, first, mine,
@@ -1645,6 +1833,14 @@ const server = http.createServer(async (req, res) => {
   if (parts[0]==='batches' && parts[1]==='all-full' && !parts[2] && method==='GET') {
     if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot browse saved batches' });
     const list = Object.values(db.batches).filter(b => (b.replays||[]).length);
+    // Re-derive each replay's override fields from the global, replayId-keyed
+    // registry before responding — see applyGlobalOverrideToReplay. This is
+    // what makes an override visible here even on a batch copy that's gone
+    // stale (a duplicate scrape, an unmerged alias batch, a cross-linked
+    // twin that never got its own propagation write).
+    for (const b of list) {
+      for (const r of (b.replays||[])) applyGlobalOverrideToReplay(r, b.player || null);
+    }
     return json(res, 200, list);
   }
   // ── POST /api/batches ───────────────────────────────────────────────────────
@@ -1697,6 +1893,11 @@ const server = http.createServer(async (req, res) => {
     }
     const b = db.batches[parts[1]];
     if (!b) return json(res, 404, { error:'Not found' });
+    // Re-derive each replay's override fields from the global, replayId-keyed
+    // registry before responding — see applyGlobalOverrideToReplay. Whatever
+    // (possibly stale) override data this specific batch's own copy has, the
+    // global record — if one exists for a given replayId — always wins.
+    for (const r of (b.replays||[])) applyGlobalOverrideToReplay(r, b.player || null);
     return json(res, 200, b);
   }
   // ── PATCH /api/batches/:id ──────────────────────────────────────────────────
@@ -1793,7 +1994,11 @@ const server = http.createServer(async (req, res) => {
       if (!r) return json(res, 404, { error:'Replay not found in batch' });
       const fields = ['plays','allPlays','parsed','timedOut','oppName','player1','player2','eventLabel','mergedReplays'];
       for (const f of fields) { if (data[f] !== undefined) r[f] = data[f]; }
-      if (data.parsed) { r.allPlays = []; reapplyOverridesToParsed(r); } // fresh parse means we no longer need the raw plays stored
+      if (data.parsed) {
+        r.allPlays = [];
+        reapplyOverridesToParsed(r); // this replay's OWN override fields, if any, still win
+        applyGlobalOverrideToReplay(r, b.player || null); // ...and the global registry (if a record exists) has final say
+      }
       r.savedAt = Date.now();
 
       // A Merge Replay save is a deliberate, infrequent, correction a person
@@ -1851,6 +2056,7 @@ const server = http.createServer(async (req, res) => {
           twin.mergedReplays = data.mergedReplays; // replay IDs/game numbers are absolute, not perspective-dependent
           twin.allPlays = [];
           reapplyOverridesToParsed(twin); // twin's OWN override (if any) still wins, same rule as everywhere else
+          applyGlobalOverrideToReplay(twin, ob.player || null); // ...and the global registry has final say
           twin.savedAt = Date.now();
           twinBatchIds.push(ob.id);
         }
@@ -1880,6 +2086,22 @@ const server = http.createServer(async (req, res) => {
         applyOverrideToReplay(r, data, false);
         if (data.resultOverride !== undefined) {
           console.log(`[override] Result override for ${r.replayId}: ${data.resultOverride||'cleared'}`);
+        }
+
+        // Write-through to the global, replayId-keyed override registry —
+        // the single source of truth that every GET re-projects onto every
+        // batch's copy of this replay (see applyGlobalOverrideToReplay).
+        // This runs IN ADDITION to the per-batch/twin-propagation logic
+        // below, not instead of it: that logic stays as an additional
+        // safety net, but it is no longer what makes the override durable
+        // against a stale/duplicate/unmerged-alias batch copy — this is.
+        const oppNameForOverride = r.oppName || (r.parsed && r.parsed.oppName) || null;
+        const mergedGlobal = mergeGlobalOverride(replayId, data, b.player || null, oppNameForOverride);
+        if (mergedGlobal) db.overrides[replayId] = mergedGlobal;
+        else delete db.overrides[replayId];
+        const globalSave = await saveDB('overrides');
+        if (globalSave && globalSave.ok === false) {
+          console.error(`[override] FAILED to durably save GLOBAL override for ${replayId}:`, globalSave.error);
         }
         // An override is a deliberate, infrequent, rules-correction a person
         // made on purpose — it must be CONFIRMED durably saved before this
@@ -1927,6 +2149,24 @@ const server = http.createServer(async (req, res) => {
         }
         if (twinBatchIds.length) {
           console.log(`[override] Propagated to ${twinBatchIds.length} cross-linked twin batch(es) for ${replayId}`);
+        }
+
+        // Final pass: re-derive EVERY batch's copy of this replayId straight
+        // from the global registry just written above. The twin-propagation
+        // loop just above only finds "other batches" via alias-matching
+        // heuristics and flips based on its own best guess of same-player
+        // vs. opponent — useful as a first pass, but it's exactly the kind
+        // of per-copy logic that's had edge cases every round of this fix so
+        // far. This pass is authoritative and covers every batch holding
+        // this replayId unconditionally (including the primary batch and
+        // every twin, redundantly but harmlessly), so even if the heuristic
+        // above got a same-player/opponent call wrong, this corrects it.
+        const globalTouchedIds = applyGlobalOverrideToAllBatchCopies(replayId);
+        const alreadyFlushed = new Set([b.id, ...twinBatchIds]);
+        for (const bid of globalTouchedIds) {
+          if (alreadyFlushed.has(bid)) { await flushBatchNow(bid); continue; } // re-flush: global pass may have corrected it
+          const tRes = await flushBatchNow(bid);
+          if (!tRes.ok) { twinsFailed++; console.error(`[override] FAILED to durably save batch ${bid} after global projection:`, tRes.error); }
         }
 
         if (!primarySave.ok) {
