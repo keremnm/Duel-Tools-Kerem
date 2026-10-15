@@ -9847,8 +9847,17 @@ async function editDeckType(m, isOpp, badgeEl, refreshFn) {
     const hardFailures = []; // real server-side save errors (DB unreachable, batch too large, ...) — never silently dropped
     const batchesToTry = new Set();
     if (_activeBatch && _activeBatch.id && !_activeBatch.isTemp) batchesToTry.add(_activeBatch.id);
-    (_allProfileBatches||[]).filter(b=>b.id&&!b.isTemp).forEach(b=>batchesToTry.add(b.id));
-    (_activeProfile?.batches||[]).filter(b=>b.id&&!b.isTemp).forEach(b=>batchesToTry.add(b.id));
+    // Only batches confirmed to belong to the SAME PLAYER as this match
+    // (m.player) — see the matching comment in applyResultOverride() for
+    // why: scanning _allProfileBatches unfiltered (every batch in the whole
+    // league, from loadProfiles()'s GET /api/batches) and PATCHing this same
+    // un-flipped payload at every one of them that held this replayId could
+    // hit the OPPONENT's own batch directly and silently flip which deck
+    // override wins, on top of firing one request per batch in the league
+    // for a single edit.
+    const samePlayerBatches = [...(_allProfileBatches||[]), ...(_activeProfile?.batches||[])]
+      .filter(b => b && b.id && !b.isTemp && isSamePlayerClient(b.player, m.player));
+    samePlayerBatches.forEach(b => batchesToTry.add(b.id));
 
     for (const bid of batchesToTry) {
       // Update in-memory
@@ -10445,8 +10454,26 @@ function flipParsedBaseForTwinClient(parsed, twinOppName) {
 async function applyResultOverride(m, payload) {
   const batchesToTry = new Set();
   if (_activeBatch && _activeBatch.id && !_activeBatch.isTemp) batchesToTry.add(_activeBatch.id);
-  (_allProfileBatches||[]).filter(b=>b.id&&!b.isTemp).forEach(b=>batchesToTry.add(b.id));
-  (_activeProfile?.batches||[]).filter(b=>b.id&&!b.isTemp).forEach(b=>batchesToTry.add(b.id));
+  // Only ever search batches confirmed to belong to the SAME PLAYER as this
+  // match (m.player) — e.g. a profile that aggregates several of the
+  // player's own batches, or an unmerged alias batch. This used to pull in
+  // EVERY batch loaded anywhere this session via _allProfileBatches, which
+  // loadProfiles() populates from GET /api/batches — every player's
+  // batches, league-wide, not just this one's — and PATCH this same
+  // un-flipped, "m.player's perspective" payload directly at every single
+  // one of them that happened to hold this replayId. Whenever that included
+  // the OPPONENT's own batch (routine for a cross-linked match), it told
+  // the server "this batch's own player is the winner" as if the opponent
+  // had reported it themselves — backwards — and depending on request
+  // ordering could leave the globally-recorded winner flipped to the wrong
+  // player. It also meant a single edit could fire one PATCH per batch in
+  // the entire league (hundreds of requests for one correction). The
+  // opponent's copy must only ever be corrected by the server's own
+  // twin-propagation (which flips it correctly, alias-aware) — never by
+  // sending it this same-perspective payload directly.
+  const samePlayerBatches = [...(_allProfileBatches||[]), ...(_activeProfile?.batches||[])]
+    .filter(b => b && b.id && !b.isTemp && isSamePlayerClient(b.player, m.player));
+  samePlayerBatches.forEach(b => batchesToTry.add(b.id));
 
   const body = JSON.stringify(payload);
   let savedToServer = false;
@@ -10964,8 +10991,17 @@ async function mergeReplayIntoMatch(m, newId, gameNums) {
   try {
     const batchesToTry = new Set();
     if (_activeBatch && _activeBatch.id && !_activeBatch.isTemp) batchesToTry.add(_activeBatch.id);
-    (_allProfileBatches||[]).filter(b=>b.id&&!b.isTemp).forEach(b=>batchesToTry.add(b.id));
-    (_activeProfile?.batches||[]).filter(b=>b.id&&!b.isTemp).forEach(b=>batchesToTry.add(b.id));
+    // Only batches confirmed to belong to the SAME PLAYER as this match
+    // (m.player) — see the matching comment in applyResultOverride(). An
+    // unscoped search here risked something subtler than the request flood
+    // there: since this loop `break`s on the FIRST batch it finds holding
+    // this replayId, an unfiltered _allProfileBatches (every batch in the
+    // whole league) could just as easily match the OPPONENT's cross-linked
+    // copy of this same replayId first, silently merging the correction
+    // into the wrong player's batch entirely.
+    const samePlayerBatches = [...(_allProfileBatches||[]), ...(_activeProfile?.batches||[])]
+      .filter(b => b && b.id && !b.isTemp && isSamePlayerClient(b.player, m.player));
+    samePlayerBatches.forEach(b => batchesToTry.add(b.id));
 
     let ownerBatch = null, r = null;
     for (const bid of batchesToTry) {
