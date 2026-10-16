@@ -33,7 +33,11 @@ let pgClient = null;
 // replayId gets the SAME answer, re-derived from this one place, regardless
 // of how many copies of the replay exist or which one a page happens to
 // load. See applyGlobalOverrideToReplay() below.
-let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {}, replayCache: {}, overrides: {} };
+// db._changeLog: an admin-visible audit trail of mutating actions — who did
+// what, to which player's data, when. Kept as a capped array (newest last,
+// trimmed to the most recent 5000 entries) rather than a separate table,
+// since it's read as a whole list, not queried by key. See logChange().
+let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {}, replayCache: {}, overrides: {}, _changeLog: [] };
 
 async function connectPostgres() {
   const { Client } = require('pg');
@@ -68,7 +72,7 @@ async function connectPostgres() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
-  const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('players','users','gfwl','eventDates','overrides')");
+  const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('players','users','gfwl','eventDates','overrides','_changeLog')");
   for (const row of res.rows) { db[row.key] = row.value; }
   const batchRes = await client.query('SELECT id, value FROM duel_tools_batches');
   db.batches = {};
@@ -95,6 +99,7 @@ async function connectPostgres() {
   if (!db.eventDates) db.eventDates = {};
   if (!db.replayCache) db.replayCache = {};
   if (!db.overrides) db.overrides = {};
+  if (!db._changeLog) db._changeLog = [];
   pgClient = client;
   // Handle PG client-level errors (e.g. connection dropped by server)
   // Without this, 'error' events on the pg client crash Node
@@ -214,6 +219,7 @@ function loadFileDB() {
       if (!db.eventDates) db.eventDates = {};
       if (!db.replayCache) db.replayCache = {};
       if (!db.overrides) db.overrides = {};
+      if (!db._changeLog) db._changeLog = [];
     }
   } catch(e) { console.error('File DB load error:', e.message); }
 }
@@ -230,7 +236,7 @@ function loadFileDB() {
 // change to player aliases/teams was silently never persisted again.
 // Always-save-everything is simpler and can't silently drop data — these
 // four keys are small enough that resaving all of them every time is cheap.
-const _ALWAYS_SAVE_KEYS = ['players','users','gfwl','eventDates','overrides'];
+const _ALWAYS_SAVE_KEYS = ['players','users','gfwl','eventDates','overrides','_changeLog'];
 const _dirtyKeys = new Set(_ALWAYS_SAVE_KEYS);
 
 // ── Write-ahead buffer — holds pending saves when Postgres is temporarily down ─
@@ -569,6 +575,53 @@ function saveDBDebounced(key) {
     _saveTimeout = null;
     saveDB().catch(e => console.error('[saveDB debounced]', e.message));
   }, 2000); // Wait 2s for more changes before saving
+}
+
+// ── Admin audit log ──────────────────────────────────────────────────────────
+// Records who did what to whose data — batches created, replays added (with
+// event label), decklists added, overrides set/cleared, merges, deletions —
+// so admins have one place to see exactly what every user has been doing on
+// KDT. Read back via GET /api/changelog and rendered by the "Edit Log" tab
+// (admin-only) in the client. `details` is spread directly onto the log
+// entry: each action naturally carries different fields (batchId, replayId,
+// eventLabel, deckType, note, ...) so there's no fixed schema — the client
+// renders whatever's present generically.
+function logChange(req, action, details) {
+  if (!db._changeLog) db._changeLog = [];
+  const user = getUser(req);
+  db._changeLog.push({
+    t: Date.now(),
+    action,
+    user: (user && (user.name || user.email)) || 'unknown',
+    ...details,
+  });
+  if (db._changeLog.length > 5000) db._changeLog = db._changeLog.slice(-5000);
+  // Debounced, not synchronous — this is an audit trail, not data whose loss
+  // would corrupt anything. The actual data each entry describes is already
+  // durably saved by its own route-specific flush before or alongside this
+  // call; at worst a crash in the ~2s debounce window loses the few most
+  // recent log lines, never the data itself.
+  saveDBDebounced();
+}
+
+// eventDecklists is always saved as a whole-array replace (the client
+// recomputes the full list and PATCHes it), not an incremental add/remove —
+// so to log "a decklist was added for event X" with the actual event code,
+// this diffs the old and new arrays by eventCode and logs one entry per
+// addition/removal, instead of one vague "list changed" entry.
+function logDecklistDiff(req, before, after, context) {
+  const beforeCodes = new Set((before||[]).map(d => d && d.eventCode).filter(Boolean));
+  const afterCodes  = new Set((after ||[]).map(d => d && d.eventCode).filter(Boolean));
+  for (const d of (after||[])) {
+    if (d && d.eventCode && !beforeCodes.has(d.eventCode)) {
+      logChange(req, 'add_decklist', { ...context, eventCode: d.eventCode, deckUrl: d.deckUrl || null });
+    }
+  }
+  for (const code of beforeCodes) {
+    if (!afterCodes.has(code)) {
+      logChange(req, 'remove_decklist', { ...context, eventCode: code });
+    }
+  }
 }
 
 // ── stripPlay: remove bloat from play objects before storing ─────────────────
@@ -1459,31 +1512,77 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true, repaired, checked, noOriginal, errors, batchesUpdated: batchIds.size });
   }
 
-  // ── GET /api/changelog — head admin audit log ──────────────────────────────
+  // ── GET /api/changelog — admin audit log (the "Edit Log" tab) ──────────────
+  // Optional filters — player (matches batchPlayer, case-insensitive
+  // substring), action (exact match, e.g. 'set_override'), user (matches the
+  // acting user's name/email, case-insensitive substring) — let admins
+  // narrow down "what has this person been doing" or "what happened to this
+  // player's data" without scrolling the whole log client-side.
   if (parts[0]==='changelog' && method==='GET') {
     if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
-    const limit = parseInt(url.searchParams.get('limit')||'100');
-    const log = (db._changeLog||[]).slice(-limit).reverse();
-    return json(res, 200, { log });
+    const limit = Math.min(parseInt(url.searchParams.get('limit')||'500'), 5000);
+    const playerFilter = (url.searchParams.get('player')||'').toLowerCase().trim();
+    const actionFilter = (url.searchParams.get('action')||'').trim();
+    const userFilter   = (url.searchParams.get('user')||'').toLowerCase().trim();
+    let log = (db._changeLog||[]).slice().reverse();
+    if (playerFilter) log = log.filter(l => (l.batchPlayer||'').toLowerCase().includes(playerFilter));
+    if (actionFilter) log = log.filter(l => l.action === actionFilter);
+    if (userFilter)   log = log.filter(l => (l.user||'').toLowerCase().includes(userFilter));
+    return json(res, 200, { log: log.slice(0, limit), total: log.length });
   }
 
-  // ── DELETE /api/changelog/revert/:replayId — head admin revert ───────────
+  // ── DELETE /api/changelog/revert/:replayId — admin revert ─────────────────
+  // Wholesale undo: removes this replay entirely from every batch that holds
+  // a copy of it (the original, any cross-linked twin, any duplicate scrape)
+  // and clears its global override record, if any — for when a replay was
+  // imported by mistake (wrong player, test data, a duplicate that slipped
+  // past dedup) and needs to disappear everywhere, not just from one batch.
+  // Was gated on isHeadAdmin(), a role that no longer exists (always returns
+  // false — see its definition) and so was permanently unreachable; opened
+  // up to any admin, same as the rest of this file's admin-only actions.
   if (parts[0]==='changelog' && parts[1]==='revert' && parts[2] && method==='DELETE') {
-    if (!isHeadAdmin(req)) return json(res, 403, { error:'Head Admin only' });
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
     const replayId = decodeURIComponent(parts[2]);
     let reverted = 0;
+    const revertFailures = [];
     for (const batch of Object.values(db.batches)) {
       const before = (batch.replays||[]).length;
       batch.replays = (batch.replays||[]).filter(r => r.replayId !== replayId);
       if (batch.replays.length < before) {
-        await saveBatchToPostgres(batch.id);
+        // A revert is a deliberate, infrequent action an admin explicitly
+        // chose — same reasoning as overrides/merges elsewhere in this file:
+        // it must be CONFIRMED durably saved via the synchronous flush, not
+        // the normal debounced saveBatchToPostgres() (schedules a write
+        // ~1.5s out and returns immediately). GET /api/batches/:id re-reads
+        // straight from Postgres before responding — if the debounced write
+        // hadn't landed yet, that fresh read would restore the batch's OLD
+        // (pre-revert) row from Postgres, undoing the in-memory removal this
+        // very endpoint just made.
+        const flushRes = await flushBatchNow(batch.id);
+        if (!flushRes.ok) { revertFailures.push({ batchId: batch.id, error: flushRes.error }); console.error(`[revert] FAILED to durably save batch ${batch.id}:`, flushRes.error); }
         reverted++;
       }
     }
-    if (reverted > 0) {
-      db._changeLog = (db._changeLog||[]).filter(l => l.replayId !== replayId);
-      console.log('[HeadAdmin] Reverted replay', replayId, 'from', reverted, 'batches');
+    if (reverted === 0) return json(res, 404, { error: 'This replay was not found in any saved batch — nothing to revert.' });
+    if (revertFailures.length) {
+      return json(res, 500, { ok:false, error: 'Revert was applied in memory but FAILED TO DURABLY SAVE for ' + revertFailures.length + ' batch(es): ' + revertFailures.map(f=>f.error).join('; '), reverted });
     }
+    // Clear any global override recorded for this replay — it would
+    // otherwise sit as an orphaned record for a replay that no longer
+    // exists anywhere (harmless, since applyGlobalOverrideToReplay is a
+    // no-op without a matching replay to apply it to, but there's no
+    // reason to keep it around).
+    if (db.overrides[replayId]) {
+      delete db.overrides[replayId];
+      await saveDB('overrides');
+    }
+    // Drop this replay's prior history from the log (the add/override/merge
+    // entries that are no longer meaningful once it's gone), then record the
+    // revert itself as a fresh entry — logChange() is called AFTER this
+    // filter so its own entry isn't immediately wiped by it.
+    db._changeLog = (db._changeLog||[]).filter(l => l.replayId !== replayId);
+    console.log('[Admin] Reverted replay', replayId, 'from', reverted, 'batch(es)');
+    logChange(req, 'revert_replay', { replayId, revertedFromBatches: reverted });
     return json(res, 200, { ok: true, reverted });
   }
 
@@ -1730,8 +1829,14 @@ const server = http.createServer(async (req, res) => {
       if (data.aliases    !== undefined) p.aliases    = data.aliases;
       if (data.topPlayer  !== undefined) p.topPlayer  = !!data.topPlayer;
       if (data.gfwlTeams  !== undefined) p.gfwlTeams  = data.gfwlTeams;
-      if (data.eventDecklists !== undefined) p.eventDecklists = data.eventDecklists;
+      if (data.eventDecklists !== undefined) {
+        logDecklistDiff(req, p.eventDecklists || [], data.eventDecklists || [], { batchPlayer: p.name });
+        p.eventDecklists = data.eventDecklists;
+      }
       if (data.tags       !== undefined) p.tags       = data.tags;
+      if (data.aliases !== undefined || data.topPlayer !== undefined || data.gfwlTeams !== undefined || data.tags !== undefined) {
+        logChange(req, 'edit_player', { batchPlayer: p.name, aliases: p.aliases, topPlayer: p.topPlayer, gfwlTeams: p.gfwlTeams });
+      }
       await saveDB('players'); // explicit key — bare saveDB() can silently skip 'players'
                                  // once it's fallen out of the dirty-key tracking set
       return json(res, 200, p);
@@ -1851,6 +1956,7 @@ const server = http.createServer(async (req, res) => {
       const batch = { id, name: data.name||data.player||'Batch', player: data.player||'', aliases: data.aliases||[], replays: [], createdAt: Date.now(), status: 'pending' };
       db.batches[id] = batch;
       await saveBatchToPostgres(id);
+      logChange(req, 'create_batch', { batchId: id, batchPlayer: batch.player, batchName: batch.name });
       return json(res, 200, batch);
     });
   }
@@ -1905,10 +2011,21 @@ const server = http.createServer(async (req, res) => {
     return readBody(req, async data => {
       const b = db.batches[parts[1]];
       if (!b) return json(res, 404, { error:'Not found' });
+      if (data.name !== undefined || data.player !== undefined || data.aliases !== undefined) {
+        logChange(req, 'edit_batch', { batchId: b.id, batchPlayer: data.player!==undefined?data.player:b.player, prevPlayer: b.player, name: data.name, aliases: data.aliases });
+      }
       if (data.name           !== undefined) b.name           = data.name;
       if (data.player         !== undefined) b.player         = data.player;
       if (data.aliases        !== undefined) b.aliases        = data.aliases;
-      if (data.eventDecklists !== undefined) b.eventDecklists = data.eventDecklists;
+      if (data.eventDecklists !== undefined) {
+        // Decklists are saved as a whole-array replace, not an incremental
+        // add — diff against what was there before so the audit log can say
+        // "decklist added for event X" (with the event id/code) rather than
+        // just "eventDecklists changed," which is what the user actually
+        // asked this log to show.
+        logDecklistDiff(req, b.eventDecklists || [], data.eventDecklists || [], { batchId: b.id, batchPlayer: b.player });
+        b.eventDecklists = data.eventDecklists;
+      }
       await saveBatchToPostgres(b.id);
       return json(res, 200, b);
     });
@@ -1928,6 +2045,7 @@ const server = http.createServer(async (req, res) => {
     if (role === 'user') {
       return json(res, 403, { error: 'Users cannot delete batches' });
     }
+    logChange(req, 'delete_batch', { batchId: batch.id, batchPlayer: batch.player, batchName: batch.name, replayCount: (batch.replays||[]).length });
     delete db.batches[parts[1]];
     await deleteBatchFromPostgres(parts[1]);
     return json(res, 200, { ok:true });
@@ -1939,8 +2057,12 @@ const server = http.createServer(async (req, res) => {
     if (!b) return json(res, 404, { error:'Not found' });
     const replayId = decodeURIComponent(parts[3]);
     const before = (b.replays||[]).length;
+    const removedReplay = (b.replays||[]).find(r => r.replayId === replayId);
     b.replays = (b.replays||[]).filter(r => r.replayId !== replayId);
     await saveBatchToPostgres(b.id);
+    if (b.replays.length < before) {
+      logChange(req, 'delete_replay', { batchId: b.id, batchPlayer: b.player, replayId, eventLabel: removedReplay?.eventLabel || '' });
+    }
     return json(res, 200, { ok:true, removed: before - b.replays.length });
   }
 
@@ -2021,6 +2143,7 @@ const server = http.createServer(async (req, res) => {
       if (isDeliberateMerge) {
         primarySave = await flushBatchNow(b.id);
         if (!primarySave.ok) console.error(`[merge] FAILED to durably save replay ${r.replayId} in batch ${b.id}:`, primarySave.error);
+        logChange(req, 'merge_replay', { batchId: b.id, batchPlayer: b.player, replayId, eventLabel: r.eventLabel || '', mergedReplays: (data.mergedReplays||[]).map(x=>x.replayId||x) });
       } else {
         await saveBatchToPostgres(b.id);
       }
@@ -2099,6 +2222,14 @@ const server = http.createServer(async (req, res) => {
         const mergedGlobal = mergeGlobalOverride(replayId, data, b.player || null, oppNameForOverride);
         if (mergedGlobal) db.overrides[replayId] = mergedGlobal;
         else delete db.overrides[replayId];
+        logChange(req, mergedGlobal ? 'set_override' : 'clear_override', {
+          batchId: b.id, batchPlayer: b.player, replayId, oppName: oppNameForOverride,
+          resultOverride: data.resultOverride!==undefined ? data.resultOverride : undefined,
+          scoreOverride:  data.scoreOverride !==undefined ? data.scoreOverride  : undefined,
+          myDeckOverride: data.myDeckOverride!==undefined ? data.myDeckOverride : undefined,
+          oppDeckOverride:data.oppDeckOverride!==undefined? data.oppDeckOverride: undefined,
+          note: data.overrideNote || undefined,
+        });
         const globalSave = await saveDB('overrides');
         if (globalSave && globalSave.ok === false) {
           console.error(`[override] FAILED to durably save GLOBAL override for ${replayId}:`, globalSave.error);
@@ -2219,10 +2350,7 @@ const server = http.createServer(async (req, res) => {
         b.replays.push({ replayId:data.replayId, plays:data.plays||[], allPlays:parsedData?[]:strippedPlays, parsed:parsedData, timedOut:!!data.timedOut, eventLabel:data.eventLabel||'', round:data.round||'', oppName:data.oppName||'', player1:data.player1||null, player2:data.player2||null, savedAt:Date.now() });
         b.status = 'ready';
         markBatchDirty(b.id);
-        // Log for Head Admin revert
-        if (!db._changeLog) db._changeLog = [];
-        db._changeLog.push({ t:Date.now(), action:'add_replay', batchId:b.id, batchPlayer:b.player, replayId:data.replayId, user:getUser(req)?.name||'unknown' });
-        if (db._changeLog.length > 5000) db._changeLog = db._changeLog.slice(-5000);
+        logChange(req, 'add_replay', { batchId: b.id, batchPlayer: b.player, replayId: data.replayId, eventLabel: data.eventLabel || '', oppName: data.oppName || '' });
         // Only cross-link when explicitly allowed (new batch creation, not manual add-to-batch)
         if (data.oppName && !data.noCrossLink) {
           const cl = crossLinkReplay(data, data.oppName, b.player);

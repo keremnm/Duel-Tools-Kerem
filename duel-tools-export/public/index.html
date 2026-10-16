@@ -614,6 +614,7 @@ select{cursor:pointer}
       <button class="ntab" id="ntab-ingame" onclick="switchTab('ingame',this)">In-Game Tools</button>
       <button class="ntab" id="gfwl-prep-tab" onclick="switchTab('gfwl',this)">GFWL Archive</button>
       <button class="ntab" id="ntab-admin" onclick="switchTab('admin',this)" style="display:none">⚙ Admin</button>
+      <button class="ntab" id="ntab-editlog" onclick="switchTab('editlog',this)" style="display:none">📋 Edit Log</button>
     </div>
     <!-- Mobile nav dropdown — replaces tab row on small screens -->
     <div id="nav-mobile-wrap" style="display:none;padding:0 10px;flex-shrink:0;align-items:center;border-bottom:1px solid var(--border);background:var(--panel)">
@@ -1398,6 +1399,42 @@ select{cursor:pointer}
       <div id="admin-perms-section" style="display:none"></div>
       <div id="admin-sessions-section" style="display:none;flex-direction:column;gap:12px"></div>
       <div id="admin-crosslinks-section" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- Edit Log page — admin-only audit trail of who did what to whose data -->
+  <div class="page" id="pg-editlog">
+    <div style="flex:1;overflow-y:auto;padding:26px 30px;display:flex;flex-direction:column;gap:16px;max-width:1300px;margin:0 auto;width:100%;box-sizing:border-box">
+      <div style="font-size:21px;font-weight:bold;color:var(--text);letter-spacing:.04em">📋 Edit Log</div>
+      <div style="color:var(--muted);font-size:12px">Every batch, replay, decklist, override and merge change made on KDT — who did it, and what it touched. Admins only.</div>
+
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding-bottom:12px;border-bottom:1px solid var(--border)">
+        <input id="editlog-filter-player" type="text" placeholder="Filter by player…" oninput="editLogDebouncedLoad()"
+          style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;width:180px">
+        <input id="editlog-filter-user" type="text" placeholder="Filter by user…" oninput="editLogDebouncedLoad()"
+          style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;width:160px">
+        <select id="editlog-filter-action" onchange="loadEditLog()"
+          style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none">
+          <option value="">All actions</option>
+          <option value="create_batch">Batch created</option>
+          <option value="edit_batch">Batch edited</option>
+          <option value="delete_batch">Batch deleted</option>
+          <option value="add_replay">Replay added</option>
+          <option value="delete_replay">Replay deleted</option>
+          <option value="merge_replay">Replay merged</option>
+          <option value="set_override">Override set</option>
+          <option value="clear_override">Override cleared</option>
+          <option value="add_decklist">Decklist added</option>
+          <option value="remove_decklist">Decklist removed</option>
+          <option value="edit_player">Player profile edited</option>
+          <option value="create_player">Player profile created</option>
+          <option value="revert_replay">Replay reverted</option>
+        </select>
+        <button onclick="loadEditLog()" style="background:none;border:1px solid var(--green);color:var(--green);font-family:monospace;font-size:11px;padding:6px 12px;border-radius:6px;cursor:pointer">↻ Refresh</button>
+        <span id="editlog-count" style="color:var(--muted);font-size:11px;margin-left:auto"></span>
+      </div>
+
+      <div id="editlog-list" style="display:flex;flex-direction:column;gap:6px"></div>
     </div>
   </div>
 
@@ -2366,6 +2403,7 @@ function switchTab(name, btn) {
   if (name === 'gfwl') gfwlInit();
   if (name === 'profiles') loadProfiles();
   if (name === 'admin')    renderAdminPage();
+  if (name === 'editlog')  loadEditLog();
   // Format Data tab always shows ALL saved replays — never filtered by active batch
   if (name === 'formatdata') loadFormatData();
 }
@@ -16462,7 +16500,9 @@ function applyRoleUI() {
     if (errBtn) errBtn.style.display = isAdminRole(_userRole) ? 'inline-block' : 'none';
     const adminTab = document.getElementById('ntab-admin');
     if (adminTab) adminTab.style.display = isAdminRole(_userRole) ? 'inline-block' : 'none';
-    // Mobile nav dropdown — admin option only added for admins
+    const editLogTab = document.getElementById('ntab-editlog');
+    if (editLogTab) editLogTab.style.display = isAdminRole(_userRole) ? 'inline-block' : 'none';
+    // Mobile nav dropdown — admin-only options only added for admins
     const mobileSel = document.getElementById('nav-mobile-sel');
     if (mobileSel) {
       const existingOpt = mobileSel.querySelector('option[value="admin"]');
@@ -16472,6 +16512,14 @@ function applyRoleUI() {
         mobileSel.appendChild(opt);
       } else if (!isAdminRole(_userRole) && existingOpt) {
         existingOpt.remove();
+      }
+      const existingLogOpt = mobileSel.querySelector('option[value="editlog"]');
+      if (isAdminRole(_userRole) && !existingLogOpt) {
+        const opt = document.createElement('option');
+        opt.value = 'editlog'; opt.textContent = '📋 Edit Log';
+        mobileSel.appendChild(opt);
+      } else if (!isAdminRole(_userRole) && existingLogOpt) {
+        existingLogOpt.remove();
       }
     }
   }
@@ -16582,6 +16630,123 @@ async function viewErrorLog() {
     }
     document.body.appendChild(overlay);
   } catch(e) { alert('Failed to load error log: '+e.message); }
+}
+
+// ── Edit Log (admin-only audit trail) ─────────────────────────────────────────
+const EDITLOG_LABELS = {
+  create_batch:    { label: 'Created batch',           color: 'var(--green)' },
+  edit_batch:      { label: 'Edited batch',             color: 'var(--amber)' },
+  delete_batch:    { label: 'Deleted batch',             color: 'var(--red)' },
+  add_replay:      { label: 'Added replay',             color: 'var(--green)' },
+  delete_replay:   { label: 'Deleted replay',            color: 'var(--red)' },
+  merge_replay:    { label: 'Merged replay',             color: 'var(--amber)' },
+  set_override:    { label: 'Set result override',       color: 'var(--amber)' },
+  clear_override:  { label: 'Cleared override',          color: 'var(--amber)' },
+  add_decklist:    { label: 'Added decklist',            color: 'var(--green)' },
+  remove_decklist: { label: 'Removed decklist',          color: 'var(--red)' },
+  edit_player:     { label: 'Edited player profile',     color: 'var(--amber)' },
+  create_player:   { label: 'Created player profile',    color: 'var(--green)' },
+  revert_replay:   { label: 'Reverted replay',            color: 'var(--red)' },
+};
+
+let _editLogDebounce = null;
+function editLogDebouncedLoad() {
+  clearTimeout(_editLogDebounce);
+  _editLogDebounce = setTimeout(loadEditLog, 300);
+}
+
+// Builds the one-line, action-specific detail string for a log entry — the
+// part that actually answers "what was added/changed," e.g. the event id
+// for a replay or decklist, the score for an override, the merged replay
+// IDs for a merge. Kept generic (reads whatever fields are present) since
+// logChange() on the server doesn't enforce a fixed schema per action.
+function editLogDetailLine(e) {
+  const parts = [];
+  if (e.replayId) {
+    parts.push(`<a href="${replayUrl(e.replayId)}" target="_blank" rel="noopener" style="color:var(--blue)">${e.replayId}</a>`);
+  }
+  if (e.eventLabel) parts.push(`Event: <b>${e.eventLabel}</b>`);
+  if (e.eventCode) parts.push(`Event: <b>${e.eventCode}</b>`);
+  if (e.oppName) parts.push(`vs ${e.oppName}`);
+  if (e.resultOverride !== undefined) parts.push(`Result → <b>${e.resultOverride===null?'cleared':(e.resultOverride==='w'?'W':e.resultOverride==='l'?'L':e.resultOverride)}</b>`);
+  if (e.scoreOverride) parts.push(`Score → <b>${e.scoreOverride.my}-${e.scoreOverride.opp}</b>`);
+  if (e.myDeckOverride) parts.push(`My deck → <b>${e.myDeckOverride}</b>`);
+  if (e.oppDeckOverride) parts.push(`Opp deck → <b>${e.oppDeckOverride}</b>`);
+  if (e.note) parts.push(`Note: "${e.note}"`);
+  if (e.mergedReplays && e.mergedReplays.length) parts.push(`Merged with: ${e.mergedReplays.join(', ')}`);
+  if (e.deckUrl) parts.push(`<a href="${e.deckUrl}" target="_blank" rel="noopener" style="color:var(--blue)">deck link</a>`);
+  if (e.batchName) parts.push(`Batch: ${e.batchName}`);
+  if (e.name) parts.push(`Renamed → <b>${e.name}</b>`);
+  if (e.prevPlayer && e.batchPlayer && e.prevPlayer !== e.batchPlayer) parts.push(`Player: ${e.prevPlayer} → <b>${e.batchPlayer}</b>`);
+  if (e.aliases) parts.push(`Aliases: ${(e.aliases||[]).join(', ') || '(none)'}`);
+  if (e.replayCount !== undefined) parts.push(`${e.replayCount} replay(s)`);
+  return parts.join(' &nbsp;·&nbsp; ');
+}
+
+async function loadEditLog() {
+  const listEl = document.getElementById('editlog-list');
+  const countEl = document.getElementById('editlog-count');
+  if (!listEl) return;
+  listEl.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:16px">Loading…</div>';
+  try {
+    const player = (document.getElementById('editlog-filter-player')||{}).value || '';
+    const user   = (document.getElementById('editlog-filter-user')||{}).value || '';
+    const action = (document.getElementById('editlog-filter-action')||{}).value || '';
+    const qs = new URLSearchParams({ limit: '500' });
+    if (player) qs.set('player', player);
+    if (user)   qs.set('user', user);
+    if (action) qs.set('action', action);
+    const data = await fetch(`${API}/changelog?${qs}`, { headers: authHeaders() }).then(r=>r.json());
+    const log = data.log || [];
+    if (countEl) countEl.textContent = log.length + (data.total && data.total > log.length ? ` of ${data.total}` : '') + ' entries';
+    if (!log.length) {
+      listEl.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:16px">No matching changes recorded.</div>';
+      return;
+    }
+    listEl.innerHTML = '';
+    log.forEach(e => {
+      const meta = EDITLOG_LABELS[e.action] || { label: e.action, color: 'var(--muted)' };
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:10px;align-items:flex-start;padding:9px 12px;background:var(--card);border:1px solid var(--border);border-radius:6px;font-size:12px';
+      const when = new Date(e.t).toLocaleString();
+      const canRevert = e.replayId && !['delete_replay','revert_replay','delete_batch'].includes(e.action);
+      row.innerHTML = `
+        <div style="min-width:150px;color:var(--muted);font-size:11px;white-space:nowrap">${when}</div>
+        <div style="min-width:110px;color:${meta.color};font-weight:bold">${meta.label}</div>
+        <div style="min-width:120px;color:var(--text)">${e.batchPlayer||''}</div>
+        <div style="flex:1;color:var(--dim)">${editLogDetailLine(e)}</div>
+        <div style="min-width:90px;text-align:right;color:var(--muted);font-size:11px">${e.user||'unknown'}</div>
+        <div style="min-width:70px;text-align:right">${canRevert ? `<button onclick="revertReplayFromLog('${e.replayId}', this)" style="background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer">↺ Revert</button>` : ''}</div>
+      `;
+      listEl.appendChild(row);
+    });
+  } catch(e) {
+    listEl.innerHTML = '<div style="color:var(--red);font-size:12px;padding:16px">Failed to load edit log: '+e.message+'</div>';
+  }
+}
+
+// Wholesale undo for a replay, from the Edit Log — removes it from EVERY
+// batch that holds a copy (the original, any cross-linked twin, any
+// duplicate), not just the one batch this log entry happened to name.
+// Admin-only server-side (see DELETE /api/changelog/revert/:replayId).
+async function revertReplayFromLog(replayId, btn) {
+  if (!confirm(`Revert replay ${replayId}?\n\nThis removes it entirely from every batch that has a copy (original, cross-linked twin, duplicates) and clears any override on it. This cannot be undone — the replay would need to be re-imported from DuelingBook.`)) return;
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const res = await fetch(`${API}/changelog/revert/${encodeURIComponent(replayId)}`, { method:'DELETE', headers: authHeaders() });
+    const d = await res.json().catch(()=>null);
+    if (res.ok && d && d.ok) {
+      st(`Reverted replay ${replayId} from ${d.reverted} batch(es)`, 'var(--green)');
+      loadEditLog();
+    } else {
+      alert('Revert failed: ' + (d && d.error ? d.error : res.status));
+      btn.disabled = false; btn.textContent = orig;
+    }
+  } catch(e) {
+    alert('Revert failed: ' + e.message);
+    btn.disabled = false; btn.textContent = orig;
+  }
 }
 
 async function adminShowSessions() {
