@@ -12331,7 +12331,7 @@ async function addToBatch() {
   if (aliasInp && aliasInp.value.trim()) {
     const newAliases = aliasInp.value.split(',').map(a=>a.trim()).filter(Boolean);
     targetBatch.aliases = newAliases;
-    try { await fetch(API+'/batches/'+targetBatch.id, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({aliases:newAliases})}); } catch(e) {}
+    try { await fetch(API+'/batches/'+targetBatch.id, {method:'PATCH',headers:authHeaders(),body:JSON.stringify({aliases:newAliases})}); } catch(e) {}
   }
 
   // Set as active batch
@@ -12438,7 +12438,7 @@ function saveEventLabel(bar, match, label) {
       // Use lightweight PATCH endpoint — just update the label, no replay data needed
       try {
         fetch(API+'/batches/'+_activeBatch.id+'/replay/'+match.replayId+'/label', {
-          method:'PATCH', headers:{'Content-Type':'application/json'},
+          method:'PATCH', headers:authHeaders(),
           body: JSON.stringify({ eventLabel: label })
         });
       } catch(e) {}
@@ -13704,7 +13704,7 @@ Adding new ones will retroactively scan all saved replays.`,
 
   try {
     const res = await fetch(`${API}/players/${encodeURIComponent(player)}/aliases`, {
-      method:'PATCH', headers:{'Content-Type':'application/json'},
+      method:'PATCH', headers:authHeaders(),
       body: JSON.stringify({ aliases, rescan: hasNew })
     });
     const data = await res.json();
@@ -14904,7 +14904,7 @@ function importBatch() {
       let serverBatchId = null;
       try {
         const createRes = await fetch(API+'/batches', {
-          method:'POST', headers:{'Content-Type':'application/json'},
+          method:'POST', headers:authHeaders(),
           body: JSON.stringify({ name:batch.player, player:batch.player })
         });
         const created = await createRes.json();
@@ -14923,7 +14923,7 @@ function importBatch() {
         try {
           // Ensure eventLabel is included in the POST
           await fetch(API+'/batches/'+batchId+'/replay', {
-            method:'POST', headers:{'Content-Type':'application/json'},
+            method:'POST', headers:authHeaders(),
             body: JSON.stringify({ ...r, eventLabel: r.eventLabel||'' })
           });
           saved++;
@@ -14935,7 +14935,7 @@ function importBatch() {
       if (importAliases.length) {
         try {
           await fetch(API+'/players/'+encodeURIComponent(batch.player)+'/aliases', {
-            method:'PATCH', headers:{'Content-Type':'application/json'},
+            method:'PATCH', headers:authHeaders(),
             body: JSON.stringify({ aliases: importAliases, rescan: true })
           });
         } catch(e) {}
@@ -14958,7 +14958,7 @@ function importBatch() {
               if (!already) {
                 try {
                   await fetch(API+'/batches/'+batchId+'/replay', {
-                    method:'POST', headers:{'Content-Type':'application/json'},
+                    method:'POST', headers:authHeaders(),
                     body: JSON.stringify({ ...r, eventLabel: r.eventLabel||'' })
                   });
                 } catch(e) {}
