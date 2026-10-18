@@ -614,7 +614,6 @@ select{cursor:pointer}
       <button class="ntab" id="ntab-ingame" onclick="switchTab('ingame',this)">In-Game Tools</button>
       <button class="ntab" id="gfwl-prep-tab" onclick="switchTab('gfwl',this)">GFWL Archive</button>
       <button class="ntab" id="ntab-admin" onclick="switchTab('admin',this)" style="display:none">⚙ Admin</button>
-      <button class="ntab" id="ntab-editlog" onclick="switchTab('editlog',this)" style="display:none">📋 Edit Log</button>
     </div>
     <!-- Mobile nav dropdown — replaces tab row on small screens -->
     <div id="nav-mobile-wrap" style="display:none;padding:0 10px;flex-shrink:0;align-items:center;border-bottom:1px solid var(--border);background:var(--panel)">
@@ -1399,42 +1398,44 @@ select{cursor:pointer}
       <div id="admin-perms-section" style="display:none"></div>
       <div id="admin-sessions-section" style="display:none;flex-direction:column;gap:12px"></div>
       <div id="admin-crosslinks-section" style="display:none"></div>
-    </div>
-  </div>
 
-  <!-- Edit Log page — admin-only audit trail of who did what to whose data -->
-  <div class="page" id="pg-editlog">
-    <div style="flex:1;overflow-y:auto;padding:26px 30px;display:flex;flex-direction:column;gap:16px;max-width:1300px;margin:0 auto;width:100%;box-sizing:border-box">
-      <div style="font-size:21px;font-weight:bold;color:var(--text);letter-spacing:.04em">📋 Edit Log</div>
-      <div style="color:var(--muted);font-size:12px">Every batch, replay, decklist, override and merge change made on KDT — who did it, and what it touched. Admins only.</div>
+      <!-- Log sub-tab — audit trail of who did what to whose data -->
+      <div id="admin-log-section" style="display:none;flex-direction:column;gap:16px">
+        <div style="color:var(--muted);font-size:12px">Every batch, replay, decklist, override and merge change made on KDT — who did it, and what it touched. Kept for 7 days, for every user.</div>
 
-      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding-bottom:12px;border-bottom:1px solid var(--border)">
-        <input id="editlog-filter-player" type="text" placeholder="Filter by player…" oninput="editLogDebouncedLoad()"
-          style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;width:180px">
-        <input id="editlog-filter-user" type="text" placeholder="Filter by user…" oninput="editLogDebouncedLoad()"
-          style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;width:160px">
-        <select id="editlog-filter-action" onchange="loadEditLog()"
-          style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none">
-          <option value="">All actions</option>
-          <option value="create_batch">Batch created</option>
-          <option value="edit_batch">Batch edited</option>
-          <option value="delete_batch">Batch deleted</option>
-          <option value="add_replay">Replay added</option>
-          <option value="delete_replay">Replay deleted</option>
-          <option value="merge_replay">Replay merged</option>
-          <option value="set_override">Override set</option>
-          <option value="clear_override">Override cleared</option>
-          <option value="add_decklist">Decklist added</option>
-          <option value="remove_decklist">Decklist removed</option>
-          <option value="edit_player">Player profile edited</option>
-          <option value="create_player">Player profile created</option>
-          <option value="revert_replay">Replay reverted</option>
-        </select>
-        <button onclick="loadEditLog()" style="background:none;border:1px solid var(--green);color:var(--green);font-family:monospace;font-size:11px;padding:6px 12px;border-radius:6px;cursor:pointer">↻ Refresh</button>
-        <span id="editlog-count" style="color:var(--muted);font-size:11px;margin-left:auto"></span>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding-bottom:12px;border-bottom:1px solid var(--border)">
+          <select id="editlog-filter-days" onchange="loadEditLog()"
+            style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none">
+            <option value="1">Last 24 hours</option>
+            <option value="7" selected>Last 7 days</option>
+          </select>
+          <input id="editlog-filter-player" type="text" placeholder="Filter by player…" oninput="editLogDebouncedLoad()"
+            style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;width:180px">
+          <input id="editlog-filter-user" type="text" placeholder="Filter by user…" oninput="editLogDebouncedLoad()"
+            style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;width:160px">
+          <select id="editlog-filter-action" onchange="loadEditLog()"
+            style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none">
+            <option value="">All actions</option>
+            <option value="create_batch">Batch created</option>
+            <option value="edit_batch">Batch edited</option>
+            <option value="delete_batch">Batch deleted</option>
+            <option value="add_replay">Replay added</option>
+            <option value="delete_replay">Replay deleted</option>
+            <option value="merge_replay">Replay merged</option>
+            <option value="set_override">Override set</option>
+            <option value="clear_override">Override cleared</option>
+            <option value="add_decklist">Decklist added</option>
+            <option value="remove_decklist">Decklist removed</option>
+            <option value="edit_player">Player profile edited</option>
+            <option value="create_player">Player profile created</option>
+            <option value="revert_replay">Replay reverted</option>
+          </select>
+          <button onclick="loadEditLog()" style="background:none;border:1px solid var(--green);color:var(--green);font-family:monospace;font-size:11px;padding:6px 12px;border-radius:6px;cursor:pointer">↻ Refresh</button>
+          <span id="editlog-count" style="color:var(--muted);font-size:11px;margin-left:auto"></span>
+        </div>
+
+        <div id="editlog-list" style="display:flex;flex-direction:column;gap:6px"></div>
       </div>
-
-      <div id="editlog-list" style="display:flex;flex-direction:column;gap:6px"></div>
     </div>
   </div>
 
@@ -2403,7 +2404,6 @@ function switchTab(name, btn) {
   if (name === 'gfwl') gfwlInit();
   if (name === 'profiles') loadProfiles();
   if (name === 'admin')    renderAdminPage();
-  if (name === 'editlog')  loadEditLog();
   // Format Data tab always shows ALL saved replays — never filtered by active batch
   if (name === 'formatdata') loadFormatData();
 }
@@ -16500,9 +16500,8 @@ function applyRoleUI() {
     if (errBtn) errBtn.style.display = isAdminRole(_userRole) ? 'inline-block' : 'none';
     const adminTab = document.getElementById('ntab-admin');
     if (adminTab) adminTab.style.display = isAdminRole(_userRole) ? 'inline-block' : 'none';
-    const editLogTab = document.getElementById('ntab-editlog');
-    if (editLogTab) editLogTab.style.display = isAdminRole(_userRole) ? 'inline-block' : 'none';
-    // Mobile nav dropdown — admin-only options only added for admins
+    // Mobile nav dropdown — admin option only added for admins. Log lives
+    // as a sub-tab inside Admin (see renderAdminPage()), not its own entry.
     const mobileSel = document.getElementById('nav-mobile-sel');
     if (mobileSel) {
       const existingOpt = mobileSel.querySelector('option[value="admin"]');
@@ -16512,14 +16511,6 @@ function applyRoleUI() {
         mobileSel.appendChild(opt);
       } else if (!isAdminRole(_userRole) && existingOpt) {
         existingOpt.remove();
-      }
-      const existingLogOpt = mobileSel.querySelector('option[value="editlog"]');
-      if (isAdminRole(_userRole) && !existingLogOpt) {
-        const opt = document.createElement('option');
-        opt.value = 'editlog'; opt.textContent = '📋 Edit Log';
-        mobileSel.appendChild(opt);
-      } else if (!isAdminRole(_userRole) && existingLogOpt) {
-        existingLogOpt.remove();
       }
     }
   }
@@ -16692,7 +16683,8 @@ async function loadEditLog() {
     const player = (document.getElementById('editlog-filter-player')||{}).value || '';
     const user   = (document.getElementById('editlog-filter-user')||{}).value || '';
     const action = (document.getElementById('editlog-filter-action')||{}).value || '';
-    const qs = new URLSearchParams({ limit: '500' });
+    const days   = (document.getElementById('editlog-filter-days')||{}).value || '7';
+    const qs = new URLSearchParams({ limit: '500', days });
     if (player) qs.set('player', player);
     if (user)   qs.set('user', user);
     if (action) qs.set('action', action);
@@ -16814,6 +16806,7 @@ async function renderAdminPage() {
   const permsSection    = document.getElementById('admin-perms-section');
   const sessionsSection = document.getElementById('admin-sessions-section');
   const crosslinksSection = document.getElementById('admin-crosslinks-section');
+  const logSection = document.getElementById('admin-log-section');
   if (!tabBar || !usersSection) return;
 
   usersSection.innerHTML = '<div style="color:var(--muted);font-size:14px;padding:16px">Loading users...</div>';
@@ -16831,12 +16824,13 @@ async function renderAdminPage() {
 
   // Tab buttons — bigger, roomier than the old modal's
   tabBar.innerHTML = '';
-  ['Users','Roles & Permissions','Sessions','Cross-Links'].forEach(tab => {
+  const ADMIN_TAB_KEYS = { 'Users':'users', 'Roles & Permissions':'perms', 'Sessions':'sessions', 'Cross-Links':'crosslinks', 'Log':'log' };
+  ['Users','Roles & Permissions','Sessions','Cross-Links','Log'].forEach(tab => {
     const tb = document.createElement('button');
     tb.textContent = tab;
     tb.style.cssText = 'background:none;border:none;font-family:monospace;font-size:15px;cursor:pointer;padding:9px 18px;border-radius:6px;color:var(--muted)';
     tb.onclick = () => {
-      _adminTab = tab === 'Users' ? 'users' : tab === 'Sessions' ? 'sessions' : tab === 'Cross-Links' ? 'crosslinks' : 'perms';
+      _adminTab = ADMIN_TAB_KEYS[tab];
       tabBar.querySelectorAll('button').forEach(b => { b.style.background='none'; b.style.color='var(--muted)'; });
       tb.style.background = 'var(--card2)'; tb.style.color = 'var(--text)';
       usersSection.style.display = _adminTab === 'users' ? 'flex' : 'none';
@@ -16845,6 +16839,8 @@ async function renderAdminPage() {
       else sessionsSection.style.display = 'none';
       if (_adminTab === 'crosslinks') { crosslinksSection.style.display='block'; loadCrosslinksSection(crosslinksSection); }
       else crosslinksSection.style.display = 'none';
+      if (_adminTab === 'log') { logSection.style.display='flex'; loadEditLog(); }
+      else if (logSection) logSection.style.display = 'none';
     };
     if (tab === 'Users') { tb.style.background='var(--card2)'; tb.style.color='var(--text)'; }
     tabBar.appendChild(tb);

@@ -163,6 +163,20 @@ async function initDB() {
   if (healedCount > 0) {
     console.log(`[overrides] Startup: re-applied ${Object.keys(db.overrides||{}).length} global override(s) to ${healedCount} replay cop${healedCount===1?'y':'ies'} across all batches.`);
   }
+  // Trim the audit log to its 7-day retention window right away too, in
+  // case the server was down (or just never restarted) long enough for
+  // entries logged before this deploy to have aged out.
+  const beforePrune = (db._changeLog||[]).length;
+  pruneChangeLog();
+  if (beforePrune !== (db._changeLog||[]).length) {
+    console.log(`[changelog] Startup: pruned ${beforePrune - db._changeLog.length} entr${beforePrune - db._changeLog.length === 1 ? 'y' : 'ies'} older than 7 days.`);
+    // pruneChangeLog() only mutates the in-memory copy — without an explicit
+    // save here, the trimmed-out entries would still sit in Postgres and
+    // silently reappear on the NEXT restart if no other action happens in
+    // between to trigger logChange()'s own debounced save. Synchronous and
+    // awaited since this runs before the server starts accepting requests.
+    await saveDB('_changeLog');
+  }
   // Bootstrap admin — always ensure admin account exists and password matches env
   // Ensure secondary admin exists
   const SECONDARY_ADMIN = 'arinakkent@gmail.com';
@@ -586,6 +600,17 @@ function saveDBDebounced(key) {
 // entry: each action naturally carries different fields (batchId, replayId,
 // eventLabel, deckType, note, ...) so there's no fixed schema — the client
 // renders whatever's present generically.
+// Entries older than this are dropped from the log — "the last actions for
+// a week, for everyone." Pruned opportunistically (every time something new
+// is logged — see below) rather than on a timer, and GET /api/changelog
+// applies the same window by default, so the two can never disagree about
+// what counts as "the last week" even if a prune happens to lag behind.
+const CHANGE_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+function pruneChangeLog() {
+  if (!db._changeLog || !db._changeLog.length) return;
+  const cutoff = Date.now() - CHANGE_LOG_RETENTION_MS;
+  db._changeLog = db._changeLog.filter(l => l.t >= cutoff);
+}
 function logChange(req, action, details) {
   if (!db._changeLog) db._changeLog = [];
   const user = getUser(req);
@@ -595,6 +620,10 @@ function logChange(req, action, details) {
     user: (user && (user.name || user.email)) || 'unknown',
     ...details,
   });
+  pruneChangeLog();
+  // Belt-and-suspenders cap, independent of the time-based prune above — a
+  // burst of activity inside the 7-day window (a big bulk import, say)
+  // shouldn't be able to grow this without bound.
   if (db._changeLog.length > 5000) db._changeLog = db._changeLog.slice(-5000);
   // Debounced, not synchronous — this is an audit trail, not data whose loss
   // would corrupt anything. The actual data each entry describes is already
@@ -1513,6 +1542,12 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ── GET /api/changelog — admin audit log (the "Edit Log" tab) ──────────────
+  // Defaults to the last 7 days — "the last actions for a week, for
+  // everyone" — same window pruneChangeLog() trims storage to, so what's
+  // shown here and what's actually retained never disagree. `days` widens
+  // or narrows that window (e.g. ?days=1 for just today); since storage
+  // itself is pruned to 7 days on every new log entry, asking for more than
+  // that only finds more if the log has been completely quiet since.
   // Optional filters — player (matches batchPlayer, case-insensitive
   // substring), action (exact match, e.g. 'set_override'), user (matches the
   // acting user's name/email, case-insensitive substring) — let admins
@@ -1521,10 +1556,12 @@ const server = http.createServer(async (req, res) => {
   if (parts[0]==='changelog' && method==='GET') {
     if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
     const limit = Math.min(parseInt(url.searchParams.get('limit')||'500'), 5000);
+    const days  = Math.max(parseFloat(url.searchParams.get('days')||'7'), 0.01);
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
     const playerFilter = (url.searchParams.get('player')||'').toLowerCase().trim();
     const actionFilter = (url.searchParams.get('action')||'').trim();
     const userFilter   = (url.searchParams.get('user')||'').toLowerCase().trim();
-    let log = (db._changeLog||[]).slice().reverse();
+    let log = (db._changeLog||[]).filter(l => l.t >= cutoff).reverse();
     if (playerFilter) log = log.filter(l => (l.batchPlayer||'').toLowerCase().includes(playerFilter));
     if (actionFilter) log = log.filter(l => l.action === actionFilter);
     if (userFilter)   log = log.filter(l => (l.user||'').toLowerCase().includes(userFilter));
