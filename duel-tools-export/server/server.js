@@ -37,7 +37,20 @@ let pgClient = null;
 // what, to which player's data, when. Kept as a capped array (newest last,
 // trimmed to the most recent 5000 entries) rather than a separate table,
 // since it's read as a whole list, not queried by key. See logChange().
-let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {}, replayCache: {}, overrides: {}, _changeLog: [] };
+// db.events: self-contained event metadata for the Events tab, keyed by
+// event code (e.g. "LCQ32026"). Only ever populated for events that at
+// least one Duel-Tools-tracked player has a decklist/replay for — this is
+// NOT a mirror of Format Library's whole event history. Shape:
+//   { code, name, date, size, winner, decks: [ { deckId, builderName,
+//     placement, deckTypeName, ydkData?, updatedAt } ], updatedAt }
+// 'decks' holds the FULL bracket top-decks list learned from Format
+// Library the first time any tracked player's event touches this code
+// (see captureEventTopDecks) — including players Duel Tools doesn't
+// otherwise track — so the event page can show a complete gallery and an
+// accurate winner, not just "whatever we happened to import". 'size' is
+// best-effort (Format Library's own entrant count when we can find one on
+// the response, else the number of decks we know about).
+let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {}, replayCache: {}, overrides: {}, _changeLog: [], events: {} };
 
 async function connectPostgres() {
   const { Client } = require('pg');
@@ -72,7 +85,7 @@ async function connectPostgres() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
-  const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('players','users','gfwl','eventDates','overrides','_changeLog')");
+  const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('players','users','gfwl','eventDates','overrides','_changeLog','events')");
   for (const row of res.rows) { db[row.key] = row.value; }
   const batchRes = await client.query('SELECT id, value FROM duel_tools_batches');
   db.batches = {};
@@ -100,6 +113,7 @@ async function connectPostgres() {
   if (!db.replayCache) db.replayCache = {};
   if (!db.overrides) db.overrides = {};
   if (!db._changeLog) db._changeLog = [];
+  if (!db.events) db.events = {};
   pgClient = client;
   // Handle PG client-level errors (e.g. connection dropped by server)
   // Without this, 'error' events on the pg client crash Node
@@ -234,6 +248,7 @@ function loadFileDB() {
       if (!db.replayCache) db.replayCache = {};
       if (!db.overrides) db.overrides = {};
       if (!db._changeLog) db._changeLog = [];
+      if (!db.events) db.events = {};
     }
   } catch(e) { console.error('File DB load error:', e.message); }
 }
@@ -250,8 +265,11 @@ function loadFileDB() {
 // change to player aliases/teams was silently never persisted again.
 // Always-save-everything is simpler and can't silently drop data — these
 // four keys are small enough that resaving all of them every time is cheap.
-const _ALWAYS_SAVE_KEYS = ['players','users','gfwl','eventDates','overrides','_changeLog'];
+const _ALWAYS_SAVE_KEYS = ['players','users','gfwl','eventDates','overrides','_changeLog','events'];
 const _dirtyKeys = new Set(_ALWAYS_SAVE_KEYS);
+
+// Guards POST /api/events/backfill against being kicked off twice at once.
+let _eventsBackfillRunning = false;
 
 // ── Write-ahead buffer — holds pending saves when Postgres is temporarily down ─
 // Keys accumulate here; flushed automatically when connection is restored.
@@ -2472,6 +2490,179 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ══════════════════════════════════════════════════════════════════════
+  // EVENTS TAB — self-contained event database built from db.events (only
+  // events a Duel-Tools-tracked player has actually touched — see the
+  // db.events comment near the top of this file). NOT a live mirror of
+  // Format Library's whole history.
+  // ══════════════════════════════════════════════════════════════════════
+
+  // ── GET /api/events — list every event we have data for ─────────────────────
+  if (parts[0]==='events' && !parts[1] && method==='GET') {
+    if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot view events' });
+    const list = Object.values(db.events||{}).map(ev => {
+      const fallback = db.eventDates[ev.code] || {};
+      return {
+        code: ev.code,
+        name: ev.name || fallback.name || '',
+        date: ev.date || fallback.date || '',
+        size: ev.size || (ev.decks||[]).length,
+        winner: ev.winner || null,
+        deckCount: (ev.decks||[]).length,
+      };
+    });
+    return json(res, 200, { events: list, total: list.length });
+  }
+
+  // ── GET /api/events/:code — one event's full decklist gallery ───────────────
+  if (parts[0]==='events' && parts[1] && !parts[2] && method==='GET') {
+    if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot view events' });
+    const code = decodeURIComponent(parts[1]).toUpperCase();
+    const ev = db.events[code];
+    if (!ev) return json(res, 404, { error: 'No data for this event yet.' });
+    const fallback = db.eventDates[code] || {};
+    const decks = (ev.decks||[]).map(d => {
+      const playerEntry = findPlayerByUsername((d.builderName||'').replace(/_/g, ' '));
+      return {
+        deckId: d.deckId,
+        builderName: d.builderName,
+        placement: d.placement,
+        placeNum: d.placeNum,
+        deckTypeName: d.deckTypeName,
+        hasCards: !!d.ydkData,
+        trackedPlayer: playerEntry ? playerEntry.name : null,
+      };
+    }).sort((a,b) => {
+      const an = (a.placeNum==null) ? Infinity : a.placeNum, bn = (b.placeNum==null) ? Infinity : b.placeNum;
+      return an - bn;
+    });
+    return json(res, 200, {
+      code: ev.code,
+      name: ev.name || fallback.name || '',
+      date: ev.date || fallback.date || '',
+      size: ev.size || decks.length,
+      winner: ev.winner || null,
+      decks,
+    });
+  }
+
+  // ── GET /api/events/:code/deck/:deckId — full card data + tracked-player link ─
+  if (parts[0]==='events' && parts[1] && parts[2]==='deck' && parts[3] && method==='GET') {
+    if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot view event decklists' });
+    const code = decodeURIComponent(parts[1]).toUpperCase();
+    const deckId = decodeURIComponent(parts[3]);
+    const ev = db.events[code];
+    if (!ev) return json(res, 404, { error: 'No data for this event yet.' });
+    const deck = (ev.decks||[]).find(d => String(d.deckId) === String(deckId));
+    if (!deck) return json(res, 404, { error: 'Deck not found in this event.' });
+
+    // Lazy-fetch + cache the YDK the first time anyone opens this specific
+    // deck — mirrors the existing /api/proxy/fl-deck/:deckId behavior, but
+    // only miners+ trigger the live Format Library call (anyone non-limited
+    // can still view a deck once it's cached by someone else).
+    if (!deck.ydkData && isMiner(req) && flToken()) {
+      try {
+        const { status, body } = await flApiRequest('/api/decks/download/' + encodeURIComponent(deckId));
+        if (status === 200 && body) {
+          deck.ydkData = Buffer.from(body, 'utf8').toString('base64');
+          deck.updatedAt = Date.now();
+          await saveDB('events');
+        }
+      } catch(e) { console.warn('[events] lazy YDK fetch failed for deck', deckId, ':', e.message); }
+    }
+
+    const playerEntry = findPlayerByUsername((deck.builderName||'').replace(/_/g, ' '));
+    let trackedPlayer = null;
+    if (playerEntry) {
+      const names = playerNames(playerEntry);
+      const batchIds = Object.values(db.batches)
+        .filter(b => names.includes((b.player||'').toLowerCase()))
+        .map(b => b.id);
+      trackedPlayer = { name: playerEntry.name, batchIds };
+    }
+
+    return json(res, 200, {
+      ok: true,
+      eventCode: code,
+      eventName: ev.name || (db.eventDates[code]||{}).name || '',
+      eventDate: ev.date || (db.eventDates[code]||{}).date || '',
+      deck,
+      trackedPlayer,
+    });
+  }
+
+  // ── POST /api/events/backfill — admin: re-fetch placement/builder for
+  // events we already have decklists for but imported before this feature
+  // existed (so they're missing placement/builder/full-bracket data). Runs
+  // in the background and reports progress via the change log; rate-limited
+  // the same polite way the FL replay/decklist import already is. ─────────
+  if (parts[0]==='events' && parts[1]==='backfill' && method==='POST') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    if (!flToken()) return json(res, 500, { error: 'FORMATLIBRARY_TOKEN not set in environment' });
+    if (_eventsBackfillRunning) return json(res, 409, { error: 'A backfill is already running.' });
+
+    // Every event code any tracked player has a decklist for, PLUS any code
+    // already known to db.eventDates (covers events we know the date/name
+    // of but have no decklist for — harmless no-op if FL has nothing either).
+    const codes = new Set();
+    for (const p of Object.values(db.players)) {
+      for (const d of (p.eventDecklists||[])) { if (d.code) codes.add(d.code.toUpperCase().trim()); }
+    }
+    for (const b of Object.values(db.batches)) {
+      for (const d of (b.eventDecklists||[])) { if (d.code) codes.add(d.code.toUpperCase().trim()); }
+    }
+    const codeList = [...codes].filter(Boolean);
+
+    res.writeHead(200, {'Content-Type':'application/json','Access-Control-Allow-Origin':'*'});
+    res.end(JSON.stringify({ ok:true, message:'Backfill started for '+codeList.length+' event(s).', total: codeList.length }));
+
+    _eventsBackfillRunning = true;
+    (async () => {
+      let touched = 0, failed = 0;
+      for (const code of codeList) {
+        try {
+          const { status, body } = await flApiRequest('/api/events/subscriber/' + encodeURIComponent(code));
+          if (status === 200) {
+            const data = JSON.parse(body);
+            const eventFormat = ((data.event && data.event.formatName) || '').toLowerCase();
+            if (!eventFormat || eventFormat === 'goat') {
+              if (captureEventTopDecks(code, data)) touched++;
+              // Back-write place/builder onto every tracked player's own
+              // eventDecklists entry for this code, now that we know it.
+              const ev = db.events[code.toUpperCase()];
+              if (ev) {
+                for (const d of (ev.decks||[])) {
+                  const playerEntry = findPlayerByUsername((d.builderName||'').replace(/_/g,' '));
+                  if (!playerEntry) continue;
+                  const key = playerEntry.name.toLowerCase();
+                  const reg = db.players[key];
+                  if (reg && Array.isArray(reg.eventDecklists)) {
+                    const entry = reg.eventDecklists.find(x => (x.code||'').toUpperCase() === code.toUpperCase());
+                    if (entry) { entry.place = d.placement; entry.builder = d.builderName; }
+                  }
+                }
+              }
+            }
+          } else if (status !== 404) {
+            failed++;
+          }
+        } catch(e) { failed++; }
+        await new Promise(r => setTimeout(r, 300)); // same polite pacing as the existing FL import loop
+      }
+      await saveDB(['events','players']);
+      console.log(`[events] Backfill complete — touched ${touched} event(s), ${failed} failed, out of ${codeList.length}.`);
+      logChange(req, 'events_backfill', { totalEvents: codeList.length, touched, failed });
+      _eventsBackfillRunning = false;
+    })().catch(e => { console.error('[events] Backfill crashed:', e.message); _eventsBackfillRunning = false; });
+    return;
+  }
+
+  // ── GET /api/events/backfill/status — poll whether a backfill is running ────
+  if (parts[0]==='events' && parts[1]==='backfill' && parts[2]==='status' && method==='GET') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    return json(res, 200, { running: _eventsBackfillRunning });
+  }
+
   // ── POST /api/gfwl/:season/bulk-import — import full season teams+schedule ──
   if (parts[0]==='gfwl' && parts[1] && parts[2]==='bulk-import' && method==='POST') {
     if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
@@ -2844,10 +3035,15 @@ const server = http.createServer(async (req, res) => {
       try { data = JSON.parse(body); } catch(e) { return json(res, 502, { error: 'Format Library returned a non-JSON response' }); }
       const eventFormat = ((data.event && data.event.formatName) || '').toLowerCase();
       if (eventFormat && eventFormat !== 'goat') return json(res, 200, { ok: true, deck: null });
+      // Learn the FULL bracket for the Events tab (see db.events comment up
+      // top) every time this endpoint is hit, regardless of whether :player
+      // has a deck in it — not just the one matched deck below.
+      const capturedEvent = captureEventTopDecks(eventId, data);
+      if (capturedEvent) { try { await saveDB('events'); } catch(e) { console.warn('[events] save after fl-event capture failed:', e.message); } }
       const decks = data.topDecks || [];
       const match = decks.find(d => ((d.builderName||'').toLowerCase().replace(/_/g, ' ')) === player);
       if (!match) return json(res, 200, { ok: true, deck: null });
-      return json(res, 200, { ok: true, deck: { deckId: match.id, deckTypeName: match.deckTypeName || '', placement: match.placement || null } });
+      return json(res, 200, { ok: true, deck: { deckId: match.id, deckTypeName: match.deckTypeName || '', placement: match.placement || null, builderName: match.builderName || '' } });
     } catch(e) {
       return json(res, 502, { error: 'Format Library request failed: ' + e.message });
     }
@@ -3654,6 +3850,79 @@ const EVENT_DATE_CATALOG = {
   'SJCHOU05': '2005',
   'SJCPOM05': '2005',
 };
+
+// Best-effort numeric placement, regardless of whether Format Library sends
+// it as a bare number (1, 2) or an ordinal string ("1st", "T-9th"). Used
+// both to detect the event winner (placement 1) and for display.
+function placementNum(p) {
+  if (p === null || p === undefined) return null;
+  const m = String(p).match(/\d+/);
+  return m ? parseInt(m[0], 10) : null;
+}
+
+// Learns a full event's top-decks bracket from Format Library's
+// /api/events/subscriber/:eventId response (see GET /api/proxy/fl-event/
+// below) and merges it into db.events[code]. Called every time ANY
+// Duel-Tools-tracked player's decklist lookup touches this event code —
+// so db.events only ever grows for events a tracked player actually
+// played in (see the db.events comment near the top of this file), but
+// once it does, the FULL bracket is captured (every builder FL lists, not
+// just the one matched player), which is what lets the Events tab show a
+// complete decklist gallery and an accurate winner.
+// flData is the parsed JSON body from /api/events/subscriber/:eventId —
+// shape observed so far: { event: { formatName, ... }, topDecks: [ { id,
+// builderName, deckTypeName, placement } ] }. Format Library doesn't
+// document this endpoint anywhere we have access to, so every field read
+// here is defensive — a missing/renamed field degrades gracefully instead
+// of throwing.
+function captureEventTopDecks(code, flData) {
+  try {
+    const c = (code||'').toUpperCase().trim();
+    if (!c || !flData) return false;
+    const rawDecks = Array.isArray(flData.topDecks) ? flData.topDecks : [];
+    if (!rawDecks.length) return false; // nothing worth storing yet
+
+    if (!db.events) db.events = {};
+    const existing = db.events[c] || { code: c, decks: [] };
+    const ev = flData.event || {};
+
+    // Format Library's own entrant-count field name isn't known for certain
+    // — try the common possibilities. Falls back to the top-decks count
+    // (a lower bound: FL's own "Size" column counts every entrant, while
+    // this endpoint typically only returns the top cut).
+    const sizeCandidates = [ev.numEntrants, ev.entrantCount, ev.playerCount, ev.numPlayers, ev.totalPlayers, ev.participants, ev.entrants, ev.size, flData.numEntrants, flData.entrantCount, flData.size];
+    const foundSize = sizeCandidates.find(v => typeof v === 'number' && v > 0);
+
+    const decks = rawDecks.map(d => {
+      const prior = (existing.decks||[]).find(x => String(x.deckId) === String(d.id));
+      return {
+        deckId: d.id,
+        builderName: d.builderName || '',
+        placement: (d.placement != null) ? d.placement : null,
+        placeNum: placementNum(d.placement),
+        deckTypeName: d.deckTypeName || '',
+        ydkData: (prior && prior.ydkData) || undefined, // keep any YDK already cached for this deck
+        updatedAt: Date.now(),
+      };
+    });
+
+    const winnerDeck = decks.find(d => d.placeNum === 1);
+
+    db.events[c] = {
+      code: c,
+      name: ev.name || ev.eventName || existing.name || '',
+      date: ((ev.date || ev.startDate || '')+'').slice(0,10) || existing.date || '',
+      size: foundSize || existing.size || decks.length,
+      winner: winnerDeck ? winnerDeck.builderName : (existing.winner || null),
+      decks,
+      updatedAt: Date.now(),
+    };
+    return true;
+  } catch(e) {
+    console.error('[events] captureEventTopDecks failed for', code, ':', e.message);
+    return false;
+  }
+}
 
 // Record an event's date as learned from a real, individual FL replay (the
 // per-player replay scraper, not the admin-only events-list scrape below).

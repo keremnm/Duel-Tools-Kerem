@@ -613,6 +613,7 @@ select{cursor:pointer}
       <button class="ntab" id="ntab-formatdata" onclick="switchTab('formatdata',this)">Format Data</button>
       <button class="ntab" id="ntab-ingame" onclick="switchTab('ingame',this)">In-Game Tools</button>
       <button class="ntab" id="gfwl-prep-tab" onclick="switchTab('gfwl',this)">GFWL Archive</button>
+      <button class="ntab" id="ntab-events" onclick="switchTab('events',this)">🏆 Events</button>
       <button class="ntab" id="ntab-admin" onclick="switchTab('admin',this)" style="display:none">⚙ Admin</button>
     </div>
     <!-- Mobile nav dropdown — replaces tab row on small screens -->
@@ -624,6 +625,7 @@ select{cursor:pointer}
         <option value="rps">RPS Analysis</option>
         <option value="formatdata">Format Data</option>
         <option value="gfwl">GFWL Archive</option>
+        <option value="events">Events</option>
       </select>
     </div>
     <div class="topbar-right">
@@ -1055,6 +1057,77 @@ select{cursor:pointer}
     <div style="flex:1;overflow-y:auto;overflow-x:hidden;padding:16px 20px;min-height:0" id="gfwl-main">
       <div style="color:var(--muted);font-size:13px;text-align:center;padding:40px">Select a season to begin.</div>
     </div>
+  </div>
+
+  <!-- ── Events ─────────────────────────────────────────────────────────── -->
+  <div class="page" id="pg-events" style="flex-direction:column;flex:1;overflow:hidden;min-height:0">
+
+    <!-- List view: searchable/sortable/paginated table of every event we have data for -->
+    <div id="events-list-view" style="flex-direction:column;flex:1;overflow:hidden;min-height:0;display:flex">
+      <div style="display:flex;align-items:center;gap:10px;padding:14px 20px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap">
+        <div style="font-size:13px;font-weight:bold;color:var(--amber);font-family:monospace;letter-spacing:.08em">🏆 EVENT DATABASE</div>
+        <div style="font-size:11px;color:var(--muted)">Events a tracked player has a decklist or replay for</div>
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input id="events-search" type="text" placeholder="Search event name or code…" oninput="eventsRenderList()" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:5px 10px;border-radius:5px;outline:none;width:220px"/>
+          <select id="events-sort" onchange="eventsRenderList()" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:5px 8px;border-radius:5px;outline:none">
+            <option value="date-desc">Sort Date: New → Old</option>
+            <option value="date-asc">Sort Date: Old → New</option>
+            <option value="name-asc">Sort Name: A → Z</option>
+            <option value="size-desc">Sort Size: High → Low</option>
+          </select>
+          <select id="events-pagesize" onchange="eventsRenderList()" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:5px 8px;border-radius:5px;outline:none">
+            <option value="10">10 Events / Page</option>
+            <option value="25">25 Events / Page</option>
+            <option value="50">50 Events / Page</option>
+          </select>
+          <button onclick="loadEventsTab(true)" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer">↺ Refresh</button>
+          <button id="events-backfill-btn" onclick="eventsRunBackfill()" style="display:none;background:none;border:1px solid var(--purple,#a78bfa);color:var(--purple,#a78bfa);font-family:monospace;font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer" title="Admin: re-fetch placement/builder from Format Library for events imported before this feature existed">⚙ Backfill Placements</button>
+        </div>
+      </div>
+      <div id="events-backfill-status" style="display:none;padding:8px 20px;font-size:11px;color:var(--amber);border-bottom:1px solid var(--border)"></div>
+      <div style="padding:10px 20px;font-size:12px;color:var(--muted);flex-shrink:0" id="events-count-row">Loading…</div>
+      <div style="flex:1;overflow-y:auto;min-height:0;padding:0 20px 16px">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead>
+            <tr style="border-bottom:1px solid var(--border2);text-align:left">
+              <th style="padding:8px 10px;color:var(--muted);font-size:11px;letter-spacing:.06em">EVENT ID</th>
+              <th style="padding:8px 10px;color:var(--muted);font-size:11px;letter-spacing:.06em">WINNING PLAYER</th>
+              <th style="padding:8px 10px;color:var(--muted);font-size:11px;letter-spacing:.06em">DECKS</th>
+              <th style="padding:8px 10px;color:var(--muted);font-size:11px;letter-spacing:.06em">SIZE</th>
+              <th style="padding:8px 10px;color:var(--muted);font-size:11px;letter-spacing:.06em">DATE</th>
+            </tr>
+          </thead>
+          <tbody id="events-table-body"></tbody>
+        </table>
+      </div>
+      <div id="events-pagination" style="display:flex;gap:6px;align-items:center;justify-content:center;padding:10px 20px;border-top:1px solid var(--border);flex-shrink:0"></div>
+    </div>
+
+    <!-- Event detail view: decklist gallery grid for one event -->
+    <div id="events-detail-view" style="flex-direction:column;flex:1;overflow:hidden;min-height:0;display:none">
+      <div style="display:flex;align-items:center;gap:10px;padding:14px 20px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap">
+        <button onclick="eventsShowList()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer">← Events</button>
+        <div id="events-detail-title" style="font-size:14px;font-weight:bold;color:var(--amber);font-family:monospace"></div>
+        <div id="events-detail-sub" style="font-size:11px;color:var(--muted)"></div>
+      </div>
+      <div id="events-detail-body" style="flex:1;overflow-y:auto;min-height:0;padding:20px"></div>
+    </div>
+
+    <!-- Deck detail view: full card grid + event/builder info + this duelist's replays for the event -->
+    <div id="events-deck-view" style="flex-direction:column;flex:1;overflow:hidden;min-height:0;display:none">
+      <div style="display:flex;align-items:center;gap:10px;padding:14px 20px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap">
+        <button id="events-deck-back-btn" onclick="eventsShowDetail(_eventsState.code)" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer">← Decklists</button>
+        <div id="events-deck-title" style="font-size:14px;font-weight:bold;color:var(--text);font-family:monospace;flex:1">Chaos Turbo</div>
+        <button id="events-deck-dl-btn" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:5px 12px;border-radius:5px;cursor:pointer">⬇ Download</button>
+        <a id="events-deck-open-link" href="#" target="_blank" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:5px 12px;border-radius:5px;cursor:pointer;text-decoration:none">Open Deck ↗</a>
+      </div>
+      <div style="display:flex;gap:4px 18px;flex-wrap:wrap;padding:10px 20px;border-bottom:1px solid var(--border);font-size:12px;flex-shrink:0" id="events-deck-meta"></div>
+      <div style="flex:1;overflow:hidden;min-height:0;display:flex">
+        <div id="events-deck-cards" style="flex:1;overflow-y:auto;min-height:0;padding:16px 20px"></div>
+        <div id="events-deck-replays" style="width:300px;flex-shrink:0;overflow-y:auto;min-height:0;padding:16px 16px;border-left:1px solid var(--border)"></div>
+      </div>
+    </div>
+
   </div>
 
   <!-- ── In-Game Tools ──────────────────────────────────────────────────── -->
@@ -2406,6 +2479,7 @@ function switchTab(name, btn) {
   if (name === 'admin')    renderAdminPage();
   // Format Data tab always shows ALL saved replays — never filtered by active batch
   if (name === 'formatdata') loadFormatData();
+  if (name === 'events') eventsShowList();
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -6849,7 +6923,7 @@ async function flFetchPreview() {
           statusEl.textContent = ddata.error || 'Format Library token expired.';
           fetchBtn.disabled = false; return;
         }
-        if (dres.ok && ddata.deck) deckCandidates.push({ eventId: evId, deckId: ddata.deck.deckId, deckTypeName: ddata.deck.deckTypeName });
+        if (dres.ok && ddata.deck) deckCandidates.push({ eventId: evId, deckId: ddata.deck.deckId, deckTypeName: ddata.deck.deckTypeName, place: ddata.deck.placement, builder: ddata.deck.builderName });
       } catch(e) {}
       await new Promise(r => setTimeout(r, 200));
     }
@@ -6918,9 +6992,9 @@ async function flConfirmImport() {
     st('Importing '+deckCandidates.length+' decklist(s) from Format Library…', 'var(--amber)');
     const decks = getEventDecks(dtPlayer);
     let added = 0;
-    for (const { eventId, deckId, deckTypeName } of deckCandidates) {
+    for (const { eventId, deckId, deckTypeName, place, builder } of deckCandidates) {
       if (decks.find(d => (d.code||'').toUpperCase() === eventId.toUpperCase())) continue; // skip duplicate codes
-      const entry = { code: eventId, year: null, deckId, deckUrl: 'https://www.formatlibrary.com/decks/'+deckId, addedAt: Date.now() };
+      const entry = { code: eventId, year: null, deckId, deckUrl: 'https://www.formatlibrary.com/decks/'+deckId, addedAt: Date.now(), place: place!=null?place:undefined, builder: builder||undefined };
       try {
         const dres = await fetch(API+'/proxy/fl-deck/'+encodeURIComponent(deckId), { headers: authHeaders() });
         if (dres.status === 401) {
@@ -12979,6 +13053,452 @@ function downloadYDK(deck) {
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// EVENTS TAB — self-contained event database (see db.events on the
+// server): list → one event's decklist gallery → one decklist + its
+// duelist's replays for that event. Only covers events a Duel-Tools-
+// tracked player has a decklist or replay for — not a Format Library
+// mirror. See GET /api/events* on the server.
+// ══════════════════════════════════════════════════════════════════════
+let _eventsState = { list: [], page: 1, pageSize: 10, code: null, detail: null };
+
+function eventsOrdinal(n) {
+  if (n === null || n === undefined || isNaN(n)) return '';
+  const s = ['th','st','nd','rd'], v = n % 100;
+  return n + (s[(v-20)%10] || s[v] || s[0]);
+}
+
+async function loadEventsTab(forceRefresh) {
+  const countRow = document.getElementById('events-count-row');
+  if (_eventsState.list.length && !forceRefresh) { eventsRenderList(); return; }
+  if (countRow) countRow.textContent = 'Loading…';
+  const tbody = document.getElementById('events-table-body');
+  if (tbody) tbody.innerHTML = '';
+  try {
+    const res = await fetch(API+'/events', { headers: authHeaders() });
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok) { if (countRow) countRow.textContent = data.error || 'Failed to load events.'; return; }
+    _eventsState.list = data.events || [];
+  } catch(e) {
+    if (countRow) countRow.textContent = 'Request failed: '+e.message;
+    return;
+  }
+  _eventsState.page = 1;
+  eventsRenderList();
+  eventsCheckBackfillStatus();
+}
+
+function eventsRenderList() {
+  const tbody = document.getElementById('events-table-body');
+  const countRow = document.getElementById('events-count-row');
+  const pagerEl = document.getElementById('events-pagination');
+  if (!tbody) return;
+
+  const q = (document.getElementById('events-search')?.value || '').toLowerCase().trim();
+  const sortMode = document.getElementById('events-sort')?.value || 'date-desc';
+  const pageSize = parseInt(document.getElementById('events-pagesize')?.value || '10', 10);
+  _eventsState.pageSize = pageSize;
+
+  let rows = _eventsState.list.filter(ev =>
+    !q || (ev.code||'').toLowerCase().includes(q) || (ev.name||'').toLowerCase().includes(q)
+  );
+
+  rows = [...rows].sort((a,b) => {
+    if (sortMode === 'date-asc')  return (a.date||'').localeCompare(b.date||'');
+    if (sortMode === 'name-asc')  return (a.name||a.code).localeCompare(b.name||b.code);
+    if (sortMode === 'size-desc') return (b.size||0) - (a.size||0);
+    return (b.date||'').localeCompare(a.date||''); // date-desc default
+  });
+
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (_eventsState.page > totalPages) _eventsState.page = totalPages;
+  const start = (_eventsState.page - 1) * pageSize;
+  const pageRows = rows.slice(start, start + pageSize);
+
+  if (countRow) {
+    countRow.textContent = total
+      ? `Results: ${start+1} - ${Math.min(start+pageRows.length, total)} of ${total}`
+      : "No events yet — import replays/decklists from a tracked player's Profile page (Format Library import) to populate this.";
+  }
+
+  tbody.innerHTML = '';
+  pageRows.forEach(ev => {
+    const tr = document.createElement('tr');
+    tr.style.cssText = 'border-bottom:1px solid var(--border);cursor:pointer';
+    tr.onmouseover = () => tr.style.background = 'var(--card2)';
+    tr.onmouseout  = () => tr.style.background = '';
+    tr.onclick = () => eventsShowDetail(ev.code);
+    tr.innerHTML = `
+      <td style="padding:9px 10px;font-weight:bold;color:var(--amber);font-family:monospace">${_escapeHtml(ev.code)}${ev.name?`<div style="font-weight:normal;color:var(--muted);font-size:11px">${_escapeHtml(ev.name)}</div>`:''}</td>
+      <td style="padding:9px 10px">${ev.winner ? _escapeHtml(ev.winner) : '<span style="color:var(--dim)">N/A</span>'}</td>
+      <td style="padding:9px 10px;color:var(--muted)">${ev.deckCount}</td>
+      <td style="padding:9px 10px;color:var(--muted)">${ev.size||ev.deckCount}</td>
+      <td style="padding:9px 10px;color:var(--muted)">${ev.date||'—'}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  if (pagerEl) {
+    pagerEl.innerHTML = '';
+    if (totalPages > 1) {
+      const mkBtn = (label, page, disabled, active) => {
+        const b = document.createElement('button');
+        b.textContent = label;
+        b.disabled = !!disabled;
+        b.style.cssText = `background:${active?'var(--text)':'var(--card)'};color:${active?'#050508':'var(--text)'};border:1px solid var(--border);font-family:monospace;font-size:12px;padding:5px 10px;border-radius:5px;cursor:${disabled?'default':'pointer'};opacity:${disabled?'.4':'1'}`;
+        if (!disabled) b.onclick = () => { _eventsState.page = page; eventsRenderList(); };
+        return b;
+      };
+      pagerEl.appendChild(mkBtn('«', 1, _eventsState.page===1));
+      const windowSize = 5;
+      let lo = Math.max(1, _eventsState.page - Math.floor(windowSize/2));
+      let hi = Math.min(totalPages, lo + windowSize - 1);
+      lo = Math.max(1, hi - windowSize + 1);
+      for (let p = lo; p <= hi; p++) pagerEl.appendChild(mkBtn(String(p), p, false, p===_eventsState.page));
+      pagerEl.appendChild(mkBtn('»', totalPages, _eventsState.page===totalPages));
+    }
+  }
+}
+
+function eventsShowList() {
+  _eventsState.code = null;
+  const lv = document.getElementById('events-list-view'), dv = document.getElementById('events-detail-view'), kv = document.getElementById('events-deck-view');
+  if (lv) lv.style.display = 'flex';
+  if (dv) dv.style.display = 'none';
+  if (kv) kv.style.display = 'none';
+  loadEventsTab();
+}
+
+async function eventsShowDetail(code) {
+  _eventsState.code = code;
+  const lv = document.getElementById('events-list-view'), dv = document.getElementById('events-detail-view'), kv = document.getElementById('events-deck-view');
+  if (lv) lv.style.display = 'none';
+  if (dv) dv.style.display = 'flex';
+  if (kv) kv.style.display = 'none';
+  const titleEl = document.getElementById('events-detail-title');
+  const subEl   = document.getElementById('events-detail-sub');
+  const bodyEl  = document.getElementById('events-detail-body');
+  if (titleEl) titleEl.textContent = '🏆 ' + code;
+  if (subEl) subEl.textContent = 'Loading…';
+  if (bodyEl) bodyEl.innerHTML = '';
+  try {
+    const res = await fetch(API+'/events/'+encodeURIComponent(code), { headers: authHeaders() });
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok) { if (subEl) subEl.textContent = data.error || 'Failed to load event.'; return; }
+    _eventsState.detail = data;
+    if (titleEl) titleEl.textContent = '🏆 ' + (data.name || data.code) + ' Decks:';
+    if (subEl) subEl.textContent = [data.date, data.size?(data.size+' entrants'):null, (data.decks||[]).length+' decklist(s) on record'].filter(Boolean).join(' · ');
+    eventsRenderDeckGrid(data);
+  } catch(e) {
+    if (subEl) subEl.textContent = 'Request failed: '+e.message;
+  }
+}
+
+function eventsRenderDeckGrid(ev) {
+  const bodyEl = document.getElementById('events-detail-body');
+  if (!bodyEl) return;
+  const decks = ev.decks || [];
+  if (!decks.length) { bodyEl.innerHTML = '<div style="color:var(--muted);font-size:13px">No decklists on record for this event yet.</div>'; return; }
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px';
+  decks.forEach(d => {
+    const place = d.placeNum!=null ? eventsOrdinal(d.placeNum) : (d.placement||'—');
+    const card = document.createElement('div');
+    card.style.cssText = 'background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:12px;cursor:pointer;display:flex;flex-direction:column;gap:4px';
+    card.onmouseover = () => card.style.borderColor = 'var(--amber)';
+    card.onmouseout  = () => card.style.borderColor = 'var(--border2)';
+    card.onclick = () => eventsShowDeck(ev.code, d.deckId);
+    card.innerHTML = `
+      <div style="font-weight:bold;color:var(--text);font-size:13px">${_escapeHtml(d.deckTypeName||'Unknown Deck')}</div>
+      <div style="font-size:12px;color:var(--muted)">${_escapeHtml(d.builderName||'Unknown')}${d.trackedPlayer?' <span style="color:var(--green)">✓ tracked</span>':''}</div>
+      <div style="font-size:11px;color:var(--amber)">${place} place</div>
+    `;
+    grid.appendChild(card);
+  });
+  bodyEl.innerHTML = '';
+  bodyEl.appendChild(grid);
+}
+
+async function eventsShowDeck(code, deckId) {
+  const lv = document.getElementById('events-list-view'), dv = document.getElementById('events-detail-view'), kv = document.getElementById('events-deck-view');
+  if (lv) lv.style.display = 'none';
+  if (dv) dv.style.display = 'none';
+  if (kv) kv.style.display = 'flex';
+  const titleEl   = document.getElementById('events-deck-title');
+  const metaEl    = document.getElementById('events-deck-meta');
+  const cardsEl   = document.getElementById('events-deck-cards');
+  const replaysEl = document.getElementById('events-deck-replays');
+  const dlBtn     = document.getElementById('events-deck-dl-btn');
+  const openLink  = document.getElementById('events-deck-open-link');
+  if (titleEl) titleEl.textContent = 'Loading…';
+  if (metaEl) metaEl.innerHTML = '';
+  if (cardsEl) cardsEl.innerHTML = '<div style="color:var(--muted);font-size:12px">Loading deck…</div>';
+  if (replaysEl) replaysEl.innerHTML = '';
+
+  let data;
+  try {
+    const res = await fetch(API+'/events/'+encodeURIComponent(code)+'/deck/'+encodeURIComponent(deckId), { headers: authHeaders() });
+    data = await res.json().catch(()=>({}));
+    if (!res.ok) { if (cardsEl) cardsEl.innerHTML = '<div style="color:var(--red);font-size:12px">'+_escapeHtml(data.error||'Failed to load deck.')+'</div>'; return; }
+  } catch(e) {
+    if (cardsEl) cardsEl.innerHTML = '<div style="color:var(--red);font-size:12px">Request failed: '+_escapeHtml(e.message)+'</div>';
+    return;
+  }
+
+  const deck = data.deck || {};
+  const place = deck.placeNum!=null ? eventsOrdinal(deck.placeNum) : (deck.placement||'—');
+  if (titleEl) titleEl.textContent = deck.deckTypeName || 'Unknown Deck';
+  if (metaEl) metaEl.innerHTML = `
+    <div><span style="color:var(--muted)">Builder:</span> <b>${_escapeHtml(deck.builderName||'Unknown')}</b></div>
+    <div><span style="color:var(--muted)">Format:</span> <b>Goat</b></div>
+    <div><span style="color:var(--muted)">Event:</span> <b>${_escapeHtml(code)}</b></div>
+    <div><span style="color:var(--muted)">Place:</span> <b>${_escapeHtml(String(place))}</b></div>
+  `;
+  if (dlBtn) dlBtn.onclick = () => downloadYDK({ ydkData: deck.ydkData, code: code, ydkFileName: (deck.builderName||code)+'-'+code+'.ydk' });
+  if (openLink) openLink.href = 'https://www.formatlibrary.com/decks/'+deck.deckId;
+
+  await eventsRenderDeckCards(cardsEl, deck);
+  eventsRenderReplaysPanel(replaysEl, code, data.trackedPlayer);
+}
+
+// Renders a card grid like Format Library's own deck view — unique cards
+// only, with a quantity badge for duplicates — rather than repeating each
+// physical copy as its own tile (which is how the existing per-player
+// "View" popup in showDeckViewPopup() does it; left untouched since that's
+// an established, separate UI).
+async function eventsRenderDeckCards(container, deck) {
+  if (!container) return;
+  if (!deck.ydkData) {
+    container.innerHTML = '<div style="color:var(--muted);font-size:12px">No card data cached for this deck yet — a miner+ account needs to open it once to fetch it from Format Library.</div>';
+    return;
+  }
+  let ydkText;
+  try { ydkText = decodeURIComponent(escape(atob(deck.ydkData))); }
+  catch(e) { try { ydkText = atob(deck.ydkData); } catch(e2) { container.innerHTML = '<div style="color:var(--red);font-size:12px">Could not decode deck data.</div>'; return; } }
+
+  const mainPasscodes = [], sidePasscodes = [];
+  let sec = null;
+  for (const line of ydkText.split(/\r?\n/)) {
+    const t = line.trim();
+    if (t === '#main') { sec='main'; continue; }
+    if (t === '#extra') { sec='extra'; continue; }
+    if (t === '!side') { sec='side'; continue; }
+    if (t.startsWith('#') || t.startsWith('!')) { sec=null; continue; }
+    if (/^\d+$/.test(t)) {
+      const p = parseInt(t, 10);
+      if (sec==='main') mainPasscodes.push(p);
+      else if (sec==='side') sidePasscodes.push(p);
+    }
+  }
+  if (!mainPasscodes.length && !sidePasscodes.length) { container.innerHTML = '<div style="color:var(--muted);font-size:12px">This decklist has no main/side deck data.</div>'; return; }
+
+  container.innerHTML = '<div style="color:var(--muted);font-size:12px">Loading card images…</div>';
+  try { await lookupPasscodeNames([...mainPasscodes, ...sidePasscodes]); } catch(e) {}
+
+  function groupByCard(pList) {
+    const order = [], counts = {};
+    for (const p of pList) { if (!(p in counts)) { counts[p] = 0; order.push(p); } counts[p]++; }
+    return order.map(p => ({ passcode:p, count:counts[p] })).sort((a,b) => {
+      const typeA = window._cardDataCache[a.passcode] ? window._cardDataCache[a.passcode].card_type : '';
+      const typeB = window._cardDataCache[b.passcode] ? window._cardDataCache[b.passcode].card_type : '';
+      const td = cardTypeSortOrder(typeA) - cardTypeSortOrder(typeB);
+      if (td !== 0) return td;
+      const nameA = window._passcodeCache[a.passcode] || '';
+      const nameB = window._passcodeCache[b.passcode] || '';
+      return nameA.localeCompare(nameB);
+    });
+  }
+
+  function renderGrid(items) {
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:8px;margin-bottom:10px';
+    items.forEach(({passcode:p, count}) => {
+      const name = window._passcodeCache[p] || '';
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'position:relative;cursor:pointer';
+      const img = document.createElement('img');
+      img.style.cssText = 'width:100%;border-radius:4px;display:block;background:var(--card2)';
+      img.title = name; img.alt = name; img.loading = 'lazy';
+      if (p) {
+        const imgId = (window._cardDataCache[p] && window._cardDataCache[p].imageId) || p;
+        img.src = `https://images.ygoprodeck.com/images/cards/${imgId}.jpg`;
+      }
+      const showUnresolved = () => {
+        img.style.display = 'none';
+        const n = document.createElement('div');
+        n.style.cssText = 'font-size:8px;color:'+(name?'var(--muted)':'var(--red)')+';font-family:monospace;word-break:break-word;padding:3px;background:var(--card2);border-radius:4px;min-height:70px;display:flex;align-items:center;justify-content:center;text-align:center;border:1px solid '+(name?'var(--border)':'var(--red)');
+        n.textContent = name || ('⚠ #'+p);
+        if (name) n.onclick = () => showCardPopup(name);
+        wrap.appendChild(n);
+      };
+      img.onerror = async () => {
+        if (name) {
+          try {
+            const r2 = await fetch(`https://db.ygoprodeck.com/api/v7/cardinfo.php?name=${encodeURIComponent(name)}&misc=yes`);
+            const d2 = await r2.json();
+            const baseId = d2 && d2.data && d2.data[0] && d2.data[0].id;
+            if (baseId && String(baseId) !== String(p)) { img.onerror = showUnresolved; img.src = `https://images.ygoprodeck.com/images/cards/${baseId}.jpg`; return; }
+          } catch(e) {}
+        }
+        showUnresolved();
+      };
+      wrap.onclick = () => showCardPopup(name);
+      wrap.appendChild(img);
+      if (count > 1) {
+        const badge = document.createElement('div');
+        badge.textContent = count;
+        badge.style.cssText = 'position:absolute;top:2px;left:2px;background:#d62828;color:#fff;font-size:10px;font-weight:bold;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:monospace;box-shadow:0 1px 3px rgba(0,0,0,.5)';
+        wrap.appendChild(badge);
+      }
+      grid.appendChild(wrap);
+    });
+    return grid;
+  }
+
+  container.innerHTML = '';
+  const mainGrouped = groupByCard(mainPasscodes);
+  const sideGrouped  = groupByCard(sidePasscodes);
+  if (mainGrouped.length) {
+    const t = document.createElement('div'); t.style.cssText='font-size:10px;color:var(--muted);letter-spacing:.1em;margin-bottom:6px;font-weight:bold'; t.textContent = 'MAIN DECK ('+mainPasscodes.length+')';
+    container.appendChild(t);
+    container.appendChild(renderGrid(mainGrouped));
+  }
+  if (sideGrouped.length) {
+    const t = document.createElement('div'); t.style.cssText='font-size:10px;color:var(--muted);letter-spacing:.1em;margin:14px 0 6px;font-weight:bold'; t.textContent = 'SIDE DECK ('+sidePasscodes.length+')';
+    container.appendChild(t);
+    container.appendChild(renderGrid(sideGrouped));
+  }
+}
+
+async function eventsRenderReplaysPanel(container, code, trackedPlayer) {
+  if (!container) return;
+  if (!trackedPlayer || !trackedPlayer.batchIds || !trackedPlayer.batchIds.length) {
+    container.innerHTML = '<div style="font-size:11px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">REPLAYS</div><div style="font-size:12px;color:var(--dim)">This duelist isn\'t tracked in Duel Tools — no replays on record.</div>';
+    return;
+  }
+  container.innerHTML = '<div style="font-size:11px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">REPLAYS — '+_escapeHtml(trackedPlayer.name)+'</div><div style="font-size:12px;color:var(--muted)">Loading…</div>';
+
+  let replays = [];
+  try {
+    const fulls = await Promise.all(trackedPlayer.batchIds.map(id =>
+      fetch(API+'/batches/'+id, { headers: authHeaders() }).then(r=>r.json()).catch(()=>null)
+    ));
+    for (const b of fulls) {
+      if (!b || !b.replays) continue;
+      for (const r of b.replays) {
+        const evId = (r.eventLabel||r.eventId||'').toUpperCase();
+        if (evId === code) replays.push({ ...r, _batchId: b.id });
+      }
+    }
+  } catch(e) {}
+
+  if (!replays.length) {
+    container.innerHTML = '<div style="font-size:11px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">REPLAYS — '+_escapeHtml(trackedPlayer.name)+'</div><div style="font-size:12px;color:var(--dim)">No replays tagged with this event in '+_escapeHtml(trackedPlayer.name)+'\'s batch.</div>';
+    return;
+  }
+
+  container.innerHTML = '';
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'font-size:11px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold';
+  hdr.textContent = 'REPLAYS — '+trackedPlayer.name+' ('+replays.length+')';
+  container.appendChild(hdr);
+
+  replays.forEach(r => {
+    const p = r.parsed || {};
+    const result = r.resultOverride || p.resultOverride || p.result || '';
+    const oppName = r.oppName || p.oppName || 'Unknown';
+    const score = (p.scoreOverride ? (p.scoreOverride.my+'-'+p.scoreOverride.opp) : p.score) || '';
+    const isWin  = /^w/i.test(result);
+    const isLoss = /^l/i.test(result);
+    const row = document.createElement('div');
+    row.style.cssText = 'padding:8px 10px;margin-bottom:6px;background:var(--card2);border:1px solid var(--border2);border-radius:6px;cursor:pointer;font-size:11px';
+    row.onmouseover = () => row.style.borderColor = 'var(--amber)';
+    row.onmouseout  = () => row.style.borderColor = 'var(--border2)';
+    row.onclick = () => eventsOpenReplayInAnalyzer(r._batchId, r.replayId);
+    const resColor = isWin ? 'var(--green)' : isLoss ? 'var(--red)' : 'var(--muted)';
+    const resLabel = isWin ? 'W' : isLoss ? 'L' : (result || '—');
+    row.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="color:${resColor};font-weight:bold">${_escapeHtml(resLabel)}</span>
+        <span style="color:var(--muted)">${_escapeHtml(score)}</span>
+      </div>
+      <div style="color:var(--text);margin-top:3px">vs ${_escapeHtml(oppName)}</div>
+      ${r.round?`<div style="color:var(--dim);font-size:10px;margin-top:2px">${_escapeHtml(r.round)}</div>`:''}
+    `;
+    container.appendChild(row);
+  });
+}
+
+async function eventsOpenReplayInAnalyzer(batchId, replayId) {
+  await loadSpecificBatch(batchId);
+  setTimeout(() => {
+    const idx = _matches.findIndex(m => m.replayId === replayId);
+    if (idx >= 0) {
+      const deckBtn = document.querySelector('.ntab[onclick*="deck"]');
+      if (deckBtn) switchTab('deck', deckBtn);
+      selectMatch(idx);
+    } else {
+      st('Loaded the batch, but could not locate that specific replay in it.', 'var(--amber)');
+    }
+  }, 800);
+}
+
+// ── Admin: re-fetch placement/builder for events imported before this
+// feature existed (see POST /api/events/backfill on the server). ──────────
+async function eventsRunBackfill() {
+  if (!confirm("Re-fetch placement/builder data from Format Library for every event you already have decklists for? This makes one request per event and can take a while.")) return;
+  const btn = document.getElementById('events-backfill-btn');
+  const statusEl = document.getElementById('events-backfill-status');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(API+'/events/backfill', { method:'POST', headers: authHeaders() });
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok) { alert(data.error || 'Backfill failed to start.'); if (btn) btn.disabled = false; return; }
+    if (statusEl) { statusEl.style.display = 'block'; statusEl.textContent = data.message || ('Backfill started for '+data.total+' event(s)…'); }
+    eventsPollBackfillStatus();
+  } catch(e) {
+    alert('Request failed: '+e.message);
+    if (btn) btn.disabled = false;
+  }
+}
+
+function eventsPollBackfillStatus() {
+  const statusEl = document.getElementById('events-backfill-status');
+  const btn = document.getElementById('events-backfill-btn');
+  const poll = async () => {
+    try {
+      const res = await fetch(API+'/events/backfill/status', { headers: authHeaders() });
+      const data = await res.json().catch(()=>({running:false}));
+      if (data.running) {
+        setTimeout(poll, 4000);
+      } else {
+        if (statusEl) statusEl.textContent = 'Backfill complete — reloading events…';
+        if (btn) btn.disabled = false;
+        setTimeout(() => { if (statusEl) statusEl.style.display = 'none'; loadEventsTab(true); }, 1500);
+      }
+    } catch(e) {
+      if (btn) btn.disabled = false;
+    }
+  };
+  setTimeout(poll, 3000);
+}
+
+async function eventsCheckBackfillStatus() {
+  if (!isAdminRole(_userRole)) return;
+  try {
+    const res = await fetch(API+'/events/backfill/status', { headers: authHeaders() });
+    const data = await res.json().catch(()=>({running:false}));
+    if (data.running) {
+      const statusEl = document.getElementById('events-backfill-status');
+      const btn = document.getElementById('events-backfill-btn');
+      if (statusEl) { statusEl.style.display = 'block'; statusEl.textContent = 'A backfill is already running…'; }
+      if (btn) btn.disabled = true;
+      eventsPollBackfillStatus();
+    }
+  } catch(e) {}
+}
+
 function showAddEventDecklist() {
   const form = document.getElementById('event-decklist-form');
   if (!form) return;
@@ -16500,6 +17020,8 @@ function applyRoleUI() {
     if (errBtn) errBtn.style.display = isAdminRole(_userRole) ? 'inline-block' : 'none';
     const adminTab = document.getElementById('ntab-admin');
     if (adminTab) adminTab.style.display = isAdminRole(_userRole) ? 'inline-block' : 'none';
+    const eventsBackfillBtn = document.getElementById('events-backfill-btn');
+    if (eventsBackfillBtn) eventsBackfillBtn.style.display = isAdminRole(_userRole) ? 'inline-block' : 'none';
     // Mobile nav dropdown — admin option only added for admins. Log lives
     // as a sub-tab inside Admin (see renderAdminPage()), not its own entry.
     const mobileSel = document.getElementById('nav-mobile-sel');
