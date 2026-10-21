@@ -2601,15 +2601,24 @@ const server = http.createServer(async (req, res) => {
     if (!flToken()) return json(res, 500, { error: 'FORMATLIBRARY_TOKEN not set in environment' });
     if (_eventsBackfillRunning) return json(res, 409, { error: 'A backfill is already running.' });
 
-    // Every event code any tracked player has a decklist for, PLUS any code
-    // already known to db.eventDates (covers events we know the date/name
-    // of but have no decklist for — harmless no-op if FL has nothing either).
+    // Every event code already in the server for a tracked player — this
+    // means every code referenced by ANY replay (by far the biggest source:
+    // a batch can have hundreds of replays with only a handful of actual
+    // decklists saved), plus any code already attached as a decklist. Does
+    // NOT pull in the full db.eventDates catalog (275+ historical codes,
+    // most with zero connection to a tracked player) — that would turn this
+    // into the full Format-Library-mirror option that was explicitly not
+    // chosen for this feature.
     const codes = new Set();
     for (const p of Object.values(db.players)) {
       for (const d of (p.eventDecklists||[])) { if (d.code) codes.add(d.code.toUpperCase().trim()); }
     }
     for (const b of Object.values(db.batches)) {
       for (const d of (b.eventDecklists||[])) { if (d.code) codes.add(d.code.toUpperCase().trim()); }
+      for (const r of (b.replays||[])) {
+        const code = (r.eventLabel || r.eventId || '').toUpperCase().trim();
+        if (code) codes.add(code);
+      }
     }
     const codeList = [...codes].filter(Boolean);
 
