@@ -2520,28 +2520,29 @@ function extractIdsWithEvents(text) {
     for (const line of lines) {
       const parts = line.split('\t');
       if (parts.length >= 2) {
-        // Tab-separated line: col A = event label, col B = URL
+        // Tab-separated line: col A = event label, col B = URL, col C (optional) = round
         const eventLabel = (parts[0]||'').trim().toUpperCase();
         // Skip header row
         if (eventLabel === 'EVENT_ID' || eventLabel === 'EVENTID' || eventLabel === 'EVENT ID') continue;
         const urlOrId = (parts[1]||'').trim();
         if (!urlOrId) continue; // blank URL column
+        const round = (parts[2]||'').trim();
         const mUrl = reUrl.exec(urlOrId);
         const mId  = reId.exec(urlOrId);
         const id = mUrl ? mUrl[1] : mId ? mId[1] : null;
-        if (id && !seen.has(id)) { seen.add(id); results.push({ id, eventLabel: eventLabel || '' }); }
+        if (id && !seen.has(id)) { seen.add(id); results.push({ id, eventLabel: eventLabel || '', round }); }
       } else {
         // No tab on this line — try to extract a plain URL/ID (no event label)
         const mUrl = reUrl.exec(line);
         const mId  = reId.exec(line);
         const id = mUrl ? mUrl[1] : mId ? mId[1] : null;
-        if (id && !seen.has(id)) { seen.add(id); results.push({ id, eventLabel: '' }); }
+        if (id && !seen.has(id)) { seen.add(id); results.push({ id, eventLabel: '', round: '' }); }
       }
     }
   } else {
     // Plain URL format — use existing extractIds logic
     const ids = extractIds(text);
-    ids.forEach(id => results.push({ id, eventLabel: '' }));
+    ids.forEach(id => results.push({ id, eventLabel: '', round: '' }));
   }
   return results;
 }
@@ -6228,6 +6229,10 @@ async function go() {
   // Build a map of id -> eventLabel from the pasted data
   const _idEventMap = {};
   idEvents.forEach(x => { if (x.eventLabel) _idEventMap[x.id] = x.eventLabel; });
+  // Same for round (e.g. "Finals", "Semi Finals") — Format Library imports
+  // carry this per-replay; manual two/three-column pastes can too.
+  const _idRoundMap = {};
+  idEvents.forEach(x => { if (x.round) _idRoundMap[x.id] = x.round; });
 
   const aliasRaw = (document.getElementById('aliases-inp').value||'').trim();
   const aliases = aliasRaw ? aliasRaw.split(',').map(a=>a.trim()).filter(Boolean) : [];
@@ -6347,6 +6352,7 @@ async function go() {
     }));
     // Per-replay event label: from tab-separated data takes priority, then batch-level label
     const _replayEventLabel = _idEventMap[result.id] || _batchEventLabel || '';
+    const _replayRound = _idRoundMap[result.id] || '';
 
     // Dual-parse for temp batches: parse from both players' perspectives
     let _parsed, _parsedStore, _oppName;
@@ -6385,14 +6391,14 @@ async function go() {
       }
     }
 
-    _activeBatch.replays.push({ replayId:result.id, plays:_rpsPlays, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, parsed:_parsedStore, parsedP2:_parsedStoreP2||undefined, oppName:_oppName, eventLabel:_replayEventLabel });
+    _activeBatch.replays.push({ replayId:result.id, plays:_rpsPlays, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, parsed:_parsedStore, parsedP2:_parsedStoreP2||undefined, oppName:_oppName, eventLabel:_replayEventLabel, round:_replayRound });
     // Save to server — server handles duplicate detection + cross-linking
     if (!_activeBatch.isTemp) try {
       const targetBatchId = (_activeBatch._mergedIds && _activeBatch._mergedIds[0]) || _activeBatch.id;
       const saveRes = await fetch(`${API}/batches/${targetBatchId}/replay`, {
         method:'POST', headers: authHeaders(),
         body: JSON.stringify({ replayId:result.id, plays:_rpsPlays, allPlays:[],
-          timedOut:result.timedOut, oppName:_oppName, player1:result.player1||null, player2:result.player2||null, parsed:_parsedStore, eventLabel:_replayEventLabel })
+          timedOut:result.timedOut, oppName:_oppName, player1:result.player1||null, player2:result.player2||null, parsed:_parsedStore, eventLabel:_replayEventLabel, round:_replayRound })
       });
       if (!saveRes.ok) {
         const errBody = await saveRes.json().catch(()=>({}));
@@ -6971,7 +6977,7 @@ async function flConfirmImport() {
     document.getElementById('player-inp').value = dtPlayer;
     document.getElementById('aliases-inp').value = aliasRaw;
     const _eli = document.getElementById('batch-event-label-inp'); if (_eli) _eli.value = '';
-    document.getElementById('urls-inp').value = newReplays.map(r => (r.eventId||'')+'\t'+r.replayLink).join('\n');
+    document.getElementById('urls-inp').value = newReplays.map(r => (r.eventId||'')+'\t'+r.replayLink+'\t'+(r.round||'')).join('\n');
     _batchPanelMode = 'new';
     // go() already builds a visible "N replay(s) skipped — PLAYER not found in
     // them" report (with a Copy IDs button) in the sidebar for any replay where
@@ -12423,6 +12429,8 @@ async function addToBatch() {
   if (!ids.length) { alert('No Duelingbook replay URLs found. Paste URLs or a two-column spreadsheet (event_id \t replay_link).'); return; }
   const _idEventMapA = {};
   idEvents.forEach(x => { if (x.eventLabel) _idEventMapA[x.id] = x.eventLabel; });
+  const _idRoundMapA = {};
+  idEvents.forEach(x => { if (x.round) _idRoundMapA[x.id] = x.round; });
 
   // Filter out already-loaded replays
   const existing = new Set((_activeBatch.replays||[]).map(r => r.replayId));
@@ -12455,7 +12463,8 @@ async function addToBatch() {
     const _ppA = parseMatch(result.id, result.allPlays||result.plays||[], _activeBatch.player||'', _activeBatch.aliases||[], result.player1, result.player2);
     const _psA = _ppA ? { games:_ppA.games, allMine:_ppA.allMine, allOpp:_ppA.allOpp, oppName:_ppA.oppName, myW:_ppA.myW, oppW:_ppA.oppW, draws:_ppA.draws, score:_ppA.score, result:_ppA.result } : null;
     const _replayEventLabelA = (_idEventMapA && _idEventMapA[result.id]) || _batchEventLabel || '';
-    const replayEntry = { replayId:result.id, plays:_rpsA, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, oppName:_oppName, parsed:_psA, eventLabel:_replayEventLabelA };
+    const _replayRoundA = (_idRoundMapA && _idRoundMapA[result.id]) || '';
+    const replayEntry = { replayId:result.id, plays:_rpsA, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, oppName:_oppName, parsed:_psA, eventLabel:_replayEventLabelA, round:_replayRoundA };
     _activeBatch.replays.push(replayEntry);
     try {
       const _saveId = (_activeBatch._mergedIds && _activeBatch._mergedIds[0]) || _activeBatch.id;
@@ -12463,7 +12472,7 @@ async function addToBatch() {
         method:'POST', headers: authHeaders(),
         body: JSON.stringify({ replayId:result.id, plays:_rpsA, allPlays:[],
           timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null,
-          oppName:_oppName, noCrossLink:true, eventLabel:_replayEventLabelA,
+          oppName:_oppName, noCrossLink:true, eventLabel:_replayEventLabelA, round:_replayRoundA,
           parsed:_psA })
       });
       if (!_saveRes.ok) {
@@ -13190,9 +13199,161 @@ async function eventsShowDetail(code) {
     if (titleEl) titleEl.textContent = '🏆 ' + (data.name || data.code) + ' Decks:';
     if (subEl) subEl.textContent = [data.date, data.size?(data.size+' entrants'):null, (data.decks||[]).length+' decklist(s) on record'].filter(Boolean).join(' · ');
     eventsRenderDeckGrid(data);
+    eventsRenderMetagame(code);
   } catch(e) {
     if (subEl) subEl.textContent = 'Request failed: '+e.message;
   }
+}
+
+// ── Metagame Stats + Matchup Matrix for the event detail page ──────────────
+// Deck Representation / Top Deck Representation come straight from the
+// bracket we captured. The Matchup Matrix is explicitly partial: it's built
+// server-side only from replays already on record for Duel Tools-tracked
+// players in this event, since Format Library's event API doesn't expose
+// full bracket match-by-match pairings — see the note the endpoint returns,
+// which is surfaced to the user below rather than presenting this as the
+// complete bracket result.
+async function eventsRenderMetagame(code) {
+  const bodyEl = document.getElementById('events-detail-body');
+  if (!bodyEl) return;
+  const section = document.createElement('div');
+  section.id = 'events-metagame-section';
+  section.style.cssText = 'margin-bottom:24px;padding-bottom:20px;border-bottom:1px solid var(--border)';
+  const hdrHtml = '<div style="font-size:11px;color:var(--muted);letter-spacing:.08em;margin-bottom:10px;font-weight:bold">METAGAME STATS</div>';
+  section.innerHTML = hdrHtml + '<div style="color:var(--muted);font-size:12px">Loading…</div>';
+  bodyEl.insertBefore(section, bodyEl.firstChild);
+
+  let data;
+  try {
+    const res = await fetch(API+'/events/'+encodeURIComponent(code)+'/metagame', { headers: authHeaders() });
+    data = await res.json().catch(()=>({}));
+    if (!res.ok) { section.innerHTML = hdrHtml + '<div style="color:var(--red);font-size:12px">'+_escapeHtml(data.error||'Failed to load metagame stats.')+'</div>'; return; }
+  } catch(e) {
+    section.innerHTML = hdrHtml + '<div style="color:var(--red);font-size:12px">Request failed: '+_escapeHtml(e.message)+'</div>';
+    return;
+  }
+
+  const cardStats = data.cardStats || {};
+  const coverageNote = cardStats.totalDecks
+    ? `<div style="font-size:10px;color:var(--dim);margin:-8px 0 18px">Card stats based on ${cardStats.decksWithCards||0} of ${cardStats.totalDecks} bracket deck(s) whose cards have been cached so far — opening more decklists above improves coverage.</div>`
+    : '';
+
+  section.innerHTML = hdrHtml + `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-bottom:18px">
+      <div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:12px">
+        <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">DECK REPRESENTATION</div>
+        <canvas id="events-mg-donut-rep" style="width:100%;max-height:180px"></canvas>
+        <div id="events-mg-donut-rep-legend" style="margin-top:8px;display:flex;flex-direction:column;gap:3px"></div>
+      </div>
+      <div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:12px">
+        <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">TOP DECK REPRESENTATION</div>
+        <div style="font-size:9px;color:var(--dim);margin-bottom:8px">Top ${data.topDeckRepresentationN||8} by placement — our own cutoff, not an official Format Library stat</div>
+        <canvas id="events-mg-donut-top" style="width:100%;max-height:180px"></canvas>
+        <div id="events-mg-donut-top-legend" style="margin-top:8px;display:flex;flex-direction:column;gap:3px"></div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:8px">
+      <div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:12px">
+        <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">TOP MAIN DECK CARDS</div>
+        <div id="events-mg-maincards"></div>
+      </div>
+      <div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:12px">
+        <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">TOP SIDE DECK CARDS</div>
+        <div id="events-mg-sidecards"></div>
+      </div>
+    </div>
+    ${coverageNote}
+    <div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:12px">
+      <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">MATCHUP MATRIX (match wins)</div>
+      <div id="events-mg-matrix"></div>
+    </div>
+  `;
+
+  const repEntries = (data.deckRepresentation||[]).map(d=>[d.deckTypeName, d.count]);
+  if (repEntries.length) buildDonutChart('events-mg-donut-rep','events-mg-donut-rep-legend', repEntries, 'Deck Representation');
+  else {
+    const c = document.getElementById('events-mg-donut-rep'); if (c) c.style.display = 'none';
+    const l = document.getElementById('events-mg-donut-rep-legend'); if (l) l.textContent = 'No deck data yet.';
+  }
+
+  const topEntries = (data.topDeckRepresentation||[]).map(d=>[d.deckTypeName, d.count]);
+  if (topEntries.length) buildDonutChart('events-mg-donut-top','events-mg-donut-top-legend', topEntries, 'Top Deck Representation');
+  else {
+    const c = document.getElementById('events-mg-donut-top'); if (c) c.style.display = 'none';
+    const l = document.getElementById('events-mg-donut-top-legend'); if (l) l.textContent = 'No placement data yet.';
+  }
+
+  const allPasscodes = [...(cardStats.main||[]).map(c=>c.passcode), ...(cardStats.side||[]).map(c=>c.passcode)];
+  if (allPasscodes.length) { try { await lookupPasscodeNames(allPasscodes); } catch(e) {} }
+  eventsRenderCardBarList(document.getElementById('events-mg-maincards'), cardStats.main||[]);
+  eventsRenderCardBarList(document.getElementById('events-mg-sidecards'), cardStats.side||[]);
+
+  eventsRenderMatchupMatrix(document.getElementById('events-mg-matrix'), data.matchupMatrix||{});
+}
+
+// Simple horizontal bar list — card name + copy count, bar width relative to
+// the top card in the list. `cards` is pre-sorted desc by the server.
+function eventsRenderCardBarList(container, cards) {
+  if (!container) return;
+  if (!cards.length) { container.innerHTML = '<div style="color:var(--dim);font-size:11px">No cached card data for this event yet.</div>'; return; }
+  const max = cards[0].count || 1;
+  container.innerHTML = '';
+  cards.forEach(c => {
+    const name = window._passcodeCache[c.passcode] || ('#'+c.passcode);
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:5px;font-size:11px;cursor:pointer';
+    row.onclick = () => { if (window._passcodeCache[c.passcode]) showCardPopup(name); };
+    row.innerHTML = `
+      <span style="flex:1;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_escapeHtml(name)}</span>
+      <div style="width:70px;height:7px;border-radius:3px;background:var(--bg);overflow:hidden;flex-shrink:0">
+        <div style="width:${Math.round(c.count/max*100)}%;height:100%;background:var(--amber)"></div>
+      </div>
+      <span style="width:18px;text-align:right;color:var(--muted);flex-shrink:0">${c.count}</span>
+    `;
+    container.appendChild(row);
+  });
+}
+
+// Full deck-vs-deck grid, honestly scoped to what eventsState.matchupMatrix
+// actually contains (see server-side note). Diagonal/self cells are shown
+// like any other — a tracked player who played a mirror match populates it
+// the same way as any other matchup.
+function eventsRenderMatchupMatrix(container, matrix) {
+  if (!container) return;
+  const decks = matrix.decks || [];
+  const cells = matrix.cells || {};
+  if (!decks.length) {
+    container.innerHTML = '<div style="color:var(--dim);font-size:11px">No replays on record yet for a Duel Tools-tracked player in this event — the matrix fills in as replays get tagged with this event code.</div>';
+    return;
+  }
+  const table = document.createElement('table');
+  table.style.cssText = 'border-collapse:collapse;font-size:10px;width:100%';
+  let thead = '<thead><tr><th style="padding:5px 8px;text-align:left;color:var(--muted);border-bottom:1px solid var(--border)">Deck ↓ \\ Opp →</th>';
+  decks.forEach(d => { thead += `<th style="padding:5px 8px;color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap">${_escapeHtml(d)}</th>`; });
+  thead += '</tr></thead>';
+  let tbody = '<tbody>';
+  decks.forEach(row => {
+    tbody += `<tr><td style="padding:5px 8px;font-weight:bold;color:var(--text);white-space:nowrap;border-bottom:1px solid var(--border2)">${_escapeHtml(row)}</td>`;
+    decks.forEach(col => {
+      const rec = cells[row+'|'+col];
+      if (!rec || (rec.wins+rec.losses)===0) {
+        tbody += '<td style="padding:5px 8px;text-align:center;color:var(--dim);border-bottom:1px solid var(--border2)">—</td>';
+      } else {
+        const tot = rec.wins+rec.losses, wp = Math.round(rec.wins/tot*100);
+        const color = wp>=50 ? 'var(--green)' : 'var(--red)';
+        tbody += `<td style="padding:5px 8px;text-align:center;border-bottom:1px solid var(--border2)" title="${rec.wins}-${rec.losses}"><span style="color:${color};font-weight:bold">${wp}%</span><span style="color:var(--dim)"> (${rec.wins}-${rec.losses})</span></td>`;
+      }
+    });
+    tbody += '</tr>';
+  });
+  tbody += '</tbody>';
+  table.innerHTML = thead + tbody;
+  container.innerHTML = '';
+  container.appendChild(table);
+  const note = document.createElement('div');
+  note.style.cssText = 'font-size:10px;color:var(--dim);margin-top:8px';
+  note.textContent = (matrix.matchesCounted||0) + ' match(es) on record. ' + (matrix.note||'');
+  container.appendChild(note);
 }
 
 function eventsRenderDeckGrid(ev) {
@@ -13249,12 +13410,22 @@ async function eventsShowDeck(code, deckId) {
   const deck = data.deck || {};
   const place = deck.placeNum!=null ? eventsOrdinal(deck.placeNum) : (deck.placement||'—');
   if (titleEl) titleEl.textContent = deck.deckTypeName || 'Unknown Deck';
-  if (metaEl) metaEl.innerHTML = `
-    <div><span style="color:var(--muted)">Builder:</span> <b>${_escapeHtml(deck.builderName||'Unknown')}</b></div>
-    <div><span style="color:var(--muted)">Format:</span> <b>Goat</b></div>
-    <div><span style="color:var(--muted)">Event:</span> <b>${_escapeHtml(code)}</b></div>
-    <div><span style="color:var(--muted)">Place:</span> <b>${_escapeHtml(String(place))}</b></div>
-  `;
+  if (metaEl) {
+    metaEl.innerHTML = `
+      <div><span style="color:var(--muted)">Builder:</span> <b>${_escapeHtml(deck.builderName||'Unknown')}</b></div>
+      <div><span style="color:var(--muted)">Format:</span> <b>Goat</b></div>
+      <div><span style="color:var(--muted)">Event:</span> <b>${_escapeHtml(code)}</b></div>
+      <div><span style="color:var(--muted)">Place:</span> <b>${_escapeHtml(String(place))}</b></div>
+    `;
+    if (data.trackedPlayer && data.trackedPlayer.name) {
+      const viewBtn = document.createElement('button');
+      viewBtn.className = 'btn-sec';
+      viewBtn.style.cssText = 'font-size:11px;padding:4px 10px';
+      viewBtn.textContent = 'View Profile →';
+      viewBtn.onclick = () => eventsGotoPlayerProfile(data.trackedPlayer.name);
+      metaEl.appendChild(viewBtn);
+    }
+  }
   if (dlBtn) dlBtn.onclick = () => downloadYDK({ ydkData: deck.ydkData, code: code, ydkFileName: (deck.builderName||code)+'-'+code+'.ydk' });
   if (openLink) openLink.href = 'https://www.formatlibrary.com/decks/'+deck.deckId;
 
@@ -13262,11 +13433,9 @@ async function eventsShowDeck(code, deckId) {
   eventsRenderReplaysPanel(replaysEl, code, data.trackedPlayer);
 }
 
-// Renders a card grid like Format Library's own deck view — unique cards
-// only, with a quantity badge for duplicates — rather than repeating each
-// physical copy as its own tile (which is how the existing per-player
-// "View" popup in showDeckViewPopup() does it; left untouched since that's
-// an established, separate UI).
+// Renders a normal YDK-style card grid — one tile per physical copy, fixed
+// 10-per-row — matching the convention already established by the
+// per-player "View" popup in showDeckViewPopup().
 async function eventsRenderDeckCards(container, deck) {
   if (!container) return;
   if (!deck.ydkData) {
@@ -13296,29 +13465,31 @@ async function eventsRenderDeckCards(container, deck) {
   container.innerHTML = '<div style="color:var(--muted);font-size:12px">Loading card images…</div>';
   try { await lookupPasscodeNames([...mainPasscodes, ...sidePasscodes]); } catch(e) {}
 
-  function groupByCard(pList) {
-    const order = [], counts = {};
-    for (const p of pList) { if (!(p in counts)) { counts[p] = 0; order.push(p); } counts[p]++; }
-    return order.map(p => ({ passcode:p, count:counts[p] })).sort((a,b) => {
-      const typeA = window._cardDataCache[a.passcode] ? window._cardDataCache[a.passcode].card_type : '';
-      const typeB = window._cardDataCache[b.passcode] ? window._cardDataCache[b.passcode].card_type : '';
+  // Sort only (no grouping/dedup) — one tile per physical copy, same as a
+  // normal YDK deck-viewer layout (and matching showDeckViewPopup's convention).
+  function sortPasscodesByType(pList) {
+    return [...pList].sort((a, b) => {
+      const typeA = window._cardDataCache[a] ? window._cardDataCache[a].card_type : '';
+      const typeB = window._cardDataCache[b] ? window._cardDataCache[b].card_type : '';
       const td = cardTypeSortOrder(typeA) - cardTypeSortOrder(typeB);
       if (td !== 0) return td;
-      const nameA = window._passcodeCache[a.passcode] || '';
-      const nameB = window._passcodeCache[b.passcode] || '';
+      const nameA = window._passcodeCache[a] || '';
+      const nameB = window._passcodeCache[b] || '';
       return nameA.localeCompare(nameB);
     });
   }
 
-  function renderGrid(items) {
+  // Fixed 10-per-row grid, one tile per copy (no quantity badge) — matches
+  // showDeckViewPopup's renderCardGrid exactly.
+  function renderGrid(pList) {
     const grid = document.createElement('div');
-    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:8px;margin-bottom:10px';
-    items.forEach(({passcode:p, count}) => {
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(10,1fr);gap:4px;margin-bottom:8px';
+    for (const p of pList) {
       const name = window._passcodeCache[p] || '';
       const wrap = document.createElement('div');
       wrap.style.cssText = 'position:relative;cursor:pointer';
       const img = document.createElement('img');
-      img.style.cssText = 'width:100%;border-radius:4px;display:block;background:var(--card2)';
+      img.style.cssText = 'width:100%;border-radius:3px;display:block;background:var(--card2)';
       img.title = name; img.alt = name; img.loading = 'lazy';
       if (p) {
         const imgId = (window._cardDataCache[p] && window._cardDataCache[p].imageId) || p;
@@ -13327,9 +13498,9 @@ async function eventsRenderDeckCards(container, deck) {
       const showUnresolved = () => {
         img.style.display = 'none';
         const n = document.createElement('div');
-        n.style.cssText = 'font-size:8px;color:'+(name?'var(--muted)':'var(--red)')+';font-family:monospace;word-break:break-word;padding:3px;background:var(--card2);border-radius:4px;min-height:70px;display:flex;align-items:center;justify-content:center;text-align:center;border:1px solid '+(name?'var(--border)':'var(--red)');
-        n.textContent = name || ('⚠ #'+p);
-        if (name) n.onclick = () => showCardPopup(name);
+        n.style.cssText = 'font-size:7px;color:'+(name?'var(--muted)':'var(--red)')+';font-family:monospace;word-break:break-word;padding:2px;background:var(--card2);border-radius:3px;min-height:60px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;cursor:pointer;border:1px solid '+(name?'var(--border)':'var(--red)');
+        if (name) { n.textContent = name; n.onclick = () => showCardPopup(name); }
+        else { n.innerHTML = '⚠ UNKNOWN CARD<br>#'+p; n.title = 'Passcode '+p+' did not match any known card — likely a typo in the source decklist.'; }
         wrap.appendChild(n);
       };
       img.onerror = async () => {
@@ -13345,29 +13516,23 @@ async function eventsRenderDeckCards(container, deck) {
       };
       wrap.onclick = () => showCardPopup(name);
       wrap.appendChild(img);
-      if (count > 1) {
-        const badge = document.createElement('div');
-        badge.textContent = count;
-        badge.style.cssText = 'position:absolute;top:2px;left:2px;background:#d62828;color:#fff;font-size:10px;font-weight:bold;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:monospace;box-shadow:0 1px 3px rgba(0,0,0,.5)';
-        wrap.appendChild(badge);
-      }
       grid.appendChild(wrap);
-    });
+    }
     return grid;
   }
 
   container.innerHTML = '';
-  const mainGrouped = groupByCard(mainPasscodes);
-  const sideGrouped  = groupByCard(sidePasscodes);
-  if (mainGrouped.length) {
-    const t = document.createElement('div'); t.style.cssText='font-size:10px;color:var(--muted);letter-spacing:.1em;margin-bottom:6px;font-weight:bold'; t.textContent = 'MAIN DECK ('+mainPasscodes.length+')';
+  const sortedMain = sortPasscodesByType(mainPasscodes);
+  const sortedSide = sortPasscodesByType(sidePasscodes);
+  if (sortedMain.length) {
+    const t = document.createElement('div'); t.style.cssText='font-size:10px;color:var(--muted);letter-spacing:.1em;margin-bottom:6px;font-weight:bold'; t.textContent = 'MAIN DECK ('+sortedMain.length+')';
     container.appendChild(t);
-    container.appendChild(renderGrid(mainGrouped));
+    container.appendChild(renderGrid(sortedMain));
   }
-  if (sideGrouped.length) {
-    const t = document.createElement('div'); t.style.cssText='font-size:10px;color:var(--muted);letter-spacing:.1em;margin:14px 0 6px;font-weight:bold'; t.textContent = 'SIDE DECK ('+sidePasscodes.length+')';
+  if (sortedSide.length) {
+    const t = document.createElement('div'); t.style.cssText='font-size:10px;color:var(--muted);letter-spacing:.1em;margin:14px 0 6px;font-weight:bold'; t.textContent = 'SIDE DECK ('+sortedSide.length+')';
     container.appendChild(t);
-    container.appendChild(renderGrid(sideGrouped));
+    container.appendChild(renderGrid(sortedSide));
   }
 }
 
@@ -13411,11 +13576,15 @@ async function eventsRenderReplaysPanel(container, code, trackedPlayer) {
     const score = (p.scoreOverride ? (p.scoreOverride.my+'-'+p.scoreOverride.opp) : p.score) || '';
     const isWin  = /^w/i.test(result);
     const isLoss = /^l/i.test(result);
+    const myDeck  = r.myDeckOverride  || p.myDeck  || '—';
+    const oppDeck = r.oppDeckOverride || p.oppDeck || '—';
+    const round = r.round || '—';
+    const replayUrl = 'https://www.duelingbook.com/replay?id='+encodeURIComponent(r.replayId);
     const row = document.createElement('div');
     row.style.cssText = 'padding:8px 10px;margin-bottom:6px;background:var(--card2);border:1px solid var(--border2);border-radius:6px;cursor:pointer;font-size:11px';
     row.onmouseover = () => row.style.borderColor = 'var(--amber)';
     row.onmouseout  = () => row.style.borderColor = 'var(--border2)';
-    row.onclick = () => eventsOpenReplayInAnalyzer(r._batchId, r.replayId);
+    row.onclick = (e) => { if (e.target.closest('a')) return; eventsOpenReplayInAnalyzer(r._batchId, r.replayId); };
     const resColor = isWin ? 'var(--green)' : isLoss ? 'var(--red)' : 'var(--muted)';
     const resLabel = isWin ? 'W' : isLoss ? 'L' : (result || '—');
     row.innerHTML = `
@@ -13424,10 +13593,27 @@ async function eventsRenderReplaysPanel(container, code, trackedPlayer) {
         <span style="color:var(--muted)">${_escapeHtml(score)}</span>
       </div>
       <div style="color:var(--text);margin-top:3px">vs ${_escapeHtml(oppName)}</div>
-      ${r.round?`<div style="color:var(--dim);font-size:10px;margin-top:2px">${_escapeHtml(r.round)}</div>`:''}
+      <div style="color:var(--dim);font-size:10px;margin-top:2px">${_escapeHtml(myDeck)} vs ${_escapeHtml(oppDeck)}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:3px">
+        <span style="color:var(--dim);font-size:10px">${_escapeHtml(round)}</span>
+        <a href="${replayUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:var(--amber);font-size:10px;text-decoration:none">View on DB ↗</a>
+      </div>
     `;
     container.appendChild(row);
   });
+}
+
+// ── View Player Profile from the Events tab ─────────────────────────────────
+// Mirrors the existing gotoPlayerProfile() helper used from GFWL (switch to
+// the Profiles tab, load the profile list, then open the matching player).
+function eventsGotoPlayerProfile(playerName) {
+  const profilesTab = document.querySelector('.ntab[onclick*="profiles"]');
+  switchTab('profiles', profilesTab);
+  setTimeout(async () => {
+    await loadProfiles();
+    const playerBatches = (_allProfileBatches||[]).filter(b=>(b.player||'').toLowerCase()===String(playerName||'').toLowerCase());
+    if (playerBatches.length) openProfile(playerName, playerBatches, []);
+  }, 300);
 }
 
 async function eventsOpenReplayInAnalyzer(batchId, replayId) {

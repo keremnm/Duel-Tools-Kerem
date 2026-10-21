@@ -2434,7 +2434,7 @@ const server = http.createServer(async (req, res) => {
           if (preservedScoreOverride)   parsedData2.scoreOverride = preservedScoreOverride;
           if (preservedOverrideNote)    parsedData2.overrideNote = preservedOverrideNote;
         }
-        b.replays[dupIdx] = { replayId:data.replayId, plays:data.plays||[], allPlays:parsedData2?[]:(minPlays||[]).map(stripPlay), parsed:parsedData2, timedOut:false, eventLabel:dup.eventLabel||data.eventLabel||'', oppName:data.oppName||dup.oppName||'', player1:data.player1||dup.player1||null, player2:data.player2||dup.player2||null, savedAt:Date.now(),
+        b.replays[dupIdx] = { replayId:data.replayId, plays:data.plays||[], allPlays:parsedData2?[]:(minPlays||[]).map(stripPlay), parsed:parsedData2, timedOut:false, eventLabel:dup.eventLabel||data.eventLabel||'', round:dup.round||data.round||'', oppName:data.oppName||dup.oppName||'', player1:data.player1||dup.player1||null, player2:data.player2||dup.player2||null, savedAt:Date.now(),
           resultOverride: preservedResultOverride, scoreOverride: preservedScoreOverride,
           myDeckOverride: preservedMyDeckOverride, oppDeckOverride: preservedOppDeckOverride,
           overrideNote: preservedOverrideNote, crossLinked: dup.crossLinked||false };
@@ -2588,6 +2588,133 @@ const server = http.createServer(async (req, res) => {
       eventDate: ev.date || (db.eventDates[code]||{}).date || '',
       deck,
       trackedPlayer,
+    });
+  }
+
+  // ── GET /api/events/:code/metagame — deck representation + a matchup
+  // matrix for the event detail page. Deck Representation and Top Deck
+  // Representation come straight from the bracket we captured. The
+  // Matchup Matrix is explicitly partial and labeled as such to the client:
+  // Format Library's event API exposes the bracket's top decks but not
+  // match-by-match pairings, so a full bracket matrix isn't available from
+  // this data source — this one is built only from replays already on
+  // record for Duel-Tools-tracked players who played in this event. ───────
+  if (parts[0]==='events' && parts[1] && parts[2]==='metagame' && method==='GET') {
+    if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot view events' });
+    const code = decodeURIComponent(parts[1]).toUpperCase();
+    const ev = db.events[code];
+    if (!ev) return json(res, 404, { error: 'No data for this event yet.' });
+    const decks = ev.decks || [];
+
+    // Deck Representation — every deck in the bracket, by type.
+    const repCounts = {};
+    for (const d of decks) {
+      const t = d.deckTypeName || 'Unknown';
+      repCounts[t] = (repCounts[t]||0) + 1;
+    }
+    const deckRepresentation = Object.entries(repCounts)
+      .map(([deckTypeName,count]) => ({ deckTypeName, count }))
+      .sort((a,b)=>b.count-a.count);
+
+    // Top Deck Representation — our own reasonable interpretation (Top 8 by
+    // placement), since Format Library doesn't document an exact definition
+    // for this stat anywhere we have access to. Disclosed as such below via
+    // topDeckRepresentationN, not presented as FL's own methodology.
+    const TOP_N = 8;
+    const topDecks = decks.filter(d => d.placeNum != null).sort((a,b)=>a.placeNum-b.placeNum).slice(0, TOP_N);
+    const topRepCounts = {};
+    for (const d of topDecks) {
+      const t = d.deckTypeName || 'Unknown';
+      topRepCounts[t] = (topRepCounts[t]||0) + 1;
+    }
+    const topDeckRepresentation = Object.entries(topRepCounts)
+      .map(([deckTypeName,count]) => ({ deckTypeName, count }))
+      .sort((a,b)=>b.count-a.count);
+
+    // Top Main/Side Deck Cards — aggregated across whichever bracket decks
+    // have cached YDK data. Coverage can be partial (a miner+ account has to
+    // open a deck once for its cards to get cached) — decksWithCards/
+    // totalDecks is returned so the client can disclose that honestly.
+    const mainCounts = {}, sideCounts = {};
+    let decksWithCards = 0;
+    for (const d of decks) {
+      if (!d.ydkData) continue;
+      const parsedYdk = parseYdkPasscodes(d.ydkData);
+      if (!parsedYdk) continue;
+      decksWithCards++;
+      for (const p of parsedYdk.main) mainCounts[p] = (mainCounts[p]||0) + 1;
+      for (const p of parsedYdk.side) sideCounts[p] = (sideCounts[p]||0) + 1;
+    }
+    const topMainCards = Object.entries(mainCounts)
+      .map(([passcode,count]) => ({ passcode:Number(passcode), count }))
+      .sort((a,b)=>b.count-a.count).slice(0, 15);
+    const topSideCards = Object.entries(sideCounts)
+      .map(([passcode,count]) => ({ passcode:Number(passcode), count }))
+      .sort((a,b)=>b.count-a.count).slice(0, 15);
+
+    // Matchup Matrix — see function comment above the route for the honesty
+    // caveat. Each tracked player's own deck type comes from their confirmed
+    // bracket entry; the opponent's deck type is resolved the same way when
+    // the opponent is ALSO a bracket entrant in this event, otherwise falls
+    // back to that replay's own classified oppDeck (if any).
+    const cells = {}; // 'RowDeck|ColDeck' -> {wins, losses}
+    let matchesCounted = 0;
+    const bump = (rowDeck, colDeck, won) => {
+      const key = rowDeck + '|' + colDeck;
+      if (!cells[key]) cells[key] = { wins:0, losses:0 };
+      if (won) cells[key].wins++; else cells[key].losses++;
+    };
+    for (const d of decks) {
+      if (!d.builderName) continue;
+      const playerEntry = findPlayerByUsername(d.builderName.replace(/_/g, ' '));
+      if (!playerEntry) continue;
+      const myDeckType = d.deckTypeName || 'Unknown';
+      const names = playerNames(playerEntry);
+      const batchIds = Object.values(db.batches)
+        .filter(b => names.includes((b.player||'').toLowerCase()))
+        .map(b => b.id);
+      for (const bid of batchIds) {
+        const b = db.batches[bid];
+        if (!b || !b.replays) continue;
+        for (const r of b.replays) {
+          const evId = (r.eventLabel || r.eventId || '').toUpperCase().trim();
+          if (evId !== code) continue;
+          const p = r.parsed || {};
+          const result = r.resultOverride || p.resultOverride || p.result || '';
+          if (!/^[wl]/i.test(result)) continue; // only count decided matches
+          const won = /^w/i.test(result);
+          const oppName = r.oppName || p.oppName || '';
+          let oppDeckType = null;
+          const oppBracketDeck = decks.find(d2 => d2 !== d && oppName && isSameNameOrAlias(d2.builderName, oppName));
+          if (oppBracketDeck) oppDeckType = oppBracketDeck.deckTypeName || 'Unknown';
+          else {
+            const classified = r.oppDeckOverride || p.oppDeck;
+            if (classified && classified !== '—' && classified !== '-' && classified !== 'Unknown') oppDeckType = classified;
+          }
+          if (!oppDeckType) oppDeckType = 'Unknown';
+          bump(myDeckType, oppDeckType, won);
+          matchesCounted++;
+        }
+      }
+    }
+    const deckAxis = [...new Set(Object.keys(cells).flatMap(k => k.split('|')))]
+      .sort((a,b) => {
+        const totalFor = (name) => Object.entries(cells).reduce((sum,[k,v]) => k.split('|').includes(name) ? sum+v.wins+v.losses : sum, 0);
+        return totalFor(b) - totalFor(a);
+      });
+
+    return json(res, 200, {
+      code: ev.code,
+      deckRepresentation,
+      topDeckRepresentation,
+      topDeckRepresentationN: TOP_N,
+      cardStats: { main: topMainCards, side: topSideCards, decksWithCards, totalDecks: decks.length },
+      matchupMatrix: {
+        decks: deckAxis,
+        cells,
+        matchesCounted,
+        note: "Built only from replays on record for Duel Tools-tracked players in this event — not the full bracket (Format Library's event API doesn't expose match-by-match bracket pairings).",
+      },
     });
   }
 
@@ -3867,6 +3994,29 @@ function placementNum(p) {
   if (p === null || p === undefined) return null;
   const m = String(p).match(/\d+/);
   return m ? parseInt(m[0], 10) : null;
+}
+
+// Decodes a cached deck's base64 .ydk text and splits it into main/side
+// passcode lists — mirrors the client-side parsing in eventsRenderDeckCards,
+// used server-side to aggregate card stats across a whole event's bracket.
+function parseYdkPasscodes(ydkBase64) {
+  let text;
+  try { text = Buffer.from(ydkBase64, 'base64').toString('utf8'); } catch(e) { return null; }
+  const main = [], side = [];
+  let sec = null;
+  for (const line of text.split(/\r?\n/)) {
+    const t = line.trim();
+    if (t === '#main') { sec='main'; continue; }
+    if (t === '#extra') { sec='extra'; continue; }
+    if (t === '!side') { sec='side'; continue; }
+    if (t.startsWith('#') || t.startsWith('!')) { sec=null; continue; }
+    if (/^\d+$/.test(t)) {
+      const p = parseInt(t, 10);
+      if (sec==='main') main.push(p);
+      else if (sec==='side') side.push(p);
+    }
+  }
+  return { main, side };
 }
 
 // Learns a full event's top-decks bracket from Format Library's
