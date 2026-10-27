@@ -24,15 +24,23 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Courie
 .app{display:grid;grid-template-columns:260px 1fr;grid-template-rows:52px 1fr;height:100vh;width:100vw}
 
 /* ── Top bar ── */
-.topbar{grid-column:1/-1;background:var(--panel);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 18px;gap:14px;z-index:20}
-.logo{color:var(--green);font-weight:bold;font-size:16px;letter-spacing:.12em;display:flex;align-items:center;gap:8px}
+.topbar{grid-column:1/-1;background:var(--panel);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 18px;gap:14px;z-index:20;flex-wrap:nowrap}
+.logo{color:var(--green);font-weight:bold;font-size:16px;letter-spacing:.12em;display:flex;align-items:center;gap:8px;flex-shrink:0}
 .logo-icon{font-size:20px}
 .logo-img{height:28px;width:28px;object-fit:contain;flex-shrink:0}
-.nav-tabs{display:flex;gap:2px;margin-left:16px}
-.ntab{background:none;border:none;color:var(--muted);font-family:monospace;font-size:13px;padding:7px 16px;cursor:pointer;border-radius:6px;letter-spacing:.05em;transition:all .15s}
+/* Nav tabs stay a single row no matter how many there are — once the full
+   list (plus the Admin tab, plus the always-visible topbar-right controls)
+   is too wide for the window, this strip scrolls horizontally instead of
+   ever wrapping onto a second line (which used to make the topbar look
+   "doubled" once the Admin-only buttons pushed total content past the
+   window width). topbar-right is flex-shrink:0 below so it's always fully
+   visible and this is the only part that ever gives up width. */
+.nav-tabs{display:flex;gap:2px;margin-left:16px;flex-wrap:nowrap;overflow-x:auto;min-width:0;scrollbar-width:none}
+.nav-tabs::-webkit-scrollbar{display:none}
+.ntab{background:none;border:none;color:var(--muted);font-family:monospace;font-size:13px;padding:7px 16px;cursor:pointer;border-radius:6px;letter-spacing:.05em;transition:all .15s;flex-shrink:0;white-space:nowrap}
 .ntab:hover{color:var(--text);background:var(--card)}
 .ntab.on{color:var(--green);background:var(--card)}
-.topbar-right{margin-left:auto;display:flex;gap:8px;align-items:center}
+.topbar-right{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:nowrap;flex-shrink:0}
 .tpill{font-size:11px;color:var(--muted);background:var(--card);border:1px solid var(--border);border-radius:20px;padding:3px 13px;min-width:160px;max-width:340px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tbtn{background:var(--card);border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:4px 10px;border-radius:6px;cursor:pointer;white-space:nowrap}
 .tbtn:hover{color:var(--green);border-color:var(--green)}
@@ -6781,13 +6789,13 @@ function clearForm() {
 // ══════════════════════════════════════════════════════════════════════
 let _flPreviewData = null;
 
-function openFLImport() {
+function openFLImport(prefillName) {
   const backdrop = document.getElementById('fl-import-backdrop');
   const panel    = document.getElementById('fl-import-panel');
   if (!backdrop || !panel) return;
   backdrop.style.display = 'block';
   panel.style.display    = 'flex';
-  const _prefill = (_activeProfile && _activeProfile.player) || (_activeBatch && _activeBatch.player) || '';
+  const _prefill = prefillName || (_activeProfile && _activeProfile.player) || (_activeBatch && _activeBatch.player) || '';
   document.getElementById('fl-username-inp').value = _prefill;
   document.getElementById('fl-dtplayer-inp').value  = _prefill;
   document.getElementById('fl-aliases-inp').value   = '';
@@ -13430,7 +13438,7 @@ async function eventsShowDeck(code, deckId) {
   if (openLink) openLink.href = 'https://www.formatlibrary.com/decks/'+deck.deckId;
 
   await eventsRenderDeckCards(cardsEl, deck);
-  eventsRenderReplaysPanel(replaysEl, code, data.trackedPlayer);
+  eventsRenderReplaysPanel(replaysEl, code, data.trackedPlayer, deck.builderName);
 }
 
 // Renders a normal YDK-style card grid — one tile per physical copy, fixed
@@ -13483,7 +13491,7 @@ async function eventsRenderDeckCards(container, deck) {
   // showDeckViewPopup's renderCardGrid exactly.
   function renderGrid(pList) {
     const grid = document.createElement('div');
-    grid.style.cssText = 'display:grid;grid-template-columns:repeat(10,1fr);gap:4px;margin-bottom:8px';
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(10,72px);gap:4px;margin-bottom:8px';
     for (const p of pList) {
       const name = window._passcodeCache[p] || '';
       const wrap = document.createElement('div');
@@ -13536,10 +13544,20 @@ async function eventsRenderDeckCards(container, deck) {
   }
 }
 
-async function eventsRenderReplaysPanel(container, code, trackedPlayer) {
+function _eventsImportBtn(label, prefillName) {
+  const btn = document.createElement('button');
+  btn.className = 'btn-sec';
+  btn.style.cssText = 'font-size:11px;padding:6px 10px;margin-top:10px';
+  btn.textContent = label;
+  btn.onclick = () => openFLImport(prefillName);
+  return btn;
+}
+
+async function eventsRenderReplaysPanel(container, code, trackedPlayer, builderName) {
   if (!container) return;
   if (!trackedPlayer || !trackedPlayer.batchIds || !trackedPlayer.batchIds.length) {
-    container.innerHTML = '<div style="font-size:11px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">REPLAYS</div><div style="font-size:12px;color:var(--dim)">This duelist isn\'t tracked in Duel Tools — no replays on record.</div>';
+    container.innerHTML = '<div style="font-size:11px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">REPLAYS</div><div style="font-size:12px;color:var(--dim)">This duelist doesn\'t have a Duel Tools profile yet — no replays on record.</div>';
+    if (builderName) container.appendChild(_eventsImportBtn('📥 Import Profile from Format Library', builderName));
     return;
   }
   container.innerHTML = '<div style="font-size:11px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">REPLAYS — '+_escapeHtml(trackedPlayer.name)+'</div><div style="font-size:12px;color:var(--muted)">Loading…</div>';
@@ -13560,6 +13578,7 @@ async function eventsRenderReplaysPanel(container, code, trackedPlayer) {
 
   if (!replays.length) {
     container.innerHTML = '<div style="font-size:11px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">REPLAYS — '+_escapeHtml(trackedPlayer.name)+'</div><div style="font-size:12px;color:var(--dim)">No replays tagged with this event in '+_escapeHtml(trackedPlayer.name)+'\'s batch.</div>';
+    container.appendChild(_eventsImportBtn('📥 Import more replays from Format Library', builderName || trackedPlayer.name));
     return;
   }
 
@@ -17521,7 +17540,12 @@ async function renderAdminPage() {
   let users = [];
   try {
     const res = await fetch(API+'/admin/users', { headers: authHeaders() });
-    users = await res.json();
+    const body = await res.json();
+    if (!res.ok || !Array.isArray(body)) {
+      usersSection.innerHTML = '<div style="color:var(--red);font-size:14px;padding:16px">'+_escapeHtml((body && body.error) || ('Failed to load users (HTTP '+res.status+')'))+'</div>';
+      return;
+    }
+    users = body;
   } catch(e) {
     usersSection.innerHTML = '<div style="color:var(--red);font-size:14px;padding:16px">Failed to load users: '+e.message+'</div>';
     return;

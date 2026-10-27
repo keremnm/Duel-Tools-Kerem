@@ -207,9 +207,21 @@ async function initDB() {
     if (sa) { sa.approved = true; }
   }
 
-  // Migrate any legacy head_admin roles to admin in the DB
+  // Migrate any legacy head_admin roles to admin in the DB. This used to only
+  // mutate the in-memory copy, so a Postgres reconnect (which re-SELECTs
+  // db.users fresh from the table) could silently bring a legacy
+  // 'head_admin' value right back — and a few /api/admin/users routes used
+  // to check u.role==='admin' directly instead of the isAdmin() helper (which
+  // does treat head_admin as admin), so that account would see "Admin only"
+  // errors on the Admin page despite otherwise looking fully admin. Saving
+  // here makes the migration stick in Postgres so it can't come back.
+  let _migratedHeadAdmin = false;
   for (const u of Object.values(db.users)) {
-    if (u.role === 'head_admin') { u.role = 'admin'; }
+    if (u.role === 'head_admin') { u.role = 'admin'; _migratedHeadAdmin = true; }
+  }
+  if (_migratedHeadAdmin) {
+    await saveDB('users');
+    console.log('[migration] Persisted head_admin → admin role migration.');
   }
 
   const existingAdmin = Object.values(db.users).find(u => u.email === BOOTSTRAP_EMAIL);
@@ -1781,7 +1793,7 @@ const server = http.createServer(async (req, res) => {
   // ── Admin: GET /api/admin/users ─────────────────────────────────────────────
   if (parts[0]==='admin' && parts[1]==='users' && method==='GET') {
     const user = getUser(req);
-    if (!user || user.role !== 'admin') return json(res, 403, { error: 'Admin only' });
+    if (!isAdmin(req)) return json(res, 403, { error: 'Admin only' });
     const users = Object.values(db.users).map(u => ({ id:u.id, email:u.email, name:u.name||'', role:u.role, approved:u.approved, createdAt:u.createdAt }));
     return json(res, 200, users);
   }
@@ -1789,7 +1801,7 @@ const server = http.createServer(async (req, res) => {
   // ── Admin: POST /api/admin/users ────────────────────────────────────────────
   if (parts[0]==='admin' && parts[1]==='users' && method==='POST') {
     const user = getUser(req);
-    if (!user || user.role !== 'admin') return json(res, 403, { error: 'Admin only' });
+    if (!isAdmin(req)) return json(res, 403, { error: 'Admin only' });
     return readBody(req, async data => {
       const email = (data.email||'').toLowerCase().trim();
       const pw    = (data.password||'ilovesui').trim();
@@ -1806,7 +1818,7 @@ const server = http.createServer(async (req, res) => {
   // ── Admin: PATCH /api/admin/users/:id ──────────────────────────────────────
   if (parts[0]==='admin' && parts[1]==='users' && parts[2] && method==='PATCH') {
     const user = getUser(req);
-    if (!user || user.role !== 'admin') return json(res, 403, { error: 'Admin only' });
+    if (!isAdmin(req)) return json(res, 403, { error: 'Admin only' });
     return readBody(req, async data => {
       const u = db.users[parts[2]];
       if (!u) return json(res, 404, { error: 'Not found' });
@@ -1822,7 +1834,7 @@ const server = http.createServer(async (req, res) => {
   // ── Admin: DELETE /api/admin/users/:id ─────────────────────────────────────
   if (parts[0]==='admin' && parts[1]==='users' && parts[2] && method==='DELETE') {
     const user = getUser(req);
-    if (!user || user.role !== 'admin') return json(res, 403, { error: 'Admin only' });
+    if (!isAdmin(req)) return json(res, 403, { error: 'Admin only' });
     if (!db.users[parts[2]]) return json(res, 404, { error: 'Not found' });
     delete db.users[parts[2]];
     await saveDB();
@@ -1832,7 +1844,7 @@ const server = http.createServer(async (req, res) => {
   // ── Admin: POST /api/admin/cleanup ──────────────────────────────────────────
   if (parts[0]==='admin' && parts[1]==='cleanup' && method==='POST') {
     const user = getUser(req);
-    if (!user || user.role !== 'admin') return json(res, 403, { error: 'Admin only' });
+    if (!isAdmin(req)) return json(res, 403, { error: 'Admin only' });
     let totalReplays = 0, totalBatches = 0;
     const stripPlay = p => ({
       play:p.play,owner:p.owner,username:p.username,player1:p.player1,player2:p.player2,
