@@ -1132,7 +1132,7 @@ select{cursor:pointer}
       <div style="display:flex;gap:4px 18px;flex-wrap:wrap;padding:10px 20px;border-bottom:1px solid var(--border);font-size:12px;flex-shrink:0" id="events-deck-meta"></div>
       <div style="flex:1;overflow:hidden;min-height:0;display:flex">
         <div id="events-deck-cards" style="flex:1;overflow-y:auto;min-height:0;padding:16px 20px"></div>
-        <div id="events-deck-replays" style="width:300px;flex-shrink:0;overflow-y:auto;min-height:0;padding:16px 16px;border-left:1px solid var(--border)"></div>
+        <div id="events-deck-replays" style="width:380px;flex-shrink:0;overflow-y:auto;min-height:0;padding:16px;border-left:1px solid var(--border)"></div>
       </div>
     </div>
 
@@ -13539,7 +13539,7 @@ async function eventsRenderDeckCards(container, deck) {
   // showDeckViewPopup's renderCardGrid exactly.
   function renderGrid(pList) {
     const grid = document.createElement('div');
-    grid.style.cssText = 'display:grid;grid-template-columns:repeat(10,72px);gap:4px;margin-bottom:8px';
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(10,84px);gap:6px;margin-bottom:8px';
     for (const p of pList) {
       const name = window._passcodeCache[p] || '';
       const wrap = document.createElement('div');
@@ -13578,15 +13578,22 @@ async function eventsRenderDeckCards(container, deck) {
   }
 
   container.innerHTML = '';
+  // Card tiles stay a fixed 72px (a wider auto-stretched grid was the
+  // original complaint), so on a wide window the grid is narrower than this
+  // panel. Centering it — instead of leaving it stranded against the left
+  // edge with a dead gap to its right — is what actually uses that space.
+  container.style.display = 'flex';
+  container.style.flexDirection = 'column';
+  container.style.alignItems = 'center';
   const sortedMain = sortPasscodesByType(mainPasscodes);
   const sortedSide = sortPasscodesByType(sidePasscodes);
   if (sortedMain.length) {
-    const t = document.createElement('div'); t.style.cssText='font-size:10px;color:var(--muted);letter-spacing:.1em;margin-bottom:6px;font-weight:bold'; t.textContent = 'MAIN DECK ('+sortedMain.length+')';
+    const t = document.createElement('div'); t.style.cssText='font-size:11px;color:var(--muted);letter-spacing:.1em;margin-bottom:6px;font-weight:bold'; t.textContent = 'MAIN DECK ('+sortedMain.length+')';
     container.appendChild(t);
     container.appendChild(renderGrid(sortedMain));
   }
   if (sortedSide.length) {
-    const t = document.createElement('div'); t.style.cssText='font-size:10px;color:var(--muted);letter-spacing:.1em;margin:14px 0 6px;font-weight:bold'; t.textContent = 'SIDE DECK ('+sortedSide.length+')';
+    const t = document.createElement('div'); t.style.cssText='font-size:11px;color:var(--muted);letter-spacing:.1em;margin:14px 0 6px;font-weight:bold'; t.textContent = 'SIDE DECK ('+sortedSide.length+')';
     container.appendChild(t);
     container.appendChild(renderGrid(sortedSide));
   }
@@ -13637,11 +13644,11 @@ function _eventsImportBtn(label, prefillName) {
 async function eventsRenderReplaysPanel(container, code, trackedPlayer, builderName) {
   if (!container) return;
   if (!trackedPlayer || !trackedPlayer.batchIds || !trackedPlayer.batchIds.length) {
-    container.innerHTML = '<div style="font-size:11px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">REPLAYS</div><div style="font-size:12px;color:var(--dim)">This duelist doesn\'t have a Duel Tools profile yet — no replays on record.</div>';
+    container.innerHTML = '<div style="font-size:12px;color:var(--muted);letter-spacing:.08em;margin-bottom:10px;font-weight:bold">REPLAYS</div><div style="font-size:13px;color:var(--muted)">This duelist doesn\'t have a Duel Tools profile yet — no replays on record.</div>';
     if (builderName) container.appendChild(_eventsImportBtn('📥 Import Profile from Format Library', builderName));
     return;
   }
-  container.innerHTML = '<div style="font-size:11px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">REPLAYS — '+_escapeHtml(trackedPlayer.name)+'</div><div style="font-size:12px;color:var(--muted)">Loading…</div>';
+  container.innerHTML = '<div style="font-size:12px;color:var(--muted);letter-spacing:.08em;margin-bottom:10px;font-weight:bold">REPLAYS — '+_escapeHtml(trackedPlayer.name)+'</div><div style="font-size:12px;color:var(--muted)">Loading…</div>';
 
   let replays = [];
   try {
@@ -13658,14 +13665,14 @@ async function eventsRenderReplaysPanel(container, code, trackedPlayer, builderN
   } catch(e) {}
 
   if (!replays.length) {
-    container.innerHTML = '<div style="font-size:11px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">REPLAYS — '+_escapeHtml(trackedPlayer.name)+'</div><div style="font-size:12px;color:var(--dim)">No replays tagged with this event in '+_escapeHtml(trackedPlayer.name)+'\'s batch.</div>';
+    container.innerHTML = '<div style="font-size:12px;color:var(--muted);letter-spacing:.08em;margin-bottom:10px;font-weight:bold">REPLAYS — '+_escapeHtml(trackedPlayer.name)+'</div><div style="font-size:13px;color:var(--muted)">No replays tagged with this event in '+_escapeHtml(trackedPlayer.name)+'\'s batch.</div>';
     container.appendChild(_eventsImportBtn('📥 Import more replays from Format Library', builderName || trackedPlayer.name));
     return;
   }
 
   container.innerHTML = '';
   const hdr = document.createElement('div');
-  hdr.style.cssText = 'font-size:11px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold';
+  hdr.style.cssText = 'font-size:12px;color:var(--muted);letter-spacing:.08em;margin-bottom:10px;font-weight:bold';
   hdr.textContent = 'REPLAYS — '+trackedPlayer.name+' ('+replays.length+')';
   container.appendChild(hdr);
 
@@ -13681,22 +13688,22 @@ async function eventsRenderReplaysPanel(container, code, trackedPlayer, builderN
     const round = r.round || '—';
     const replayUrl = 'https://www.duelingbook.com/replay?id='+encodeURIComponent(r.replayId);
     const row = document.createElement('div');
-    row.style.cssText = 'padding:8px 10px;margin-bottom:6px;background:var(--card2);border:1px solid var(--border2);border-radius:6px;cursor:pointer;font-size:11px';
+    row.style.cssText = 'padding:12px 14px;margin-bottom:10px;background:var(--card2);border:1px solid var(--border2);border-left:3px solid '+(isWin?'var(--green)':isLoss?'var(--red)':'var(--border2)')+';border-radius:6px;cursor:pointer;font-size:13px';
     row.onmouseover = () => row.style.borderColor = 'var(--amber)';
-    row.onmouseout  = () => row.style.borderColor = 'var(--border2)';
+    row.onmouseout  = () => { row.style.borderColor = 'var(--border2)'; row.style.borderLeftColor = isWin?'var(--green)':isLoss?'var(--red)':'var(--border2)'; };
     row.onclick = (e) => { if (e.target.closest('a')) return; eventsOpenReplayInAnalyzer(r._batchId, r.replayId); };
     const resColor = isWin ? 'var(--green)' : isLoss ? 'var(--red)' : 'var(--muted)';
-    const resLabel = isWin ? 'W' : isLoss ? 'L' : (result || '—');
+    const resLabel = isWin ? 'WIN' : isLoss ? 'LOSS' : (result || '—');
     row.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <span style="color:${resColor};font-weight:bold">${_escapeHtml(resLabel)}</span>
-        <span style="color:var(--muted)">${_escapeHtml(score)}</span>
+        <span style="color:${resColor};font-weight:bold;font-size:14px;letter-spacing:.04em">${_escapeHtml(resLabel)}</span>
+        <span style="color:var(--text);font-weight:bold;font-size:14px">${_escapeHtml(score)}</span>
       </div>
-      <div style="color:var(--text);margin-top:3px">vs ${_escapeHtml(oppName)}</div>
-      <div style="color:var(--dim);font-size:10px;margin-top:2px">${_escapeHtml(myDeck)} vs ${_escapeHtml(oppDeck)}</div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:3px">
-        <span style="color:var(--dim);font-size:10px">${_escapeHtml(round)}</span>
-        <a href="${replayUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:var(--amber);font-size:10px;text-decoration:none">View on DB ↗</a>
+      <div style="color:var(--text);font-weight:bold;margin-top:6px;font-size:14px">vs ${_escapeHtml(oppName)}</div>
+      <div style="color:var(--muted);font-size:12px;margin-top:4px">${_escapeHtml(myDeck)} <span style="color:var(--dim)">vs</span> ${_escapeHtml(oppDeck)}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+        <span style="color:var(--muted);font-size:11px">${_escapeHtml(round)}</span>
+        <a href="${replayUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:var(--amber);font-size:12px;font-weight:bold;text-decoration:none">View on DB ↗</a>
       </div>
     `;
     container.appendChild(row);
