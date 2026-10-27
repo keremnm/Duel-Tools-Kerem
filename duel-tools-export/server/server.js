@@ -3121,6 +3121,17 @@ const server = http.createServer(async (req, res) => {
     if (!flToken()) return json(res, 500, { error: 'FORMATLIBRARY_TOKEN not set in environment' });
     const player = url.searchParams.get('player');
     if (!player) return json(res, 400, { error: 'player required' });
+    // Format Library's own 'player:or:' filter matches substrings (and
+    // apparently un-word-bounded ones at that — searching "Chen" matches
+    // "Grumplestielzchen" because it ends in "...zchen"), so every row FL
+    // hands back has to be re-checked here against the EXACT username before
+    // it's treated as this player's replay. Underscore/space is normalized
+    // the same way the rest of the app treats FL usernames (isSameNameOrAlias
+    // et al.), but this is otherwise a strict, non-fuzzy equality check —
+    // deliberately not alias-aware, since this is the raw FL search step
+    // that feeds the import preview, before the user's own aliases field
+    // comes into play.
+    const playerNorm = player.trim().toLowerCase().replace(/_/g, ' ');
     try {
       const replays = [];
       let eventDatesChanged = false;
@@ -3135,6 +3146,9 @@ const server = http.createServer(async (req, res) => {
         if (!Array.isArray(rows) || !rows.length) break;
         for (const row of rows) {
           if ((row.formatName||'').toLowerCase() !== 'goat') continue;
+          const winnerNorm = (row.winnerName||'').trim().toLowerCase().replace(/_/g, ' ');
+          const loserNorm  = (row.loserName||'').trim().toLowerCase().replace(/_/g, ' ');
+          if (winnerNorm !== playerNorm && loserNorm !== playerNorm) continue; // FL substring false-positive — not actually this player
           const eventId = row.eventAbbreviation || '';
           const replayDate = (row.publishDate||'').slice(0, 10);
           // Every replay carries its own event code + exact publish date, so
