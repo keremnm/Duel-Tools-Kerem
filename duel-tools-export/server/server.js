@@ -2653,10 +2653,12 @@ const server = http.createServer(async (req, res) => {
       .sort((a,b)=>b.count-a.count).slice(0, 15);
 
     // Matchup Matrix — see function comment above the route for the honesty
-    // caveat. Each tracked player's own deck type comes from their confirmed
-    // bracket entry; the opponent's deck type is resolved the same way when
-    // the opponent is ALSO a bracket entrant in this event, otherwise falls
-    // back to that replay's own classified oppDeck (if any).
+    // caveat. Both sides of every counted match must be one of THIS event's
+    // own bracket entries, so the matrix only ever shows deck types actually
+    // entered in the event — a match whose opponent can't be matched to a
+    // bracket entrant here (not a Duel Tools-tracked player, or their deck
+    // couldn't be resolved) is left out rather than falling back to a guess
+    // or an "Unknown" bucket.
     const cells = {}; // 'RowDeck|ColDeck' -> {wins, losses}
     let matchesCounted = 0;
     const bump = (rowDeck, colDeck, won) => {
@@ -2684,24 +2686,20 @@ const server = http.createServer(async (req, res) => {
           if (!/^[wl]/i.test(result)) continue; // only count decided matches
           const won = /^w/i.test(result);
           const oppName = r.oppName || p.oppName || '';
-          let oppDeckType = null;
           const oppBracketDeck = decks.find(d2 => d2 !== d && oppName && isSameNameOrAlias(d2.builderName, oppName));
-          if (oppBracketDeck) oppDeckType = oppBracketDeck.deckTypeName || 'Unknown';
-          else {
-            const classified = r.oppDeckOverride || p.oppDeck;
-            if (classified && classified !== '—' && classified !== '-' && classified !== 'Unknown') oppDeckType = classified;
-          }
-          if (!oppDeckType) oppDeckType = 'Unknown';
+          if (!oppBracketDeck) continue; // opponent isn't one of this event's own bracket entries — skip rather than guess
+          const oppDeckType = oppBracketDeck.deckTypeName || 'Unknown';
           bump(myDeckType, oppDeckType, won);
           matchesCounted++;
         }
       }
     }
-    const deckAxis = [...new Set(Object.keys(cells).flatMap(k => k.split('|')))]
-      .sort((a,b) => {
-        const totalFor = (name) => Object.entries(cells).reduce((sum,[k,v]) => k.split('|').includes(name) ? sum+v.wins+v.losses : sum, 0);
-        return totalFor(b) - totalFor(a);
-      });
+    // Axis is restricted to the deck types actually entered in this event's
+    // bracket (same set as Deck Representation above) — not whatever strings
+    // happened to show up as an opponent's classified deck in a replay, which
+    // can include decks/players outside this event's own entrant list.
+    const deckAxis = [...new Set(decks.map(d => d.deckTypeName || 'Unknown'))]
+      .sort((a,b) => (repCounts[b]||0) - (repCounts[a]||0));
 
     return json(res, 200, {
       code: ev.code,
