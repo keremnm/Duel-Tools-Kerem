@@ -12676,7 +12676,55 @@ window._passcodeCache = window._passcodeCache || {};
 // Full card data cache: passcode → {name, type} where type is ygoprodeck card type string
 window._cardDataCache = window._cardDataCache || {};
 
+// Known alt-art/reprint passcodes that YGOProDeck's database has no record
+// of at all (not even "card not found with that exact print" — a plain
+// cardinfo.php?id= lookup returns zero results), but which are the exact
+// same card as a passcode that IS in their database — confirmed by looking
+// each one up by name and comparing. Format Library's decklist exports can
+// carry these alternate-print passcodes, which otherwise show up as
+// "UNKNOWN CARD" with no name or image even though the card is perfectly
+// identifiable.
+//
+// This list was built by a full sweep (2026-10-27) of every decklist already
+// cached across every player, batch, and event in the live database — 5,456
+// decklists, 517 distinct passcodes. 507 resolved cleanly; these 10 did not,
+// and every one of them has exactly one unambiguous real card sitting right
+// next to it in YGOProDeck's id space (same naming/typing pattern each
+// time), which is how they were identified — not a guess. A decklist
+// imported after this sweep could still reference a not-yet-seen alt-art
+// passcode; add it here the same way (verify by name search, confirm the
+// neighbor match, never guess) whenever one turns up.
+const PASSCODE_OVERRIDES = {
+  25551952: 25551951, // Blowback Dragon
+  32807848: 32807846, // Reinforcement of the Army
+  40410111: 40410110, // Homunculus the Alchemic Being
+  46303689: 46303688, // Roulette Barrel
+  70828913: 70828912, // Premature Burial
+  72989440: 72989439, // Black Luster Soldier - Envoy of the Beginning
+  76922030: 76922029, // Don Zaloog
+  77414723: 77414722, // Magic Jammer
+  78783371: 78783370, // Barrel Behind the Door
+  97077564: 97077563, // Call of the Haunted
+};
+
 async function lookupPasscodeNames(passcodes) {
+  // Resolve any overridden passcodes via their verified real counterpart
+  // first, then mirror the cached result onto the ORIGINAL passcode too —
+  // everything downstream (renderGrid etc.) keys off the passcode exactly
+  // as it appears in the YDK, so the alias has to live under that key.
+  const overridden = passcodes.filter(p => PASSCODE_OVERRIDES[p] && !window._cardDataCache[p]);
+  if (overridden.length) {
+    const targets = [...new Set(overridden.map(p => PASSCODE_OVERRIDES[p]))];
+    await lookupPasscodeNames(targets);
+    for (const p of overridden) {
+      const target = PASSCODE_OVERRIDES[p];
+      if (window._cardDataCache[target]) {
+        window._cardDataCache[p] = window._cardDataCache[target];
+        window._passcodeCache[p] = window._passcodeCache[target];
+      }
+    }
+  }
+
   const unknown = passcodes.filter(p => !window._cardDataCache[p]);
   if (unknown.length) {
     const chunks = [];
@@ -13544,6 +13592,39 @@ async function eventsRenderDeckCards(container, deck) {
   }
 }
 
+// Resolves a player's deck type from the CURRENT event's own bracket deck
+// list (_eventsState.detail.decks) — used as a fallback for replay rows that
+// predate any myDeck/oppDeck classification (e.g. freshly imported via
+// Format Library, which carries no deck-matchup annotation per replay).
+// Since we already know which event this replay belongs to, the bracket's
+// own decklist is a reliable, already-available source instead of leaving
+// the matchup blank. Name matching is alias-aware via the player registry,
+// same convention as the server-side matchup matrix.
+function _eventsFindBracketDeckType(name) {
+  const decks = (_eventsState.detail && _eventsState.detail.decks) || [];
+  if (!name || !decks.length) return null;
+  const norm = s => (s||'').trim().toLowerCase().replace(/_/g, ' ');
+  const target = norm(name);
+  let found = decks.find(d => norm(d.builderName) === target);
+  if (!found) {
+    const reg = window._playerRegistry && window._playerRegistry[target];
+    if (reg) {
+      const names = [reg.name, ...(reg.aliases||[])].map(norm);
+      found = decks.find(d => names.includes(norm(d.builderName)));
+    }
+  }
+  if (!found) {
+    // Also try matching the other direction — the bracket builder's own
+    // registry entry (and its aliases) against the requested name.
+    found = decks.find(d => {
+      const dReg = window._playerRegistry && window._playerRegistry[norm(d.builderName)];
+      if (!dReg) return false;
+      return [dReg.name, ...(dReg.aliases||[])].map(norm).includes(target);
+    });
+  }
+  return found ? (found.deckTypeName || null) : null;
+}
+
 function _eventsImportBtn(label, prefillName) {
   const btn = document.createElement('button');
   btn.className = 'btn-sec';
@@ -13595,8 +13676,8 @@ async function eventsRenderReplaysPanel(container, code, trackedPlayer, builderN
     const score = (p.scoreOverride ? (p.scoreOverride.my+'-'+p.scoreOverride.opp) : p.score) || '';
     const isWin  = /^w/i.test(result);
     const isLoss = /^l/i.test(result);
-    const myDeck  = r.myDeckOverride  || p.myDeck  || '—';
-    const oppDeck = r.oppDeckOverride || p.oppDeck || '—';
+    const myDeck  = r.myDeckOverride  || p.myDeck  || _eventsFindBracketDeckType(trackedPlayer.name) || '—';
+    const oppDeck = r.oppDeckOverride || p.oppDeck || _eventsFindBracketDeckType(oppName) || '—';
     const round = r.round || '—';
     const replayUrl = 'https://www.duelingbook.com/replay?id='+encodeURIComponent(r.replayId);
     const row = document.createElement('div');
