@@ -840,6 +840,19 @@ function readBody(req, cb) {
 function playerNames(entry) {
   return [entry.name, ...(entry.aliases||[])].map(n => n.toLowerCase());
 }
+// Resolves a Format Library event bracket's builderName to a tracked
+// player. builderName is usually the player's literal username as typed —
+// which can itself legitimately contain an underscore (e.g. "goat_lothy")
+// — so that exact spelling is tried FIRST. Only when there's no exact match
+// do we fall back to treating the underscore as FL's older space-placeholder
+// convention (seen on some other FL fields). Matching only the normalized
+// form, as earlier code here did, broke tracked-player detection for any
+// real player whose own username contains an underscore.
+function findPlayerByBuilderName(builderName) {
+  const raw = (builderName || '').trim();
+  if (!raw) return null;
+  return findPlayerByUsername(raw) || findPlayerByUsername(raw.replace(/_/g, ' '));
+}
 function findPlayerByUsername(username) {
   const ul = username.toLowerCase().trim();
   if (!ul) return null;
@@ -2534,7 +2547,7 @@ const server = http.createServer(async (req, res) => {
     if (!ev) return json(res, 404, { error: 'No data for this event yet.' });
     const fallback = db.eventDates[code] || {};
     const decks = (ev.decks||[]).map(d => {
-      const playerEntry = findPlayerByUsername((d.builderName||'').replace(/_/g, ' '));
+      const playerEntry = findPlayerByBuilderName(d.builderName);
       return {
         deckId: d.deckId,
         builderName: d.builderName,
@@ -2583,7 +2596,7 @@ const server = http.createServer(async (req, res) => {
       } catch(e) { console.warn('[events] lazy YDK fetch failed for deck', deckId, ':', e.message); }
     }
 
-    const playerEntry = findPlayerByUsername((deck.builderName||'').replace(/_/g, ' '));
+    const playerEntry = findPlayerByBuilderName(deck.builderName);
     let trackedPlayer = null;
     if (playerEntry) {
       const names = playerNames(playerEntry);
@@ -2680,7 +2693,7 @@ const server = http.createServer(async (req, res) => {
     };
     for (const d of decks) {
       if (!d.builderName) continue;
-      const playerEntry = findPlayerByUsername(d.builderName.replace(/_/g, ' '));
+      const playerEntry = findPlayerByBuilderName(d.builderName);
       if (!playerEntry) continue;
       const myDeckType = d.deckTypeName || 'Unknown';
       const names = playerNames(playerEntry);
@@ -2778,7 +2791,7 @@ const server = http.createServer(async (req, res) => {
               const ev = db.events[code.toUpperCase()];
               if (ev) {
                 for (const d of (ev.decks||[])) {
-                  const playerEntry = findPlayerByUsername((d.builderName||'').replace(/_/g,' '));
+                  const playerEntry = findPlayerByBuilderName(d.builderName);
                   if (!playerEntry) continue;
                   const key = playerEntry.name.toLowerCase();
                   const reg = db.players[key];
@@ -4083,7 +4096,12 @@ function captureEventTopDecks(code, flData) {
         builderName: d.builderName || '',
         placement: (d.placement != null) ? d.placement : null,
         placeNum: placementNum(d.placement),
-        deckTypeName: d.deckTypeName || '',
+        // Once a deck type is known, keep it — don't let a re-capture regress
+        // it to blank just because Format Library's response that day didn't
+        // include it. A fresh non-blank value from FL still always wins, so a
+        // deck that was missing its type gets filled in the moment any
+        // capture (including one triggered by an FL import) returns it.
+        deckTypeName: d.deckTypeName || (prior && prior.deckTypeName) || '',
         ydkData: (prior && prior.ydkData) || undefined, // keep any YDK already cached for this deck
         updatedAt: Date.now(),
       };

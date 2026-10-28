@@ -6789,15 +6789,19 @@ function clearForm() {
 // ══════════════════════════════════════════════════════════════════════
 let _flPreviewData = null;
 
-function openFLImport(prefillName) {
+function openFLImport(prefillName, dtPlayerName) {
   const backdrop = document.getElementById('fl-import-backdrop');
   const panel    = document.getElementById('fl-import-panel');
   if (!backdrop || !panel) return;
   backdrop.style.display = 'block';
   panel.style.display    = 'flex';
   const _prefill = prefillName || (_activeProfile && _activeProfile.player) || (_activeBatch && _activeBatch.player) || '';
+  // dtPlayerName, when given, is an *already-known* Duel Tools profile name
+  // (e.g. a player who already has a profile, just missing replays for this
+  // one event) — prefer it over the raw FL builder spelling so the import
+  // attaches to the existing profile instead of risking a near-duplicate.
   document.getElementById('fl-username-inp').value = _prefill;
-  document.getElementById('fl-dtplayer-inp').value  = _prefill;
+  document.getElementById('fl-dtplayer-inp').value  = dtPlayerName || _prefill;
   document.getElementById('fl-aliases-inp').value   = '';
   document.getElementById('fl-import-status').textContent = '';
   const dd = document.getElementById('fl-dtplayer-dropdown'); if (dd) dd.style.display = 'none';
@@ -6805,7 +6809,7 @@ function openFLImport(prefillName) {
   previewEl.style.display = 'none';
   previewEl.innerHTML = '';
   _flPreviewData = null;
-  if (_prefill) flAutoFillAliases();
+  if (_prefill || dtPlayerName) flAutoFillAliases();
 }
 
 function closeFLImport() {
@@ -13535,11 +13539,19 @@ async function eventsRenderDeckCards(container, deck) {
     });
   }
 
-  // Fixed 10-per-row grid, one tile per copy (no quantity badge) — matches
-  // showDeckViewPopup's renderCardGrid exactly.
-  function renderGrid(pList) {
+  // Fixed per-row grid, one tile per copy (no quantity badge) — matches
+  // showDeckViewPopup's renderCardGrid conventions, but tile size/columns are
+  // tunable per call so the side deck (up to 15 cards) can be sized to fit
+  // one row at the same total width as the 10-wide main deck row, instead of
+  // wrapping to a second row and pushing the panel into a scroll.
+  function renderGrid(pList, tileWidth, perRow, gap) {
+    tileWidth = tileWidth || 64;
+    perRow = perRow || 10;
+    gap = gap || (tileWidth < 56 ? 4 : 5);
     const grid = document.createElement('div');
-    grid.style.cssText = 'display:grid;grid-template-columns:repeat(10,84px);gap:6px;margin-bottom:8px';
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat('+perRow+','+tileWidth+'px);gap:'+gap+'px;margin-bottom:8px';
+    const unresolvedMinHeight = Math.max(30, Math.round(tileWidth * 0.72));
+    const unresolvedFontSize = tileWidth < 56 ? 6 : 7;
     for (const p of pList) {
       const name = window._passcodeCache[p] || '';
       const wrap = document.createElement('div');
@@ -13554,7 +13566,7 @@ async function eventsRenderDeckCards(container, deck) {
       const showUnresolved = () => {
         img.style.display = 'none';
         const n = document.createElement('div');
-        n.style.cssText = 'font-size:7px;color:'+(name?'var(--muted)':'var(--red)')+';font-family:monospace;word-break:break-word;padding:2px;background:var(--card2);border-radius:3px;min-height:60px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;cursor:pointer;border:1px solid '+(name?'var(--border)':'var(--red)');
+        n.style.cssText = 'font-size:'+unresolvedFontSize+'px;color:'+(name?'var(--muted)':'var(--red)')+';font-family:monospace;word-break:break-word;padding:2px;background:var(--card2);border-radius:3px;min-height:'+unresolvedMinHeight+'px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;cursor:pointer;border:1px solid '+(name?'var(--border)':'var(--red)');
         if (name) { n.textContent = name; n.onclick = () => showCardPopup(name); }
         else { n.innerHTML = '⚠ UNKNOWN CARD<br>#'+p; n.title = 'Passcode '+p+' did not match any known card — likely a typo in the source decklist.'; }
         wrap.appendChild(n);
@@ -13578,7 +13590,7 @@ async function eventsRenderDeckCards(container, deck) {
   }
 
   container.innerHTML = '';
-  // Card tiles stay a fixed 72px (a wider auto-stretched grid was the
+  // Card tiles stay a fixed 64px (a wider auto-stretched grid was the
   // original complaint), so on a wide window the grid is narrower than this
   // panel. Centering it — instead of leaving it stranded against the left
   // edge with a dead gap to its right — is what actually uses that space.
@@ -13587,15 +13599,24 @@ async function eventsRenderDeckCards(container, deck) {
   container.style.alignItems = 'center';
   const sortedMain = sortPasscodesByType(mainPasscodes);
   const sortedSide = sortPasscodesByType(sidePasscodes);
+  const MAIN_TILE = 64, MAIN_GAP = 5, MAIN_PER_ROW = 10;
+  const mainRowWidth = MAIN_PER_ROW * MAIN_TILE + (MAIN_PER_ROW - 1) * MAIN_GAP;
   if (sortedMain.length) {
     const t = document.createElement('div'); t.style.cssText='font-size:11px;color:var(--muted);letter-spacing:.1em;margin-bottom:6px;font-weight:bold'; t.textContent = 'MAIN DECK ('+sortedMain.length+')';
     container.appendChild(t);
-    container.appendChild(renderGrid(sortedMain));
+    container.appendChild(renderGrid(sortedMain, MAIN_TILE, MAIN_PER_ROW));
   }
   if (sortedSide.length) {
-    const t = document.createElement('div'); t.style.cssText='font-size:11px;color:var(--muted);letter-spacing:.1em;margin:14px 0 6px;font-weight:bold'; t.textContent = 'SIDE DECK ('+sortedSide.length+')';
+    // Side deck always fits in a single row, same total width as the main
+    // deck's row — tiles shrink to whatever size makes that many copies fit,
+    // instead of wrapping to a second row (capped at the main tile size so a
+    // short side deck doesn't blow up to oversized tiles).
+    const sideCount = sortedSide.length;
+    const sideGap = sideCount >= 14 ? 4 : 5;
+    const sideTile = Math.max(30, Math.min(MAIN_TILE, Math.floor((mainRowWidth - (sideCount - 1) * sideGap) / sideCount)));
+    const t = document.createElement('div'); t.style.cssText='font-size:11px;color:var(--muted);letter-spacing:.1em;margin:10px 0 6px;font-weight:bold'; t.textContent = 'SIDE DECK ('+sortedSide.length+')';
     container.appendChild(t);
-    container.appendChild(renderGrid(sortedSide));
+    container.appendChild(renderGrid(sortedSide, sideTile, sideCount, sideGap));
   }
 }
 
@@ -13632,12 +13653,12 @@ function _eventsFindBracketDeckType(name) {
   return found ? (found.deckTypeName || null) : null;
 }
 
-function _eventsImportBtn(label, prefillName) {
+function _eventsImportBtn(label, flUsername, dtPlayerName) {
   const btn = document.createElement('button');
   btn.className = 'btn-sec';
   btn.style.cssText = 'font-size:11px;padding:6px 10px;margin-top:10px';
   btn.textContent = label;
-  btn.onclick = () => openFLImport(prefillName);
+  btn.onclick = () => openFLImport(flUsername, dtPlayerName);
   return btn;
 }
 
@@ -13666,7 +13687,10 @@ async function eventsRenderReplaysPanel(container, code, trackedPlayer, builderN
 
   if (!replays.length) {
     container.innerHTML = '<div style="font-size:12px;color:var(--muted);letter-spacing:.08em;margin-bottom:10px;font-weight:bold">REPLAYS — '+_escapeHtml(trackedPlayer.name)+'</div><div style="font-size:13px;color:var(--muted)">No replays tagged with this event in '+_escapeHtml(trackedPlayer.name)+'\'s batch.</div>';
-    container.appendChild(_eventsImportBtn('📥 Import more replays from Format Library', builderName || trackedPlayer.name));
+    // This player already has a Duel Tools profile (trackedPlayer) — recognize
+    // it by name so the import attaches to the existing profile rather than
+    // just reusing the raw Format Library builder spelling.
+    container.appendChild(_eventsImportBtn('📥 Import more replays from Format Library', builderName || trackedPlayer.name, trackedPlayer.name));
     return;
   }
 
