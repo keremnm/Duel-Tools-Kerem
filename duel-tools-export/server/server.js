@@ -3676,8 +3676,31 @@ server.listen(PORT, '0.0.0.0', () => {
   initDB().catch(e => console.error('DB init error:', e.message));
 });
 
-process.on('SIGINT',  () => { saveDB().then(() => process.exit(0)).catch(() => process.exit(1)); });
-process.on('SIGTERM', () => { saveDB().then(() => process.exit(0)).catch(() => process.exit(1)); });
+// ── Graceful shutdown ─────────────────────────────────────────────────────
+// saveDB() with no arguments only flushes _ALWAYS_SAVE_KEYS (players, users,
+// gfwl, eventDates, overrides, _changeLog, events) — 'batches' is
+// deliberately NOT in that list (see saveDB's own comment: batches are
+// written to their own per-row table, not serialized as one JSONB blob).
+// Replay batch saves go through saveBatchToPostgres(), which is debounced
+// 1.5s (BATCH_SAVE_DEBOUNCE_MS) and only actually hits Postgres once that
+// timer fires — a POST /batches/:id/replay returns {ok:true} to the client
+// the instant the write is QUEUED, not once it's durable. A redeploy sends
+// SIGTERM to the old process; if that happened mid-debounce (e.g. a user
+// adding replays in quick succession, each one re-arming the 1.5s timer),
+// calling only saveDB() here silently dropped every batch still sitting in
+// _dirtyBatches/_batchSaveQueue — replays the UI had already told the user
+// were saved, gone for good the moment the old process exited. Flushing
+// saveAllBatchesToPostgres() (dirty batches only, not a full re-save) here
+// alongside saveDB() closes that gap for any ordinary graceful stop.
+async function gracefulShutdown() {
+  try {
+    await Promise.all([ saveDB(), saveAllBatchesToPostgres() ]);
+  } catch (e) {
+    console.error('[shutdown] Save failed:', e.message);
+  }
+}
+process.on('SIGINT',  () => { gracefulShutdown().then(() => process.exit(0)).catch(() => process.exit(1)); });
+process.on('SIGTERM', () => { gracefulShutdown().then(() => process.exit(0)).catch(() => process.exit(1)); });
 
 // ── In-memory error log (last 100 errors) ────────────────────────────────────
 const _errorLog = [];

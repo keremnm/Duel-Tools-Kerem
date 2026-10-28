@@ -12721,6 +12721,14 @@ async function addToBatch() {
 
   const _batchEventLabel = (document.getElementById('batch-event-label-inp')?.value||'').trim().toUpperCase();
 
+  // Every replay that fails its server save gets tracked here. The local
+  // in-memory push (right below) always happens regardless of whether the
+  // save succeeds, so without this, a failed save was invisible — the UI
+  // still showed the replay as "added" for the rest of this session, right
+  // up until a refresh re-fetched the batch from the server and it was
+  // simply gone, with nothing in the UI ever having said it didn't save.
+  const _failedSaves = [];
+
   for (let i=0; i<newIds.length; i++) {
     st('Loading '+(i+1)+'/'+newIds.length+' — '+newIds[i], 'var(--muted)');
     const result = await loadReplay(newIds[i]);
@@ -12748,7 +12756,10 @@ async function addToBatch() {
         const _errBody = await _saveRes.json().catch(()=>({}));
         throw new Error(_errBody.error || `HTTP ${_saveRes.status}`);
       }
-    } catch(e) { console.error('Failed to save replay', result.id, e); }
+    } catch(e) {
+      console.error('Failed to save replay', result.id, e);
+      _failedSaves.push({ id: result.id, error: e.message });
+    }
     if (i<newIds.length-1) await sleep(1200);
   }
 
@@ -12756,7 +12767,22 @@ async function addToBatch() {
   closeBatchPanel();
   btn.disabled = false; btn.textContent = '▶ Analyze';
 
-  st((_activeBatch.name||_activeBatch.player)+' — '+_activeBatch.replays.length+' replays total', 'var(--green)');
+  if (_failedSaves.length) {
+    // Don't let these silently vanish — a save error here means the replay
+    // is visible for the rest of THIS session (it's already in
+    // _activeBatch.replays) but was never written to the server, so it will
+    // be gone the next time this batch loads from scratch (a refresh, or
+    // anyone else opening this profile). Surface it loudly instead of just
+    // the quiet console.error these used to get.
+    alert(
+      '⚠ ' + _failedSaves.length + ' of ' + newIds.length + ' replay(s) FAILED to save to the server and will be lost on refresh:\n\n' +
+      _failedSaves.map(f => '• ' + f.id + ' — ' + f.error).join('\n') +
+      '\n\nThe ' + (newIds.length - _failedSaves.length) + ' that succeeded are safe. Re-paste the failed ID(s) above and try adding them again.'
+    );
+    st((_activeBatch.name||_activeBatch.player)+' — '+_failedSaves.length+' of '+newIds.length+' FAILED to save (see popup)', 'var(--red)');
+  } else {
+    st((_activeBatch.name||_activeBatch.player)+' — '+_activeBatch.replays.length+' replays total', 'var(--green)');
+  }
   loadBatches();
   // Temp batches: skip RPS entirely, only show deck viewer for both players
   if (_activeBatch.isTemp) {
