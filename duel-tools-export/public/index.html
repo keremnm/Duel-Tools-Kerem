@@ -13763,7 +13763,7 @@ async function eventsRenderDeckCards(container, deck, eventCode, trackedPlayer) 
     // priority than a decklist-derived classification and gets overwritten
     // automatically the moment a decklist for this deck does get fetched
     // (see upsertEventDeckType in server.js).
-    if (isMinerRole() && deck.deckId && eventCode && trackedPlayer && trackedPlayer.batchIds && trackedPlayer.batchIds.length) {
+    if (isMinerRole(_userRole) && deck.deckId && eventCode && trackedPlayer && trackedPlayer.batchIds && trackedPlayer.batchIds.length) {
       try {
         const fulls = await Promise.all(trackedPlayer.batchIds.map(id =>
           fetch(API+'/batches/'+id, { headers: authHeaders() }).then(r=>r.json()).catch(()=>null)
@@ -13828,7 +13828,7 @@ async function eventsRenderDeckCards(container, deck, eventCode, trackedPlayer) 
   // Events tab, Metagame Stats, Matchup Matrix, and that player's replay
   // rows all end up agreeing on one deck type instead of each showing
   // whatever source happened to populate them first.
-  if (isMinerRole() && deck.deckId && eventCode) {
+  if (isMinerRole(_userRole) && deck.deckId && eventCode) {
     try {
       const cardObjects = buildCardObjectsFromPasscodes([...mainPasscodes, ...sidePasscodes]);
       const deckClass = cardObjects.length ? classifyFromCards(cardObjects) : null;
@@ -14986,7 +14986,7 @@ async function openProfile(player, batches, records) {
     const addBtn = document.getElementById('add-to-batch-btn');
     if (addBtn) addBtn.style.display = 'block';
     const _cb = document.getElementById('clean-batch-btn'); if (_cb) _cb.style.display = 'block';
-    if (isMinerRole()) {
+    if (isMinerRole(_userRole)) {
       const _ied = document.getElementById('import-event-data-btn'); if (_ied) _ied.style.display = 'block';
       const _idk = document.getElementById('import-event-decks-btn'); if (_idk) _idk.style.display = 'block';
     }
@@ -14997,7 +14997,7 @@ async function openProfile(player, batches, records) {
   }
 
   const _amb = document.getElementById('profile-add-match-btn');
-  if (_amb) _amb.style.display = isMinerRole() ? 'block' : 'none';
+  if (_amb) _amb.style.display = isMinerRole(_userRole) ? 'block' : 'none';
 
   // Header
   document.getElementById('profile-view-name').textContent = player;
