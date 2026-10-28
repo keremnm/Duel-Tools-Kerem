@@ -924,6 +924,20 @@ function findOrCreateBatchForPlayer(playerEntry) {
   db.batches[id] = batch;
   return batch;
 }
+// Same as findOrCreateBatchForPlayer, but starts from a raw typed name
+// instead of an already-resolved registry entry — used by the manual-match
+// endpoint, where a player typed into a form may or may not already have a
+// profile. Resolves aliases first (so typing a known alias attaches to the
+// existing profile instead of spawning a near-duplicate), and only creates
+// a brand-new batch when the name really is new — the same "a batch with no
+// registry entry is still a profile" rule findPlayerByUsername's own second
+// branch already relies on.
+function findOrCreateBatchForPlayerName(name) {
+  const raw = (name || '').trim();
+  if (!raw) return null;
+  const entry = findPlayerByUsername(raw) || { name: raw, aliases: [] };
+  return findOrCreateBatchForPlayer(entry);
+}
 // A manually-overridden result must trump the raw parsed outcome everywhere,
 // including when a replay gets mirrored into an opponent's batch via
 // cross-linking — otherwise Player A's corrected result (e.g. a DQ ruling)
@@ -1134,6 +1148,67 @@ function applyGlobalOverrideToAllBatchCopies(replayId) {
     if (r) { applyGlobalOverrideToReplay(r, b.player || null); touchedBatchIds.push(b.id); }
   }
   return touchedBatchIds;
+}
+
+// Sets the CANONICAL deck type for one event bracket deck, using OUR
+// classifier (run client-side, see eventsRenderDeckCards / flConfirmImport
+// in index.html) instead of trusting Format Library's own deckTypeName
+// string. Two sources can call this: 'decklist' (classified straight from
+// that deck's own card list — always correct, and always wins) and
+// 'replay' (classified from cards actually seen in a player's games — a
+// fallback used only when no decklist classification exists yet). A lower-
+// priority source is never allowed to clobber a higher one that's already
+// recorded, which is what makes "decklist overrules replay-card guesses,
+// once a decklist shows up" durable rather than a race between whichever
+// code path happens to run last.
+//
+// Once applied, the classification is propagated onto every replay this
+// player has for this event code — via the SAME global, replayId-keyed
+// override registry real manual corrections use (mergeGlobalOverride /
+// applyGlobalOverrideToAllBatchCopies) — so it automatically takes effect
+// everywhere overrides already do: profile matchup tables, GFWL
+// Archive/History, Format Data, the events replays panel. No parallel
+// "deck type" mechanism needed.
+const DECK_TYPE_SOURCE_PRIORITY = { fl: 0, replay: 1, decklist: 2 };
+async function upsertEventDeckType(code, builderName, deckTypeName, source) {
+  const c = (code || '').toUpperCase().trim();
+  const ev = db.events[c];
+  if (!ev) return { ok: false, reason: 'no-event' };
+  const deck = (ev.decks || []).find(d => (d.builderName || '').toLowerCase() === (builderName || '').toLowerCase());
+  if (!deck) return { ok: false, reason: 'no-deck' };
+
+  const curPriority = DECK_TYPE_SOURCE_PRIORITY[deck.deckTypeSource] ?? 0;
+  const newPriority  = DECK_TYPE_SOURCE_PRIORITY[source] ?? 0;
+  if (deck.deckTypeName && newPriority < curPriority) {
+    return { ok: true, applied: false, reason: 'A higher-priority classification is already recorded.', current: deck.deckTypeName, currentSource: deck.deckTypeSource };
+  }
+
+  deck.deckTypeName = deckTypeName;
+  deck.deckTypeSource = source;
+  deck.updatedAt = Date.now();
+
+  let propagated = 0;
+  const touchedBatchIds = new Set();
+  const playerEntry = findPlayerByBuilderName(builderName);
+  if (playerEntry) {
+    const names = playerNames(playerEntry);
+    const batches = Object.values(db.batches).filter(b => names.includes((b.player || '').toLowerCase()));
+    for (const b of batches) {
+      for (const r of (b.replays || [])) {
+        const evId = (r.eventLabel || '').toUpperCase().trim();
+        if (evId !== c) continue;
+        const oppName = r.oppName || (r.parsed && r.parsed.oppName) || null;
+        const merged = mergeGlobalOverride(r.replayId, { myDeckOverride: deckTypeName }, b.player, oppName);
+        if (merged) db.overrides[r.replayId] = merged; else delete db.overrides[r.replayId];
+        applyGlobalOverrideToAllBatchCopies(r.replayId).forEach(id => touchedBatchIds.add(id));
+        propagated++;
+      }
+    }
+  }
+  for (const bid of touchedBatchIds) {
+    try { await saveBatchToPostgres(bid); } catch (e) { console.warn('[events] deck-type propagation save failed for batch', bid, ':', e.message); }
+  }
+  return { ok: true, applied: true, propagated, touchedBatchIds: [...touchedBatchIds] };
 }
 
 // Same as above but for every replayId that has a global override recorded
@@ -2040,6 +2115,81 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, batch);
     });
   }
+  // ── POST /api/matches/manual — record a match with no real DuelingBook
+  // replay behind it (most commonly a GFWL forfeit: a ruling assigned a
+  // win/loss but no game was actually played, so there's nothing to import).
+  // Creates one synthetic replay-shaped record in EACH player's batch —
+  // mirrored result/score, exactly like a real cross-linked replay — so it
+  // shows up identically on both profiles, in Deck Matchups, GFWL History,
+  // etc. Flagged isManual (and manualForfeit when applicable) so the client
+  // can label it and skip anything that assumes a real replay exists.
+  if (parts[0]==='matches' && parts[1]==='manual' && !parts[2] && method==='POST') {
+    if (!isMiner(req)) return json(res, 403, { error: 'Miners and above can add manual matches' });
+    return readBody(req, async data => {
+      const playerA = (data.playerA || '').trim();
+      const playerB = (data.playerB || '').trim();
+      if (!playerA || !playerB) return json(res, 400, { error: 'Both player names are required.' });
+      if (playerA.toLowerCase() === playerB.toLowerCase()) return json(res, 400, { error: 'Players must be different.' });
+      const scoreA = Number(data.scoreA), scoreB = Number(data.scoreB);
+      if (!Number.isInteger(scoreA) || !Number.isInteger(scoreB) || scoreA < 0 || scoreB < 0) {
+        return json(res, 400, { error: 'Enter a valid score for both players.' });
+      }
+      if (scoreA === scoreB) return json(res, 400, { error: "Scores can't be tied — pick an actual winner." });
+      const eventId = (data.eventId || '').trim();
+      const deckA = (data.deckA || '').trim();
+      const deckB = (data.deckB || '').trim();
+      const manualForfeit = !!data.manualForfeit;
+      const note = (data.note || '').trim();
+
+      const batchA = findOrCreateBatchForPlayerName(playerA);
+      const batchB = findOrCreateBatchForPlayerName(playerB);
+      if (!batchA || !batchB) return json(res, 500, { error: 'Could not create or find a profile for one of these players.' });
+      if (batchA.id === batchB.id) return json(res, 400, { error: 'Those two names resolve to the same existing profile.' });
+
+      const resultA = scoreA > scoreB ? 'w' : 'l';
+      const resultB = flipResult(resultA);
+      const replayId = 'manual-' + crypto.randomUUID();
+      const now = Date.now();
+
+      if (!batchA.replays) batchA.replays = [];
+      batchA.replays.push({
+        replayId, isManual: true, manualForfeit, manualNote: note,
+        plays: [], allPlays: [],
+        parsed: {
+          oppName: batchB.player, result: resultA,
+          score: `${scoreA}-${scoreB}`, myW: scoreA, oppW: scoreB, draws: 0,
+          myDeck: deckA || 'Unknown', oppDeck: deckB || 'Unknown',
+          games: [], allMine: [], allOpp: [],
+        },
+        timedOut: false, eventLabel: eventId, oppName: batchB.player,
+        crossLinked: true, savedAt: now,
+      });
+      batchA.status = 'ready';
+
+      if (!batchB.replays) batchB.replays = [];
+      batchB.replays.push({
+        replayId, isManual: true, manualForfeit, manualNote: note,
+        plays: [], allPlays: [],
+        parsed: {
+          oppName: batchA.player, result: resultB,
+          score: `${scoreB}-${scoreA}`, myW: scoreB, oppW: scoreA, draws: 0,
+          myDeck: deckB || 'Unknown', oppDeck: deckA || 'Unknown',
+          games: [], allMine: [], allOpp: [],
+        },
+        timedOut: false, eventLabel: eventId, oppName: batchA.player,
+        crossLinked: true, savedAt: now,
+      });
+      batchB.status = 'ready';
+
+      await saveBatchToPostgres(batchA.id);
+      await saveBatchToPostgres(batchB.id);
+      logChange(req, 'add_manual_match', {
+        replayId, playerA: batchA.player, playerB: batchB.player,
+        scoreA, scoreB, eventId, manualForfeit, note,
+      });
+      return json(res, 200, { ok: true, replayId, batchAId: batchA.id, batchBId: batchB.id, playerA: batchA.player, playerB: batchB.player });
+    });
+  }
   // ── GET /api/batches/:id ────────────────────────────────────────────────────
   // This is the exact call Deck Viewer makes every time a batch is opened or
   // the page is reloaded — which is why it re-reads the row straight from
@@ -2613,6 +2763,40 @@ const server = http.createServer(async (req, res) => {
       eventDate: ev.date || (db.eventDates[code]||{}).date || '',
       deck,
       trackedPlayer,
+    });
+  }
+
+  // ── PATCH /api/events/:code/deck/:deckId/decktype — set the canonical,
+  // OUR-RULES deck type for one event bracket deck (see upsertEventDeckType
+  // above for the full priority/propagation behavior). Called client-side
+  // right after a decklist's cards are classified — by the Events tab when
+  // a miner+ opens that deck, and by the Format Library decklist-import
+  // flow when a player's eventDecklist gets classified on import.
+  if (parts[0]==='events' && parts[1] && parts[2]==='deck' && parts[3] && parts[4]==='decktype' && method==='PATCH') {
+    if (!isMiner(req)) return json(res, 403, { error: 'Miners and above only' });
+    const code = decodeURIComponent(parts[1]).toUpperCase();
+    const deckId = decodeURIComponent(parts[3]);
+    return readBody(req, async data => {
+      const deckTypeName = (data.deckTypeName || '').trim();
+      const source = data.source === 'replay' ? 'replay' : 'decklist';
+      if (!deckTypeName) return json(res, 400, { error: 'deckTypeName is required.' });
+      const ev = db.events[code];
+      if (!ev) return json(res, 404, { error: 'No data for this event yet.' });
+      const deck = (ev.decks||[]).find(d => String(d.deckId) === String(deckId));
+      if (!deck) return json(res, 404, { error: 'Deck not found in this event.' });
+
+      const result = await upsertEventDeckType(code, deck.builderName, deckTypeName, source);
+      if (!result.ok) return json(res, 404, { error: 'Could not apply classification.' });
+      if (result.applied) {
+        await saveDB('events');
+        logChange(req, 'set_event_deck_type', {
+          code, deckId, builderName: deck.builderName, deckTypeName, source, propagated: result.propagated,
+        });
+      }
+      return json(res, 200, {
+        ok: true, applied: result.applied, deckTypeName: deck.deckTypeName, source: deck.deckTypeSource,
+        propagated: result.propagated || 0, reason: result.reason,
+      });
     });
   }
 
@@ -4091,17 +4275,22 @@ function captureEventTopDecks(code, flData) {
 
     const decks = rawDecks.map(d => {
       const prior = (existing.decks||[]).find(x => String(x.deckId) === String(d.id));
+      const priorSource = prior && prior.deckTypeSource;
+      // OUR classification (from a decklist's own cards, or as a fallback
+      // from cards seen in replays — see upsertEventDeckType) always
+      // outranks Format Library's own deckTypeName string. A routine
+      // re-capture of this bracket must never regress an already-classified
+      // deck back to whatever FL happens to label it — FL's value is only
+      // ever used as the lowest-priority fallback, same priority rule
+      // upsertEventDeckType enforces for its two sources.
+      const ourClassification = (priorSource === 'decklist' || priorSource === 'replay') ? prior.deckTypeName : null;
       return {
         deckId: d.id,
         builderName: d.builderName || '',
         placement: (d.placement != null) ? d.placement : null,
         placeNum: placementNum(d.placement),
-        // Once a deck type is known, keep it — don't let a re-capture regress
-        // it to blank just because Format Library's response that day didn't
-        // include it. A fresh non-blank value from FL still always wins, so a
-        // deck that was missing its type gets filled in the moment any
-        // capture (including one triggered by an FL import) returns it.
-        deckTypeName: d.deckTypeName || (prior && prior.deckTypeName) || '',
+        deckTypeName: ourClassification || d.deckTypeName || (prior && prior.deckTypeName) || '',
+        deckTypeSource: ourClassification ? priorSource : (d.deckTypeName ? 'fl' : ((prior && prior.deckTypeSource) || null)),
         ydkData: (prior && prior.ydkData) || undefined, // keep any YDK already cached for this deck
         updatedAt: Date.now(),
       };

@@ -943,6 +943,7 @@ select{cursor:pointer}
             <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px">
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
                 <div class="slbl" style="margin:0">ALL MATCHES</div>
+                <button onclick="openAddMatchModal()" id="profile-add-match-btn" style="margin-left:auto;display:none;background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-weight:bold;font-size:11px;padding:5px 12px;border-radius:6px;cursor:pointer">+ Add Match</button>
               </div>
               <div id="profile-all-matches"></div>
             </div>
@@ -1479,6 +1480,7 @@ select{cursor:pointer}
       <div id="admin-perms-section" style="display:none"></div>
       <div id="admin-sessions-section" style="display:none;flex-direction:column;gap:12px"></div>
       <div id="admin-crosslinks-section" style="display:none"></div>
+      <div id="admin-decktypes-section" style="display:none"></div>
 
       <!-- Log sub-tab — audit trail of who did what to whose data -->
       <div id="admin-log-section" style="display:none;flex-direction:column;gap:16px">
@@ -7028,6 +7030,18 @@ async function flConfirmImport() {
             const cardObjects = buildCardObjectsFromPasscodes(passcodes);
             const deckClass = cardObjects.length ? classifyFromCards(cardObjects) : null;
             entry.deckTypeOverride = (deckClass && deckClass.dc) || deckTypeName || undefined;
+            if (deckClass && deckClass.dc) {
+              // Propagate this decklist-derived classification (OUR rules,
+              // not Format Library's own deckTypeName) to the event's
+              // bracket entry + every replay this player has for this
+              // event — see PATCH /api/events/:code/deck/:deckId/decktype.
+              // Fire-and-forget: a slow/offline event sync should never
+              // block the decklist import itself.
+              fetch(API+'/events/'+encodeURIComponent(eventId)+'/deck/'+encodeURIComponent(deckId)+'/decktype', {
+                method: 'PATCH', headers: authHeaders(),
+                body: JSON.stringify({ deckTypeName: deckClass.dc, source: 'decklist' })
+              }).catch(()=>{});
+            }
             try { entry.ydkData = btoa(unescape(encodeURIComponent(ydkText))); } catch(e) { entry.ydkData = btoa(ydkText); }
             entry.ydkFileName = eventId + '.ydk';
           } else if (deckTypeName) {
@@ -10380,6 +10394,219 @@ async function renderMatchDisplay(m) {
   });
 }
 
+// ── Add Match modal — manually records a match with no real DuelingBook
+// replay behind it (mainly GFWL forfeits: a ruling assigned a win/loss but
+// no game was actually played). Saves via POST /api/matches/manual, which
+// writes a mirrored record into BOTH players' profiles — see that route in
+// server.js for how the two sides are linked. ───────────────────────────────
+function openAddMatchModal() {
+  const existing = document.getElementById('add-match-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'add-match-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:420px;width:100%;display:flex;flex-direction:column;gap:12px;max-height:90vh;overflow-y:auto';
+
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;gap:8px';
+  hdr.innerHTML = '<span style="font-family:monospace;font-weight:bold;font-size:13px;color:var(--amber)">Add Match</span>';
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = 'margin-left:auto;background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer';
+  closeBtn.onclick = () => overlay.remove();
+  hdr.appendChild(closeBtn);
+  box.appendChild(hdr);
+
+  const desc = document.createElement('div');
+  desc.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace';
+  desc.textContent = "Manually record a match — mainly for GFWL forfeits, where a win/loss was assigned but no game was actually played. Saves to both players' profiles.";
+  box.appendChild(desc);
+
+  const mkField = (label, placeholder, value) => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;gap:3px;position:relative';
+    const lbl = document.createElement('span'); lbl.textContent = label; lbl.style.cssText = 'color:var(--muted);font-size:10px';
+    const inp = document.createElement('input');
+    inp.type = 'text'; inp.placeholder = placeholder || ''; inp.value = value || '';
+    inp.style.cssText = 'width:100%;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:13px;padding:7px 8px;border-radius:5px;outline:none;box-sizing:border-box';
+    wrap.appendChild(lbl); wrap.appendChild(inp);
+    return { wrap, inp };
+  };
+
+  const prefillPlayer = (_activeProfile && _activeProfile.player) || '';
+  const playerAField = mkField('Player A', 'e.g. goat_lothy', prefillPlayer);
+  const playerBField = mkField('Player B (opponent)', 'e.g. Tuzik!');
+  box.appendChild(playerAField.wrap);
+  box.appendChild(playerBField.wrap);
+
+  // Lightweight autocomplete dropdown for both name fields, reusing the
+  // existing player registry — same idea as the FL import panel's
+  // flOnDtPlayerSearch, just inlined here for two fields instead of one.
+  function attachPlayerAutocomplete(field) {
+    const dd = document.createElement('div');
+    dd.style.cssText = 'display:none;position:absolute;left:0;top:100%;background:var(--panel);border:1px solid var(--border);border-radius:6px;max-height:160px;overflow-y:auto;z-index:100000;box-shadow:0 4px 20px rgba(0,0,0,.5)';
+    field.wrap.appendChild(dd);
+    field.inp.oninput = () => {
+      const q = field.inp.value.trim().toLowerCase();
+      if (!q) { dd.style.display = 'none'; return; }
+      const matches = Object.values(window._playerRegistry||{})
+        .filter(p => p.name && (p.name.toLowerCase().includes(q) || (p.aliases||[]).some(a=>a.toLowerCase().includes(q))))
+        .slice(0, 8);
+      if (!matches.length) { dd.style.display = 'none'; return; }
+      dd.innerHTML = '';
+      dd.style.display = 'block';
+      dd.style.width = field.inp.offsetWidth + 'px';
+      matches.forEach(p => {
+        const item = document.createElement('div');
+        item.style.cssText = 'padding:6px 10px;cursor:pointer;font-size:12px;border-bottom:1px solid var(--border)';
+        item.onmouseover = () => item.style.background = 'var(--card2)';
+        item.onmouseout  = () => item.style.background = '';
+        item.textContent = p.name + ((p.aliases||[]).length ? ' (aka ' + p.aliases.join(', ') + ')' : '');
+        item.onclick = () => { field.inp.value = p.name; dd.style.display = 'none'; };
+        dd.appendChild(item);
+      });
+    };
+    document.addEventListener('click', e => { if (!field.wrap.contains(e.target)) dd.style.display = 'none'; });
+  }
+  attachPlayerAutocomplete(playerAField);
+  attachPlayerAutocomplete(playerBField);
+
+  const eventField = mkField('Event ID', 'e.g. S9: WK 3, or LCQ22026');
+  box.appendChild(eventField.wrap);
+
+  // Deck type fields — optional, free text with suggestions from the known
+  // archetype list (DECK_COLORS) so this behaves like a loose "select"
+  // without blocking a deck name that isn't in that list.
+  const deckListId = 'add-match-deck-types';
+  let deckList = document.getElementById(deckListId);
+  if (!deckList) {
+    deckList = document.createElement('datalist');
+    deckList.id = deckListId;
+    Object.keys(DECK_COLORS).forEach(d => { const o = document.createElement('option'); o.value = d; deckList.appendChild(o); });
+    document.body.appendChild(deckList);
+  }
+  const deckRow = document.createElement('div');
+  deckRow.style.cssText = 'display:flex;gap:8px';
+  const deckAField = mkField('Player A Deck (optional)', 'Deck type…');
+  const deckBField = mkField('Player B Deck (optional)', 'Deck type…');
+  deckAField.inp.setAttribute('list', deckListId);
+  deckBField.inp.setAttribute('list', deckListId);
+  deckAField.wrap.style.flex = '1'; deckBField.wrap.style.flex = '1';
+  deckRow.appendChild(deckAField.wrap); deckRow.appendChild(deckBField.wrap);
+  box.appendChild(deckRow);
+
+  const scoreRow = document.createElement('div');
+  scoreRow.style.cssText = 'display:flex;align-items:center;gap:8px;font-family:monospace;font-size:12px;flex-wrap:wrap';
+  const mkScoreField = (label) => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;gap:3px';
+    const lbl = document.createElement('span'); lbl.textContent = label; lbl.style.cssText = 'color:var(--muted);font-size:10px';
+    const inp = document.createElement('input');
+    inp.type = 'number'; inp.min = '0'; inp.max = '9'; inp.value = 0;
+    inp.style.cssText = 'width:64px;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:14px;padding:6px;border-radius:5px;outline:none;box-sizing:border-box';
+    wrap.appendChild(lbl); wrap.appendChild(inp);
+    return { wrap, inp };
+  };
+  const scoreAField = mkScoreField('Score A');
+  const scoreBField = mkScoreField('Score B');
+  const dash = document.createElement('span'); dash.textContent = '–'; dash.style.cssText = 'color:var(--muted);margin-top:14px';
+  scoreRow.appendChild(scoreAField.wrap); scoreRow.appendChild(dash); scoreRow.appendChild(scoreBField.wrap);
+  box.appendChild(scoreRow);
+
+  // Manually Forfeited toggle — same kind of explicit, labeled flag as a
+  // result override's required reason, just a one-click toggle instead of
+  // free text since it's the overwhelmingly common reason to use this form.
+  const forfeitBtn = document.createElement('button');
+  let manualForfeit = false;
+  const renderForfeitBtn = () => {
+    forfeitBtn.textContent = manualForfeit ? '⚠ Manually Forfeited' : 'Mark as Manually Forfeited';
+    forfeitBtn.style.cssText = 'text-align:left;background:' + (manualForfeit ? 'var(--red)' : 'none') + ';color:' + (manualForfeit ? '#fff' : 'var(--muted)') + ';border:1px solid ' + (manualForfeit ? 'var(--red)' : 'var(--border)') + ';font-family:monospace;font-weight:bold;font-size:12px;padding:8px 10px;border-radius:6px;cursor:pointer';
+  };
+  renderForfeitBtn();
+  forfeitBtn.onclick = () => { manualForfeit = !manualForfeit; renderForfeitBtn(); };
+  box.appendChild(forfeitBtn);
+
+  const noteLbl = document.createElement('div');
+  noteLbl.textContent = 'Notes:';
+  noteLbl.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace';
+  box.appendChild(noteLbl);
+  const noteInput = document.createElement('textarea');
+  noteInput.placeholder = 'e.g. Player B no-showed round 4, ruled a 2-0 forfeit loss by the TO...';
+  noteInput.style.cssText = 'width:100%;min-height:60px;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:8px;border-radius:6px;outline:none;resize:vertical;box-sizing:border-box';
+  box.appendChild(noteInput);
+
+  const errEl = document.createElement('div');
+  errEl.style.cssText = 'font-size:11px;color:var(--red);min-height:14px;font-family:monospace';
+  box.appendChild(errEl);
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px';
+  const saveBtn = document.createElement('button');
+  saveBtn.textContent = 'Save Match';
+  saveBtn.style.cssText = 'flex:1;background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:13px;padding:10px;border-radius:6px;cursor:pointer';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:13px;padding:10px 16px;border-radius:6px;cursor:pointer';
+  cancelBtn.onclick = () => overlay.remove();
+  btnRow.appendChild(saveBtn); btnRow.appendChild(cancelBtn);
+  box.appendChild(btnRow);
+
+  saveBtn.onclick = async () => {
+    errEl.textContent = '';
+    const playerA = playerAField.inp.value.trim();
+    const playerB = playerBField.inp.value.trim();
+    const scoreA = parseInt(scoreAField.inp.value, 10);
+    const scoreB = parseInt(scoreBField.inp.value, 10);
+    if (!playerA || !playerB) { errEl.textContent = 'Both player names are required.'; return; }
+    if (playerA.toLowerCase() === playerB.toLowerCase()) { errEl.textContent = 'Players must be different.'; return; }
+    if (isNaN(scoreA) || isNaN(scoreB) || scoreA < 0 || scoreB < 0) { errEl.textContent = 'Enter a valid score for both players.'; return; }
+    if (scoreA === scoreB) { errEl.textContent = "Scores can't be tied — pick an actual winner."; return; }
+    saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
+    try {
+      const res = await fetch(API+'/matches/manual', {
+        method: 'POST', headers: authHeaders(),
+        body: JSON.stringify({
+          playerA, playerB,
+          eventId: eventField.inp.value.trim(),
+          deckA: deckAField.inp.value.trim(),
+          deckB: deckBField.inp.value.trim(),
+          scoreA, scoreB,
+          manualForfeit,
+          note: noteInput.value.trim(),
+        })
+      });
+      const d = await res.json().catch(()=>({}));
+      if (!res.ok || !d.ok) { errEl.textContent = d.error || 'Failed to save match.'; saveBtn.disabled = false; saveBtn.textContent = 'Save Match'; return; }
+      overlay.remove();
+      st('Match added to both profiles.', 'var(--green)');
+      // Refresh whichever profile is currently open so the new match shows
+      // up immediately — force openProfile's full rebuild path (not its
+      // _matches-reuse fast path) by clearing _activeBatch/_matches first,
+      // so isManual/manualForfeit/manualNote and the chosen deck types are
+      // picked up instead of silently dropped (see openProfile's fast path).
+      const reopenPlayer = (_activeProfile && _activeProfile.player === d.playerA) ? d.playerA
+        : (_activeProfile && _activeProfile.player === d.playerB) ? d.playerB : null;
+      if (reopenPlayer) {
+        _matches = null; _activeBatch = null;
+        await loadProfiles();
+        const freshBatches = (_allProfileBatches||[]).filter(b => (b.player||'').toLowerCase() === reopenPlayer.toLowerCase());
+        if (freshBatches.length) await openProfile(reopenPlayer, freshBatches, []);
+      }
+    } catch(e) {
+      errEl.textContent = 'Request failed: ' + e.message;
+      saveBtn.disabled = false; saveBtn.textContent = 'Save Match';
+    }
+  };
+
+  overlay.appendChild(box);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+  setTimeout(() => playerBField.inp.focus(), 50);
+}
+
 // ── Result override modal — collects the corrected game score + a required
 // explanation, instead of just flipping W/L with no record of why. ──────────
 function showResultOverrideModal(m) {
@@ -11341,6 +11568,36 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
     const evDecks = getEventDecks(player);
     const match = evDecks && evDecks.find(d => d.code === code || d.code === eventLabel.trim().toUpperCase());
     return match ? (match.deckTypeOverride || null) : null;
+  }
+
+  // Manual match entry (no real DuelingBook replay behind it — see
+  // POST /api/matches/manual, used mainly for GFWL forfeits). There's no
+  // card data to classify a deck from and nothing earlier to overlay an
+  // override on top of — the entry itself already IS the final record, so
+  // it's used exactly as recorded instead of falling into the games-based
+  // fast path below (which requires at least one played game) or the
+  // legacy allPlays path (which would find no RPS play and drop the match
+  // entirely).
+  if (replayResult.isManual && replayResult.parsed) {
+    const p = replayResult.parsed;
+    return {
+      replayId, player,
+      oppName: p.oppName || replayResult.oppName || '',
+      eventLabel: replayResult.eventLabel || '',
+      myDeck: p.myDeck || 'Unknown',
+      oppDeck: p.oppDeck || 'Unknown',
+      myDeckConf: 'Manual', oppDeckConf: 'Manual',
+      matchWon: p.result === 'w',
+      matchLost: p.result === 'l',
+      result: p.result,
+      score: p.score,
+      myW: p.myW, oppW: p.oppW, draws: p.draws || 0,
+      isManual: true,
+      manualForfeit: !!replayResult.manualForfeit,
+      manualNote: replayResult.manualNote || '',
+      games: [], allMine: [], allOpp: [], allMyCards: [],
+      mergedReplays: [],
+    };
   }
 
   // Fast path: use pre-parsed data if available
@@ -13489,17 +13746,53 @@ async function eventsShowDeck(code, deckId) {
   if (dlBtn) dlBtn.onclick = () => downloadYDK({ ydkData: deck.ydkData, code: code, ydkFileName: (deck.builderName||code)+'-'+code+'.ydk' });
   if (openLink) openLink.href = 'https://www.formatlibrary.com/decks/'+deck.deckId;
 
-  await eventsRenderDeckCards(cardsEl, deck);
+  await eventsRenderDeckCards(cardsEl, deck, code, data.trackedPlayer);
   eventsRenderReplaysPanel(replaysEl, code, data.trackedPlayer, deck.builderName);
 }
 
 // Renders a normal YDK-style card grid — one tile per physical copy, fixed
 // 10-per-row — matching the convention already established by the
 // per-player "View" popup in showDeckViewPopup().
-async function eventsRenderDeckCards(container, deck) {
+async function eventsRenderDeckCards(container, deck, eventCode, trackedPlayer) {
   if (!container) return;
   if (!deck.ydkData) {
     container.innerHTML = '<div style="color:var(--muted);font-size:12px">No card data cached for this deck yet — a miner+ account needs to open it once to fetch it from Format Library.</div>';
+    // Fallback (no decklist on file yet): judge the deck type from cards
+    // actually seen across this player's own replays for this event, using
+    // OUR classifier — tagged source:'replay' server-side, so it's a lower
+    // priority than a decklist-derived classification and gets overwritten
+    // automatically the moment a decklist for this deck does get fetched
+    // (see upsertEventDeckType in server.js).
+    if (isMinerRole() && deck.deckId && eventCode && trackedPlayer && trackedPlayer.batchIds && trackedPlayer.batchIds.length) {
+      try {
+        const fulls = await Promise.all(trackedPlayer.batchIds.map(id =>
+          fetch(API+'/batches/'+id, { headers: authHeaders() }).then(r=>r.json()).catch(()=>null)
+        ));
+        let allCards = [];
+        for (const b of fulls) {
+          if (!b || !b.replays) continue;
+          for (const r of b.replays) {
+            const evId = (r.eventLabel||r.eventId||'').toUpperCase();
+            if (evId !== eventCode.toUpperCase()) continue;
+            const mine = (r.parsed && r.parsed.allMine) || [];
+            allCards = allCards.concat(mine);
+          }
+        }
+        const deckClass = allCards.length ? classifyFromCards(allCards) : null;
+        if (deckClass && deckClass.dc && !(deck.deckTypeName === deckClass.dc && deck.deckTypeSource === 'replay')) {
+          const dtRes = await fetch(API+'/events/'+encodeURIComponent(eventCode)+'/deck/'+encodeURIComponent(deck.deckId)+'/decktype', {
+            method: 'PATCH', headers: authHeaders(),
+            body: JSON.stringify({ deckTypeName: deckClass.dc, source: 'replay' })
+          });
+          const dtData = await dtRes.json().catch(()=>({}));
+          if (dtRes.ok && dtData.applied) {
+            deck.deckTypeName = deckClass.dc;
+            const titleEl = document.getElementById('events-deck-title');
+            if (titleEl) titleEl.textContent = deckClass.dc;
+          }
+        }
+      } catch(e) { console.warn('[events] replay-based deck classification failed:', e.message); }
+    }
     return;
   }
   let ydkText;
@@ -13524,6 +13817,40 @@ async function eventsRenderDeckCards(container, deck) {
 
   container.innerHTML = '<div style="color:var(--muted);font-size:12px">Loading card images…</div>';
   try { await lookupPasscodeNames([...mainPasscodes, ...sidePasscodes]); } catch(e) {}
+
+  // Classify this decklist using OUR deck-detection rules (not Format
+  // Library's own deckTypeName) and persist it as the canonical deck type
+  // for this event+player — same classifier already used for Format Library
+  // decklist imports and replay card data. The server always lets a
+  // decklist-derived classification win over a replay-card-derived guess,
+  // and propagates it onto every replay this player has for this event (see
+  // PATCH /api/events/:code/deck/:deckId/decktype in server.js), so the
+  // Events tab, Metagame Stats, Matchup Matrix, and that player's replay
+  // rows all end up agreeing on one deck type instead of each showing
+  // whatever source happened to populate them first.
+  if (isMinerRole() && deck.deckId && eventCode) {
+    try {
+      const cardObjects = buildCardObjectsFromPasscodes([...mainPasscodes, ...sidePasscodes]);
+      const deckClass = cardObjects.length ? classifyFromCards(cardObjects) : null;
+      // Still send this even when the name happens to already match — what
+      // matters for the priority rule is the SOURCE tag landing as
+      // 'decklist' server-side, not just the displayed name, otherwise a
+      // coincidental name match here would leave it vulnerable to being
+      // overwritten later by a lower-priority replay-card guess.
+      if (deckClass && deckClass.dc && !(deck.deckTypeName === deckClass.dc && deck.deckTypeSource === 'decklist')) {
+        const dtRes = await fetch(API+'/events/'+encodeURIComponent(eventCode)+'/deck/'+encodeURIComponent(deck.deckId)+'/decktype', {
+          method: 'PATCH', headers: authHeaders(),
+          body: JSON.stringify({ deckTypeName: deckClass.dc, source: 'decklist' })
+        });
+        const dtData = await dtRes.json().catch(()=>({}));
+        if (dtRes.ok && dtData.applied) {
+          deck.deckTypeName = deckClass.dc;
+          const titleEl = document.getElementById('events-deck-title');
+          if (titleEl) titleEl.textContent = deckClass.dc;
+        }
+      }
+    } catch(e) { console.warn('[events] deck classification failed:', e.message); }
+  }
 
   // Sort only (no grouping/dedup) — one tile per physical copy, same as a
   // normal YDK deck-viewer layout (and matching showDeckViewPopup's convention).
@@ -13589,35 +13916,64 @@ async function eventsRenderDeckCards(container, deck) {
     return grid;
   }
 
-  container.innerHTML = '';
-  // Card tiles stay a fixed 64px (a wider auto-stretched grid was the
-  // original complaint), so on a wide window the grid is narrower than this
-  // panel. Centering it — instead of leaving it stranded against the left
-  // edge with a dead gap to its right — is what actually uses that space.
   container.style.display = 'flex';
   container.style.flexDirection = 'column';
   container.style.alignItems = 'center';
   const sortedMain = sortPasscodesByType(mainPasscodes);
   const sortedSide = sortPasscodesByType(sidePasscodes);
-  const MAIN_TILE = 64, MAIN_GAP = 5, MAIN_PER_ROW = 10;
-  const mainRowWidth = MAIN_PER_ROW * MAIN_TILE + (MAIN_PER_ROW - 1) * MAIN_GAP;
-  if (sortedMain.length) {
-    const t = document.createElement('div'); t.style.cssText='font-size:11px;color:var(--muted);letter-spacing:.1em;margin-bottom:6px;font-weight:bold'; t.textContent = 'MAIN DECK ('+sortedMain.length+')';
-    container.appendChild(t);
-    container.appendChild(renderGrid(sortedMain, MAIN_TILE, MAIN_PER_ROW));
+  const MAIN_PER_ROW = 10;
+  const CARD_PAD = 40; // container's own left+right padding (16px 20px)
+
+  // Tile size scales up to fill the panel's actual available width instead
+  // of staying pinned at a fixed small size — on a wide window the cards
+  // panel (flex:1 next to the 380px replays rail) is often much wider than
+  // a fixed 685px grid, leaving a big dead gap on both sides. Floors at the
+  // original 64px (never smaller/harder to read than before) and caps at
+  // 108px so a single deck on an ultrawide monitor doesn't blow up into
+  // oversized tiles that just push everything into more vertical scrolling.
+  function computeMainTile() {
+    const availW = Math.max(320, (container.clientWidth || 685) - CARD_PAD);
+    return Math.max(64, Math.min(108, Math.floor((availW - (MAIN_PER_ROW - 1) * 5) / MAIN_PER_ROW)));
   }
-  if (sortedSide.length) {
-    // Side deck always fits in a single row, same total width as the main
-    // deck's row — tiles shrink to whatever size makes that many copies fit,
-    // instead of wrapping to a second row (capped at the main tile size so a
-    // short side deck doesn't blow up to oversized tiles).
-    const sideCount = sortedSide.length;
-    const sideGap = sideCount >= 14 ? 4 : 5;
-    const sideTile = Math.max(30, Math.min(MAIN_TILE, Math.floor((mainRowWidth - (sideCount - 1) * sideGap) / sideCount)));
-    const t = document.createElement('div'); t.style.cssText='font-size:11px;color:var(--muted);letter-spacing:.1em;margin:10px 0 6px;font-weight:bold'; t.textContent = 'SIDE DECK ('+sortedSide.length+')';
-    container.appendChild(t);
-    container.appendChild(renderGrid(sortedSide, sideTile, sideCount, sideGap));
+
+  function layoutGrids() {
+    container.innerHTML = '';
+    const MAIN_TILE = computeMainTile(), MAIN_GAP = 5;
+    const mainRowWidth = MAIN_PER_ROW * MAIN_TILE + (MAIN_PER_ROW - 1) * MAIN_GAP;
+    if (sortedMain.length) {
+      const t = document.createElement('div'); t.style.cssText='font-size:11px;color:var(--muted);letter-spacing:.1em;margin-bottom:6px;font-weight:bold'; t.textContent = 'MAIN DECK ('+sortedMain.length+')';
+      container.appendChild(t);
+      container.appendChild(renderGrid(sortedMain, MAIN_TILE, MAIN_PER_ROW, MAIN_GAP));
+    }
+    if (sortedSide.length) {
+      // Side deck always fits in a single row, same total width as the main
+      // deck's row — tiles shrink to whatever size makes that many copies fit,
+      // instead of wrapping to a second row (capped at the main tile size so a
+      // short side deck doesn't blow up to oversized tiles).
+      const sideCount = sortedSide.length;
+      const sideGap = sideCount >= 14 ? 4 : 5;
+      const sideTile = Math.max(30, Math.min(MAIN_TILE, Math.floor((mainRowWidth - (sideCount - 1) * sideGap) / sideCount)));
+      const t = document.createElement('div'); t.style.cssText='font-size:11px;color:var(--muted);letter-spacing:.1em;margin:10px 0 6px;font-weight:bold'; t.textContent = 'SIDE DECK ('+sortedSide.length+')';
+      container.appendChild(t);
+      container.appendChild(renderGrid(sortedSide, sideTile, sideCount, sideGap));
+    }
   }
+
+  layoutGrids();
+
+  // Keep it filling the panel if the window gets resized while this view is
+  // open (e.g. a user docking/undocking the window), without re-fetching
+  // anything — images reload from the browser's own cache since the src
+  // URLs are unchanged. Debounced so a drag-resize doesn't thrash it, and
+  // any previous listener from an earlier deck view is cleaned up first so
+  // these don't pile up across visits to this page.
+  if (container._dtResizeHandler) window.removeEventListener('resize', container._dtResizeHandler);
+  let _dtResizeTimer = null;
+  container._dtResizeHandler = () => {
+    clearTimeout(_dtResizeTimer);
+    _dtResizeTimer = setTimeout(layoutGrids, 150);
+  };
+  window.addEventListener('resize', container._dtResizeHandler);
 }
 
 // Resolves a player's deck type from the CURRENT event's own bracket deck
@@ -14571,12 +14927,16 @@ async function openProfile(player, batches, records) {
     records = _matches.map(m => ({
       replayId: m.replayId, player, oppName: m.oppName,
       eventLabel: m.eventLabel || '',
-      myDeck:  (classifyFromCards(m.allMine)||{dc:'Unknown'}).dc,
-      oppDeck: (classifyFromCards(m.allOpp)||{dc:'Unknown'}).dc,
+      // A manual entry (see POST /api/matches/manual) has no card data to
+      // classify a deck from — use the deck it was recorded with instead of
+      // reclassifying from an empty hand, which would just come back Unknown.
+      myDeck:  m.isManual ? (m.myDeck  || 'Unknown') : (classifyFromCards(m.allMine)||{dc:'Unknown'}).dc,
+      oppDeck: m.isManual ? (m.oppDeck || 'Unknown') : (classifyFromCards(m.allOpp)||{dc:'Unknown'}).dc,
       matchWon: m.result==='w', matchLost: m.result==='l',
       result: m.result, score: m.score, myW: m.myW, oppW: m.oppW, draws: m.draws,
       allMine: m.allMine, allOpp: m.allOpp,
       allMyCards: m.allMine.map(x=>x.name.toLowerCase()),
+      isManual: !!m.isManual, manualForfeit: !!m.manualForfeit, manualNote: m.manualNote || '',
     }));
     // Make sure active batch is in the list
     if (!batches.find(b => b.id === _activeBatch.id)) batches = [_activeBatch, ...batches];
@@ -14635,6 +14995,9 @@ async function openProfile(player, batches, records) {
     }
     loadBatches();
   }
+
+  const _amb = document.getElementById('profile-add-match-btn');
+  if (_amb) _amb.style.display = isMinerRole() ? 'block' : 'none';
 
   // Header
   document.getElementById('profile-view-name').textContent = player;
@@ -14742,16 +15105,35 @@ async function openProfile(player, batches, records) {
       const oppDeck = r.oppDeck && r.oppDeck!=='Unknown' ? r.oppDeck : '';
       const wEl=document.createElement('span'); wEl.style.cssText='color:'+rCol+';font-weight:bold;min-width:28px'; wEl.textContent=(r.matchWon?'W':r.matchLost?'L':'D')+' '+(r.score||'');
       const infoEl=document.createElement('div'); infoEl.style.flex='1';
-      infoEl.innerHTML='vs <strong>'+(r.oppName||'?')+'</strong><div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:2px">'+(myDeck?'<span style="font-size:10px;color:var(--green);border:1px solid var(--green);border-radius:3px;padding:0 5px">'+myDeck+'</span>':'')+(oppDeck?'<span style="font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:3px;padding:0 5px">vs '+oppDeck+'</span>':'')+'</div>';
+      const manualBadge = r.isManual
+        ? '<span style="font-size:10px;color:'+(r.manualForfeit?'var(--red)':'var(--amber)')+';border:1px solid '+(r.manualForfeit?'var(--red)':'var(--amber)')+';border-radius:3px;padding:0 5px">'+(r.manualForfeit?'⚠ Manually Forfeited':'📝 Manual Entry')+'</span>'
+        : '';
+      infoEl.innerHTML='vs <strong>'+(r.oppName||'?')+'</strong><div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:2px">'+(myDeck?'<span style="font-size:10px;color:var(--green);border:1px solid var(--green);border-radius:3px;padding:0 5px">'+myDeck+'</span>':'')+(oppDeck?'<span style="font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:3px;padding:0 5px">vs '+oppDeck+'</span>':'')+manualBadge+'</div>';
       const btns=document.createElement('div'); btns.style.cssText='display:flex;gap:4px;flex-shrink:0';
-      const watchA=document.createElement('a'); watchA.href='https://www.duelingbook.com/replay?id='+r.replayId; watchA.target='_blank'; watchA.onclick=ev=>ev.stopPropagation();
-      watchA.style.cssText='background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;text-decoration:none;white-space:nowrap';
-      watchA.textContent='▶ Watch';
-      const viewBtn=document.createElement('button'); viewBtn.style.cssText='background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:10px;padding:3px 10px;border-radius:4px;cursor:pointer;white-space:nowrap'; viewBtn.textContent='View';
-      viewBtn.onclick=ev=>{ev.stopPropagation();loadEventReplay(r.replayId);};
-      btns.appendChild(watchA); btns.appendChild(viewBtn);
+      if (r.isManual) {
+        // No real DuelingBook replay behind a manual entry (see
+        // POST /api/matches/manual) — nothing to watch or load into the
+        // Analyzer. Show the recorded note instead, if one was given.
+        row.style.cursor = r.manualNote ? 'pointer' : 'default';
+        const showNote = () => alert((r.manualForfeit ? 'Manually Forfeited\n\n' : 'Manual entry\n\n') + (r.manualNote || '(no note given)'));
+        if (r.manualNote) {
+          const noteBtn=document.createElement('button');
+          noteBtn.style.cssText='background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer;white-space:nowrap';
+          noteBtn.textContent='📋 Note';
+          noteBtn.onclick=ev=>{ev.stopPropagation();showNote();};
+          btns.appendChild(noteBtn);
+          row.onclick = showNote;
+        }
+      } else {
+        const watchA=document.createElement('a'); watchA.href='https://www.duelingbook.com/replay?id='+r.replayId; watchA.target='_blank'; watchA.onclick=ev=>ev.stopPropagation();
+        watchA.style.cssText='background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;text-decoration:none;white-space:nowrap';
+        watchA.textContent='▶ Watch';
+        const viewBtn=document.createElement('button'); viewBtn.style.cssText='background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:10px;padding:3px 10px;border-radius:4px;cursor:pointer;white-space:nowrap'; viewBtn.textContent='View';
+        viewBtn.onclick=ev=>{ev.stopPropagation();loadEventReplay(r.replayId);};
+        btns.appendChild(watchA); btns.appendChild(viewBtn);
+        row.onclick=()=>loadEventReplay(r.replayId);
+      }
       row.appendChild(wEl); row.appendChild(infoEl); row.appendChild(btns);
-      row.onclick=()=>loadEventReplay(r.replayId);
       return row;
     }
 
@@ -17645,6 +18027,7 @@ async function renderAdminPage() {
   const permsSection    = document.getElementById('admin-perms-section');
   const sessionsSection = document.getElementById('admin-sessions-section');
   const crosslinksSection = document.getElementById('admin-crosslinks-section');
+  const decktypesSection = document.getElementById('admin-decktypes-section');
   const logSection = document.getElementById('admin-log-section');
   if (!tabBar || !usersSection) return;
 
@@ -17668,8 +18051,8 @@ async function renderAdminPage() {
 
   // Tab buttons — bigger, roomier than the old modal's
   tabBar.innerHTML = '';
-  const ADMIN_TAB_KEYS = { 'Users':'users', 'Roles & Permissions':'perms', 'Sessions':'sessions', 'Cross-Links':'crosslinks', 'Log':'log' };
-  ['Users','Roles & Permissions','Sessions','Cross-Links','Log'].forEach(tab => {
+  const ADMIN_TAB_KEYS = { 'Users':'users', 'Roles & Permissions':'perms', 'Sessions':'sessions', 'Cross-Links':'crosslinks', 'Deck Types':'decktypes', 'Log':'log' };
+  ['Users','Roles & Permissions','Sessions','Cross-Links','Deck Types','Log'].forEach(tab => {
     const tb = document.createElement('button');
     tb.textContent = tab;
     tb.style.cssText = 'background:none;border:none;font-family:monospace;font-size:15px;cursor:pointer;padding:9px 18px;border-radius:6px;color:var(--muted)';
@@ -17683,6 +18066,8 @@ async function renderAdminPage() {
       else sessionsSection.style.display = 'none';
       if (_adminTab === 'crosslinks') { crosslinksSection.style.display='block'; loadCrosslinksSection(crosslinksSection); }
       else crosslinksSection.style.display = 'none';
+      if (_adminTab === 'decktypes') { decktypesSection.style.display='block'; loadDeckTypesSection(decktypesSection); }
+      else if (decktypesSection) decktypesSection.style.display = 'none';
       if (_adminTab === 'log') { logSection.style.display='flex'; loadEditLog(); }
       else if (logSection) logSection.style.display = 'none';
     };
@@ -17912,6 +18297,188 @@ async function runCrosslinkScan() {
     res.textContent = '✗ Error: ' + e.message;
   }
   btn.disabled = false; btn.textContent = '🔗 Scan & Link All Replays';
+}
+
+// ── Admin tool: Deck Type Recheck ────────────────────────────────────────
+// Re-runs OUR deck classifier (classifyFromCards — same rules the Events
+// tab, Format Library import, and player profiles now use live) against
+// every decklist already cached ANYWHERE in the system, and re-saves any
+// whose label comes out different. Two separate stores feed deck-type
+// labels across the app, so this runs two passes:
+//   1. Event bracket decks (db.events[code].decks[]) — drives the Events
+//      tab's decklist cards, Metagame Stats, and the event's own Matchup
+//      Matrix. Classification here also propagates onto that player's
+//      replays for the event (see upsertEventDeckType in server.js), which
+//      is what feeds their profile's own matchup table for that event too.
+//   2. Player-attached decklists (db.players[x].eventDecklists[]) — the
+//      "Event Decklists" panel on a Player Profile. These feed that
+//      player's Deck Matchups table and GFWL/Format Data reports directly
+//      via getEventDeckType(), independent of whether an event bracket
+//      entry also exists for the same code.
+// Both are what "the data is valid" depends on, so both get rechecked.
+//
+// Scoped to decklists ALREADY cached — it does not go fetch new ones from
+// Format Library, so it can't blow through FL's rate limits. A deck with no
+// cached decklist still only gets classified the normal way (someone
+// opening it, which lazily fetches it, or the replay-card fallback).
+function loadDeckTypesSection(el) {
+  el.innerHTML =
+    '<div style="font-size:15px;color:var(--text);margin-bottom:14px">' +
+      '<b>Deck Type Recheck</b>' +
+      '<div style="font-size:13px;color:var(--muted);margin-top:8px;line-height:1.6">' +
+        'Re-runs our own deck-detection rules against every decklist already cached — both event bracket ' +
+        'decks (Events tab, Metagame Stats, Matchup Matrix) and player-attached decklists (Player Profile ' +
+        '→ Event Decklists, which feeds that player\'s own Deck Matchups table) — and updates any whose ' +
+        'label comes out different. Only touches decklists already on file; it won\'t fetch new ones from ' +
+        'Format Library. Safe to run multiple times; this can take several minutes for a large dataset.' +
+      '</div>' +
+    '</div>' +
+    '<div id="dt-recheck-result" style="font-size:13.5px;color:var(--muted);min-height:22px;margin:12px 0"></div>' +
+    '<button id="dt-recheck-btn" onclick="runDeckTypeRecheck()" style="background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:14px;padding:11px 24px;border-radius:6px;cursor:pointer">' +
+      '🔄 Recheck All Deck Types' +
+    '</button>';
+}
+
+// Decode + resolve + classify one base64 YDK blob with OUR rules. Returns
+// the classified deck type name, or null if there's nothing usable to
+// classify from (bad data, empty deck, no confident match).
+async function _dtClassifyYdk(ydkDataB64) {
+  if (!ydkDataB64) return null;
+  let ydkText;
+  try { ydkText = decodeURIComponent(escape(atob(ydkDataB64))); }
+  catch(e) { try { ydkText = atob(ydkDataB64); } catch(e2) { return null; } }
+  const passcodes = parseYDK(ydkText);
+  if (!passcodes.length) return null;
+  await lookupPasscodeNames(passcodes);
+  const cardObjects = buildCardObjectsFromPasscodes(passcodes);
+  const deckClass = cardObjects.length ? classifyFromCards(cardObjects) : null;
+  return (deckClass && deckClass.dc) || null;
+}
+
+async function runDeckTypeRecheck() {
+  const btn = document.getElementById('dt-recheck-btn');
+  const res = document.getElementById('dt-recheck-result');
+  if (!btn || !res) return;
+  btn.disabled = true; btn.textContent = '⏳ Checking...';
+  res.style.color = 'var(--muted)';
+  res.textContent = 'Loading event + player lists…';
+
+  let evChecked=0, evUpdated=0, evSkipped=0, evErrors=0;
+  let plChecked=0, plUpdated=0, plSkipped=0, plErrors=0;
+  let evTotal=0, plTotal=0;
+  const updateStatus = (extra) => {
+    res.textContent =
+      'Event brackets: ' + evChecked + '/' + evTotal + ' checked, ' + evUpdated + ' updated' +
+      ' · Player decklists: ' + plChecked + '/' + plTotal + ' checked, ' + plUpdated + ' updated' +
+      (extra ? ' — ' + extra : '') + '…';
+  };
+
+  try {
+    // ══ Phase 1: event bracket decklists (db.events) ═══════════════════
+    const evRes = await fetch(API+'/events', { headers: authHeaders() });
+    const evList = ((await evRes.json()).events) || [];
+    const evWork = [];
+    for (const ev of evList) {
+      try {
+        const dRes = await fetch(API+'/events/'+encodeURIComponent(ev.code), { headers: authHeaders() });
+        const dData = await dRes.json();
+        for (const d of (dData.decks||[])) {
+          if (d.hasCards) evWork.push({ code: ev.code, deckId: d.deckId });
+        }
+      } catch(e) { evErrors++; }
+    }
+    evTotal = evWork.length;
+    updateStatus('starting event brackets');
+
+    const EV_CONCURRENCY = 5;
+    let evIdx = 0;
+    async function evWorker() {
+      while (evIdx < evWork.length) {
+        const item = evWork[evIdx++];
+        try {
+          const full = await fetch(API+'/events/'+encodeURIComponent(item.code)+'/deck/'+encodeURIComponent(item.deckId), { headers: authHeaders() }).then(r=>r.json());
+          const deck = full.deck;
+          const dc = deck ? await _dtClassifyYdk(deck.ydkData) : null;
+          if (dc && !(deck.deckTypeName === dc && deck.deckTypeSource === 'decklist')) {
+            const dtRes = await fetch(API+'/events/'+encodeURIComponent(item.code)+'/deck/'+encodeURIComponent(item.deckId)+'/decktype', {
+              method: 'PATCH', headers: authHeaders(),
+              body: JSON.stringify({ deckTypeName: dc, source: 'decklist' })
+            });
+            const dtData = await dtRes.json().catch(()=>({}));
+            if (dtRes.ok && dtData.applied) evUpdated++; else evSkipped++;
+          } else {
+            evSkipped++;
+          }
+        } catch(e) { evErrors++; }
+        evChecked++; updateStatus(item.code);
+      }
+    }
+    await Promise.all(Array.from({ length: Math.max(1, Math.min(EV_CONCURRENCY, evWork.length)) }, evWorker));
+
+    // ══ Phase 2: player-attached decklists (db.players[x].eventDecklists) ══
+    const plRes = await fetch(API+'/players', { headers: authHeaders() });
+    const players = (await plRes.json()) || [];
+    const plWorkByPlayer = {};
+    for (const p of players) {
+      const idxs = (p.eventDecklists||[]).map((d,i)=>d.ydkData?i:-1).filter(i=>i>=0);
+      if (idxs.length) plWorkByPlayer[p.name] = idxs;
+    }
+    const playerNamesToCheck = Object.keys(plWorkByPlayer);
+    plTotal = playerNamesToCheck.reduce((s,n)=>s+plWorkByPlayer[n].length, 0);
+    updateStatus('starting player decklists');
+
+    // Grouped by player so each player's whole-array replace (eventDecklists
+    // is always saved as a full-array replace — see
+    // PATCH /api/players/:name/aliases) happens once, with every changed
+    // entry applied together, instead of one PATCH per decklist.
+    const PL_CONCURRENCY = 4;
+    let plPIdx = 0;
+    async function plWorker() {
+      while (plPIdx < playerNamesToCheck.length) {
+        const name = playerNamesToCheck[plPIdx++];
+        const p = players.find(x => x.name === name);
+        if (!p) continue;
+        const list = [...(p.eventDecklists||[])];
+        let changedAny = false;
+        for (const i of plWorkByPlayer[name]) {
+          try {
+            const dc = await _dtClassifyYdk(list[i].ydkData);
+            if (dc && list[i].deckTypeOverride !== dc) {
+              list[i] = { ...list[i], deckTypeOverride: dc };
+              changedAny = true;
+              plUpdated++;
+            } else {
+              plSkipped++;
+            }
+          } catch(e) { plErrors++; }
+          plChecked++; updateStatus(name);
+        }
+        if (changedAny) {
+          try {
+            await fetch(API+'/players/'+encodeURIComponent(name)+'/aliases', {
+              method: 'PATCH', headers: authHeaders(),
+              body: JSON.stringify({ eventDecklists: list })
+            });
+            // Keep the client-side registry in sync so an open profile (or
+            // the next one opened) reflects this without a full reload.
+            if (window._playerRegistry && window._playerRegistry[name.toLowerCase()]) {
+              window._playerRegistry[name.toLowerCase()].eventDecklists = list;
+            }
+          } catch(e) { plErrors++; }
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.max(1, Math.min(PL_CONCURRENCY, playerNamesToCheck.length)) }, plWorker));
+
+    res.style.color = 'var(--green)';
+    res.textContent =
+      'Done — Event brackets: ' + evChecked + ' checked across ' + evList.length + ' event(s), ' + evUpdated + ' updated, ' + evErrors + ' error(s). ' +
+      'Player decklists: ' + plChecked + ' checked across ' + playerNamesToCheck.length + ' player(s), ' + plUpdated + ' updated, ' + plErrors + ' error(s).';
+  } catch(e) {
+    res.style.color = 'var(--red)';
+    res.textContent = '✗ Error: ' + e.message;
+  }
+  btn.disabled = false; btn.textContent = '🔄 Recheck All Deck Types';
 }
 
 async function loadSessionsSection(el) {
