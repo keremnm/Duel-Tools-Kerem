@@ -2140,6 +2140,15 @@ const server = http.createServer(async (req, res) => {
       const deckB = (data.deckB || '').trim();
       const manualForfeit = !!data.manualForfeit;
       const note = (data.note || '').trim();
+      // Optional documentation link — most manual entries are forfeits with
+      // no real replay, but occasionally one does exist (e.g. a match that
+      // WAS played but needs its result corrected/recorded this way for some
+      // other reason) and is worth keeping attached. Only accepted as an
+      // actual duelingbook.com replay link, not the bare prefix the client
+      // pre-fills the field with — anything else is silently ignored rather
+      // than stored as a broken link.
+      const rawReplayUrl = (data.replayUrl || '').trim();
+      const manualReplayUrl = /^https?:\/\/(www\.)?duelingbook\.com\/replay\?id=\S+/i.test(rawReplayUrl) ? rawReplayUrl : '';
 
       const batchA = findOrCreateBatchForPlayerName(playerA);
       const batchB = findOrCreateBatchForPlayerName(playerB);
@@ -2153,7 +2162,7 @@ const server = http.createServer(async (req, res) => {
 
       if (!batchA.replays) batchA.replays = [];
       batchA.replays.push({
-        replayId, isManual: true, manualForfeit, manualNote: note,
+        replayId, isManual: true, manualForfeit, manualNote: note, manualReplayUrl,
         plays: [], allPlays: [],
         parsed: {
           oppName: batchB.player, result: resultA,
@@ -2168,7 +2177,7 @@ const server = http.createServer(async (req, res) => {
 
       if (!batchB.replays) batchB.replays = [];
       batchB.replays.push({
-        replayId, isManual: true, manualForfeit, manualNote: note,
+        replayId, isManual: true, manualForfeit, manualNote: note, manualReplayUrl,
         plays: [], allPlays: [],
         parsed: {
           oppName: batchA.player, result: resultB,
@@ -2181,11 +2190,28 @@ const server = http.createServer(async (req, res) => {
       });
       batchB.status = 'ready';
 
-      await saveBatchToPostgres(batchA.id);
-      await saveBatchToPostgres(batchB.id);
+      // This must be CONFIRMED durably saved before responding "ok" — not
+      // just handed to the normal debounced save (saveBatchToPostgres),
+      // which schedules a write ~1.5s out and returns immediately regardless
+      // of whether it ever lands. The very next thing the client does after
+      // seeing {ok:true} is re-fetch these two batches (GET /api/batches/:id
+      // always re-reads straight from Postgres — see that route's own
+      // comment — specifically so a stale in-memory copy on some OTHER
+      // server instance can't be served after a real save). That re-read
+      // was racing the debounce timer: if it landed before the 1.5s flush,
+      // it read the OLD row from Postgres and overwrote this request's own
+      // in-memory update with it — the match the user just added vanishing
+      // immediately, even though the server had genuinely just written it to
+      // memory a moment earlier. flushBatchNow() blocks until Postgres
+      // actually has the new data, so that race can't happen.
+      const flushA = await flushBatchNow(batchA.id);
+      const flushB = await flushBatchNow(batchB.id);
+      if (!flushA.ok || !flushB.ok) {
+        return json(res, 500, { error: 'Match recorded in memory but failed to save durably: ' + (flushA.error || flushB.error || 'unknown error') + '. Try again — if this keeps happening, check Postgres connectivity.' });
+      }
       logChange(req, 'add_manual_match', {
         replayId, playerA: batchA.player, playerB: batchB.player,
-        scoreA, scoreB, eventId, manualForfeit, note,
+        scoreA, scoreB, eventId, manualForfeit, note, manualReplayUrl,
       });
       return json(res, 200, { ok: true, replayId, batchAId: batchA.id, batchBId: batchB.id, playerA: batchA.player, playerB: batchB.player });
     });

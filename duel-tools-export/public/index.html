@@ -5221,12 +5221,15 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
       const tr = document.createElement('tr');
       tr.style.cssText = 'border-bottom:1px solid var(--border2)';
       const scoreStr = gfwlEffScore(r);
-      // A manual entry (see POST /api/matches/manual) has no real replay
-      // behind it — a link here would point at a fake, non-existent
-      // "manual-..." id. Show a forfeit/manual indicator instead, with the
-      // note (if any) on hover.
+      // A manual entry (see POST /api/matches/manual) usually has no real
+      // replay behind it — a link using its fake "manual-..." id would be
+      // broken. But an optional real replay link can be attached, so link
+      // to that when present; otherwise show a forfeit/manual indicator,
+      // with the note (if any) on hover.
       const replayCell = r.isManual
-        ? `<span title="${_escapeHtml((r.manualForfeit ? 'Manually Forfeited' : 'Manual entry') + (r.manualNote ? ' — ' + r.manualNote : ''))}" style="color:${r.manualForfeit?'var(--red)':'var(--amber)'};font-size:11px;cursor:help">${r.manualForfeit?'⚠':'📝'}</span>`
+        ? (r.manualReplayUrl
+            ? `<a href="${_escapeHtml(r.manualReplayUrl)}" target="_blank" title="${_escapeHtml((r.manualForfeit ? 'Manually Forfeited' : 'Manual entry') + (r.manualNote ? ' — ' + r.manualNote : ''))}" style="color:var(--blue);font-size:10px;font-family:monospace">▶</a>`
+            : `<span title="${_escapeHtml((r.manualForfeit ? 'Manually Forfeited' : 'Manual entry') + (r.manualNote ? ' — ' + r.manualNote : ''))}" style="color:${r.manualForfeit?'var(--red)':'var(--amber)'};font-size:11px;cursor:help">${r.manualForfeit?'⚠':'📝'}</span>`)
         : `<a href="https://www.duelingbook.com/replay?id=${r.replayId}" target="_blank" style="color:var(--blue);font-size:10px;font-family:monospace">▶</a>`;
       tr.innerHTML = `
         <td style="padding:5px 8px;color:var(--amber);font-family:monospace">WK${wk}</td>
@@ -5389,8 +5392,19 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
       const actionsEl = document.createElement('div');
       actionsEl.style.cssText = 'display:flex;gap:4px;align-items:center;flex-shrink:0';
       if (r.isManual) {
-        // No real DuelingBook replay behind a manual entry — a copy-link
-        // button here would copy a fake, non-existent "manual-..." id.
+        // Usually no real DuelingBook replay behind a manual entry — a
+        // copy-link button here would normally copy a fake, non-existent
+        // "manual-..." id. But show a real Watch link when one was
+        // attached at add-time.
+        if (r.manualReplayUrl) {
+          const manualWatchA = document.createElement('a');
+          manualWatchA.href = r.manualReplayUrl; manualWatchA.target = '_blank';
+          manualWatchA.onclick = e => e.stopPropagation();
+          manualWatchA.textContent = '▶';
+          manualWatchA.title = 'Watch the attached replay';
+          manualWatchA.style.cssText = 'color:var(--blue);font-size:10px;text-decoration:none';
+          actionsEl.appendChild(manualWatchA);
+        }
         const manualTag = document.createElement('span');
         manualTag.title = (r.manualForfeit ? 'Manually Forfeited' : 'Manual entry') + (r.manualNote ? ' — ' + r.manualNote : '');
         manualTag.style.cssText = 'font-size:10px;color:'+(r.manualForfeit?'var(--red)':'var(--amber)')+';cursor:help';
@@ -5439,7 +5453,9 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
           const miniHdr = document.createElement('div');
           miniHdr.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:10px';
           const miniWatchHtml = r.isManual
-            ? '<span style="margin-left:auto;font-size:10px;color:'+(r.manualForfeit?'var(--red)':'var(--amber)')+'">'+(r.manualForfeit?'⚠ Manually Forfeited':'📝 Manual Entry')+' — no replay</span>'
+            ? (r.manualReplayUrl
+                ? '<a href="'+r.manualReplayUrl+'" target="_blank" style="margin-left:auto;color:var(--blue);font-size:10px;font-family:monospace">▶ Watch</a>'
+                : '<span style="margin-left:auto;font-size:10px;color:'+(r.manualForfeit?'var(--red)':'var(--amber)')+'">'+(r.manualForfeit?'⚠ Manually Forfeited':'📝 Manual Entry')+' — no replay</span>')
             : '<a href="https://www.duelingbook.com/replay?id='+r.replayId+'" target="_blank" style="margin-left:auto;color:var(--blue);font-size:10px;font-family:monospace">▶ Watch</a>';
           miniHdr.innerHTML = '<span style="font-size:12px;font-weight:bold;color:var(--text)">vs '+oppName+'</span><span style="font-size:10px;color:var(--muted)">'+wkKey+'</span>'+miniWatchHtml;
           miniViewArea.appendChild(miniHdr);
@@ -8040,6 +8056,7 @@ function buildDeck() {
         myDeckOverride: null, oppDeckOverride: null,
         mergedReplays: [],
         isManual: true, manualForfeit: !!r.manualForfeit, manualNote: r.manualNote || '',
+        manualReplayUrl: r.manualReplayUrl || '',
       });
       continue;
     }
@@ -9869,6 +9886,15 @@ function renderMatchSidebar(query) {
         manualNoteBtn.onclick = e => { e.stopPropagation(); alert((m.manualForfeit ? 'Manually Forfeited\n\n' : 'Manual entry\n\n') + m.manualNote); };
         titleRow.appendChild(manualNoteBtn);
       }
+      if (m.isManual && m.manualReplayUrl) {
+        const manualWatchA = document.createElement('a');
+        manualWatchA.href = m.manualReplayUrl; manualWatchA.target = '_blank';
+        manualWatchA.textContent = '▶';
+        manualWatchA.title = 'Watch the attached replay';
+        manualWatchA.onclick = e => e.stopPropagation();
+        manualWatchA.style.cssText = 'color:var(--blue);cursor:pointer;font-size:11px;padding:0 2px;flex-shrink:0;text-decoration:none';
+        titleRow.appendChild(manualWatchA);
+      }
       // No real DuelingBook replay behind a manual entry — nothing for
       // Retry to re-fetch (its fake 'manual-...' id isn't a real replay).
       if (!m.isManual) titleRow.appendChild(retryIconBtn);
@@ -10199,16 +10225,24 @@ async function renderMatchDisplay(m) {
     mlr.appendChild(row);
   }
   if (m.isManual) {
-    // No real DuelingBook replay behind a manual entry (see
-    // POST /api/matches/manual) — a link row here would point at a fake,
-    // non-existent "manual-..." id. Show what this actually is instead:
+    // Usually no real DuelingBook replay behind a manual entry (see
+    // POST /api/matches/manual) — a link row here would normally point at
+    // a fake, non-existent "manual-..." id. But an optional real replay
+    // link can be attached at add-time, so show that when present, plus
     // the manual/forfeit badge, and the note if one was given.
     const manualRow = document.createElement('div');
     manualRow.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap';
     const badge = document.createElement('span');
     badge.style.cssText = 'font-size:10px;color:'+(m.manualForfeit?'var(--red)':'var(--amber)')+';font-family:monospace;border:1px solid '+(m.manualForfeit?'var(--red)':'var(--amber)')+';border-radius:3px;padding:1px 8px';
-    badge.textContent = m.manualForfeit ? '⚠ Manually Forfeited — no replay, manually recorded' : '📝 Manual Entry — no replay, manually recorded';
+    badge.textContent = m.manualForfeit ? '⚠ Manually Forfeited — manually recorded' : '📝 Manual Entry — manually recorded';
     manualRow.appendChild(badge);
+    if (m.manualReplayUrl) {
+      const watchA = document.createElement('a');
+      watchA.href = m.manualReplayUrl; watchA.target = '_blank';
+      watchA.textContent = '▶ Watch Replay';
+      watchA.style.cssText = 'background:none;border:1px solid var(--border2);color:var(--blue);font-family:monospace;font-size:9px;padding:1px 8px;border-radius:3px;text-decoration:none';
+      manualRow.appendChild(watchA);
+    }
     if (m.manualNote) {
       const noteBtn = document.createElement('button');
       noteBtn.textContent = '📋 Notes';
@@ -10584,6 +10618,14 @@ function openAddMatchModal() {
   const eventField = mkField('Event ID', 'e.g. S9: WK 3, or LCQ22026');
   box.appendChild(eventField.wrap);
 
+  // Replay link — optional. Most manual entries are forfeits with nothing to
+  // link, but occasionally a real replay does exist and is worth keeping
+  // attached rather than losing it. Pre-filled with the site's own prefix so
+  // the person only has to paste/type the "?id=..." part onto the end,
+  // rather than typing out the whole URL themselves.
+  const replayUrlField = mkField('Replay Link (optional)', 'https://www.duelingbook.com/replay?id=...', 'https://www.duelingbook.com/');
+  box.appendChild(replayUrlField.wrap);
+
   // Deck type fields — optional, free text with suggestions from the known
   // archetype list (DECK_COLORS) so this behaves like a loose "select"
   // without blocking a deck name that isn't in that list.
@@ -10671,6 +10713,16 @@ function openAddMatchModal() {
     if (playerA.toLowerCase() === playerB.toLowerCase()) { errEl.textContent = 'Players must be different.'; return; }
     if (isNaN(scoreA) || isNaN(scoreB) || scoreA < 0 || scoreB < 0) { errEl.textContent = 'Enter a valid score for both players.'; return; }
     if (scoreA === scoreB) { errEl.textContent = "Scores can't be tied — pick an actual winner."; return; }
+    // Optional — blank or left as just the pre-filled prefix both mean "no
+    // replay". Anything else has to actually look like a duelingbook replay
+    // link, so a typo gets caught here instead of silently being dropped by
+    // the server (which validates the same way).
+    const replayUrlRaw = replayUrlField.inp.value.trim();
+    const replayUrl = (replayUrlRaw && replayUrlRaw !== 'https://www.duelingbook.com/') ? replayUrlRaw : '';
+    if (replayUrl && !/^https?:\/\/(www\.)?duelingbook\.com\/replay\?id=\S+/i.test(replayUrl)) {
+      errEl.textContent = 'Replay link doesn\'t look like a duelingbook.com replay URL — clear it if there isn\'t one.';
+      return;
+    }
     saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
     try {
       const res = await fetch(API+'/matches/manual', {
@@ -10683,19 +10735,35 @@ function openAddMatchModal() {
           scoreA, scoreB,
           manualForfeit,
           note: noteInput.value.trim(),
+          replayUrl,
         })
       });
       const d = await res.json().catch(()=>({}));
       if (!res.ok || !d.ok) { errEl.textContent = d.error || 'Failed to save match.'; saveBtn.disabled = false; saveBtn.textContent = 'Save Match'; return; }
       overlay.remove();
       st('Match added to both profiles.', 'var(--green)');
-      // Refresh whichever profile is currently open so the new match shows
-      // up immediately — force openProfile's full rebuild path (not its
-      // _matches-reuse fast path) by clearing _activeBatch/_matches first,
-      // so isManual/manualForfeit/manualNote and the chosen deck types are
-      // picked up instead of silently dropped (see openProfile's fast path).
-      const reopenPlayer = (_activeProfile && _activeProfile.player === d.playerA) ? d.playerA
-        : (_activeProfile && _activeProfile.player === d.playerB) ? d.playerB : null;
+      // Two caches can go stale the moment this POST lands, and both need
+      // invalidating by batch ID (not by comparing player name strings,
+      // which can mismatch on casing — e.g. the profile header shows
+      // "AJTBLS" but the canonically-stored batch.player the server
+      // resolved and returned as d.playerA is "Ajtbls"; a strict === on
+      // those silently no-ops this whole refresh):
+      //  1. _activeBatch — a single-slot global cache. loadProfiles()
+      //     blindly reuses it (instead of a fresh lightweight listing)
+      //     whenever a server batch id matches it, so if it's still
+      //     pointing at batchA/batchB from some earlier, unrelated
+      //     navigation this session, the new match stays invisible even
+      //     after navigating away and back — only a full page reload
+      //     would eventually clear it. Always drop it here if it's one of
+      //     the two batches this match just touched.
+      //  2. _matches/openProfile's fast path — only relevant while one of
+      //     these two players' profile is the one currently open.
+      if (_activeBatch && (_activeBatch.id === d.batchAId || _activeBatch.id === d.batchBId)) {
+        _activeBatch = null; _matches = null;
+      }
+      const _curProfile = (_activeProfile && _activeProfile.player || '').toLowerCase().trim();
+      const reopenPlayer = _curProfile === (d.playerA||'').toLowerCase().trim() ? d.playerA
+        : _curProfile === (d.playerB||'').toLowerCase().trim() ? d.playerB : null;
       if (reopenPlayer) {
         _matches = null; _activeBatch = null;
         await loadProfiles();
@@ -11702,6 +11770,7 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
       isManual: true,
       manualForfeit: !!replayResult.manualForfeit,
       manualNote: replayResult.manualNote || '',
+      manualReplayUrl: replayResult.manualReplayUrl || '',
       games: [], allMine: [], allOpp: [], allMyCards: [],
       mergedReplays: [],
     };
@@ -12382,10 +12451,19 @@ function renderGFWLHistory() {
         };
         row.appendChild(wEl); row.appendChild(infoEl); row.appendChild(batchBtn);
         if (r.isManual) {
-          // No real DuelingBook replay behind a manual entry — a Watch link
-          // or copy-link button here would point at a fake, non-existent
-          // replay id (see POST /api/matches/manual). Show the recorded note
-          // instead, if one was given, same as the ALL MATCHES list.
+          // Usually no real DuelingBook replay behind a manual entry — a
+          // Watch link or copy-link button here would normally point at a
+          // fake, non-existent replay id (see POST /api/matches/manual).
+          // But an optional real replay link can be attached, so show that
+          // when present, plus the recorded note, same as ALL MATCHES.
+          if (r.manualReplayUrl) {
+            const watchA = document.createElement('a');
+            watchA.href = r.manualReplayUrl; watchA.target = '_blank';
+            watchA.onclick = e => e.stopPropagation();
+            watchA.textContent = '▶ Watch';
+            watchA.style.cssText='background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;text-decoration:none;white-space:nowrap';
+            row.appendChild(watchA);
+          }
           if (r.manualNote) {
             const noteBtn = document.createElement('button');
             noteBtn.textContent = '📋 Note';
@@ -15285,11 +15363,18 @@ async function openProfile(player, batches, records) {
       infoEl.innerHTML='vs <strong>'+(r.oppName||'?')+'</strong><div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:2px">'+(myDeck?'<span style="font-size:10px;color:var(--green);border:1px solid var(--green);border-radius:3px;padding:0 5px">'+myDeck+'</span>':'')+(oppDeck?'<span style="font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:3px;padding:0 5px">vs '+oppDeck+'</span>':'')+eventBadge+manualBadge+'</div>';
       const btns=document.createElement('div'); btns.style.cssText='display:flex;gap:4px;flex-shrink:0';
       if (r.isManual) {
-        // No real DuelingBook replay behind a manual entry (see
-        // POST /api/matches/manual) — nothing to watch or load into the
-        // Analyzer. Show the recorded note instead, if one was given.
+        // Usually no real DuelingBook replay behind a manual entry (see
+        // POST /api/matches/manual), but one can optionally be attached —
+        // show a real Watch link when it was, otherwise nothing to watch
+        // or load into the Analyzer. Show the recorded note too, if given.
         row.style.cursor = r.manualNote ? 'pointer' : 'default';
         const showNote = () => alert((r.manualForfeit ? 'Manually Forfeited\n\n' : 'Manual entry\n\n') + (r.manualNote || '(no note given)'));
+        if (r.manualReplayUrl) {
+          const watchA=document.createElement('a'); watchA.href=r.manualReplayUrl; watchA.target='_blank'; watchA.onclick=ev=>ev.stopPropagation();
+          watchA.style.cssText='background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;text-decoration:none;white-space:nowrap';
+          watchA.textContent='▶ Watch';
+          btns.appendChild(watchA);
+        }
         if (r.manualNote) {
           const noteBtn=document.createElement('button');
           noteBtn.style.cssText='background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer;white-space:nowrap';
