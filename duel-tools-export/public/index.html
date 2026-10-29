@@ -7870,6 +7870,15 @@ function renderRPS() {
 // games of the same match are completely normal (not every card in a deck
 // gets drawn/played every game), so that alone isn't evidence of failure.
 function replayNeedsRetry(r) {
+  // A manual entry (see POST /api/matches/manual) has no real DuelingBook
+  // replay behind it by design — myW/oppW/draws reflect the recorded
+  // result, but parsed.games is deliberately empty since there was nothing
+  // to parse (most commonly a forfeit). That used to look exactly like a
+  // truncated/failed parse to the checks below (expectedGames > 0 but
+  // gameCount 0), so a correctly-recorded forfeit would get flagged
+  // "NEEDS RETRY" and show up in Retry All, which would just fail again
+  // and again since there's no replay id DuelingBook actually knows about.
+  if (r.isManual) return false;
   if (r.timedOut) return true;
   const hasRaw = (r.allPlays && r.allPlays.length) || (r.plays && r.plays.length);
   const p = r.parsed;
