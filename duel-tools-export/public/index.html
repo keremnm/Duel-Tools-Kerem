@@ -5221,6 +5221,13 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
       const tr = document.createElement('tr');
       tr.style.cssText = 'border-bottom:1px solid var(--border2)';
       const scoreStr = gfwlEffScore(r);
+      // A manual entry (see POST /api/matches/manual) has no real replay
+      // behind it — a link here would point at a fake, non-existent
+      // "manual-..." id. Show a forfeit/manual indicator instead, with the
+      // note (if any) on hover.
+      const replayCell = r.isManual
+        ? `<span title="${_escapeHtml((r.manualForfeit ? 'Manually Forfeited' : 'Manual entry') + (r.manualNote ? ' — ' + r.manualNote : ''))}" style="color:${r.manualForfeit?'var(--red)':'var(--amber)'};font-size:11px;cursor:help">${r.manualForfeit?'⚠':'📝'}</span>`
+        : `<a href="https://www.duelingbook.com/replay?id=${r.replayId}" target="_blank" style="color:var(--blue);font-size:10px;font-family:monospace">▶</a>`;
       tr.innerHTML = `
         <td style="padding:5px 8px;color:var(--amber);font-family:monospace">WK${wk}</td>
         <td style="padding:5px 8px;color:var(--dim);font-size:10px">${vsTeam}</td>
@@ -5228,7 +5235,7 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
         <td style="padding:5px 8px;text-align:center;font-family:monospace;font-weight:bold;color:${result==='w'?'var(--green)':'var(--red)'}">${result==='w'?'W':'L'}${scoreStr?' '+scoreStr:''}</td>
         <td style="padding:5px 8px;font-size:11px;color:var(--muted)">${myDeck}</td>
         <td style="padding:5px 8px;font-size:11px;color:var(--muted)">${oppDeck}</td>
-        <td style="padding:5px 8px"><a href="https://www.duelingbook.com/replay?id=${r.replayId}" target="_blank" style="color:var(--blue);font-size:10px;font-family:monospace">▶</a></td>
+        <td style="padding:5px 8px">${replayCell}</td>
       `;
       wkBody.appendChild(tr);
     });
@@ -5380,12 +5387,22 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
 
       // Replay link + Batch button
       const actionsEl = document.createElement('div');
-      actionsEl.style.cssText = 'display:flex;gap:4px;flex-shrink:0';
+      actionsEl.style.cssText = 'display:flex;gap:4px;align-items:center;flex-shrink:0';
+      if (r.isManual) {
+        // No real DuelingBook replay behind a manual entry — a copy-link
+        // button here would copy a fake, non-existent "manual-..." id.
+        const manualTag = document.createElement('span');
+        manualTag.title = (r.manualForfeit ? 'Manually Forfeited' : 'Manual entry') + (r.manualNote ? ' — ' + r.manualNote : '');
+        manualTag.style.cssText = 'font-size:10px;color:'+(r.manualForfeit?'var(--red)':'var(--amber)')+';cursor:help';
+        manualTag.textContent = r.manualForfeit ? '⚠' : '📝';
+        actionsEl.appendChild(manualTag);
+      }
       const copyBtn = document.createElement('button');
       copyBtn.textContent = '⎘';
       copyBtn.title = 'Copy replay link';
       copyBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--dim);font-size:10px;padding:1px 5px;border-radius:3px;cursor:pointer';
       copyBtn.onclick = e => { e.stopPropagation(); navigator.clipboard.writeText('https://www.duelingbook.com/replay?id='+r.replayId).then(()=>{copyBtn.textContent='✓';setTimeout(()=>copyBtn.textContent='⎘',1200);}); };
+      if (!r.isManual) actionsEl.appendChild(copyBtn);
       const batchBtn = document.createElement('button');
       batchBtn.textContent = 'Batch';
       batchBtn.style.cssText = 'background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:9px;padding:1px 6px;border-radius:3px;cursor:pointer';
@@ -5406,7 +5423,7 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
           }
         }, 300);
       };
-      actionsEl.appendChild(copyBtn); actionsEl.appendChild(batchBtn);
+      actionsEl.appendChild(batchBtn);
 
       card.appendChild(resBadge); card.appendChild(deckBadge); card.appendChild(oppEl);
       card.appendChild(oppDeckEl); card.appendChild(actionsEl);
@@ -5421,7 +5438,10 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
           miniViewArea.innerHTML = '';
           const miniHdr = document.createElement('div');
           miniHdr.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:10px';
-          miniHdr.innerHTML = '<span style="font-size:12px;font-weight:bold;color:var(--text)">vs '+oppName+'</span><span style="font-size:10px;color:var(--muted)">'+wkKey+'</span><a href="https://www.duelingbook.com/replay?id='+r.replayId+'" target="_blank" style="margin-left:auto;color:var(--blue);font-size:10px;font-family:monospace">▶ Watch</a>';
+          const miniWatchHtml = r.isManual
+            ? '<span style="margin-left:auto;font-size:10px;color:'+(r.manualForfeit?'var(--red)':'var(--amber)')+'">'+(r.manualForfeit?'⚠ Manually Forfeited':'📝 Manual Entry')+' — no replay</span>'
+            : '<a href="https://www.duelingbook.com/replay?id='+r.replayId+'" target="_blank" style="margin-left:auto;color:var(--blue);font-size:10px;font-family:monospace">▶ Watch</a>';
+          miniHdr.innerHTML = '<span style="font-size:12px;font-weight:bold;color:var(--text)">vs '+oppName+'</span><span style="font-size:10px;color:var(--muted)">'+wkKey+'</span>'+miniWatchHtml;
           miniViewArea.appendChild(miniHdr);
 
           // Show each game's cards
@@ -7995,6 +8015,35 @@ function buildDeck() {
       }
     }
 
+    if (r.isManual && r.parsed) {
+      // Manual entry (see POST /api/matches/manual) — no real plays/games to
+      // parse, so without this special case it fell through to the "legacy:
+      // parse raw allPlays" branch below, found r.allPlays/r.plays both
+      // empty (by design — there's no real replay behind it), and was
+      // silently dropped via the `continue` there. That meant a manual
+      // match never appeared in the Deck Viewer's match list at all —
+      // not in the sidebar, not selectable, and GFWL History's "Batch"
+      // button (which looks it up via _matches.findIndex) could never find
+      // it either. Build the record directly from what was recorded, with
+      // the same field shape buildMatchRecord's isManual branch already
+      // uses for the Profile page, so every Deck-Viewer render function can
+      // rely on isManual/manualForfeit/manualNote/myDeck/oppDeck being
+      // present exactly like a normal match's fields are.
+      const p = r.parsed;
+      _matches.push({
+        replayId: r.replayId, player: _replayPlayer,
+        oppName: p.oppName || r.oppName || '',
+        games: [], allMine: [], allOpp: [],
+        myW: p.myW, oppW: p.oppW, draws: p.draws || 0, score: p.score, result: p.result,
+        eventLabel: r.eventLabel || '',
+        myDeck: p.myDeck || 'Unknown', oppDeck: p.oppDeck || 'Unknown',
+        myDeckOverride: null, oppDeckOverride: null,
+        mergedReplays: [],
+        isManual: true, manualForfeit: !!r.manualForfeit, manualNote: r.manualNote || '',
+      });
+      continue;
+    }
+
     if (_replayParsed && _replayParsed.games && _replayParsed.games.length) {
       // Fast path: use pre-parsed data
       m = { replayId:r.replayId, player:_replayPlayer, oppName:_replayParsed.oppName||r.oppName||'', games:_replayParsed.games, allMine:_replayParsed.allMine||[], allOpp:_replayParsed.allOpp||[], myW:_replayParsed.myW, oppW:_replayParsed.oppW, draws:_replayParsed.draws, score:_replayParsed.score, result:_replayParsed.result };
@@ -9759,8 +9808,16 @@ function renderMatchSidebar(query) {
       item.dataset.opp   = (m.oppName||'').toLowerCase();
       item.dataset.idx   = idx;
       item.dataset.event = (m.eventLabel||'').toLowerCase();
-      const myDeckTag = classifyFromCards(m.allMine);
-      const myDeckLabel = m.myDeckOverride || (myDeckTag ? myDeckTag.dc : '');
+      // A manual entry (see POST /api/matches/manual) has no cards to
+      // classify a deck from — m.allMine is always [] for one, so
+      // classifyFromCards found nothing and this showed no deck label at
+      // all even though a deck WAS chosen when the match was recorded.
+      // m.myDeck is already buildMatchRecord's fully-resolved value (it
+      // already accounts for myDeckOverride/event-decklist overrides on top
+      // of the live classification) — prefer it outright instead of
+      // reclassifying from cards that don't exist.
+      const myDeckLabel = (m.myDeck && m.myDeck !== 'Unknown') ? m.myDeck
+        : (m.myDeckOverride || (classifyFromCards(m.allMine)||{}).dc || '');
       const matchPrefix = m.result==='w'?'W ':m.result==='l'?'L ':'';
       const scoreDisplay = m.draws>0 ? m.score : `${m.myW}-${m.oppW}`;
       const rl = matchPrefix + scoreDisplay;
@@ -9804,13 +9861,24 @@ function renderMatchSidebar(query) {
         noteBtn.onclick = e => { e.stopPropagation(); showOverrideNoteModal(m); };
         titleRow.appendChild(noteBtn);
       }
-      titleRow.appendChild(retryIconBtn);
+      if (m.isManual && m.manualNote) {
+        const manualNoteBtn = document.createElement('button');
+        manualNoteBtn.textContent = '📋';
+        manualNoteBtn.title = (m.manualForfeit ? 'Manually Forfeited' : 'Manual entry') + ' — click to read note';
+        manualNoteBtn.style.cssText = 'background:none;border:none;color:var(--amber);cursor:pointer;font-size:11px;padding:0 2px;flex-shrink:0';
+        manualNoteBtn.onclick = e => { e.stopPropagation(); alert((m.manualForfeit ? 'Manually Forfeited\n\n' : 'Manual entry\n\n') + m.manualNote); };
+        titleRow.appendChild(manualNoteBtn);
+      }
+      // No real DuelingBook replay behind a manual entry — nothing for
+      // Retry to re-fetch (its fake 'manual-...' id isn't a real replay).
+      if (!m.isManual) titleRow.appendChild(retryIconBtn);
       titleRow.appendChild(delBtn);
       item.appendChild(titleRow);
       item.onmouseenter = () => { delBtn.style.opacity = '1'; retryIconBtn.style.opacity = '1'; };
       item.onmouseleave = () => { delBtn.style.opacity = '0'; retryIconBtn.style.opacity = '0'; };
       const scoreEl = document.createElement('div');
-      scoreEl.className = 'mi-score '+m.result; scoreEl.textContent = rl+' · '+m.games.length+'G';
+      scoreEl.className = 'mi-score '+m.result;
+      scoreEl.textContent = m.isManual ? rl + (m.manualForfeit ? ' · ⚠ Forfeit' : ' · 📝 Manual') : rl+' · '+m.games.length+'G';
       item.appendChild(scoreEl);
       if (myDeckLabel) { const dl=document.createElement('div'); dl.className='mi-deck-label'; dl.textContent=myDeckLabel; item.appendChild(dl); }
       // Show event ID under deck label if match has one and it's not already shown in group header
@@ -10130,7 +10198,26 @@ async function renderMatchDisplay(m) {
     }
     mlr.appendChild(row);
   }
-  if ((m.mergedReplays||[]).length) {
+  if (m.isManual) {
+    // No real DuelingBook replay behind a manual entry (see
+    // POST /api/matches/manual) — a link row here would point at a fake,
+    // non-existent "manual-..." id. Show what this actually is instead:
+    // the manual/forfeit badge, and the note if one was given.
+    const manualRow = document.createElement('div');
+    manualRow.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap';
+    const badge = document.createElement('span');
+    badge.style.cssText = 'font-size:10px;color:'+(m.manualForfeit?'var(--red)':'var(--amber)')+';font-family:monospace;border:1px solid '+(m.manualForfeit?'var(--red)':'var(--amber)')+';border-radius:3px;padding:1px 8px';
+    badge.textContent = m.manualForfeit ? '⚠ Manually Forfeited — no replay, manually recorded' : '📝 Manual Entry — no replay, manually recorded';
+    manualRow.appendChild(badge);
+    if (m.manualNote) {
+      const noteBtn = document.createElement('button');
+      noteBtn.textContent = '📋 Notes';
+      noteBtn.style.cssText = 'background:none;border:1px solid var(--border2);color:var(--muted);font-family:monospace;font-size:9px;padding:1px 8px;border-radius:3px;cursor:pointer';
+      noteBtn.onclick = () => alert((m.manualForfeit ? 'Manually Forfeited\n\n' : 'Manual entry\n\n') + m.manualNote);
+      manualRow.appendChild(noteBtn);
+    }
+    mlr.appendChild(manualRow);
+  } else if ((m.mergedReplays||[]).length) {
     // Label the original replay with whichever game number(s) it still
     // covers (everything NOT claimed by a merged continuation replay),
     // rather than assuming it's always "Game 1" — a merge can replace any
@@ -10190,13 +10277,17 @@ async function renderMatchDisplay(m) {
     // Merge Replay — available regardless of override state. For when a
     // disconnect forced DuelingBook to record the rest of this match under
     // a separate replay ID; stitches that continuation in as additional
-    // game(s) of THIS match (see mergeReplayIntoMatch above).
-    const mergeBtn = document.createElement('button');
-    mergeBtn.textContent = '🔗 Merge Replay';
-    mergeBtn.title = 'Stitch in a continuation replay (e.g. after a disconnect) as additional game(s) of this same match';
-    mergeBtn.style.cssText = 'background:none;border:1px solid var(--blue);color:var(--blue);font-family:monospace;font-size:9px;padding:1px 8px;border-radius:3px;cursor:pointer';
-    mergeBtn.onclick = () => showMergeReplayModal(m);
-    overrideBar.appendChild(mergeBtn);
+    // game(s) of THIS match (see mergeReplayIntoMatch above). Doesn't apply
+    // to a manual entry — there's no real replay/games to stitch anything
+    // into.
+    if (!m.isManual) {
+      const mergeBtn = document.createElement('button');
+      mergeBtn.textContent = '🔗 Merge Replay';
+      mergeBtn.title = 'Stitch in a continuation replay (e.g. after a disconnect) as additional game(s) of this same match';
+      mergeBtn.style.cssText = 'background:none;border:1px solid var(--blue);color:var(--blue);font-family:monospace;font-size:9px;padding:1px 8px;border-radius:3px;cursor:pointer';
+      mergeBtn.onclick = () => showMergeReplayModal(m);
+      overrideBar.appendChild(mergeBtn);
+    }
 
     mtb.appendChild(overrideBar);
   }
@@ -10241,7 +10332,9 @@ async function renderMatchDisplay(m) {
   // YDK export all
   const ydkAllBtn=document.createElement('button'); ydkAllBtn.className='ddl'; ydkAllBtn.textContent='↓ All YDK';
   ydkAllBtn.onclick=()=>dlYDK(_showOpp?m.allOpp:m.allMine,`${_showOpp?m.oppName:player}_match_${m.replayId}.ydk`);
-  toolbar.appendChild(ptg); toolbar.appendChild(stg); toolbar.appendChild(ydkAllBtn);
+  toolbar.appendChild(ptg); toolbar.appendChild(stg);
+  // No card data behind a manual entry — a YDK export here would just be an empty file.
+  if (!m.isManual) toolbar.appendChild(ydkAllBtn);
   ddisplay.appendChild(toolbar);
 
   // Content area
@@ -10278,9 +10371,17 @@ async function renderMatchDisplay(m) {
     (m.games||[]).forEach(g => { if (g.mine) resortInPlace(g.mine); if (g.opp) resortInPlace(g.opp); });
 
     const deckClass = classifyFromCards(showCards);
-    // Use override if set, fall back to classifier
+    // Use override if set, fall back to classifier. A manual entry (see
+    // POST /api/matches/manual) has no cards at all to classify — showCards
+    // is always empty, so deckClass is always null for one, even though a
+    // deck WAS chosen when the match was recorded (m.myDeck/m.oppDeck).
+    // Fall back to that recorded value for a manual entry instead of
+    // showing "+ set deck type" for a deck that's already set.
     const overrideKey = _showOpp ? 'oppDeckOverride' : 'myDeckOverride';
-    const currentDeck = m[overrideKey] || (deckClass ? deckClass.dc : null);
+    const recordedDeck = _showOpp ? m.oppDeck : m.myDeck;
+    const currentDeck = m[overrideKey]
+      || (m.isManual && recordedDeck && recordedDeck !== 'Unknown' ? recordedDeck : null)
+      || (deckClass ? deckClass.dc : null);
 
     // Entire match section
     const entHdr = document.createElement('div');
@@ -10306,8 +10407,10 @@ async function renderMatchDisplay(m) {
     const entYdk=document.createElement('button'); entYdk.className='ddl'; entYdk.textContent='↓ YDK';
     entYdk.style.marginLeft='auto';
     entYdk.onclick=()=>dlYDK(showCards,`${_showOpp?m.oppName:player}_match_${m.replayId}.ydk`);
-    // Re-parse button when no cards detected (player name mismatch / missing alias)
-    if (!showCards.length && m.replayId && _activeBatch && !_activeBatch.isTemp) {
+    // Re-parse button when no cards detected (player name mismatch / missing alias).
+    // Doesn't apply to a manual entry — showCards is always empty for one
+    // (there's no real replay to re-fetch/re-parse), not a parsing failure.
+    if (!showCards.length && m.replayId && _activeBatch && !_activeBatch.isTemp && !m.isManual) {
       const reparseBtn = document.createElement('button');
       reparseBtn.textContent = '↺ Re-parse with current aliases';
       reparseBtn.style.cssText = 'margin-left:8px;background:var(--amber);color:#050508;border:none;font-family:monospace;font-size:10px;padding:2px 10px;border-radius:4px;cursor:pointer';
@@ -10325,7 +10428,9 @@ async function renderMatchDisplay(m) {
     // data) and re-parses + saves it, so anyone who suspects a specific
     // match parsed wrong can double-check it directly, without waiting for
     // the automatic detection in the sidebar panel to agree with them.
-    if (m.replayId && _activeBatch) {
+    // Doesn't apply to a manual entry — its replayId is a synthetic
+    // "manual-..." id, not a real DuelingBook replay to re-fetch.
+    if (m.replayId && _activeBatch && !m.isManual) {
       const forceRetryBtn = document.createElement('button');
       forceRetryBtn.textContent = '↺ Retry this replay';
       forceRetryBtn.title = 'Re-fetch this replay from DuelingBook and re-parse it';
@@ -10345,7 +10450,9 @@ async function renderMatchDisplay(m) {
       };
       entHdr.appendChild(forceRetryBtn);
     }
-    entHdr.appendChild(entYdk);
+    // No card data behind a manual entry — a YDK export here would just be
+    // an empty file.
+    if (!m.isManual) entHdr.appendChild(entYdk);
     const entBlock=document.createElement('div'); entBlock.className='entire-block';
     entBlock.appendChild(entHdr);
     const entBody=document.createElement('div'); entBody.className='game-body';
@@ -12233,9 +12340,13 @@ function renderGFWLHistory() {
         const oppDeck = r.oppDeck && r.oppDeck!=='Unknown' ? r.oppDeck : '';
         const wEl = document.createElement('span'); wEl.style.cssText='color:'+col+';font-weight:bold;min-width:28px'; wEl.textContent=(r.matchWon?'W':r.matchLost?'L':'D')+' '+(r.score||'');
         const infoEl = document.createElement('div'); infoEl.style.flex='1';
+        const manualBadgeGH = r.isManual
+          ? '<span style="font-size:10px;color:'+(r.manualForfeit?'var(--red)':'var(--amber)')+';border:1px solid '+(r.manualForfeit?'var(--red)':'var(--amber)')+';border-radius:3px;padding:0 5px">'+(r.manualForfeit?'⚠ Manually Forfeited':'📝 Manual Entry')+'</span>'
+          : '';
         infoEl.innerHTML='vs <strong>'+(r.oppName||'?')+'</strong><div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:2px">'
           +(myDeck?'<span style="font-size:10px;color:var(--green);border:1px solid var(--green);border-radius:3px;padding:0 5px">'+myDeck+'</span>':'')
           +(oppDeck?'<span style="font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:3px;padding:0 5px">vs '+oppDeck+'</span>':'')
+          +manualBadgeGH
           +'</div>';
         // Event ID badge
         if (r.eventLabel) {
@@ -12244,21 +12355,12 @@ function renderGFWLHistory() {
           evtBadge.textContent='🏆 '+r.eventLabel;
           infoEl.querySelector('div').appendChild(evtBadge);
         }
-        // Copy link button
-        const copyBtn = document.createElement('button');
-        copyBtn.textContent = '⎘';
-        copyBtn.title = 'Copy replay link';
-        copyBtn.style.cssText='background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 6px;border-radius:4px;cursor:pointer;white-space:nowrap';
-        copyBtn.onclick = e => { e.stopPropagation(); navigator.clipboard.writeText('https://www.duelingbook.com/replay?id='+r.replayId).then(()=>{ copyBtn.textContent='✓'; setTimeout(()=>copyBtn.textContent='⎘',1500); }); };
-        const watchA = document.createElement('a');
-        watchA.href='https://www.duelingbook.com/replay?id='+r.replayId;
-        watchA.target='_blank';
-        watchA.style.cssText='background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;text-decoration:none;white-space:nowrap';
-        watchA.textContent='▶ Watch';
-        // View Batch button — loads the player's batch in Deck Viewer and jumps to this replay
+        // View Batch button — loads the player's batch in Deck Viewer and jumps to this replay.
+        // Kept for manual entries too (there's no real DuelingBook replay, but
+        // Deck Viewer still shows the recorded deck/result/forfeit info for it).
         const batchBtn = document.createElement('button');
         batchBtn.textContent = 'Batch';
-        batchBtn.title = 'View this replay in Deck Viewer';
+        batchBtn.title = 'View this match in Deck Viewer';
         batchBtn.style.cssText='background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer;white-space:nowrap';
         batchBtn.onclick = async () => {
           if (!_activeProfile) return;
@@ -12278,7 +12380,33 @@ function renderGFWLHistory() {
           }
           st('Replay not found in loaded batches', 'var(--amber)');
         };
-        row.appendChild(wEl); row.appendChild(infoEl); row.appendChild(copyBtn); row.appendChild(batchBtn); row.appendChild(watchA);
+        row.appendChild(wEl); row.appendChild(infoEl); row.appendChild(batchBtn);
+        if (r.isManual) {
+          // No real DuelingBook replay behind a manual entry — a Watch link
+          // or copy-link button here would point at a fake, non-existent
+          // replay id (see POST /api/matches/manual). Show the recorded note
+          // instead, if one was given, same as the ALL MATCHES list.
+          if (r.manualNote) {
+            const noteBtn = document.createElement('button');
+            noteBtn.textContent = '📋 Note';
+            noteBtn.style.cssText='background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer;white-space:nowrap';
+            noteBtn.onclick = e => { e.stopPropagation(); alert((r.manualForfeit ? 'Manually Forfeited\n\n' : 'Manual entry\n\n') + r.manualNote); };
+            row.appendChild(noteBtn);
+          }
+        } else {
+          // Copy link button
+          const copyBtn = document.createElement('button');
+          copyBtn.textContent = '⎘';
+          copyBtn.title = 'Copy replay link';
+          copyBtn.style.cssText='background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 6px;border-radius:4px;cursor:pointer;white-space:nowrap';
+          copyBtn.onclick = e => { e.stopPropagation(); navigator.clipboard.writeText('https://www.duelingbook.com/replay?id='+r.replayId).then(()=>{ copyBtn.textContent='✓'; setTimeout(()=>copyBtn.textContent='⎘',1500); }); };
+          const watchA = document.createElement('a');
+          watchA.href='https://www.duelingbook.com/replay?id='+r.replayId;
+          watchA.target='_blank';
+          watchA.style.cssText='background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;text-decoration:none;white-space:nowrap';
+          watchA.textContent='▶ Watch';
+          row.appendChild(copyBtn); row.appendChild(watchA);
+        }
         body.appendChild(row);
       });
 
@@ -15121,7 +15249,23 @@ async function openProfile(player, batches, records) {
     searchInput.style.cssText='width:100%;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:7px 10px;border-radius:6px;outline:none;margin-bottom:10px';
     const matchList = document.createElement('div');
     matchList.style.cssText='display:flex;flex-direction:column;gap:4px';
-    function buildMatchRow(r) {
+    // Inside a GFWL season group, the group header only ever says "Season
+    // 9" — the actual week/round each match was played in (e.g. "S9: WK 3")
+    // was otherwise nowhere on screen, so there was no way to tell which
+    // week any one row in a 12-match season group belonged to without
+    // opening it. Strips the leading "S9" the group header already shows so
+    // this doesn't just repeat "Season 9" on every single row — only the
+    // part after it (": WK 3", "-WV1", etc.) is shown.
+    function _seasonRowEventTag(eventLabel, seasonKey) {
+      if (!eventLabel) return '';
+      const t = eventLabel.trim();
+      if (seasonKey && t.toUpperCase().startsWith(seasonKey.toUpperCase())) {
+        const rest = t.slice(seasonKey.length).replace(/^[:\s-]+/, '').trim();
+        return rest || t;
+      }
+      return t;
+    }
+    function buildMatchRow(r, seasonKey) {
       const row = document.createElement('div');
       row.style.cssText='display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--card);border:1px solid var(--border);border-radius:5px;font-size:12px;cursor:pointer';
       row.onmouseover=()=>row.style.borderColor='var(--green)';
@@ -15134,7 +15278,11 @@ async function openProfile(player, batches, records) {
       const manualBadge = r.isManual
         ? '<span style="font-size:10px;color:'+(r.manualForfeit?'var(--red)':'var(--amber)')+';border:1px solid '+(r.manualForfeit?'var(--red)':'var(--amber)')+';border-radius:3px;padding:0 5px">'+(r.manualForfeit?'⚠ Manually Forfeited':'📝 Manual Entry')+'</span>'
         : '';
-      infoEl.innerHTML='vs <strong>'+(r.oppName||'?')+'</strong><div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:2px">'+(myDeck?'<span style="font-size:10px;color:var(--green);border:1px solid var(--green);border-radius:3px;padding:0 5px">'+myDeck+'</span>':'')+(oppDeck?'<span style="font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:3px;padding:0 5px">vs '+oppDeck+'</span>':'')+manualBadge+'</div>';
+      const eventTag = seasonKey ? _seasonRowEventTag(r.eventLabel||'', seasonKey) : '';
+      const eventBadge = eventTag
+        ? '<span style="font-size:10px;color:var(--purple);border:1px solid var(--purple);border-radius:3px;padding:0 5px">🏆 '+_escapeHtml(eventTag)+'</span>'
+        : '';
+      infoEl.innerHTML='vs <strong>'+(r.oppName||'?')+'</strong><div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:2px">'+(myDeck?'<span style="font-size:10px;color:var(--green);border:1px solid var(--green);border-radius:3px;padding:0 5px">'+myDeck+'</span>':'')+(oppDeck?'<span style="font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:3px;padding:0 5px">vs '+oppDeck+'</span>':'')+eventBadge+manualBadge+'</div>';
       const btns=document.createElement('div'); btns.style.cssText='display:flex;gap:4px;flex-shrink:0';
       if (r.isManual) {
         // No real DuelingBook replay behind a manual entry (see
@@ -15223,7 +15371,7 @@ async function openProfile(player, batches, records) {
 
         const body = document.createElement('div');
         body.style.cssText='display:flex;flex-direction:column;gap:3px;padding-left:8px;margin-bottom:6px'+(isOpen?'':';display:none');
-        recs.forEach(r => body.appendChild(buildMatchRow(r)));
+        recs.forEach(r => body.appendChild(buildMatchRow(r, isGFWLSeason(key) ? key : null)));
 
         hdr.onclick = () => {
           const nowOpen = body.style.display !== 'none';
