@@ -1412,6 +1412,59 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000).unref();
 
+// ── Wilson CI formula self-check ──────────────────────────────────────────
+// Format Data's confidence-interval column is computed entirely client-side
+// (wilsonCI() in public/index.html) — there's no server-side copy of that
+// math today, so nothing would ever notice if a future edit quietly changed
+// the z-constant, flipped a +/- sign, or otherwise broke the formula; the
+// numbers would just look "a little off" with no error anywhere. Rather
+// than keep a second, parallel implementation here (which could itself
+// drift out of sync with the real one and give false confidence), this
+// pulls the ACTUAL wilsonCI() function straight out of the live
+// public/index.html file, runs it, and checks the result against a small
+// set of (wins, n) cases that were hand-verified against the standard
+// Wilson score interval formula (z=1.96, 95%) — see the chat/commit history
+// for the by-hand derivation of each expected value.
+function extractClientFunctionSource(fnName) {
+  let html;
+  try { html = fs.readFileSync(path.join(PUB_DIR, 'index.html'), 'utf8'); }
+  catch(e) { return null; }
+  const marker = 'function ' + fnName + '(';
+  const start = html.indexOf(marker);
+  if (start === -1) return null;
+  let i = html.indexOf('{', start);
+  if (i === -1) return null;
+  let depth = 0;
+  for (; i < html.length; i++) {
+    if (html[i] === '{') depth++;
+    else if (html[i] === '}') { depth--; if (depth === 0) { i++; break; } }
+  }
+  return html.slice(start, i);
+}
+function verifyWilsonCI() {
+  const src = extractClientFunctionSource('wilsonCI');
+  if (!src) return { ok: false, error: 'Could not find wilsonCI() in public/index.html — has it been renamed, moved, or removed?' };
+  let fn;
+  try { fn = new Function('return (' + src + ')')(); }
+  catch(e) { return { ok: false, error: 'wilsonCI() in public/index.html no longer parses as valid JS: ' + e.message, source: src }; }
+  const cases = [
+    { wins: 60, n: 122, expect: { low: 40, high: 58  } }, // from the actual Chaos Turbo vs Warrior row this check was built to catch
+    { wins: 0,  n: 0,   expect: { low: 0,  high: 0   } }, // no data at all
+    { wins: 5,  n: 5,   expect: { low: 57, high: 100 } }, // small sample, perfect record
+    { wins: 0,  n: 3,   expect: { low: 0,  high: 56  } }, // small sample, zero wins
+  ];
+  const mismatches = [];
+  for (const c of cases) {
+    let actual;
+    try { actual = fn(c.wins, c.n); }
+    catch(e) { mismatches.push({ wins: c.wins, n: c.n, expect: c.expect, error: e.message }); continue; }
+    if (!actual || actual.low !== c.expect.low || actual.high !== c.expect.high) {
+      mismatches.push({ wins: c.wins, n: c.n, expect: c.expect, actual: actual || null });
+    }
+  }
+  return { ok: mismatches.length === 0, checked: cases.length, mismatches };
+}
+
 // ── HTTP server ───────────────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {
   res.req = req; // lets json()/static serving check this request's Accept-Encoding
@@ -1604,6 +1657,71 @@ const server = http.createServer(async (req, res) => {
 
     console.log('[crosslink/scan] Done:', linked, 'linked,', skipped, 'skipped,', errors, 'errors');
     return json(res, 200, { ok: true, linked, skipped, errors, batchesUpdated: batchIds.size });
+  }
+
+  // ── GET /api/admin/data-check — read-only integrity scan across EVERY
+  // saved batch system-wide (not scoped to one GFWL season like
+  // GET /api/gfwl/:season/data-health above). This is what makes Format
+  // Data's matchup table go asymmetric — e.g. Chaos Turbo reports 131
+  // matches vs Warrior, but Warrior only reports 122 vs Chaos Turbo —
+  // because buildGlobalRecordsFromBatches (client) builds one record per
+  // (batch, replay) pair, so a real match is only counted from BOTH
+  // decks' perspectives when its replayId exists as a mirrored copy in
+  // BOTH players' batches. A replay that only exists in one batch still
+  // counts toward its owner's N but has nothing to count toward the
+  // opponent's, which is exactly where the two sides stop matching up.
+  // For every replayId found on exactly one side, this reports whether
+  // the recorded opponent name resolves to a known player/alias (so
+  // POST /api/crosslink/scan above can auto-fix it by mirroring the
+  // replay into their batch) or doesn't match anyone on file at all (so
+  // it needs a human — usually linking an alias on the Profiles tab
+  // first). Also flags a replayId showing up more than twice anywhere,
+  // which is never legitimate and would inflate N beyond what either
+  // side's own matches justify.
+  if (parts[0]==='admin' && parts[1]==='data-check' && method==='GET') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    const byReplayId = {};
+    for (const batch of Object.values(db.batches)) {
+      for (const r of (batch.replays||[])) {
+        if (!byReplayId[r.replayId]) byReplayId[r.replayId] = [];
+        byReplayId[r.replayId].push({
+          batchId: batch.id,
+          player: batch.player || '',
+          oppName: r.oppName || (r.parsed && r.parsed.oppName) || '',
+          isManual: !!r.isManual,
+          eventLabel: r.eventLabel || '',
+        });
+      }
+    }
+    const missingMirrors = [];
+    const unrecognizedOpponents = [];
+    const duplicates = [];
+    for (const [replayId, copies] of Object.entries(byReplayId)) {
+      if (copies.length > 2) {
+        duplicates.push({ replayId, copies: copies.map(c => ({ player: c.player, batchId: c.batchId })) });
+        continue;
+      }
+      if (copies.length === 2) continue; // correctly mirrored — one row per side, counts will match
+      const only = copies[0];
+      if (!only.oppName) {
+        unrecognizedOpponents.push({ replayId, player: only.player, oppName: '(none recorded)', batchId: only.batchId, eventLabel: only.eventLabel, isManual: only.isManual, reason: 'No opponent name recorded on this replay' });
+        continue;
+      }
+      const resolved = findPlayerByUsername(only.oppName);
+      if (resolved) {
+        missingMirrors.push({ replayId, player: only.player, oppName: only.oppName, resolvedOpponent: resolved.name, batchId: only.batchId, eventLabel: only.eventLabel, isManual: only.isManual });
+      } else {
+        unrecognizedOpponents.push({ replayId, player: only.player, oppName: only.oppName, batchId: only.batchId, eventLabel: only.eventLabel, isManual: only.isManual, reason: 'Opponent name matches no known player or alias' });
+      }
+    }
+    const uniqueReplayIds = Object.keys(byReplayId).length;
+    return json(res, 200, {
+      uniqueReplayIds,
+      totalReplayRecords: Object.values(byReplayId).reduce((s,c)=>s+c.length, 0),
+      mirroredOk: uniqueReplayIds - missingMirrors.length - unrecognizedOpponents.length - duplicates.length,
+      missingMirrors, unrecognizedOpponents, duplicates,
+      ciCheck: verifyWilsonCI(),
+    });
   }
 
   // ── POST /api/crosslink/repair-games — fix already-mirrored replays whose

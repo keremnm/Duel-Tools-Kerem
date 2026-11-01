@@ -12172,11 +12172,34 @@ function renderFormatDataTable(deckType) {
   const mirrors = records.filter(r => (r.oppDeck||'Unknown') === deck);
   const nonMirrors = records.filter(r => (r.oppDeck||'Unknown') !== deck);
 
+  // Pre-Side Win % = win rate of a player's Game 1 only (before either side
+  // has adjusted their deck based on what they saw). Post-Side Win % = the
+  // COMBINED win rate of Games 2+3 (after siding). gameNum is 1-indexed —
+  // see buildMatchRecord's gameRecords above, which is where myWon/gameNum
+  // come from. A manual entry (see POST /api/matches/manual) has no real
+  // per-game data — r.games is deliberately [] — so it contributes to the
+  // match-level Win % column same as always, but nothing here; same for any
+  // individual game whose winner never got parsed (g.winner falsy): it's
+  // excluded from this tally rather than miscounted as a loss.
+  function gameOutcomeTally(games, gameNums) {
+    let w = 0, l = 0;
+    (games||[]).forEach(g => {
+      if (!gameNums.includes(g.gameNum)) return;
+      if (g.myWon) w++;
+      else if (g.winner) l++;
+    });
+    return { w, l };
+  }
+
   const byOpp = {};
   nonMirrors.forEach(r => {
     const k = r.oppDeck || 'Unknown';
-    if (!byOpp[k]) byOpp[k] = { w:0, l:0 };
+    if (!byOpp[k]) byOpp[k] = { w:0, l:0, g1w:0, g1l:0, psw:0, psl:0 };
     if (r.matchWon) byOpp[k].w++; else if (r.matchLost) byOpp[k].l++;
+    const g1 = gameOutcomeTally(r.games, [1]);
+    byOpp[k].g1w += g1.w; byOpp[k].g1l += g1.l;
+    const ps = gameOutcomeTally(r.games, [2,3]);
+    byOpp[k].psw += ps.w; byOpp[k].psl += ps.l;
   });
   const rows = Object.entries(byOpp).sort((a,b) => (b[1].w+b[1].l)-(a[1].w+a[1].l));
 
@@ -12187,6 +12210,18 @@ function renderFormatDataTable(deckType) {
   const fieldTot = fieldW + fieldL;
   const fieldWP = pct(fieldW, fieldTot);
   const fieldCI = wilsonCI(fieldW, fieldTot);
+  let fieldG1W=0, fieldG1L=0, fieldPSW=0, fieldPSL=0;
+  Object.values(byOpp).forEach(rec => { fieldG1W+=rec.g1w; fieldG1L+=rec.g1l; fieldPSW+=rec.psw; fieldPSL+=rec.psl; });
+
+  // Renders one Pre-Side or Post-Side win% cell — "N/A" when there's no
+  // per-game data to compute it from (all-manual matchup, or real replays
+  // that never got their per-game winner parsed).
+  function sideWinCell(w, l) {
+    const tot = w + l;
+    if (!tot) return '<td style="color:var(--dim);font-size:11px">N/A</td>';
+    const wp = pct(w, tot);
+    return `<td style="color:${wp>=50?'var(--green)':'var(--red)'}">${wp}% <span style="color:var(--muted);font-size:10px">(${tot})</span></td>`;
+  }
 
   out.innerHTML = '';
 
@@ -12208,7 +12243,7 @@ function renderFormatDataTable(deckType) {
   const table = document.createElement('table');
   table.className = 'dd-table';
   table.style.marginTop = '4px';
-  table.innerHTML = '<thead><tr><th>Opponent Deck</th><th>N</th><th>W-L</th><th>Win %</th><th>95% CI</th><th style="min-width:90px"></th></tr></thead>';
+  table.innerHTML = '<thead><tr><th>Opponent Deck</th><th>N</th><th>W-L</th><th>Win %</th><th title="Win rate of Game 1 only, before either side adjusts their deck">Pre-Side Win %</th><th title="Combined win rate of Games 2+3, after siding">Post-Side Win %</th><th>95% CI</th><th style="min-width:90px"></th></tr></thead>';
   const tbody = document.createElement('tbody');
 
   rows.forEach(([opp, rec]) => {
@@ -12223,6 +12258,8 @@ function renderFormatDataTable(deckType) {
       <td class="dd-record">${tot}</td>
       <td><span class="dd-pct-w">${rec.w}</span>-<span class="dd-pct-l">${rec.l}</span></td>
       <td style="font-weight:bold;color:${wp>=50?'var(--green)':'var(--red)'}">${wp}%</td>
+      ${sideWinCell(rec.g1w, rec.g1l)}
+      ${sideWinCell(rec.psw, rec.psl)}
       <td style="color:var(--muted);font-size:11px">${ci.low}–${ci.high}%</td>
       <td><div class="dd-winbar"><div class="dd-winbar-w" style="width:${tot?rec.w/tot*100:0}%"></div><div class="dd-winbar-l" style="width:${tot?rec.l/tot*100:0}%"></div></div></td>`;
     tbody.appendChild(tr);
@@ -12236,6 +12273,8 @@ function renderFormatDataTable(deckType) {
     <td class="dd-record">${fieldTot}</td>
     <td><span class="dd-pct-w">${fieldW}</span>-<span class="dd-pct-l">${fieldL}</span></td>
     <td style="color:${fieldWP>=50?'var(--green)':'var(--red)'}">${fieldWP}%</td>
+    ${sideWinCell(fieldG1W, fieldG1L)}
+    ${sideWinCell(fieldPSW, fieldPSL)}
     <td style="color:var(--muted);font-size:11px;font-weight:normal">${fieldCI.low}–${fieldCI.high}%</td>
     <td><div class="dd-winbar"><div class="dd-winbar-w" style="width:${fieldTot?fieldW/fieldTot*100:0}%"></div><div class="dd-winbar-l" style="width:${fieldTot?fieldL/fieldTot*100:0}%"></div></div></td>`;
   tbody.appendChild(sumTr);
@@ -12245,7 +12284,7 @@ function renderFormatDataTable(deckType) {
 
   const note = document.createElement('div');
   note.style.cssText = 'font-size:10px;color:var(--dim);margin-top:4px';
-  note.textContent = 'Deck types auto-classified by TF-IDF model. 95% CI via Wilson score interval. Mirror matches excluded from the opponent breakdown above.';
+  note.textContent = 'Deck types auto-classified by TF-IDF model. 95% CI via Wilson score interval. Mirror matches excluded from the opponent breakdown above. Pre-Side Win % = Game 1 only; Post-Side Win % = Games 2+3 combined — shown as N/A where there\'s no per-game data (manual/forfeit entries, or replays whose game winner was never parsed).';
   out.appendChild(note);
 }
 
@@ -18518,7 +18557,108 @@ async function loadCrosslinksSection(el) {
     '<div id="cl-repair-result" style="font-size:13.5px;color:var(--muted);min-height:22px;margin:12px 0"></div>' +
     '<button id="cl-repair-btn" onclick="runCrosslinkGameRepair()" style="background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:14px;padding:11px 24px;border-radius:6px;cursor:pointer">' +
       'Repair Game Data' +
-    '</button>';
+    '</button>' +
+    '<div style="font-size:15px;color:var(--text);margin:26px 0 14px;border-top:1px solid var(--border);padding-top:18px">' +
+      '<b>Check Data Integrity</b>' +
+      '<div style="font-size:13px;color:var(--muted);margin-top:8px;line-height:1.6">' +
+        'Scans every saved batch and checks that every match exists as a mirrored pair — one copy in ' +
+        'each player\'s batch. A replay that only exists on one side is exactly what makes Format Data\'s ' +
+        'matchup table stop adding up (one deck shows more matches against the other than that other deck ' +
+        'shows back). Read-only — this only reports gaps, it doesn\'t fix anything by itself.' +
+      '</div>' +
+    '</div>' +
+    '<div id="dc-check-result" style="font-size:13.5px;color:var(--muted);min-height:22px;margin:12px 0"></div>' +
+    '<button id="dc-check-btn" onclick="runDataCheck()" style="background:var(--blue);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:14px;padding:11px 24px;border-radius:6px;cursor:pointer">' +
+      'Check Data' +
+    '</button>' +
+    '<div id="dc-check-details" style="margin-top:14px"></div>';
+}
+
+// ── Admin tool: Check Data Integrity ─────────────────────────────────────
+// Read-only companion to the Scan + Link / Repair tools above — reports
+// exactly which replayIds exist on only one side of a match (so Format
+// Data's per-deck matchup counts stop matching up between the two decks
+// involved), split into "auto-fixable by the Scan button above" (opponent
+// resolves to a known player/alias) vs. "needs a human" (opponent name on
+// the replay doesn't match anything on file — usually an unlinked alias).
+async function runDataCheck() {
+  const btn = document.getElementById('dc-check-btn');
+  const res = document.getElementById('dc-check-result');
+  const details = document.getElementById('dc-check-details');
+  if (!btn || !res) return;
+  btn.disabled = true; btn.textContent = '⏳ Checking...';
+  res.style.color = 'var(--muted)'; res.textContent = 'Scanning every saved batch — this may take a moment for large datasets...';
+  details.innerHTML = '';
+  try {
+    const r = await fetch(API+'/admin/data-check', { headers: authHeaders() });
+    const d = await r.json();
+    if (!r.ok) {
+      res.style.color = 'var(--red)';
+      res.textContent = '✗ Failed: ' + (d.error||'unknown error');
+      btn.disabled = false; btn.textContent = 'Check Data';
+      return;
+    }
+    const problems = d.missingMirrors.length + d.unrecognizedOpponents.length + d.duplicates.length;
+    res.style.color = problems ? 'var(--amber)' : 'var(--green)';
+    res.textContent = problems
+      ? `Found ${problems} issue${problems!==1?'s':''} across ${d.uniqueReplayIds} saved matches: ${d.missingMirrors.length} auto-fixable, ${d.unrecognizedOpponents.length} need a human, ${d.duplicates.length} duplicate${d.duplicates.length!==1?'s':''}.`
+      : `✓ All ${d.uniqueReplayIds} saved matches are correctly mirrored — no asymmetry found.`;
+
+    const section = (title, color, items, renderRow) => {
+      if (!items.length) return '';
+      return '<div style="margin-bottom:14px">' +
+        '<div style="font-size:12px;font-weight:bold;color:'+color+';margin-bottom:6px">'+title+' ('+items.length+')</div>' +
+        '<div style="display:flex;flex-direction:column;gap:4px;max-height:280px;overflow-y:auto">' +
+        items.map(renderRow).join('') +
+        '</div></div>';
+    };
+
+    // Confidence-interval formula self-check — re-derives a few
+    // hand-verified cases straight from the actual wilsonCI() shipped in
+    // public/index.html (not a separate reimplementation here), so this
+    // catches it directly if the real function ever gets edited in a way
+    // that breaks the math — a changed z-constant, a flipped sign, etc.
+    const ci = d.ciCheck;
+    const ciHtml = !ci ? '' : '<div style="margin-bottom:14px">' +
+      '<div style="font-size:12px;font-weight:bold;color:'+(ci.ok?'var(--green)':'var(--red)')+';margin-bottom:6px">' +
+      (ci.ok
+        ? '✓ Confidence interval formula verified ('+ci.checked+'/'+ci.checked+' known cases match)'
+        : '✗ CONFIDENCE INTERVAL FORMULA ISSUE — the numbers in the 95% CI column may be wrong') +
+      '</div>' +
+      (ci.error ? '<div style="font-size:11px;font-family:monospace;color:var(--red);background:var(--card);border:1px solid var(--red);border-radius:4px;padding:5px 8px">'+_escapeHtml(ci.error)+'</div>' : '') +
+      ((ci.mismatches||[]).map(m =>
+        '<div style="font-size:11px;font-family:monospace;color:var(--red);background:var(--card);border:1px solid var(--red);border-radius:4px;padding:5px 8px;margin-top:4px">'
+        + 'wins='+m.wins+', n='+m.n+' — expected {low:'+m.expect.low+', high:'+m.expect.high+'}, got '
+        + (m.actual ? '{low:'+m.actual.low+', high:'+m.actual.high+'}' : (m.error ? 'an error: '+_escapeHtml(m.error) : 'nothing'))
+        + '</div>'
+      ).join('')) +
+      '</div>';
+
+    details.innerHTML = ciHtml +
+      section('🔧 Auto-fixable — run "Scan & Link All Replays" above', 'var(--green)', d.missingMirrors, m =>
+        '<div style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
+        + _escapeHtml(m.player) + ' vs ' + _escapeHtml(m.oppName) + ' <span style="color:var(--muted)">→ mirrors to</span> ' + _escapeHtml(m.resolvedOpponent)
+        + (m.eventLabel ? ' <span style="color:var(--amber)">· '+_escapeHtml(m.eventLabel)+'</span>' : '')
+        + (m.isManual ? ' <span style="color:var(--amber)">· manual entry</span>' : '')
+        + '</div>'
+      ) +
+      section('⚠ Needs a human — opponent name not recognized', 'var(--red)', d.unrecognizedOpponents, u =>
+        '<div style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
+        + _escapeHtml(u.player) + ' vs ' + _escapeHtml(u.oppName)
+        + (u.eventLabel ? ' <span style="color:var(--amber)">· '+_escapeHtml(u.eventLabel)+'</span>' : '')
+        + ' <span style="color:var(--dim)">— '+_escapeHtml(u.reason)+'</span>'
+        + '</div>'
+      ) +
+      section('⛔ Duplicate — same match on more than 2 copies', 'var(--red)', d.duplicates, dup =>
+        '<div style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
+        + _escapeHtml(dup.replayId) + ' — ' + dup.copies.map(c=>_escapeHtml(c.player)).join(', ')
+        + '</div>'
+      );
+  } catch(e) {
+    res.style.color = 'var(--red)';
+    res.textContent = '✗ Error: ' + e.message;
+  }
+  btn.disabled = false; btn.textContent = 'Check Data';
 }
 
 async function runCrosslinkGameRepair() {
