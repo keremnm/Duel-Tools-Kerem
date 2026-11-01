@@ -18599,17 +18599,19 @@ async function loadCrosslinksSection(el) {
       'Repair Game Data' +
     '</button>' +
     '<div style="font-size:15px;color:var(--text);margin:26px 0 14px;border-top:1px solid var(--border);padding-top:18px">' +
-      '<b>Check Data Integrity</b>' +
+      '<b>Check &amp; Fix Data Integrity</b>' +
       '<div style="font-size:13px;color:var(--muted);margin-top:8px;line-height:1.6">' +
         'Scans every saved batch and checks that every match exists as a mirrored pair — one copy in ' +
         'each player\'s batch. A replay that only exists on one side is exactly what makes Format Data\'s ' +
         'matchup table stop adding up (one deck shows more matches against the other than that other deck ' +
-        'shows back). Read-only — this only reports gaps, it doesn\'t fix anything by itself.' +
+        'shows back). Anything auto-fixable gets fixed automatically as part of this same click — no need to ' +
+        'separately run Scan &amp; Link above. Opponents that don\'t match a known player/alias yet are reported ' +
+        'for visibility only, not as errors — that\'s expected for players who just haven\'t been archived yet.' +
       '</div>' +
     '</div>' +
     '<div id="dc-check-result" style="font-size:13.5px;color:var(--muted);min-height:22px;margin:12px 0"></div>' +
     '<button id="dc-check-btn" onclick="runDataCheck()" style="background:var(--blue);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:14px;padding:11px 24px;border-radius:6px;cursor:pointer">' +
-      'Check Data' +
+      'Check &amp; Fix Data' +
     '</button>' +
     '<div id="dc-check-details" style="margin-top:14px"></div>';
 }
@@ -18630,19 +18632,52 @@ async function runDataCheck() {
   res.style.color = 'var(--muted)'; res.textContent = 'Scanning every saved batch — this may take a moment for large datasets...';
   details.innerHTML = '';
   try {
-    const r = await fetch(API+'/admin/data-check', { headers: authHeaders() });
-    const d = await r.json();
+    let r = await fetch(API+'/admin/data-check', { headers: authHeaders() });
+    let d = await r.json();
     if (!r.ok) {
       res.style.color = 'var(--red)';
       res.textContent = '✗ Failed: ' + (d.error||'unknown error');
-      btn.disabled = false; btn.textContent = 'Check Data';
+      btn.disabled = false; btn.textContent = 'Check & Fix Data';
       return;
     }
-    const problems = d.missingMirrors.length + d.unrecognizedOpponents.length + d.duplicates.length;
-    res.style.color = problems ? 'var(--amber)' : 'var(--green)';
-    res.textContent = problems
-      ? `Found ${problems} issue${problems!==1?'s':''} across ${d.uniqueReplayIds} saved matches: ${d.missingMirrors.length} auto-fixable, ${d.unrecognizedOpponents.length} need a human, ${d.duplicates.length} duplicate${d.duplicates.length!==1?'s':''}.`
-      : `✓ All ${d.uniqueReplayIds} saved matches are correctly mirrored — no asymmetry found.`;
+
+    let fixSummary = '';
+    if (d.missingMirrors.length > 0) {
+      btn.textContent = '⏳ Auto-fixing ' + d.missingMirrors.length + '...';
+      res.textContent = 'Found ' + d.missingMirrors.length + ' auto-fixable gap' + (d.missingMirrors.length!==1?'s':'') + ' — linking now...';
+      try {
+        const fr = await fetch(API+'/crosslink/scan', { method:'POST', headers: authHeaders() });
+        const fd = await fr.json();
+        if (fr.ok) {
+          fixSummary = ' Auto-fixed: linked ' + fd.linked + ' replay' + (fd.linked!==1?'s':'') + ' across ' + fd.batchesUpdated + ' batch' + (fd.batchesUpdated!==1?'es':'') + '.';
+        } else {
+          fixSummary = ' ⚠ Auto-fix attempt failed: ' + (fd.error||'unknown error') + '.';
+        }
+      } catch(fe) {
+        fixSummary = ' ⚠ Auto-fix attempt errored: ' + fe.message + '.';
+      }
+      // Re-check so the numbers shown reflect the post-fix state.
+      btn.textContent = '⏳ Re-checking...';
+      res.textContent = 'Re-checking after auto-fix...';
+      r = await fetch(API+'/admin/data-check', { headers: authHeaders() });
+      d = await r.json();
+      if (!r.ok) {
+        res.style.color = 'var(--red)';
+        res.textContent = '✗ Fix ran, but re-check failed: ' + (d.error||'unknown error');
+        btn.disabled = false; btn.textContent = 'Check & Fix Data';
+        return;
+      }
+    }
+
+    // "Needs a human" (unrecognized opponent) is informational, not an error —
+    // it just means that opponent hasn't been archived/aliased as a known
+    // player yet. It's expected and will naturally shrink over time as more
+    // players get added, so it's excluded from the "issues" count/coloring.
+    const realProblems = d.missingMirrors.length + d.duplicates.length;
+    res.style.color = realProblems ? 'var(--amber)' : 'var(--green)';
+    res.textContent = (realProblems
+      ? `Found ${realProblems} issue${realProblems!==1?'s':''} across ${d.uniqueReplayIds} saved matches: ${d.missingMirrors.length} auto-fixable, ${d.duplicates.length} duplicate${d.duplicates.length!==1?'s':''}.`
+      : `✓ All ${d.uniqueReplayIds} saved matches are correctly mirrored — no asymmetry found.`) + fixSummary;
 
     const section = (title, color, items, renderRow) => {
       if (!items.length) return '';
@@ -18674,31 +18709,48 @@ async function runDataCheck() {
       ).join('')) +
       '</div>';
 
+    const unrecognizedHtml = !d.unrecognizedOpponents.length ? '' :
+      '<div style="margin-bottom:14px">' +
+        '<details>' +
+          '<summary style="font-size:12px;font-weight:bold;color:var(--muted);cursor:pointer">' +
+            'ℹ Opponent not archived yet (' + d.unrecognizedOpponents.length + ') — informational, not an error' +
+          '</summary>' +
+          '<div style="font-size:11px;color:var(--dim);margin:6px 0 8px">' +
+            'These are matches where the opponent name doesn\'t match a known player/alias yet. This is expected — ' +
+            'they just haven\'t been archived into the system. They\'ll resolve on their own once those players are added. ' +
+            'Click to expand the list if you want to review it.' +
+          '</div>' +
+          '<div style="display:flex;flex-direction:column;gap:4px;max-height:280px;overflow-y:auto">' +
+          d.unrecognizedOpponents.map(u =>
+            '<div style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
+            + _escapeHtml(u.player) + ' vs ' + _escapeHtml(u.oppName)
+            + (u.eventLabel ? ' <span style="color:var(--amber)">· '+_escapeHtml(u.eventLabel)+'</span>' : '')
+            + ' <span style="color:var(--dim)">— '+_escapeHtml(u.reason)+'</span>'
+            + '</div>'
+          ).join('') +
+          '</div>' +
+        '</details>' +
+      '</div>';
+
     details.innerHTML = ciHtml +
-      section('🔧 Auto-fixable — run "Scan & Link All Replays" above', 'var(--green)', d.missingMirrors, m =>
+      section('🔧 Auto-fixable — remaining after auto-fix', 'var(--green)', d.missingMirrors, m =>
         '<div style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
         + _escapeHtml(m.player) + ' vs ' + _escapeHtml(m.oppName) + ' <span style="color:var(--muted)">→ mirrors to</span> ' + _escapeHtml(m.resolvedOpponent)
         + (m.eventLabel ? ' <span style="color:var(--amber)">· '+_escapeHtml(m.eventLabel)+'</span>' : '')
         + (m.isManual ? ' <span style="color:var(--amber)">· manual entry</span>' : '')
         + '</div>'
       ) +
-      section('⚠ Needs a human — opponent name not recognized', 'var(--red)', d.unrecognizedOpponents, u =>
-        '<div style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
-        + _escapeHtml(u.player) + ' vs ' + _escapeHtml(u.oppName)
-        + (u.eventLabel ? ' <span style="color:var(--amber)">· '+_escapeHtml(u.eventLabel)+'</span>' : '')
-        + ' <span style="color:var(--dim)">— '+_escapeHtml(u.reason)+'</span>'
-        + '</div>'
-      ) +
       section('⛔ Duplicate — same match on more than 2 copies', 'var(--red)', d.duplicates, dup =>
         '<div style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
         + _escapeHtml(dup.replayId) + ' — ' + dup.copies.map(c=>_escapeHtml(c.player)).join(', ')
         + '</div>'
-      );
+      ) +
+      unrecognizedHtml;
   } catch(e) {
     res.style.color = 'var(--red)';
     res.textContent = '✗ Error: ' + e.message;
   }
-  btn.disabled = false; btn.textContent = 'Check Data';
+  btn.disabled = false; btn.textContent = 'Check & Fix Data';
 }
 
 async function runCrosslinkGameRepair() {
