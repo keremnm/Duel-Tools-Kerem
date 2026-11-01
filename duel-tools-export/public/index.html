@@ -822,6 +822,10 @@ select{cursor:pointer}
             style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;width:84px">
             <option value="">All</option>
           </select>
+          <button id="fd-recompute-btn" onclick="recomputeFormatData()" title="Format Data caches every saved replay in memory after the first load this session — this forces a fresh re-fetch and rebuild from the server instead of reusing that cache, so changes made elsewhere (e.g. running Scan & Link on Admin → Cross-Links) actually show up here without a full page reload."
+            style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer">
+            ↻ Recompute
+          </button>
         </div>
         <div id="fd-output"><div class="dd-empty">Loading replay data…</div></div>
       </div>
@@ -12013,7 +12017,19 @@ function buildGlobalRecordsFromBatches(batchList) {
   return records;
 }
 
-async function loadGlobalRecords() {
+async function loadGlobalRecords(force) {
+  // _globalRecords is a module-level cache populated once per page session
+  // (see loadFormatData's `if (!_globalRecords.length)` guard below) — by
+  // design, so switching tabs back to Format Data doesn't re-fetch every
+  // saved replay system-wide every time. The cost: once populated, nothing
+  // ever invalidates it, so a fix made elsewhere this same session (running
+  // Scan & Link on Admin → Cross-Links, adding a manual match, re-running
+  // Deck Type recheck) stays invisible on Format Data until a full page
+  // reload — which looks exactly like "the fix didn't work." `force` is
+  // how the Recompute button (and nothing else) bypasses that: it always
+  // re-fetches from the server and overwrites the cache, regardless of
+  // what's already in it.
+  if (force) _globalRecords = [];
   // Fast path: one request for every batch's full replay data, pre-joined
   // server-side (see GET /api/batches/all-full). This is what used to take
   // 1 + N requests — one for the batch list, then one more per non-empty
@@ -12067,16 +12083,40 @@ function wilsonCI(wins, n) {
   return { low: Math.round(low), high: Math.round(high) };
 }
 
-async function loadFormatData() {
+async function loadFormatData(force) {
   const out = document.getElementById('fd-output');
-  if (!_globalRecords.length) {
+  if (!_globalRecords.length || force) {
     out.innerHTML = '<div class="dd-empty">Loading replay data…</div>';
-    await loadGlobalRecords();
+    await loadGlobalRecords(force);
   }
   populateFormatDataYearSeasonFilters();
   populateFormatDataDropdown();
   const sel = document.getElementById('fd-deck-select');
   renderFormatDataTable(sel ? sel.value : '');
+}
+
+// "↻ Recompute" button — forces Format Data to throw away its cached
+// _globalRecords and re-fetch + rebuild from scratch, instead of silently
+// going stale for the rest of the session every time something that
+// touches replay data changes elsewhere (Admin → Cross-Links' Scan & Link,
+// a manual match add, a deck-type recheck). Keeps the currently-selected
+// deck type and year/season filters so re-checking a specific matchup
+// after a fix doesn't lose your place.
+async function recomputeFormatData() {
+  const btn = document.getElementById('fd-recompute-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Recomputing...'; }
+  const deckSel = document.getElementById('fd-deck-select');
+  const yearSel = document.getElementById('fd-year-filter');
+  const seasonSel = document.getElementById('fd-season-filter');
+  const keepDeck = deckSel ? deckSel.value : '';
+  const keepYear = yearSel ? yearSel.value : '';
+  const keepSeason = seasonSel ? seasonSel.value : '';
+  await loadFormatData(true);
+  if (yearSel && keepYear) yearSel.value = keepYear;
+  if (seasonSel && keepSeason) seasonSel.value = keepSeason;
+  if (deckSel && keepDeck && [...deckSel.options].some(o=>o.value===keepDeck)) deckSel.value = keepDeck;
+  renderFormatDataTable(deckSel ? deckSel.value : '');
+  if (btn) { btn.disabled = false; btn.textContent = '↻ Recompute'; }
 }
 
 // Year + GFWL Season filter dropdowns, populated from every saved replay
