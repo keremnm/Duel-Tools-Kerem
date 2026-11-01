@@ -18612,6 +18612,9 @@ async function loadCrosslinksSection(el) {
     '<div id="dc-check-result" style="font-size:13.5px;color:var(--muted);min-height:22px;margin:12px 0"></div>' +
     '<button id="dc-check-btn" onclick="runDataCheck()" style="background:var(--blue);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:14px;padding:11px 24px;border-radius:6px;cursor:pointer">' +
       'Check &amp; Fix Data' +
+    '</button> ' +
+    '<button id="dc-export-dupes-btn" onclick="exportDuplicatesCsv()" style="display:none;background:transparent;color:var(--text);border:1px solid var(--border);font-family:monospace;font-weight:bold;font-size:14px;padding:10px 20px;border-radius:6px;cursor:pointer">' +
+      '⬇ Export Duplicates (CSV)' +
     '</button>' +
     '<div id="dc-check-details" style="margin-top:14px"></div>';
 }
@@ -18623,6 +18626,10 @@ async function loadCrosslinksSection(el) {
 // involved), split into "auto-fixable by the Scan button above" (opponent
 // resolves to a known player/alias) vs. "needs a human" (opponent name on
 // the replay doesn't match anything on file — usually an unlinked alias).
+// Last data-check result, kept around so "Export Duplicates" can build its
+// CSV from what's already on screen without firing another full scan.
+let _lastDataCheck = null;
+
 async function runDataCheck() {
   const btn = document.getElementById('dc-check-btn');
   const res = document.getElementById('dc-check-result');
@@ -18646,10 +18653,17 @@ async function runDataCheck() {
       btn.textContent = '⏳ Auto-fixing ' + d.missingMirrors.length + '...';
       res.textContent = 'Found ' + d.missingMirrors.length + ' auto-fixable gap' + (d.missingMirrors.length!==1?'s':'') + ' — linking now...';
       try {
-        const fr = await fetch(API+'/crosslink/scan', { method:'POST', headers: authHeaders() });
+        // Targeted autofix, not the blanket /crosslink/scan — that one skips
+        // any replay already flagged crossLinked:true, which can silently
+        // leave a genuinely-unmirrored replay stuck forever if that flag got
+        // set on the wrong side by old/bad data. This recomputes the exact
+        // same missingMirrors list server-side and links each one directly.
+        const fr = await fetch(API+'/admin/data-check/autofix', { method:'POST', headers: authHeaders() });
         const fd = await fr.json();
         if (fr.ok) {
           fixSummary = ' Auto-fixed: linked ' + fd.linked + ' replay' + (fd.linked!==1?'s':'') + ' across ' + fd.batchesUpdated + ' batch' + (fd.batchesUpdated!==1?'es':'') + '.';
+          if (fd.skipped) fixSummary += ' ' + fd.skipped + ' couldn\'t be linked (opponent already had data, or a self/alias conflict).';
+          if (fd.errors) fixSummary += ' ' + fd.errors + ' errored — check server logs.';
         } else {
           fixSummary = ' ⚠ Auto-fix attempt failed: ' + (fd.error||'unknown error') + '.';
         }
@@ -18669,14 +18683,22 @@ async function runDataCheck() {
       }
     }
 
+    _lastDataCheck = d;
+    const exportBtn = document.getElementById('dc-export-dupes-btn');
+    if (exportBtn) exportBtn.style.display = d.duplicates.length ? '' : 'none';
+
     // "Needs a human" (unrecognized opponent) is informational, not an error —
     // it just means that opponent hasn't been archived/aliased as a known
     // player yet. It's expected and will naturally shrink over time as more
     // players get added, so it's excluded from the "issues" count/coloring.
-    const realProblems = d.missingMirrors.length + d.duplicates.length;
+    // Self-alias conflicts ARE a real data problem (a bad alias), but they
+    // can't be fixed by mirroring/linking — only by editing the alias — so
+    // they're called out separately rather than lumped into "auto-fixable".
+    const selfConflicts = d.selfAliasConflicts || [];
+    const realProblems = d.missingMirrors.length + d.duplicates.length + selfConflicts.length;
     res.style.color = realProblems ? 'var(--amber)' : 'var(--green)';
     res.textContent = (realProblems
-      ? `Found ${realProblems} issue${realProblems!==1?'s':''} across ${d.uniqueReplayIds} saved matches: ${d.missingMirrors.length} auto-fixable, ${d.duplicates.length} duplicate${d.duplicates.length!==1?'s':''}.`
+      ? `Found ${realProblems} issue${realProblems!==1?'s':''} across ${d.uniqueReplayIds} saved matches: ${d.missingMirrors.length} auto-fixable, ${d.duplicates.length} duplicate${d.duplicates.length!==1?'s':''}${selfConflicts.length?`, ${selfConflicts.length} bad alias${selfConflicts.length!==1?'es':''}`:''}.`
       : `✓ All ${d.uniqueReplayIds} saved matches are correctly mirrored — no asymmetry found.`) + fixSummary;
 
     const section = (title, color, items, renderRow) => {
@@ -18740,6 +18762,13 @@ async function runDataCheck() {
         + (m.isManual ? ' <span style="color:var(--amber)">· manual entry</span>' : '')
         + '</div>'
       ) +
+      section('⚠ Bad alias — opponent resolves to the same player', 'var(--red)', selfConflicts, c =>
+        '<div style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
+        + _escapeHtml(c.player) + ' vs ' + _escapeHtml(c.oppName)
+        + (c.eventLabel ? ' <span style="color:var(--amber)">· '+_escapeHtml(c.eventLabel)+'</span>' : '')
+        + ' <span style="color:var(--dim)">— '+_escapeHtml(c.reason)+'</span>'
+        + '</div>'
+      ) +
       section('⛔ Duplicate — same match on more than 2 copies', 'var(--red)', d.duplicates, dup =>
         '<div style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
         + _escapeHtml(dup.replayId) + ' — ' + dup.copies.map(c=>_escapeHtml(c.player)).join(', ')
@@ -18751,6 +18780,43 @@ async function runDataCheck() {
     res.textContent = '✗ Error: ' + e.message;
   }
   btn.disabled = false; btn.textContent = 'Check & Fix Data';
+}
+
+// Builds a CSV of every duplicate replay's copies (one row per copy, so each
+// side of a bad triple/quadruple is its own line) from the most recent Check
+// & Fix Data result, and downloads it straight from the browser — no server
+// round-trip beyond the check that already ran. Lets the user go through the
+// 54-ish duplicate groups one by one in Excel/Sheets instead of scrolling a
+// cramped in-page list.
+function exportDuplicatesCsv() {
+  const d = _lastDataCheck;
+  if (!d || !d.duplicates || !d.duplicates.length) return;
+  const esc = v => {
+    const s = (v===null||v===undefined) ? '' : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
+  };
+  const rows = [['Replay ID','Player','Opponent Name','Event','Manual Entry','Result','Score','My Deck','Opp Deck','Batch ID','Saved At']];
+  for (const dup of d.duplicates) {
+    for (const c of dup.copies) {
+      rows.push([
+        dup.replayId, c.player||'', c.oppName||'', c.eventLabel||'', c.isManual ? 'yes' : '',
+        c.result||'', c.score||'', c.myDeck||'', c.oppDeck||'', c.batchId||'',
+        c.savedAt ? new Date(c.savedAt).toISOString() : '',
+      ]);
+    }
+    // Blank separator row between duplicate groups so they're easy to scan.
+    rows.push([]);
+  }
+  const csv = rows.map(row => row.map(esc).join(',')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'duel-tools-duplicate-replays-' + new Date().toISOString().slice(0,10) + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 async function runCrosslinkGameRepair() {

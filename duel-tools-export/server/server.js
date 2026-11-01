@@ -1400,6 +1400,76 @@ function crossLinkReplay(replayData, opponentUsername, originalBatchPlayer) {
   return { linked: true, duplicate: false, batchId: batch.id, player: opponentEntry.name };
 }
 
+// Shared data-check computation — used by both GET /api/admin/data-check
+// (read-only report) and POST /api/admin/data-check/autofix (the targeted
+// fix) below, so both always agree on exactly which replays are missing a
+// mirror. Groups every saved replay by replayId: a replayId appearing
+// exactly twice is a correctly-mirrored match; appearing once is either
+// auto-fixable (opponent name resolves to a known player who doesn't have
+// it yet), a self-alias conflict (resolves right back to the SAME player —
+// never auto-fixable, always a bad alias), or unrecognized (needs a human to
+// archive/alias that player); appearing more than twice is a duplicate.
+// missingMirrors entries carry _replay/_batchPlayer — references to the real
+// in-memory objects, used ONLY by the autofix endpoint and stripped before
+// anything is sent to the client.
+function computeDataCheck() {
+  const byReplayId = {};
+  for (const batch of Object.values(db.batches)) {
+    for (const r of (batch.replays||[])) {
+      if (!byReplayId[r.replayId]) byReplayId[r.replayId] = [];
+      byReplayId[r.replayId].push({
+        batchId: batch.id,
+        player: batch.player || '',
+        oppName: r.oppName || (r.parsed && r.parsed.oppName) || '',
+        isManual: !!r.isManual,
+        eventLabel: r.eventLabel || '',
+        result: r.resultOverride || (r.parsed && r.parsed.resultOverride) || (r.parsed && r.parsed.result) || r.result || '',
+        score: r.scoreOverride ? `${r.scoreOverride.my}-${r.scoreOverride.opp}` : ((r.parsed && r.parsed.score) || ''),
+        myDeck: r.myDeckOverride || (r.parsed && r.parsed.myDeck) || 'Unknown',
+        oppDeck: r.oppDeckOverride || (r.parsed && r.parsed.oppDeck) || 'Unknown',
+        savedAt: r.savedAt || null,
+        _replay: r,
+      });
+    }
+  }
+  const missingMirrors = [];
+  const unrecognizedOpponents = [];
+  const duplicates = [];
+  const selfAliasConflicts = [];
+  for (const [replayId, copies] of Object.entries(byReplayId)) {
+    if (copies.length > 2) {
+      duplicates.push({ replayId, copies: copies.map(c => ({
+        player: c.player, batchId: c.batchId, oppName: c.oppName, eventLabel: c.eventLabel,
+        isManual: c.isManual, result: c.result, score: c.score, myDeck: c.myDeck, oppDeck: c.oppDeck, savedAt: c.savedAt,
+      })) });
+      continue;
+    }
+    if (copies.length === 2) continue; // correctly mirrored — one row per side, counts will match
+    const only = copies[0];
+    if (!only.oppName) {
+      unrecognizedOpponents.push({ replayId, player: only.player, oppName: '(none recorded)', batchId: only.batchId, eventLabel: only.eventLabel, isManual: only.isManual, reason: 'No opponent name recorded on this replay' });
+      continue;
+    }
+    const resolved = findPlayerByUsername(only.oppName);
+    if (!resolved) {
+      unrecognizedOpponents.push({ replayId, player: only.player, oppName: only.oppName, batchId: only.batchId, eventLabel: only.eventLabel, isManual: only.isManual, reason: 'Opponent name matches no known player or alias' });
+      continue;
+    }
+    // The resolved opponent IS this same player — almost always a bad alias
+    // (someone else's name, or a garbage/placeholder string, got attached to
+    // this player's own profile). Linking a replay to its own owner is
+    // meaningless and crossLinkReplay correctly refuses it, so this can
+    // never be auto-fixed by mirroring — it needs a human to fix the alias.
+    if (resolved.name.toLowerCase() === only.player.toLowerCase()) {
+      selfAliasConflicts.push({ replayId, player: only.player, oppName: only.oppName, batchId: only.batchId, eventLabel: only.eventLabel, isManual: only.isManual,
+        reason: `"${only.oppName}" is recorded as an alias of ${resolved.name} — but that's this same player, so it can't be their own opponent. Check ${resolved.name}'s aliases on the Profiles tab.` });
+      continue;
+    }
+    missingMirrors.push({ replayId, player: only.player, oppName: only.oppName, resolvedOpponent: resolved.name, batchId: only.batchId, eventLabel: only.eventLabel, isManual: only.isManual, _replay: only._replay, _batchPlayer: only.player });
+  }
+  return { byReplayId, missingMirrors, unrecognizedOpponents, duplicates, selfAliasConflicts };
+}
+
 // In-memory store for the Live Tracker relay — see the route handler below
 // for why this deliberately isn't part of the persisted `db`.
 const liveSessions = new Map(); // code -> { data, updatedAt, pendingSide?: { main, setAt } }
@@ -1680,48 +1750,63 @@ const server = http.createServer(async (req, res) => {
   // side's own matches justify.
   if (parts[0]==='admin' && parts[1]==='data-check' && method==='GET') {
     if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
-    const byReplayId = {};
-    for (const batch of Object.values(db.batches)) {
-      for (const r of (batch.replays||[])) {
-        if (!byReplayId[r.replayId]) byReplayId[r.replayId] = [];
-        byReplayId[r.replayId].push({
-          batchId: batch.id,
-          player: batch.player || '',
-          oppName: r.oppName || (r.parsed && r.parsed.oppName) || '',
-          isManual: !!r.isManual,
-          eventLabel: r.eventLabel || '',
-        });
-      }
-    }
-    const missingMirrors = [];
-    const unrecognizedOpponents = [];
-    const duplicates = [];
-    for (const [replayId, copies] of Object.entries(byReplayId)) {
-      if (copies.length > 2) {
-        duplicates.push({ replayId, copies: copies.map(c => ({ player: c.player, batchId: c.batchId })) });
-        continue;
-      }
-      if (copies.length === 2) continue; // correctly mirrored — one row per side, counts will match
-      const only = copies[0];
-      if (!only.oppName) {
-        unrecognizedOpponents.push({ replayId, player: only.player, oppName: '(none recorded)', batchId: only.batchId, eventLabel: only.eventLabel, isManual: only.isManual, reason: 'No opponent name recorded on this replay' });
-        continue;
-      }
-      const resolved = findPlayerByUsername(only.oppName);
-      if (resolved) {
-        missingMirrors.push({ replayId, player: only.player, oppName: only.oppName, resolvedOpponent: resolved.name, batchId: only.batchId, eventLabel: only.eventLabel, isManual: only.isManual });
-      } else {
-        unrecognizedOpponents.push({ replayId, player: only.player, oppName: only.oppName, batchId: only.batchId, eventLabel: only.eventLabel, isManual: only.isManual, reason: 'Opponent name matches no known player or alias' });
-      }
-    }
-    const uniqueReplayIds = Object.keys(byReplayId).length;
+    const dc = computeDataCheck();
+    const uniqueReplayIds = Object.keys(dc.byReplayId).length;
+    const stripMirrors = dc.missingMirrors.map(({_replay, _batchPlayer, ...rest}) => rest);
     return json(res, 200, {
       uniqueReplayIds,
-      totalReplayRecords: Object.values(byReplayId).reduce((s,c)=>s+c.length, 0),
-      mirroredOk: uniqueReplayIds - missingMirrors.length - unrecognizedOpponents.length - duplicates.length,
-      missingMirrors, unrecognizedOpponents, duplicates,
+      totalReplayRecords: Object.values(dc.byReplayId).reduce((s,c)=>s+c.length, 0),
+      mirroredOk: uniqueReplayIds - dc.missingMirrors.length - dc.unrecognizedOpponents.length - dc.duplicates.length - dc.selfAliasConflicts.length,
+      missingMirrors: stripMirrors,
+      unrecognizedOpponents: dc.unrecognizedOpponents,
+      duplicates: dc.duplicates,
+      selfAliasConflicts: dc.selfAliasConflicts,
       ciCheck: verifyWilsonCI(),
     });
+  }
+
+  // ── POST /api/admin/data-check/autofix — targeted, authoritative fix for
+  // exactly the replays GET /api/admin/data-check reports as missingMirrors.
+  // POST /api/crosslink/scan does a blanket pass over every saved replay and
+  // skips anything already flagged crossLinked:true (normally correct — it's
+  // what keeps a mirror from chaining off itself). But that means a replay
+  // whose crossLinked flag ended up true on the ORIGINAL side instead of just
+  // the mirror (bad data from an earlier bug, a merge, etc.) gets skipped by
+  // that scan forever, even though data-check's replayId grouping proves it
+  // genuinely has no mirror anywhere. This recomputes that same authoritative
+  // list and calls crossLinkReplay directly on each one, bypassing the flag —
+  // safe specifically because the grouping already proved there's nothing to
+  // collide with. Self-alias conflicts (see computeDataCheck) are excluded —
+  // those can never be fixed by mirroring, only by fixing the alias itself.
+  if (parts[0]==='admin' && parts[1]==='data-check' && parts[2]==='autofix' && method==='POST') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    const dc = computeDataCheck();
+    let linked = 0, skipped = 0, errors = 0;
+    const batchIds = new Set();
+    const details = [];
+    for (const m of dc.missingMirrors) {
+      try {
+        const cl = crossLinkReplay(m._replay, m.oppName, m._batchPlayer);
+        if (cl && cl.linked) {
+          linked++;
+          batchIds.add(cl.batchId);
+          details.push({ replayId: m.replayId, player: m.player, oppName: m.oppName, status: cl.upgraded ? 'upgraded' : 'linked' });
+        } else {
+          skipped++;
+          details.push({ replayId: m.replayId, player: m.player, oppName: m.oppName, status: (cl && cl.duplicate) ? 'duplicate' : 'refused',
+            reason: (cl && cl.duplicate) ? 'Opponent already has real data for this replay' : 'Resolved opponent conflicts with the original player (self/alias match)' });
+        }
+      } catch(e) {
+        errors++;
+        details.push({ replayId: m.replayId, player: m.player, oppName: m.oppName, status: 'error', reason: e.message });
+        console.error('[data-check/autofix] Error on', m.replayId, e.message);
+      }
+    }
+    for (const bid of batchIds) {
+      await saveBatchToPostgres(bid).catch(e => console.error('[data-check/autofix] save error:', e.message));
+    }
+    console.log('[data-check/autofix] Done:', linked, 'linked,', skipped, 'skipped,', errors, 'errors');
+    return json(res, 200, { ok: true, linked, skipped, errors, batchesUpdated: batchIds.size, details });
   }
 
   // ── POST /api/crosslink/repair-games — fix already-mirrored replays whose
