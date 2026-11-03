@@ -12232,9 +12232,12 @@ function renderFormatDataTable(deckType) {
   }
 
   const byOpp = {};
+  const byOppRecords = {}; // raw match records per opponent deck — feeds the Games drill-down
   nonMirrors.forEach(r => {
     const k = r.oppDeck || 'Unknown';
     if (!byOpp[k]) byOpp[k] = { w:0, l:0, g1w:0, g1l:0, psw:0, psl:0 };
+    if (!byOppRecords[k]) byOppRecords[k] = [];
+    byOppRecords[k].push(r);
     if (r.matchWon) byOpp[k].w++; else if (r.matchLost) byOpp[k].l++;
     const g1 = gameOutcomeTally(r.games, [1]);
     byOpp[k].g1w += g1.w; byOpp[k].g1l += g1.l;
@@ -12283,7 +12286,7 @@ function renderFormatDataTable(deckType) {
   const table = document.createElement('table');
   table.className = 'dd-table';
   table.style.marginTop = '4px';
-  table.innerHTML = '<thead><tr><th>Opponent Deck</th><th>N</th><th>W-L</th><th>Win %</th><th title="Win rate of Game 1 only, before either side adjusts their deck">Pre-Side Win %</th><th title="Combined win rate of Games 2+3, after siding">Post-Side Win %</th><th>95% CI</th><th style="min-width:90px"></th></tr></thead>';
+  table.innerHTML = '<thead><tr><th>Opponent Deck</th><th>N</th><th>W-L</th><th>Win %</th><th title="Win rate of Game 1 only, before either side adjusts their deck">Pre-Side Win %</th><th title="Combined win rate of Games 2+3, after siding">Post-Side Win %</th><th title="Click a row to see every individual match\'s Game 1/2/3 results">Games</th><th>95% CI</th><th style="min-width:90px"></th></tr></thead>';
   const tbody = document.createElement('tbody');
 
   rows.forEach(([opp, rec]) => {
@@ -12292,7 +12295,7 @@ function renderFormatDataTable(deckType) {
     const ci = wilsonCI(rec.w, tot);
     const tr = document.createElement('tr');
     tr.style.cursor = 'pointer';
-    tr.title = 'Click to see these replays in the Deck Viewer';
+    tr.title = 'Click to see every individual match vs ' + opp + ' (Game 1/2/3 results)';
     tr.innerHTML = `
       <td style="font-weight:bold;color:var(--text)">${opp}</td>
       <td class="dd-record">${tot}</td>
@@ -12300,8 +12303,10 @@ function renderFormatDataTable(deckType) {
       <td style="font-weight:bold;color:${wp>=50?'var(--green)':'var(--red)'}">${wp}%</td>
       ${sideWinCell(rec.g1w, rec.g1l)}
       ${sideWinCell(rec.psw, rec.psl)}
+      <td style="text-align:center;color:var(--muted)"><span class="fd-games-caret">▸</span></td>
       <td style="color:var(--muted);font-size:11px">${ci.low}–${ci.high}%</td>
       <td><div class="dd-winbar"><div class="dd-winbar-w" style="width:${tot?rec.w/tot*100:0}%"></div><div class="dd-winbar-l" style="width:${tot?rec.l/tot*100:0}%"></div></div></td>`;
+    tr.onclick = () => toggleFormatDataMatchLog(tr, opp, byOppRecords[opp]||[]);
     tbody.appendChild(tr);
   });
 
@@ -12315,6 +12320,7 @@ function renderFormatDataTable(deckType) {
     <td style="color:${fieldWP>=50?'var(--green)':'var(--red)'}">${fieldWP}%</td>
     ${sideWinCell(fieldG1W, fieldG1L)}
     ${sideWinCell(fieldPSW, fieldPSL)}
+    <td></td>
     <td style="color:var(--muted);font-size:11px;font-weight:normal">${fieldCI.low}–${fieldCI.high}%</td>
     <td><div class="dd-winbar"><div class="dd-winbar-w" style="width:${fieldTot?fieldW/fieldTot*100:0}%"></div><div class="dd-winbar-l" style="width:${fieldTot?fieldL/fieldTot*100:0}%"></div></div></td>`;
   tbody.appendChild(sumTr);
@@ -12324,8 +12330,99 @@ function renderFormatDataTable(deckType) {
 
   const note = document.createElement('div');
   note.style.cssText = 'font-size:10px;color:var(--dim);margin-top:4px';
-  note.textContent = 'Deck types auto-classified by TF-IDF model. 95% CI via Wilson score interval. Mirror matches excluded from the opponent breakdown above. Pre-Side Win % = Game 1 only; Post-Side Win % = Games 2+3 combined — shown as N/A where there\'s no per-game data (manual/forfeit entries, or replays whose game winner was never parsed).';
+  note.textContent = 'Deck types auto-classified by TF-IDF model. 95% CI via Wilson score interval. Mirror matches excluded from the opponent breakdown above. Pre-Side Win % = Game 1 only; Post-Side Win % = Games 2+3 combined — shown as N/A where there\'s no per-game data (manual/forfeit entries, or replays whose game winner was never parsed). Click a row to see every individual match\'s Game 1/2/3 results.';
   out.appendChild(note);
+}
+
+// Expands/collapses the per-match Game 1/2/3 log directly under a clicked
+// Format Data matchup row (see renderFormatDataTable's "Games" column). Only
+// one log is kept open per table at a time, so re-clicking another row swaps
+// it rather than stacking several open panels.
+function toggleFormatDataMatchLog(tr, oppDeck, recs) {
+  const tbody = tr.parentNode;
+  const already = tr.nextElementSibling;
+  const wasOpen = already && already.classList && already.classList.contains('fd-match-log-row');
+  if (tbody) {
+    tbody.querySelectorAll('.fd-match-log-row').forEach(r => r.remove());
+    tbody.querySelectorAll('.fd-games-caret').forEach(c => c.textContent = '▸');
+  }
+  if (wasOpen) return; // clicking the already-open row just closes it
+  const caret = tr.querySelector('.fd-games-caret');
+  if (caret) caret.textContent = '▾';
+  const detailTr = document.createElement('tr');
+  detailTr.className = 'fd-match-log-row';
+  const td = document.createElement('td');
+  td.colSpan = tr.children.length;
+  td.style.cssText = 'padding:10px 14px;background:var(--card2)';
+  td.appendChild(buildFormatDataMatchLog(oppDeck, recs));
+  detailTr.appendChild(td);
+  tr.parentNode.insertBefore(detailTr, tr.nextSibling);
+}
+
+// Builds the per-match Game 1/2/3 breakdown table shown when a Format Data
+// matchup row is expanded. One row per real match (manual/forfeit entries
+// have no per-game data, so their G1/G2/G3 cells just show "–").
+function buildFormatDataMatchLog(oppDeck, recs) {
+  const wrap = document.createElement('div');
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'font-size:11px;color:var(--muted);margin-bottom:6px';
+  hdr.textContent = recs.length + ' individual match' + (recs.length!==1?'es':'') + ' vs ' + oppDeck + ':';
+  wrap.appendChild(hdr);
+
+  const t = document.createElement('table');
+  t.style.cssText = 'width:100%;border-collapse:collapse;font-size:11px';
+  t.innerHTML = '<thead><tr>' +
+    '<th style="text-align:left;padding:4px 8px;color:var(--muted);font-weight:normal">Opponent</th>' +
+    '<th style="text-align:left;padding:4px 8px;color:var(--muted);font-weight:normal">Event</th>' +
+    '<th style="text-align:center;padding:4px 8px;color:var(--muted);font-weight:normal">G1</th>' +
+    '<th style="text-align:center;padding:4px 8px;color:var(--muted);font-weight:normal">G2</th>' +
+    '<th style="text-align:center;padding:4px 8px;color:var(--muted);font-weight:normal">G3</th>' +
+    '<th style="text-align:left;padding:4px 8px;color:var(--muted);font-weight:normal">Result</th>' +
+    '<th style="padding:4px 8px"></th>' +
+  '</tr></thead>';
+  const tb = document.createElement('tbody');
+
+  function gameBadge(r, n) {
+    const g = (r.games||[]).find(x => x.gameNum === n);
+    if (!g) return '<span style="color:var(--dim)">–</span>';
+    if (!g.winner) return '<span style="color:var(--dim)">?</span>';
+    return g.myWon
+      ? '<span style="color:var(--green);font-weight:bold">W</span>'
+      : '<span style="color:var(--red);font-weight:bold">L</span>';
+  }
+
+  recs.forEach(r => {
+    const row = document.createElement('tr');
+    row.style.cssText = 'border-top:1px solid var(--border)';
+    const resCol = r.matchWon ? 'var(--green)' : r.matchLost ? 'var(--red)' : 'var(--muted)';
+    const manualBadge = r.isManual
+      ? ' <span style="font-size:9px;color:'+(r.manualForfeit?'var(--red)':'var(--amber)')+';border:1px solid '+(r.manualForfeit?'var(--red)':'var(--amber)')+';border-radius:3px;padding:0 4px">'+(r.manualForfeit?'Forfeit':'Manual')+'</span>'
+      : '';
+    row.innerHTML =
+      '<td style="padding:4px 8px;font-weight:bold">'+_escapeHtml(r.oppName||'?')+'</td>' +
+      '<td style="padding:4px 8px;color:var(--amber)">'+_escapeHtml(r.eventLabel||'')+'</td>' +
+      '<td style="padding:4px 8px;text-align:center">'+gameBadge(r,1)+'</td>' +
+      '<td style="padding:4px 8px;text-align:center">'+gameBadge(r,2)+'</td>' +
+      '<td style="padding:4px 8px;text-align:center">'+gameBadge(r,3)+'</td>' +
+      '<td style="padding:4px 8px;color:'+resCol+';font-weight:bold">'+(r.matchWon?'W':r.matchLost?'L':'?')+' '+_escapeHtml(r.score||'')+manualBadge+'</td>' +
+      '<td style="padding:4px 8px"></td>';
+    const linkTd = row.lastElementChild;
+    const linkUrl = !r.isManual && r.replayId ? ('https://www.duelingbook.com/replay?id='+r.replayId)
+      : (r.isManual && r.manualReplayUrl) ? r.manualReplayUrl : null;
+    if (linkUrl) {
+      const a = document.createElement('a');
+      a.href = linkUrl;
+      a.target = '_blank';
+      a.onclick = e => e.stopPropagation();
+      a.textContent = '▶ Watch';
+      a.style.cssText = 'background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:2px 7px;border-radius:4px;text-decoration:none;white-space:nowrap';
+      linkTd.appendChild(a);
+    }
+    tb.appendChild(row);
+  });
+  t.appendChild(tb);
+  wrap.appendChild(t);
+  return wrap;
 }
 
 // ── Profile sub-tabs ─────────────────────────────────────────────────────────
