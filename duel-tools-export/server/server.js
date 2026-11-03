@@ -1495,8 +1495,19 @@ function computeDataCheck() {
       if (!r.isManual) {
         const games = (r.parsed && r.parsed.games) || [];
         const implied = impliedGameRecord(games, batch.player);
-        if (implied.w || implied.l) {
-          const effResult = r.resultOverride || (r.parsed && r.parsed.resultOverride) || (r.parsed && r.parsed.result) || r.result || '';
+        // A result or score override exists specifically to make the
+        // OFFICIAL outcome disagree with what the raw parsed games show (a
+        // forfeit/DQ ruling, a bad-alias reversal, etc.) — so an overridden
+        // replay will almost always "mismatch" its own games by
+        // construction, not by accident. That's not an error needing
+        // review; a human already reviewed it and the override note is the
+        // record of that decision. Flagging it here anyway just buries the
+        // mismatches that ARE still unreviewed under ones already resolved,
+        // so overridden replays are skipped entirely rather than tagged.
+        const hasOverride = !!(r.resultOverride || (r.parsed && r.parsed.resultOverride) ||
+          r.scoreOverride || (r.parsed && r.parsed.scoreOverride));
+        if (!hasOverride && (implied.w || implied.l)) {
+          const effResult = (r.parsed && r.parsed.result) || r.result || '';
           const impliedWin  = implied.w > implied.l;
           const impliedLoss = implied.l > implied.w;
           if ((effResult === 'w' && impliedLoss) || (effResult === 'l' && impliedWin)) {
@@ -1505,10 +1516,8 @@ function computeDataCheck() {
               oppName: r.oppName || (r.parsed && r.parsed.oppName) || '',
               eventLabel: r.eventLabel || '',
               recordedResult: effResult,
-              recordedScore: r.scoreOverride ? `${r.scoreOverride.my}-${r.scoreOverride.opp}` : ((r.parsed && r.parsed.score) || ''),
+              recordedScore: (r.parsed && r.parsed.score) || '',
               impliedW: implied.w, impliedL: implied.l,
-              hasOverride: !!(r.resultOverride || (r.parsed && r.parsed.resultOverride)),
-              overrideNote: r.overrideNote || (r.parsed && r.parsed.overrideNote) || '',
               crossLinked: !!r.crossLinked,
               savedAt: r.savedAt || null,
             });
@@ -1524,8 +1533,8 @@ function computeDataCheck() {
         // it as a full match feeds an unverified result into every stats
         // view (same reasoning as Format Data's own `incomplete` exclusion
         // in buildMatchRecord — this is the system-wide version of that).
-        const hasOverride = !!(r.resultOverride || (r.parsed && r.parsed.resultOverride));
-        if (!hasOverride) {
+        const hasResultOverride = !!(r.resultOverride || (r.parsed && r.parsed.resultOverride));
+        if (!hasResultOverride) {
           const myW  = r.scoreOverride ? r.scoreOverride.my  : (r.parsed && typeof r.parsed.myW  === 'number' ? r.parsed.myW  : null);
           const oppW = r.scoreOverride ? r.scoreOverride.opp : (r.parsed && typeof r.parsed.oppW === 'number' ? r.parsed.oppW : null);
           const scoreIssue = (myW !== null && oppW !== null) ? bo3ScoreIssue(myW, oppW) : null;

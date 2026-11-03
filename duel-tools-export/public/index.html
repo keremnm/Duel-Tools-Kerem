@@ -19146,11 +19146,13 @@ async function runDataCheck() {
             '🚩 Result doesn\'t match the parsed games — needs human review (' + mismatches.length + ')' +
           '</summary>' +
           '<div style="font-size:11px;color:var(--dim);margin:6px 0 8px">' +
-            'These matches\' recorded W/L disagrees with what their own parsed games show. That can be legitimate — ' +
-            'a forfeit or DQ ruling overriding what was actually played — or it can be a mistake (a bad manual override, ' +
-            'or stale data). Nothing here is changed automatically; check the override note and the replay itself, then ' +
-            'correct it from the match\'s own result/score override controls if it\'s wrong.' +
+            'These matches\' recorded W/L disagrees with what their own parsed games show — matches with a result/score ' +
+            'override are left out here entirely, since the override IS the human review that already resolved it. ' +
+            'What\'s left is either a mistake (a bad manual edit, or stale data) or a legitimate call that still needs ' +
+            'one — check the replay, then fix it from the match\'s own result/score override controls, or re-parse if ' +
+            'it looks like a stale/bad parse.' +
           '</div>' +
+          '<button id="dc-reparse-all-mismatches" style="background:transparent;color:var(--amber);border:1px solid var(--amber);font-family:monospace;font-weight:bold;font-size:11px;padding:4px 10px;border-radius:4px;cursor:pointer;margin-bottom:6px">↺ Re-parse All (' + mismatches.length + ')</button>' +
           '<div style="display:flex;flex-direction:column;gap:4px;max-height:360px;overflow-y:auto">' +
           mismatches.map(m => {
             const watchUrl = 'https://www.duelingbook.com/replay?id=' + encodeURIComponent(m.replayId);
@@ -19193,6 +19195,7 @@ async function runDataCheck() {
             'twice). Format Data already excludes all of these from its own numbers; if one of these really was a valid, ' +
             'complete match, fix it from the match\'s own result/score override controls.' +
           '</div>' +
+          '<button id="dc-reparse-all-incomplete" style="background:transparent;color:var(--amber);border:1px solid var(--amber);font-family:monospace;font-weight:bold;font-size:11px;padding:4px 10px;border-radius:4px;cursor:pointer;margin-bottom:6px">↺ Re-parse All (' + incompleteMatches.length + ')</button>' +
           '<div style="display:flex;flex-direction:column;gap:4px;max-height:360px;overflow-y:auto">' +
           incompleteMatches.map(m => {
             const watchUrl = 'https://www.duelingbook.com/replay?id=' + encodeURIComponent(m.replayId);
@@ -19368,6 +19371,16 @@ async function runDataCheck() {
         else gotoDeckViewerForReplay(player, replayId, dvBtn);
       });
     }
+
+    // "Re-parse All" buttons — rewired every run since details.innerHTML
+    // above just replaced them (and the mismatches/incompleteMatches
+    // arrays they close over with THIS run's data).
+    const reparseAllMismatchesBtn = document.getElementById('dc-reparse-all-mismatches');
+    if (reparseAllMismatchesBtn) reparseAllMismatchesBtn.onclick = () =>
+      adminReparseAll(mismatches.map(m => ({ player: m.player, replayId: m.replayId })), reparseAllMismatchesBtn);
+    const reparseAllIncompleteBtn = document.getElementById('dc-reparse-all-incomplete');
+    if (reparseAllIncompleteBtn) reparseAllIncompleteBtn.onclick = () =>
+      adminReparseAll(incompleteMatches.map(m => ({ player: m.player, replayId: m.replayId })), reparseAllIncompleteBtn);
   } catch(e) {
     res.style.color = 'var(--red)';
     res.textContent = '✗ Error: ' + e.message;
@@ -19497,21 +19510,26 @@ async function _findBatchForReplay(playerName, replayId) {
   ) || null;
 }
 
-async function adminReparseReplay(playerName, replayId, btn) {
+// Returns true/false so bulk callers (adminReparseAll) can tally results
+// without each one popping its own toast. `quiet` suppresses the per-item
+// st() status-bar message — used by the bulk runner, which shows its own
+// running progress on the button instead.
+async function adminReparseReplay(playerName, replayId, btn, quiet) {
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Re-parsing...'; }
+  const say = (msg, color) => { if (!quiet) st(msg, color); };
   try {
     const batch = await _findBatchForReplay(playerName, replayId);
-    if (!batch) { st('Could not find that replay in ' + playerName + '\'s batches', 'var(--amber)'); return; }
+    if (!batch) { say('Could not find that replay in ' + playerName + '\'s batches', 'var(--amber)'); return false; }
     const replay = batch.replays.find(r => r.replayId === replayId);
 
     let plays = replay.allPlays && replay.allPlays.length ? replay.allPlays : null;
     if (!plays) {
       const proxyRes = await fetch(API + '/proxy/replay?id=' + encodeURIComponent(replayId));
-      if (!proxyRes.ok) { st('Failed to fetch replay from DuelingBook', 'var(--red)'); return; }
+      if (!proxyRes.ok) { say('Failed to fetch replay from DuelingBook', 'var(--red)'); return false; }
       const proxyData = await proxyRes.json();
       plays = (proxyData.replay && proxyData.replay.plays) || [];
     }
-    if (!plays.length) { st('No play data available for this replay', 'var(--red)'); return; }
+    if (!plays.length) { say('No play data available for this replay', 'var(--red)'); return false; }
 
     const aliases = (() => {
       const batchAliases = batch.aliases || [];
@@ -19525,7 +19543,7 @@ async function adminReparseReplay(playerName, replayId, btn) {
     })();
 
     const parsed = parseMatch(replayId, plays, batch.player || '', aliases, replay.player1, replay.player2);
-    if (!parsed) { st('Still no match after re-parse — check aliases cover both usernames', 'var(--red)'); return; }
+    if (!parsed) { say('Still no match after re-parse — check aliases cover both usernames', 'var(--red)'); return false; }
 
     const parsedStore = { games: parsed.games, allMine: parsed.allMine, allOpp: parsed.allOpp,
       oppName: parsed.oppName, myW: parsed.myW, oppW: parsed.oppW, draws: parsed.draws,
@@ -19534,19 +19552,40 @@ async function adminReparseReplay(playerName, replayId, btn) {
       method: 'PATCH', headers: authHeaders(),
       body: JSON.stringify({ parsed: parsedStore })
     });
-    if (!saveRes.ok) { st('Re-parse succeeded but save failed', 'var(--red)'); return; }
+    if (!saveRes.ok) { say('Re-parse succeeded but save failed', 'var(--red)'); return false; }
 
-    st('Re-parsed ' + playerName + ' vs ' + (parsed.oppName || 'opponent') + ' — now ' + parsed.score, 'var(--green)');
+    say('Re-parsed ' + playerName + ' vs ' + (parsed.oppName || 'opponent') + ' — now ' + parsed.score, 'var(--green)');
     if (btn) { btn.textContent = '✓ Re-parsed — re-run Check & Fix Data'; btn.style.background = 'var(--green)'; btn.style.color = '#050508'; }
     // The match's new data won't show up anywhere else (Format Data, Check &
     // Fix Data's own next run) until this stale cache is thrown away.
     _globalRecords = [];
     if (typeof _lastDataCheck !== 'undefined') _lastDataCheck = null;
+    return true;
   } catch (e) {
-    st('Re-parse error: ' + e.message, 'var(--red)');
+    say('Re-parse error: ' + e.message, 'var(--red)');
+    return false;
   } finally {
     if (btn && !btn.textContent.startsWith('✓')) { btn.disabled = false; btn.textContent = '↺ Re-parse'; }
   }
+}
+
+// "Re-parse All" — runs adminReparseReplay sequentially (not in parallel,
+// so this doesn't hammer the server or DuelingBook's proxy with a burst of
+// concurrent requests) over every row currently listed in one Check & Fix
+// Data section, reporting live progress on the button itself.
+async function adminReparseAll(items, btn) {
+  if (!items || !items.length) return;
+  if (btn) { btn.disabled = true; }
+  let ok = 0, fail = 0;
+  for (let i = 0; i < items.length; i++) {
+    if (btn) btn.textContent = `⏳ Re-parsing ${i+1}/${items.length}...`;
+    const success = await adminReparseReplay(items[i].player, items[i].replayId, null, true);
+    if (success) ok++; else fail++;
+    if (i < items.length - 1) await sleep(250);
+  }
+  const summary = `✓ Re-parsed ${ok}/${items.length}` + (fail ? ` (${fail} failed)` : '') + ' — re-run Check & Fix Data to see the result';
+  st(summary, fail ? 'var(--amber)' : 'var(--green)');
+  if (btn) { btn.textContent = summary; btn.style.background = fail ? 'var(--amber)' : 'var(--green)'; btn.style.color = '#050508'; }
 }
 
 async function gotoDeckViewerForReplay(playerName, replayId, btn) {
