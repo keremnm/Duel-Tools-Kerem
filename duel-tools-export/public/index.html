@@ -11743,6 +11743,43 @@ async function migrateReplayToParseFormat(r, parsedMatch, batch) {
   } catch(e) { console.warn('[migrate] Failed to save parsed for', r.replayId, e.message); }
 }
 
+// Resolves a raw (possibly-aliased) username to the REGISTERED player it
+// belongs to — i.e. the canonical {name, aliases, eventDecklists, ...} entry
+// in window._playerRegistry, which is keyed only by canonical lowercased
+// name, not by alias. Needed because the opponent name recorded on a replay
+// is whatever DuelingBook/GFWL happened to log that match under, which can
+// be an alias rather than that player's registered display name — without
+// resolving it first, a lookup of their event decklists by that raw name
+// would silently find nothing even when the player IS registered. Returns
+// null when nothing in the registry matches (opponent isn't archived at all).
+// A standard best-of-3 match can only end 2-0, 2-1, 1-2 or 0-2 — the moment
+// either side reaches 2 game wins the match is over, so nothing else is a
+// legal terminal score. Returns null for a valid score, or which way it's
+// wrong: 'under' (neither side reached 2 yet — could be a legitimate
+// single-game forfeit, or just a parsing gap where later games never got
+// recorded) or 'over' (someone has 3+ wins, or both sides somehow show 2+ —
+// not a parsing gap, a real best-of-3 can never actually reach this score,
+// so it almost always means games got double-counted, merged wrong, or a
+// continuation replay got stitched in twice).
+function bo3ScoreIssue(my, opp) {
+  if (typeof my !== 'number' || typeof opp !== 'number') return null;
+  if ((my === 2 && opp <= 1) || (opp === 2 && my <= 1)) return null;
+  if (my > 2 || opp > 2 || (my >= 2 && opp >= 2)) return 'over';
+  return 'under';
+}
+
+function resolveRegisteredPlayer(rawName) {
+  if (!rawName) return null;
+  const reg = window._playerRegistry || {};
+  const lower = rawName.toLowerCase().trim();
+  if (reg[lower]) return reg[lower];
+  for (const key in reg) {
+    const entry = reg[key];
+    if (matchesPlayerName(rawName, entry.name, entry.aliases || [])) return entry;
+  }
+  return null;
+}
+
 function buildMatchRecord(replayResult, player, aliases, batch) {
   const replayId = replayResult.replayId || '';
 
@@ -11754,6 +11791,26 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
     if (/^S\d+$/i.test(code)) return null;
     if (code === 'LADDER' || code === 'ACAD') return null;
     const evDecks = getEventDecks(player);
+    const match = evDecks && evDecks.find(d => d.code === code || d.code === eventLabel.trim().toUpperCase());
+    return match ? (match.deckTypeOverride || null) : null;
+  }
+
+  // Same idea, but for the OPPONENT's side of this replay: if the opponent
+  // is themselves a registered player and has their OWN YDK-backed decklist
+  // saved for this exact event code, that's ground truth for what they
+  // actually played — strictly better evidence than guessing their deck
+  // from only the cards that happened to be revealed in this one match.
+  // Falls back to null (letting card classification take over, same as
+  // before) whenever the opponent isn't registered or has no decklist saved
+  // for this specific event.
+  function getOpponentEventDeckType(eventLabel, oppRawName) {
+    if (!eventLabel || !oppRawName) return null;
+    const code = eventLabel.split(':')[0].trim().toUpperCase();
+    if (/^S\d+$/i.test(code)) return null;
+    if (code === 'LADDER' || code === 'ACAD') return null;
+    const oppEntry = resolveRegisteredPlayer(oppRawName);
+    if (!oppEntry) return null;
+    const evDecks = getEventDecks(oppEntry.name);
     const match = evDecks && evDecks.find(d => d.code === code || d.code === eventLabel.trim().toUpperCase());
     return match ? (match.deckTypeOverride || null) : null;
   }
@@ -11796,8 +11853,15 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
     const oppClass = classifyWithG1Bias ? classifyWithG1Bias(p.games.map(g=>g.opp))  : classifyFromCards(p.allOpp||[]);
     // Check event decklist deck type (if user saved a deck type for this event)
     const eventDeckType = getEventDeckType(replayResult.eventLabel, player);
-    const myDeckFinal  = replayResult.myDeckOverride  || eventDeckType || (myClass  ? myClass.dc  : 'Unknown');
-    const oppDeckFinal = replayResult.oppDeckOverride || (oppClass ? oppClass.dc : 'Unknown');
+    const oppEventDeckType = getOpponentEventDeckType(replayResult.eventLabel, p.oppName || replayResult.oppName);
+    const myDeckFinal  = replayResult.myDeckOverride  || eventDeckType     || (myClass  ? myClass.dc  : 'Unknown');
+    const oppDeckFinal = replayResult.oppDeckOverride || oppEventDeckType || (oppClass ? oppClass.dc : 'Unknown');
+    // Source + raw classifier guess for each side, kept regardless of which
+    // one won above — this is what lets a cross-check tool flag "the saved
+    // YDK says X but the cards actually seen in this replay look like Y"
+    // instead of silently trusting the decklist every time.
+    const myDeckSource  = replayResult.myDeckOverride  ? 'override' : eventDeckType     ? 'eventDecklist' : 'classified';
+    const oppDeckSource = replayResult.oppDeckOverride ? 'override' : oppEventDeckType ? 'eventDecklist' : 'classified';
     const gameRecords  = p.games.map(g => ({
       gameNum:  g.gameNum,
       winner:   g.winner,
@@ -11829,6 +11893,21 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
     const effMyW  = _scoreOv ? _scoreOv.my  : p.myW;
     const effOppW = _scoreOv ? _scoreOv.opp : p.oppW;
     const effScore = _scoreOv ? (p.draws>0 ? `${effMyW}-${effOppW}-${p.draws}` : `${effMyW}-${effOppW}`) : p.score;
+    // A real (non-manual) match is only verified as actually decided once
+    // its score is a legal best-of-3 terminal score — see bo3ScoreIssue.
+    // That covers BOTH directions of "not actually a valid match": stopping
+    // short (1-0, 0-1, 1-1 — could be a legitimate single-game forfeit, or
+    // just a parsing gap) AND overshooting (3-0, 0-3, 2-2 — never legitimate,
+    // a real best-of-3 cannot reach these, so it's a data bug every time).
+    // Counting either kind as a full match silently feeds an unverified
+    // result into every stats view that reads buildMatchRecord — exactly
+    // the kind of thing that produces the N/win-rate discrepancies Format
+    // Data keeps surfacing. An explicit resultOverride (a human saying "yes,
+    // this is really final") still counts it as decided. Not applied to
+    // manual entries (isManual return above) — those are already a human's
+    // explicit, trusted record.
+    const _scoreIssue = _resOv ? null : bo3ScoreIssue(effMyW, effOppW);
+    const incomplete = !!_scoreIssue;
     return {
       replayId, player,
       oppName:  p.oppName || replayResult.oppName || '',
@@ -11839,6 +11918,9 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
       oppDeck:   oppDeckFinal,
       myDeckConf:  replayResult.myDeckOverride ? 'Override' : (myClass  ? myClass.conf  : 'Low'),
       oppDeckConf: replayResult.oppDeckOverride ? 'Override' : (oppClass ? oppClass.conf : 'Low'),
+      myDeckSource, oppDeckSource,
+      myClassifiedDeck:  myClass  ? myClass.dc  : null, myClassifiedConf:  myClass  ? myClass.conf  : null,
+      oppClassifiedDeck: oppClass ? oppClass.dc : null, oppClassifiedConf: oppClass ? oppClass.conf : null,
       matchWon:  effResult === 'w',
       matchLost: effResult === 'l',
       result:    effResult,
@@ -11846,6 +11928,8 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
       myW:       effMyW,
       oppW:      effOppW,
       draws:     p.draws,
+      incomplete,
+      incompleteReason: _scoreIssue,
       resultOverride: _resOv,
       scoreOverride:  _scoreOv,
       overrideNote:   replayResult.overrideNote || p.overrideNote || '',
@@ -11974,8 +12058,12 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
 
   // Apply manual overrides if present
   const eventDeckType2 = getEventDeckType(replayResult.eventLabel, player);
-  const myDeckFinal  = replayResult.myDeckOverride  || eventDeckType2 || (myClass  ? myClass.dc  : 'Unknown');
-  const oppDeckFinal = replayResult.oppDeckOverride || (oppClass ? oppClass.dc : 'Unknown');
+  const oppEventDeckType2 = getOpponentEventDeckType(replayResult.eventLabel, parsed.oppName);
+  const myDeckFinal  = replayResult.myDeckOverride  || eventDeckType2     || (myClass  ? myClass.dc  : 'Unknown');
+  const oppDeckFinal = replayResult.oppDeckOverride || oppEventDeckType2 || (oppClass ? oppClass.dc : 'Unknown');
+  // See the matching comment in the fast path above.
+  const myDeckSource2  = replayResult.myDeckOverride  ? 'override' : eventDeckType2     ? 'eventDecklist' : 'classified';
+  const oppDeckSource2 = replayResult.oppDeckOverride ? 'override' : oppEventDeckType2 ? 'eventDecklist' : 'classified';
 
   // A saved result/score override trumps the freshly-parsed outcome here too —
   // this is the legacy (not-yet-migrated) parse path, so without this a replay
@@ -11988,6 +12076,9 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
   const effMyW2  = _scoreOv2 ? _scoreOv2.my  : parsed.myW;
   const effOppW2 = _scoreOv2 ? _scoreOv2.opp : parsed.oppW;
   const effScore2 = _scoreOv2 ? (parsed.draws>0 ? `${effMyW2}-${effOppW2}-${parsed.draws}` : `${effMyW2}-${effOppW2}`) : parsed.score;
+  // See the matching comment in the fast path above.
+  const _scoreIssue2 = _resOv2 ? null : bo3ScoreIssue(effMyW2, effOppW2);
+  const incomplete2 = !!_scoreIssue2;
 
   return {
     replayId:  replayId,
@@ -12000,6 +12091,9 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
     oppDeck:   oppDeckFinal,
     myDeckConf:  replayResult.myDeckOverride  ? 'Override' : (myClass  ? myClass.conf  : 'Low'),
     oppDeckConf: replayResult.oppDeckOverride ? 'Override' : (oppClass ? oppClass.conf : 'Low'),
+    myDeckSource: myDeckSource2, oppDeckSource: oppDeckSource2,
+    myClassifiedDeck:  myClass  ? myClass.dc  : null, myClassifiedConf:  myClass  ? myClass.conf  : null,
+    oppClassifiedDeck: oppClass ? oppClass.dc : null, oppClassifiedConf: oppClass ? oppClass.conf : null,
     matchWon:  effResult2 === 'w',
     matchLost: effResult2 === 'l',
     result:    effResult2,
@@ -12007,6 +12101,7 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
     myW:       effMyW2,
     oppW:      effOppW2,
     draws:     parsed.draws,
+    incomplete: incomplete2,
     resultOverride: _resOv2,
     scoreOverride:  _scoreOv2,
     overrideNote:   replayResult.overrideNote || '',
@@ -12032,7 +12127,134 @@ function buildGlobalRecordsFromBatches(batchList) {
       if (rec) records.push(rec);
     }
   }
+  reconcileCrossLinkedDeckLabels(records);
   return records;
+}
+
+// Cross-linked matches are the SAME real-world match saved once in each
+// player's own archive (same replayId, one record per side). buildMatchRecord
+// classifies BOTH "my deck" and "opponent deck" independently on every
+// record — "my deck" from this record's own cards (reliable), but
+// "opponent deck" from only the slice of the opponent's cards that happened
+// to be revealed during that one match (a guess, sometimes a bad one). When
+// the opponent is ALSO an archived player, their own mirror record already
+// classified that exact same deck from their own full card data — so that
+// is strictly better evidence than a guess from a partial glimpse.
+//
+// Without reconciling the two, the same physical match could show up as,
+// say, "Warrior vs Chaos Turbo" from one side and "Warrior vs Chaos
+// Control" from the other — which is exactly what let Format Data's two
+// directions of a matchup (Warrior-vs-X's row and X-vs-Warrior's row)
+// disagree on both N and win %, instead of being mathematical complements
+// of each other the way two sides of the same coin-flip have to be. This
+// syncs oppDeck/oppDeckConf from the cross-linked counterpart's own
+// self-reported myDeck/myDeckConf wherever one exists, so both directions
+// of a cross-linked matchup are always built from the same pair of deck
+// labels — the ONLY way the win rates can be guaranteed to add to 100%
+// (mod draws) is to count the exact same match from both sides with the
+// exact same two deck labels, not two independent guesses.
+// Populated as a side-effect of reconcileCrossLinkedDeckLabels: cross-linked
+// pairs whose deck label and/or result STILL disagree after reconciliation —
+// which can only happen from a conflicting manual override on each side (two
+// humans/edits disagreeing with each other) or a genuine desync (e.g. a
+// result/score override added to one side after the mirror was first
+// created, that never got propagated to the twin). Read by runDataCheck()
+// to surface these for a human to resolve; this is exactly what would
+// otherwise keep two directions of a matchup from summing to 100% even
+// after everything else here is fixed.
+let _mirrorDesyncs = [];
+
+function reconcileCrossLinkedDeckLabels(records) {
+  _mirrorDesyncs = [];
+  const byReplayId = new Map();
+  for (const r of records) {
+    if (!r.replayId || r.isManual) continue;
+    if (!byReplayId.has(r.replayId)) byReplayId.set(r.replayId, []);
+    byReplayId.get(r.replayId).push(r);
+  }
+  for (const group of byReplayId.values()) {
+    if (group.length < 2) continue; // no cross-linked counterpart — nothing to reconcile against
+    const byPlayer = new Map(); // lowercased player name -> records[]
+    for (const r of group) {
+      if (!r.player) continue;
+      const k = r.player.toLowerCase();
+      if (!byPlayer.has(k)) byPlayer.set(k, []);
+      byPlayer.get(k).push(r);
+    }
+    const players = [...byPlayer.keys()];
+    if (players.length !== 2) continue; // ambiguous (0, 1, or 3+ distinct players) — leave as-is rather than guess
+    const [recs1, recs2] = [byPlayer.get(players[0]), byPlayer.get(players[1])];
+    // Each side's own self-classification (captured before either side's
+    // oppDeck gets overwritten below, so a mutation on one line never
+    // becomes the "source" for the other). Carrying over the source side's
+    // own myDeckSource keeps this traceable — if THEY got their deck from
+    // their own saved YDK, the synced oppDeck here is just as authoritative
+    // as reading that YDK directly, not merely "another guess".
+    const my1 = recs1[0].myDeck, conf1 = recs1[0].myDeckConf, src1 = recs1[0].myDeckSource;
+    const my2 = recs2[0].myDeck, conf2 = recs2[0].myDeckConf, src2 = recs2[0].myDeckSource;
+    // Never overwrite a record whose OWN oppDeckOverride was set by a human
+    // looking at this specific match — that explicit correction outranks the
+    // counterpart's self-classification, same as every other override in
+    // this app winning over an auto-guess.
+    if (my2 && my2 !== 'Unknown') recs1.forEach(r => { if (!r.oppDeckOverride) { r.oppDeck = my2; r.oppDeckConf = conf2; r.oppDeckSource = src2 === 'eventDecklist' ? 'eventDecklist' : 'crossLinkedMirror'; } });
+    if (my1 && my1 !== 'Unknown') recs2.forEach(r => { if (!r.oppDeckOverride) { r.oppDeck = my1; r.oppDeckConf = conf1; r.oppDeckSource = src1 === 'eventDecklist' ? 'eventDecklist' : 'crossLinkedMirror'; } });
+    // This pair now has consistent, same-source deck labels on both sides
+    // (barring a conflicting override — checked below) — the ONLY thing
+    // Format Data's opponent-deck breakdown trusts for guaranteed-symmetric
+    // math, since it structurally has a matching counterpart on the other
+    // deck's page. A non-cross-linked, one-sided match never gets this flag,
+    // and is deliberately excluded from that breakdown (still counted in
+    // the deck's own Total Matches / Win Rate vs Field, which don't need a
+    // known opponent deck to be correct).
+    group.forEach(r => { r.mirrorPaired = true; });
+
+    // Cross-check: did reconciliation actually land both sides on mutually
+    // consistent labels, and does the recorded result on each side still
+    // flip to the other? If not, something about this specific pair is
+    // still desynced — surface it rather than let Format Data look subtly
+    // wrong with no explanation.
+    const r1 = recs1[0], r2 = recs2[0];
+    if ((r1.oppDeck || 'Unknown') !== (r2.myDeck || 'Unknown') || (r2.oppDeck || 'Unknown') !== (r1.myDeck || 'Unknown')) {
+      _mirrorDesyncs.push({ type: 'deck', replayId: r1.replayId, eventLabel: r1.eventLabel || r2.eventLabel || '',
+        player1: r1.player, myDeck1: r1.myDeck, oppDeck1: r1.oppDeck,
+        player2: r2.player, myDeck2: r2.myDeck, oppDeck2: r2.oppDeck });
+    }
+    const flip = { w: 'l', l: 'w', n: 'n' };
+    if (r1.result && r2.result && flip[r1.result] !== r2.result) {
+      _mirrorDesyncs.push({ type: 'result', replayId: r1.replayId, eventLabel: r1.eventLabel || r2.eventLabel || '',
+        player1: r1.player, result1: r1.result, score1: r1.score,
+        player2: r2.player, result2: r2.result, score2: r2.score });
+    }
+  }
+}
+
+// Cross-check for the saved event-decklist feature: a side whose deck type
+// came from a saved YDK (this player's own, or — now that buildMatchRecord
+// also checks a registered OPPONENT's own decklist — theirs) might still
+// disagree with what the cards actually seen in THIS specific replay look
+// like. That can mean the replay got filed under the wrong event code, the
+// saved YDK is wrong or outdated, or — most likely, and harmless — this was
+// just a low-information game the classifier shouldn't be trusted on anyway.
+// Only flagged when the classifier's own independent guess is at least
+// Medium confidence, so this doesn't drown in "G1 only showed 2 cards"
+// noise that isn't actually informative either way. This is a cross-check,
+// not an auto-fixer — it never changes anything, only surfaces the
+// disagreement for a human to look at (Re-parse / Deck Viewer buttons on
+// each row make that easy).
+function findEventDecklistConflicts(records) {
+  const out = [];
+  for (const r of records) {
+    if (r.isManual) continue;
+    if (r.myDeckSource === 'eventDecklist' && r.myClassifiedDeck && r.myClassifiedConf !== 'Low' && r.myClassifiedDeck !== r.myDeck) {
+      out.push({ side: 'my', player: r.player, oppName: r.oppName, eventLabel: r.eventLabel, replayId: r.replayId,
+        decklistDeck: r.myDeck, classifiedDeck: r.myClassifiedDeck, classifiedConf: r.myClassifiedConf });
+    }
+    if (r.oppDeckSource === 'eventDecklist' && r.oppClassifiedDeck && r.oppClassifiedConf !== 'Low' && r.oppClassifiedDeck !== r.oppDeck) {
+      out.push({ side: 'opp', player: r.player, oppName: r.oppName, eventLabel: r.eventLabel, replayId: r.replayId,
+        decklistDeck: r.oppDeck, classifiedDeck: r.oppClassifiedDeck, classifiedConf: r.oppClassifiedConf });
+    }
+  }
+  return out;
 }
 
 async function loadGlobalRecords(force) {
@@ -12196,7 +12418,10 @@ function filterFormatDataRecords(records) {
 function populateFormatDataDropdown() {
   const sel = document.getElementById('fd-deck-select');
   if (!sel) return;
-  const filtered = filterFormatDataRecords(_globalRecords);
+  // Exclude incomplete matches from the dropdown counts too, so they match
+  // the "Total Matches" number shown after picking a deck (see the
+  // `incomplete` exclusion in renderFormatDataTable).
+  const filtered = filterFormatDataRecords(_globalRecords).filter(r => !r.incomplete);
   const counts = {};
   filtered.forEach(r => { const k = r.myDeck||'Unknown'; counts[k] = (counts[k]||0)+1; });
   const decks = Object.keys(counts).sort((a,b) => counts[b]-counts[a]);
@@ -12221,7 +12446,15 @@ function renderFormatDataTable(deckType) {
   populateFormatDataDropdown();
   const sel = document.getElementById('fd-deck-select');
   const deck = deckType || (sel ? sel.value : '');
-  const records = filterFormatDataRecords(_globalRecords).filter(r => (r.myDeck||'Unknown') === deck);
+  const deckRecordsAll = filterFormatDataRecords(_globalRecords).filter(r => (r.myDeck||'Unknown') === deck);
+  // Incomplete matches (a real, non-manual replay where neither side reached
+  // the 2 game wins a best-of-3 needs to actually be decided, and nothing
+  // overrode it as final) are excluded from every number below — counting an
+  // unverified partial result as a full match is exactly what produces N/
+  // win-rate mismatches between two decks' pages. See buildMatchRecord's
+  // `incomplete` flag for the full reasoning.
+  const records = deckRecordsAll.filter(r => !r.incomplete);
+  const incompleteExcluded = deckRecordsAll.length - records.length;
   if (!records.length) {
     out.innerHTML = `<div class="dd-empty">No replays found for ${deck||'this deck'}.</div>`;
     return;
@@ -12249,9 +12482,23 @@ function renderFormatDataTable(deckType) {
     return { w, l };
   }
 
+  // The per-opponent-deck breakdown below is restricted to mirrorPaired
+  // matches — ones with a genuine cross-linked counterpart on the OTHER
+  // deck's page (see reconcileCrossLinkedDeckLabels) — because that's the
+  // only case structurally guaranteed to have a matching entry on the other
+  // side, which is what makes e.g. Warrior-vs-Chaos-Turbo and
+  // Chaos-Turbo-vs-Warrior sum to 100%. A match against an opponent who
+  // isn't archived at all has no "other side" to be symmetric WITH — there's
+  // only one observation of it, ever — so including it here would silently
+  // reintroduce the exact asymmetry this is meant to prevent. It's still
+  // counted in Total Matches and Win Rate vs Field above (that tile doesn't
+  // depend on knowing the opponent's deck at all), just not broken out by
+  // opponent deck type.
+  const nonMirrorsKnown = nonMirrors.filter(r => r.mirrorPaired);
+  const unknownOppExcluded = nonMirrors.length - nonMirrorsKnown.length;
   const byOpp = {};
   const byOppRecords = {}; // raw match records per opponent deck — feeds the Games drill-down
-  nonMirrors.forEach(r => {
+  nonMirrorsKnown.forEach(r => {
     const k = r.oppDeck || 'Unknown';
     if (!byOpp[k]) byOpp[k] = { w:0, l:0, g1w:0, g1l:0, psw:0, psl:0 };
     if (!byOppRecords[k]) byOppRecords[k] = [];
@@ -12348,7 +12595,9 @@ function renderFormatDataTable(deckType) {
 
   const note = document.createElement('div');
   note.style.cssText = 'font-size:10px;color:var(--dim);margin-top:4px';
-  note.textContent = 'Deck types auto-classified by TF-IDF model. 95% CI via Wilson score interval. Mirror matches excluded from the opponent breakdown above. Pre-Side Win % = Game 1 only; Post-Side Win % = Games 2+3 combined — shown as N/A where there\'s no per-game data (manual/forfeit entries, or replays whose game winner was never parsed). Click a row to see every individual match\'s Game 1/2/3 results.';
+  note.textContent = 'Deck types auto-classified by TF-IDF model. The Opponent Deck breakdown below only includes matches cross-linked to the opponent\'s own archive — guaranteeing it\'s built from the exact same matches, with the exact same two deck labels, as that opponent deck\'s own page, so e.g. Warrior\'s win % vs Chaos Turbo and Chaos Turbo\'s win % vs Warrior always sum to 100%. 95% CI via Wilson score interval. Mirror matches (self-deck) excluded from the opponent breakdown above. Pre-Side Win % = Game 1 only; Post-Side Win % = Games 2+3 combined — shown as N/A where there\'s no per-game data (manual/forfeit entries, or replays whose game winner was never parsed). Click a row to see every individual match\'s Game 1/2/3 results.'
+    + (unknownOppExcluded ? ` ${unknownOppExcluded} match${unknownOppExcluded!==1?'es':''} vs an opponent who isn\'t archived/cross-linked excluded from the breakdown (still counted in Total Matches and Win Rate vs Field above, which don\'t depend on knowing the opponent\'s deck).` : '')
+    + (incompleteExcluded ? ` ${incompleteExcluded} match${incompleteExcluded!==1?'es':''} excluded from every number above as not a valid best-of-3 score — a real (non-manual, non-overridden) replay whose recorded wins are either short of the 2 needed to decide it (e.g. 1-0, 0-1, 1-1) or impossible to reach in a real match (e.g. 3-0, 0-3, 2-2). See Admin → Cross-Links → Check & Fix Data to review these.` : '');
   out.appendChild(note);
 }
 
@@ -18736,6 +18985,9 @@ async function loadCrosslinksSection(el) {
     '</button> ' +
     '<button id="dc-export-mismatches-btn" onclick="exportResultMismatchesCsv()" style="display:none;background:transparent;color:var(--red);border:1px solid var(--red);font-family:monospace;font-weight:bold;font-size:14px;padding:10px 20px;border-radius:6px;cursor:pointer">' +
       '⬇ Export Result Mismatches (CSV)' +
+    '</button> ' +
+    '<button id="dc-export-incomplete-btn" onclick="exportIncompleteMatchesCsv()" style="display:none;background:transparent;color:var(--red);border:1px solid var(--red);font-family:monospace;font-weight:bold;font-size:14px;padding:10px 20px;border-radius:6px;cursor:pointer">' +
+      '⬇ Export Incomplete Matches (CSV)' +
     '</button>' +
     '<div id="dc-check-details" style="margin-top:14px"></div>';
 }
@@ -18804,11 +19056,28 @@ async function runDataCheck() {
       }
     }
 
+    // Event-decklist cross-check: a side whose deck type came from a saved
+    // YDK (this player's own, or — now that buildMatchRecord also checks a
+    // registered OPPONENT's own decklist — theirs) might still disagree with
+    // what the cards actually seen in THIS specific replay look like. Event
+    // decklists live in window._playerRegistry, not the server's data-check,
+    // so this is computed client-side from the same records Format Data uses.
+    if (!_globalRecords.length) await loadGlobalRecords();
+    d.eventDecklistConflicts = findEventDecklistConflicts(_globalRecords);
+    // Populated as a side-effect of the reconciliation pass that already ran
+    // inside loadGlobalRecords() (see reconcileCrossLinkedDeckLabels) — pairs
+    // where a cross-linked match's two sides still disagree on deck label
+    // and/or result after reconciliation, which is exactly what would keep
+    // Format Data's two directions of a matchup from summing to 100%.
+    d.mirrorDesyncs = _mirrorDesyncs;
+
     _lastDataCheck = d;
     const exportBtn = document.getElementById('dc-export-dupes-btn');
     if (exportBtn) exportBtn.style.display = d.duplicates.length ? '' : 'none';
     const exportMismatchBtn = document.getElementById('dc-export-mismatches-btn');
     if (exportMismatchBtn) exportMismatchBtn.style.display = (d.resultMismatches||[]).length ? '' : 'none';
+    const exportIncompleteBtn = document.getElementById('dc-export-incomplete-btn');
+    if (exportIncompleteBtn) exportIncompleteBtn.style.display = (d.incompleteMatches||[]).length ? '' : 'none';
 
     // "Needs a human" (unrecognized opponent) is informational, not an error —
     // it just means that opponent hasn't been archived/aliased as a known
@@ -18821,13 +19090,17 @@ async function runDataCheck() {
     // with what the replay's own parsed games show — but which side is right
     // can't be determined automatically (could be a legitimate forfeit/DQ
     // ruling, or could be a mistake), so these are surfaced for a human to
-    // judge, never auto-changed.
+    // judge, never auto-changed. Incomplete matches (never reached 2 game
+    // wins, no override saying it's final) are the same kind of "needs a
+    // human" problem — Format Data already excludes these from its own
+    // numbers, this is just the system-wide visibility into the same thing.
     const selfConflicts = d.selfAliasConflicts || [];
     const mismatches = d.resultMismatches || [];
-    const realProblems = d.missingMirrors.length + d.duplicates.length + selfConflicts.length + mismatches.length;
+    const incompleteMatches = d.incompleteMatches || [];
+    const realProblems = d.missingMirrors.length + d.duplicates.length + selfConflicts.length + mismatches.length + incompleteMatches.length;
     res.style.color = realProblems ? 'var(--amber)' : 'var(--green)';
     res.textContent = (realProblems
-      ? `Found ${realProblems} issue${realProblems!==1?'s':''} across ${d.uniqueReplayIds} saved matches: ${d.missingMirrors.length} auto-fixable, ${d.duplicates.length} duplicate${d.duplicates.length!==1?'s':''}${selfConflicts.length?`, ${selfConflicts.length} bad alias${selfConflicts.length!==1?'es':''}`:''}${mismatches.length?`, ${mismatches.length} result mismatch${mismatches.length!==1?'es':''}`:''}.`
+      ? `Found ${realProblems} issue${realProblems!==1?'s':''} across ${d.uniqueReplayIds} saved matches: ${d.missingMirrors.length} auto-fixable, ${d.duplicates.length} duplicate${d.duplicates.length!==1?'s':''}${selfConflicts.length?`, ${selfConflicts.length} bad alias${selfConflicts.length!==1?'es':''}`:''}${mismatches.length?`, ${mismatches.length} result mismatch${mismatches.length!==1?'es':''}`:''}${incompleteMatches.length?`, ${incompleteMatches.length} incomplete`:''}.`
       : `✓ All ${d.uniqueReplayIds} saved matches are correctly mirrored — no asymmetry found.`) + fixSummary;
 
     const section = (title, color, items, renderRow) => {
@@ -18881,7 +19154,7 @@ async function runDataCheck() {
           '<div style="display:flex;flex-direction:column;gap:4px;max-height:360px;overflow-y:auto">' +
           mismatches.map(m => {
             const watchUrl = 'https://www.duelingbook.com/replay?id=' + encodeURIComponent(m.replayId);
-            return '<div style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
+            return '<div class="dc-row" data-player="'+_escapeHtml(m.player)+'" data-replayid="'+_escapeHtml(m.replayId)+'" style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
               + _escapeHtml(m.player) + ' vs ' + _escapeHtml(m.oppName)
               + (m.eventLabel ? ' <span style="color:var(--amber)">· '+_escapeHtml(m.eventLabel)+'</span>' : '')
               + '<br>Recorded: <b style="color:'+(m.recordedResult==='w'?'var(--green)':'var(--red)')+'">'+(m.recordedResult==='w'?'W':'L')+' '+_escapeHtml(m.recordedScore||'')+'</b>'
@@ -18890,6 +19163,135 @@ async function runDataCheck() {
               + (m.crossLinked ? ' <span style="color:var(--muted)">· cross-linked mirror</span>' : '')
               + (m.overrideNote ? '<br><span style="color:var(--dim)">Note: '+_escapeHtml(m.overrideNote)+'</span>' : '')
               + ' <a href="'+watchUrl+'" target="_blank" style="color:var(--muted);margin-left:4px">▶ Watch</a>'
+              + ' <button class="dc-reparse-btn" style="background:transparent;color:var(--amber);border:1px solid var(--amber);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">↺ Re-parse</button>'
+              + ' <button class="dc-deckviewer-btn" style="background:transparent;color:var(--muted);border:1px solid var(--border);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">🔍 Deck Viewer</button>'
+              + '</div>';
+          }).join('') +
+          '</div>' +
+        '</details>' +
+      '</div>';
+
+    // A real, non-manual, non-overridden replay whose score isn't a legal
+    // best-of-3 terminal score — either side stopped short of 2 wins
+    // ('under': could be a legitimate single-game forfeit, or just a parsing
+    // gap) or someone has MORE than 2 wins, or both sides show 2+ ('over':
+    // never legitimate, a real best-of-3 cannot reach this — a data bug
+    // every time, usually games double-counted or a continuation replay
+    // stitched in twice). Same as resultMismatches, this is review-only and
+    // never auto-fixed.
+    const incompleteHtml = !incompleteMatches.length ? '' :
+      '<div style="margin-bottom:14px">' +
+        '<details open>' +
+          '<summary style="font-size:12px;font-weight:bold;color:var(--red);cursor:pointer">' +
+            '❓ Not a valid best-of-3 score (' + incompleteMatches.length + ')' +
+          '</summary>' +
+          '<div style="font-size:11px;color:var(--dim);margin:6px 0 8px">' +
+            'A real best-of-3 match can only end 2-0, 2-1, 1-2 or 0-2 — these don\'t. "Under" means a score like 1-0, 0-1 ' +
+            'or 1-1, short of the 2 wins needed to actually decide it (could be a legitimate single-game forfeit, or just ' +
+            'a replay whose later games never got recorded). "Over" means a score like 3-0, 0-3 or 2-2 — not possible in ' +
+            'a real match, so this is a data bug every time (games double-counted, or a continuation replay stitched in ' +
+            'twice). Format Data already excludes all of these from its own numbers; if one of these really was a valid, ' +
+            'complete match, fix it from the match\'s own result/score override controls.' +
+          '</div>' +
+          '<div style="display:flex;flex-direction:column;gap:4px;max-height:360px;overflow-y:auto">' +
+          incompleteMatches.map(m => {
+            const watchUrl = 'https://www.duelingbook.com/replay?id=' + encodeURIComponent(m.replayId);
+            return '<div class="dc-row" data-player="'+_escapeHtml(m.player)+'" data-replayid="'+_escapeHtml(m.replayId)+'" style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
+              + _escapeHtml(m.player) + ' vs ' + _escapeHtml(m.oppName)
+              + (m.eventLabel ? ' <span style="color:var(--amber)">· '+_escapeHtml(m.eventLabel)+'</span>' : '')
+              + ' <span style="color:var(--dim)">— recorded score</span> <b>'+m.myW+'-'+m.oppW+'</b>'
+              + (m.recordedResult ? ' <span style="color:var(--muted)">('+(m.recordedResult==='w'?'W':m.recordedResult==='l'?'L':m.recordedResult)+')</span>' : '')
+              + (m.reason ? ' <span style="color:'+(m.reason==='over'?'var(--red)':'var(--amber)')+'">· '+(m.reason==='over'?'over 2 wins — impossible':'under 2 wins — unverified')+'</span>' : '')
+              + ' <a href="'+watchUrl+'" target="_blank" style="color:var(--muted);margin-left:4px">▶ Watch</a>'
+              + ' <button class="dc-reparse-btn" style="background:transparent;color:var(--amber);border:1px solid var(--amber);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">↺ Re-parse</button>'
+              + ' <button class="dc-deckviewer-btn" style="background:transparent;color:var(--muted);border:1px solid var(--border);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">🔍 Deck Viewer</button>'
+              + '</div>';
+          }).join('') +
+          '</div>' +
+        '</details>' +
+      '</div>';
+
+    // Event-decklist cross-check — see findEventDecklistConflicts(). Amber,
+    // not red: a saved YDK disagreeing with one replay's observed cards
+    // isn't necessarily wrong on either side, just worth a human glance.
+    const conflicts = d.eventDecklistConflicts || [];
+    const conflictHtml = !conflicts.length ? '' :
+      '<div style="margin-bottom:14px">' +
+        '<details open>' +
+          '<summary style="font-size:12px;font-weight:bold;color:var(--amber);cursor:pointer">' +
+            '🪪 Event decklist vs. observed cards disagree — verify (' + conflicts.length + ')' +
+          '</summary>' +
+          '<div style="font-size:11px;color:var(--dim);margin:6px 0 8px">' +
+            'This side\'s deck type came from a saved YDK decklist for this event — this player\'s own, or a registered ' +
+            'opponent\'s — but the cards actually seen in THIS specific replay look like a different deck (and the classifier ' +
+            'is reasonably confident about it). Could mean this replay got filed under the wrong event code, the saved ' +
+            'YDK is wrong or outdated, or it\'s a real sided/tech choice the classifier is misreading — nothing here is ' +
+            'changed automatically.' +
+          '</div>' +
+          '<div style="display:flex;flex-direction:column;gap:4px;max-height:360px;overflow-y:auto">' +
+          conflicts.map(c => {
+            const watchUrl = 'https://www.duelingbook.com/replay?id=' + encodeURIComponent(c.replayId);
+            return '<div class="dc-row" data-player="'+_escapeHtml(c.player)+'" data-replayid="'+_escapeHtml(c.replayId)+'" style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
+              + _escapeHtml(c.player) + ' vs ' + _escapeHtml(c.oppName)
+              + (c.eventLabel ? ' <span style="color:var(--amber)">· '+_escapeHtml(c.eventLabel)+'</span>' : '')
+              + ' <span style="color:var(--muted)">· '+(c.side==='my'?'this player\'s':'opponent\'s')+' deck</span>'
+              + '<br>Saved YDK says: <b style="color:var(--green)">'+_escapeHtml(c.decklistDeck)+'</b>'
+              + ' <span style="color:var(--dim)">— but this replay\'s cards look like</span> <b>'+_escapeHtml(c.classifiedDeck)+'</b>'
+              + ' <span style="color:var(--muted)">('+_escapeHtml(c.classifiedConf)+' confidence)</span>'
+              + ' <a href="'+watchUrl+'" target="_blank" style="color:var(--muted);margin-left:4px">▶ Watch</a>'
+              + ' <button class="dc-reparse-btn" style="background:transparent;color:var(--amber);border:1px solid var(--amber);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">↺ Re-parse</button>'
+              + ' <button class="dc-deckviewer-btn" style="background:transparent;color:var(--muted);border:1px solid var(--border);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">🔍 Deck Viewer</button>'
+              + '</div>';
+          }).join('') +
+          '</div>' +
+        '</details>' +
+      '</div>';
+
+    // Cross-linked mirrors that STILL disagree after reconciliation — see
+    // the _mirrorDesyncs comment above reconcileCrossLinkedDeckLabels. Red,
+    // not amber: unlike the event-decklist cross-check, this means the two
+    // directions of a matchup genuinely can't sum to 100% right now.
+    const mirrorDesyncs = d.mirrorDesyncs || [];
+    const mirrorDesyncHtml = !mirrorDesyncs.length ? '' :
+      '<div style="margin-bottom:14px">' +
+        '<details open>' +
+          '<summary style="font-size:12px;font-weight:bold;color:var(--red);cursor:pointer">' +
+            '🪞 Cross-linked mirrors disagree (' + mirrorDesyncs.length + ')' +
+          '</summary>' +
+          '<div style="font-size:11px;color:var(--dim);margin:6px 0 8px">' +
+            'These two replays are the SAME match, cross-linked to each other, but their deck label and/or result still ' +
+            'disagree even after syncing — usually a conflicting manual override on each side, or an override added to ' +
+            'one side after the mirror was created that never propagated to its twin. This is exactly what keeps a ' +
+            'matchup\'s two directions (e.g. Warrior-vs-X and X-vs-Warrior) from summing to 100% in Format Data. Fix it ' +
+            'from either side\'s own result/score/deck override controls, then re-check.' +
+          '</div>' +
+          '<div style="display:flex;flex-direction:column;gap:4px;max-height:360px;overflow-y:auto">' +
+          mirrorDesyncs.map(m => {
+            const watchUrl = 'https://www.duelingbook.com/replay?id=' + encodeURIComponent(m.replayId);
+            const line2 = m.type === 'deck'
+              ? ('<span style="color:var(--amber)">· deck label mismatch</span> — '
+                 + _escapeHtml(m.player1) + ': ' + _escapeHtml(m.myDeck1) + ' <span style="color:var(--dim)">(sees opponent as</span> ' + _escapeHtml(m.oppDeck1) + ')'
+                 + ' <span style="color:var(--dim)">vs</span> '
+                 + _escapeHtml(m.player2) + ': ' + _escapeHtml(m.myDeck2) + ' <span style="color:var(--dim)">(sees opponent as</span> ' + _escapeHtml(m.oppDeck2) + ')')
+              : ('<span style="color:var(--amber)">· result mismatch</span> — '
+                 + _escapeHtml(m.player1) + ': ' + (m.result1==='w'?'W':m.result1==='l'?'L':m.result1) + ' ' + _escapeHtml(m.score1||'')
+                 + ' <span style="color:var(--dim)">vs</span> '
+                 + _escapeHtml(m.player2) + ': ' + (m.result2==='w'?'W':m.result2==='l'?'L':m.result2) + ' ' + _escapeHtml(m.score2||'')
+                 + ' <span style="color:var(--dim)">(should be opposite results)</span>');
+            return '<div style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
+              + _escapeHtml(m.replayId) + (m.eventLabel ? ' <span style="color:var(--amber)">· '+_escapeHtml(m.eventLabel)+'</span>' : '')
+              + ' <a href="'+watchUrl+'" target="_blank" style="color:var(--muted);margin-left:4px">▶ Watch</a>'
+              + '<br>' + line2
+              + '<div class="dc-row" data-player="'+_escapeHtml(m.player1)+'" data-replayid="'+_escapeHtml(m.replayId)+'" style="margin-top:4px">'
+                + _escapeHtml(m.player1) + '\'s copy: '
+                + '<button class="dc-reparse-btn" style="background:transparent;color:var(--amber);border:1px solid var(--amber);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">↺ Re-parse</button>'
+                + ' <button class="dc-deckviewer-btn" style="background:transparent;color:var(--muted);border:1px solid var(--border);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">🔍 Deck Viewer</button>'
+              + '</div>'
+              + '<div class="dc-row" data-player="'+_escapeHtml(m.player2)+'" data-replayid="'+_escapeHtml(m.replayId)+'" style="margin-top:4px">'
+                + _escapeHtml(m.player2) + '\'s copy: '
+                + '<button class="dc-reparse-btn" style="background:transparent;color:var(--amber);border:1px solid var(--amber);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">↺ Re-parse</button>'
+                + ' <button class="dc-deckviewer-btn" style="background:transparent;color:var(--muted);border:1px solid var(--border);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">🔍 Deck Viewer</button>'
+              + '</div>'
               + '</div>';
           }).join('') +
           '</div>' +
@@ -18940,7 +19342,32 @@ async function runDataCheck() {
         + '</div>'
       ) +
       mismatchHtml +
+      incompleteHtml +
+      conflictHtml +
+      mirrorDesyncHtml +
       unrecognizedHtml;
+
+    // Delegated click handler for the per-row "Re-parse" / "Deck Viewer"
+    // buttons added above (result-mismatch and incomplete-match rows only —
+    // the only two categories with a specific replay worth re-parsing or
+    // eyeballing in Deck Viewer). One listener on the container instead of
+    // one per button, since `details.innerHTML` gets fully replaced on
+    // every Check & Fix Data run anyway.
+    if (!details.dataset.dcRowActionsBound) {
+      details.dataset.dcRowActionsBound = '1';
+      details.addEventListener('click', e => {
+        const reparseBtn = e.target.closest('.dc-reparse-btn');
+        const dvBtn = e.target.closest('.dc-deckviewer-btn');
+        const btn = reparseBtn || dvBtn;
+        if (!btn) return;
+        const row = btn.closest('.dc-row');
+        if (!row) return;
+        const player = row.dataset.player || '';
+        const replayId = row.dataset.replayid || '';
+        if (reparseBtn) adminReparseReplay(player, replayId, reparseBtn);
+        else gotoDeckViewerForReplay(player, replayId, dvBtn);
+      });
+    }
   } catch(e) {
     res.style.color = 'var(--red)';
     res.textContent = '✗ Error: ' + e.message;
@@ -19017,6 +19444,129 @@ function exportResultMismatchesCsv() {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+// Builds a CSV of every flagged incomplete match (never reached 2 game wins,
+// no override marking it final) from the most recent Check & Fix Data
+// result — a review list, same as the other exports here. Nothing is
+// changed; this is just easier to work through outside the in-page list.
+function exportIncompleteMatchesCsv() {
+  const d = _lastDataCheck;
+  if (!d || !d.incompleteMatches || !d.incompleteMatches.length) return;
+  const esc = v => {
+    const s = (v===null||v===undefined) ? '' : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
+  };
+  const rows = [['Replay ID','Player','Opponent Name','Event','Recorded Result','My Wins','Opp Wins','Reason','Batch ID','Saved At']];
+  d.incompleteMatches.forEach(m => {
+    rows.push([
+      m.replayId, m.player||'', m.oppName||'', m.eventLabel||'',
+      m.recordedResult==='w' ? 'W' : m.recordedResult==='l' ? 'L' : (m.recordedResult||''),
+      m.myW, m.oppW, m.reason==='over' ? 'Over 2 wins (impossible)' : m.reason==='under' ? 'Under 2 wins (unverified)' : '',
+      m.batchId||'',
+      m.savedAt ? new Date(m.savedAt).toISOString() : '',
+    ]);
+  });
+  const csv = rows.map(row => row.map(esc).join(',')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'duel-tools-incomplete-matches-' + new Date().toISOString().slice(0,10) + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ── Check & Fix Data row actions: re-parse + jump to Deck Viewer ───────────
+// Both the result-mismatch and incomplete-match rows need a way to actually
+// go DO something about a flagged match instead of just reading its summary
+// line — re-run the parser (in case it was an alias/classification gap that's
+// since been fixed) or go look at the replay's actual games in Deck Viewer.
+// Unlike reparseReplay() (used from inside an already-open batch), these are
+// reached from the Admin tab where nothing player-specific is loaded yet, so
+// both look the right batch up fresh by player name + replayId first.
+
+async function _findBatchForReplay(playerName, replayId) {
+  const res = await fetch(API + '/batches/all-full');
+  const list = await res.json();
+  return (Array.isArray(list) ? list : []).find(b =>
+    (b.player || '').toLowerCase() === String(playerName || '').toLowerCase() &&
+    (b.replays || []).some(r => r.replayId === replayId)
+  ) || null;
+}
+
+async function adminReparseReplay(playerName, replayId, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Re-parsing...'; }
+  try {
+    const batch = await _findBatchForReplay(playerName, replayId);
+    if (!batch) { st('Could not find that replay in ' + playerName + '\'s batches', 'var(--amber)'); return; }
+    const replay = batch.replays.find(r => r.replayId === replayId);
+
+    let plays = replay.allPlays && replay.allPlays.length ? replay.allPlays : null;
+    if (!plays) {
+      const proxyRes = await fetch(API + '/proxy/replay?id=' + encodeURIComponent(replayId));
+      if (!proxyRes.ok) { st('Failed to fetch replay from DuelingBook', 'var(--red)'); return; }
+      const proxyData = await proxyRes.json();
+      plays = (proxyData.replay && proxyData.replay.plays) || [];
+    }
+    if (!plays.length) { st('No play data available for this replay', 'var(--red)'); return; }
+
+    const aliases = (() => {
+      const batchAliases = batch.aliases || [];
+      const regKey = (batch.player || '').toLowerCase();
+      const regAliases = (window._playerRegistry && window._playerRegistry[regKey])
+        ? (window._playerRegistry[regKey].aliases || []) : [];
+      const seen = new Set(batchAliases.map(a => a.toLowerCase()));
+      const merged = [...batchAliases];
+      for (const a of regAliases) { if (!seen.has(a.toLowerCase())) { merged.push(a); seen.add(a.toLowerCase()); } }
+      return merged;
+    })();
+
+    const parsed = parseMatch(replayId, plays, batch.player || '', aliases, replay.player1, replay.player2);
+    if (!parsed) { st('Still no match after re-parse — check aliases cover both usernames', 'var(--red)'); return; }
+
+    const parsedStore = { games: parsed.games, allMine: parsed.allMine, allOpp: parsed.allOpp,
+      oppName: parsed.oppName, myW: parsed.myW, oppW: parsed.oppW, draws: parsed.draws,
+      score: parsed.score, result: parsed.result };
+    const saveRes = await fetch(API + '/batches/' + batch.id + '/replay/' + encodeURIComponent(replayId) + '/parsed', {
+      method: 'PATCH', headers: authHeaders(),
+      body: JSON.stringify({ parsed: parsedStore })
+    });
+    if (!saveRes.ok) { st('Re-parse succeeded but save failed', 'var(--red)'); return; }
+
+    st('Re-parsed ' + playerName + ' vs ' + (parsed.oppName || 'opponent') + ' — now ' + parsed.score, 'var(--green)');
+    if (btn) { btn.textContent = '✓ Re-parsed — re-run Check & Fix Data'; btn.style.background = 'var(--green)'; btn.style.color = '#050508'; }
+    // The match's new data won't show up anywhere else (Format Data, Check &
+    // Fix Data's own next run) until this stale cache is thrown away.
+    _globalRecords = [];
+    if (typeof _lastDataCheck !== 'undefined') _lastDataCheck = null;
+  } catch (e) {
+    st('Re-parse error: ' + e.message, 'var(--red)');
+  } finally {
+    if (btn && !btn.textContent.startsWith('✓')) { btn.disabled = false; btn.textContent = '↺ Re-parse'; }
+  }
+}
+
+async function gotoDeckViewerForReplay(playerName, replayId, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '...'; }
+  try {
+    const batch = await _findBatchForReplay(playerName, replayId);
+    if (!batch) { st('Could not find that replay in ' + playerName + '\'s batches', 'var(--amber)'); return; }
+    await loadSpecificBatch(batch.id);
+    const deckTab = document.querySelector('.ntab[onclick*="deck"]');
+    if (deckTab) switchTab('deck', deckTab);
+    setTimeout(() => {
+      const idx = _matches.findIndex(m => m.replayId === replayId);
+      if (idx >= 0) selectMatch(idx);
+      else st('Loaded the batch, but couldn\'t find this exact replay to select it', 'var(--amber)');
+    }, 500);
+  } catch (e) {
+    st('Failed to open Deck Viewer: ' + e.message, 'var(--red)');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔍 Deck Viewer'; }
+  }
 }
 
 async function runCrosslinkGameRepair() {

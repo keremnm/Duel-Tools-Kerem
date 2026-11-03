@@ -945,6 +945,22 @@ function findOrCreateBatchForPlayerName(name) {
 // a W/L across the two sides of one match.
 function flipResult(r) { return r === 'w' ? 'l' : r === 'l' ? 'w' : r; }
 
+// A standard best-of-3 match can only end 2-0, 2-1, 1-2 or 0-2 — the moment
+// either side reaches 2 game wins the match is over, so nothing else is a
+// legal terminal score. Mirrors the client's bo3ScoreIssue() in
+// public/index.html — kept in sync by hand since this runs server-side.
+// Returns null for a valid score, 'under' (neither side reached 2 — could be
+// a legitimate single-game forfeit, or a parsing gap) or 'over' (someone has
+// 3+ wins, or both sides show 2+ — never legitimate in a real best-of-3,
+// almost always a data bug: games double-counted, merged wrong, or a
+// continuation replay stitched in twice).
+function bo3ScoreIssue(my, opp) {
+  if (typeof my !== 'number' || typeof opp !== 'number') return null;
+  if ((my === 2 && opp <= 1) || (opp === 2 && my <= 1)) return null;
+  if (my > 2 || opp > 2 || (my >= 2 && opp >= 2)) return 'over';
+  return 'under';
+}
+
 // Apply a result/score/deck override payload to one replay record, updating
 // both the top-level override fields and the cached `parsed` block's mirror
 // fields so every reader (buildMatchRecord, GFWL week/round scores, the
@@ -1458,6 +1474,7 @@ function impliedGameRecord(games, batchPlayer) {
 function computeDataCheck() {
   const byReplayId = {};
   const resultMismatches = [];
+  const incompleteMatches = [];
   for (const batch of Object.values(db.batches)) {
     for (const r of (batch.replays||[])) {
       if (!byReplayId[r.replayId]) byReplayId[r.replayId] = [];
@@ -1493,6 +1510,32 @@ function computeDataCheck() {
               hasOverride: !!(r.resultOverride || (r.parsed && r.parsed.resultOverride)),
               overrideNote: r.overrideNote || (r.parsed && r.parsed.overrideNote) || '',
               crossLinked: !!r.crossLinked,
+              savedAt: r.savedAt || null,
+            });
+          }
+        }
+
+        // A real match is only verified as actually decided once one side
+        // has reached 2 game wins — best-of-3's normal finish line. A score
+        // like 1-0, 0-1 or 1-1 (with no override saying it's final) means
+        // the data stops short of that: could be a legitimate single-game
+        // forfeit, or could just be a parsing gap where later games were
+        // never recorded — there's no way to tell which from here. Counting
+        // it as a full match feeds an unverified result into every stats
+        // view (same reasoning as Format Data's own `incomplete` exclusion
+        // in buildMatchRecord — this is the system-wide version of that).
+        const hasOverride = !!(r.resultOverride || (r.parsed && r.parsed.resultOverride));
+        if (!hasOverride) {
+          const myW  = r.scoreOverride ? r.scoreOverride.my  : (r.parsed && typeof r.parsed.myW  === 'number' ? r.parsed.myW  : null);
+          const oppW = r.scoreOverride ? r.scoreOverride.opp : (r.parsed && typeof r.parsed.oppW === 'number' ? r.parsed.oppW : null);
+          const scoreIssue = (myW !== null && oppW !== null) ? bo3ScoreIssue(myW, oppW) : null;
+          if (scoreIssue) {
+            incompleteMatches.push({
+              replayId: r.replayId, batchId: batch.id, player: batch.player || '',
+              oppName: r.oppName || (r.parsed && r.parsed.oppName) || '',
+              eventLabel: r.eventLabel || '',
+              recordedResult: (r.parsed && r.parsed.result) || r.result || '',
+              myW, oppW, reason: scoreIssue,
               savedAt: r.savedAt || null,
             });
           }
@@ -1535,7 +1578,7 @@ function computeDataCheck() {
     }
     missingMirrors.push({ replayId, player: only.player, oppName: only.oppName, resolvedOpponent: resolved.name, batchId: only.batchId, eventLabel: only.eventLabel, isManual: only.isManual, _replay: only._replay, _batchPlayer: only.player });
   }
-  return { byReplayId, missingMirrors, unrecognizedOpponents, duplicates, selfAliasConflicts, resultMismatches };
+  return { byReplayId, missingMirrors, unrecognizedOpponents, duplicates, selfAliasConflicts, resultMismatches, incompleteMatches };
 }
 
 // In-memory store for the Live Tracker relay — see the route handler below
@@ -1830,6 +1873,7 @@ const server = http.createServer(async (req, res) => {
       duplicates: dc.duplicates,
       selfAliasConflicts: dc.selfAliasConflicts,
       resultMismatches: dc.resultMismatches,
+      incompleteMatches: dc.incompleteMatches,
       ciCheck: verifyWilsonCI(),
     });
   }
