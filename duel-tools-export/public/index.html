@@ -11841,6 +11841,8 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
       manualForfeit: !!replayResult.manualForfeit,
       manualNote: replayResult.manualNote || '',
       manualReplayUrl: replayResult.manualReplayUrl || '',
+      omitted: !!(replayResult.omitted || (p && p.omitted)),
+      omittedNote: replayResult.omittedNote || (p && p.omittedNote) || '',
       games: [], allMine: [], allOpp: [], allMyCards: [],
       mergedReplays: [],
     };
@@ -11933,6 +11935,13 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
       resultOverride: _resOv,
       scoreOverride:  _scoreOv,
       overrideNote:   replayResult.overrideNote || p.overrideNote || '',
+      // Permanent, explicit exclusion from Format Data — see the /override
+      // endpoint's `omitted` field. Unlike every override above, this is not
+      // perspective-relative (a match being omitted is true for both
+      // cross-linked sides equally), so it's read straight through with no
+      // flipping logic anywhere.
+      omitted: !!(replayResult.omitted || p.omitted),
+      omittedNote: replayResult.omittedNote || p.omittedNote || '',
       origResult: p.result, origScore: p.score, origMyW: p.myW, origOppW: p.oppW,
       games:     gameRecords,
       allMine:   p.allMine || [],
@@ -11976,6 +11985,8 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
       myDeckConf:'Low', oppDeckConf:'Low',
       matchWon:false, matchLost:false, result:'n',
       score:'0-0', myW:0, oppW:0, draws:0,
+      omitted: !!replayResult.omitted,
+      omittedNote: replayResult.omittedNote || '',
       games:[], allMine:[], allOpp:[],
       allMyCards:[],
     };
@@ -12105,6 +12116,8 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
     resultOverride: _resOv2,
     scoreOverride:  _scoreOv2,
     overrideNote:   replayResult.overrideNote || '',
+    omitted: !!(replayResult.omitted || replayResult.parsed && replayResult.parsed.omitted),
+    omittedNote: replayResult.omittedNote || (replayResult.parsed && replayResult.parsed.omittedNote) || '',
     origResult: parsed.result, origScore: parsed.score, origMyW: parsed.myW, origOppW: parsed.oppW,
     games:     gameRecords,
     allMine:   parsed.allMine,
@@ -12418,10 +12431,10 @@ function filterFormatDataRecords(records) {
 function populateFormatDataDropdown() {
   const sel = document.getElementById('fd-deck-select');
   if (!sel) return;
-  // Exclude incomplete matches from the dropdown counts too, so they match
-  // the "Total Matches" number shown after picking a deck (see the
-  // `incomplete` exclusion in renderFormatDataTable).
-  const filtered = filterFormatDataRecords(_globalRecords).filter(r => !r.incomplete);
+  // Exclude incomplete AND manually-omitted matches from the dropdown counts
+  // too, so they match the "Total Matches" number shown after picking a deck
+  // (see the `incomplete`/`omitted` exclusion in renderFormatDataTable).
+  const filtered = filterFormatDataRecords(_globalRecords).filter(r => !r.incomplete && !r.omitted);
   const counts = {};
   filtered.forEach(r => { const k = r.myDeck||'Unknown'; counts[k] = (counts[k]||0)+1; });
   const decks = Object.keys(counts).sort((a,b) => counts[b]-counts[a]);
@@ -12453,8 +12466,13 @@ function renderFormatDataTable(deckType) {
   // unverified partial result as a full match is exactly what produces N/
   // win-rate mismatches between two decks' pages. See buildMatchRecord's
   // `incomplete` flag for the full reasoning.
-  const records = deckRecordsAll.filter(r => !r.incomplete);
-  const incompleteExcluded = deckRecordsAll.length - records.length;
+  // Manually-omitted matches (see the "⛔ Omit" action in Check & Fix Data)
+  // are excluded here too — permanently, until explicitly un-omitted — same
+  // mechanism as `incomplete` above, just driven by a human decision instead
+  // of an automatic best-of-3 validity check.
+  const records = deckRecordsAll.filter(r => !r.incomplete && !r.omitted);
+  const incompleteExcluded = deckRecordsAll.filter(r => r.incomplete).length;
+  const omittedExcluded = deckRecordsAll.filter(r => r.omitted).length;
   if (!records.length) {
     out.innerHTML = `<div class="dd-empty">No replays found for ${deck||'this deck'}.</div>`;
     return;
@@ -12597,7 +12615,8 @@ function renderFormatDataTable(deckType) {
   note.style.cssText = 'font-size:10px;color:var(--dim);margin-top:4px';
   note.textContent = 'Deck types auto-classified by TF-IDF model. The Opponent Deck breakdown below only includes matches cross-linked to the opponent\'s own archive — guaranteeing it\'s built from the exact same matches, with the exact same two deck labels, as that opponent deck\'s own page, so e.g. Warrior\'s win % vs Chaos Turbo and Chaos Turbo\'s win % vs Warrior always sum to 100%. 95% CI via Wilson score interval. Mirror matches (self-deck) excluded from the opponent breakdown above. Pre-Side Win % = Game 1 only; Post-Side Win % = Games 2+3 combined — shown as N/A where there\'s no per-game data (manual/forfeit entries, or replays whose game winner was never parsed). Click a row to see every individual match\'s Game 1/2/3 results.'
     + (unknownOppExcluded ? ` ${unknownOppExcluded} match${unknownOppExcluded!==1?'es':''} vs an opponent who isn\'t archived/cross-linked excluded from the breakdown (still counted in Total Matches and Win Rate vs Field above, which don\'t depend on knowing the opponent\'s deck).` : '')
-    + (incompleteExcluded ? ` ${incompleteExcluded} match${incompleteExcluded!==1?'es':''} excluded from every number above as not a valid best-of-3 score — a real (non-manual, non-overridden) replay whose recorded wins are either short of the 2 needed to decide it (e.g. 1-0, 0-1, 1-1) or impossible to reach in a real match (e.g. 3-0, 0-3, 2-2). See Admin → Cross-Links → Check & Fix Data to review these.` : '');
+    + (incompleteExcluded ? ` ${incompleteExcluded} match${incompleteExcluded!==1?'es':''} excluded from every number above as not a valid best-of-3 score — a real (non-manual, non-overridden) replay whose recorded wins are either short of the 2 needed to decide it (e.g. 1-0, 0-1, 1-1) or impossible to reach in a real match (e.g. 3-0, 0-3, 2-2). See Admin → Cross-Links → Check & Fix Data to review these.` : '')
+    + (omittedExcluded ? ` ${omittedExcluded} match${omittedExcluded!==1?'es':''} manually omitted from every number above — see Admin → Cross-Links → Check & Fix Data → Omitted Data to review or un-omit.` : '');
   out.appendChild(note);
 }
 
@@ -19167,6 +19186,7 @@ async function runDataCheck() {
               + ' <a href="'+watchUrl+'" target="_blank" style="color:var(--muted);margin-left:4px">▶ Watch</a>'
               + ' <button class="dc-reparse-btn" style="background:transparent;color:var(--amber);border:1px solid var(--amber);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">↺ Re-parse</button>'
               + ' <button class="dc-deckviewer-btn" style="background:transparent;color:var(--muted);border:1px solid var(--border);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">🔍 Deck Viewer</button>'
+              + ' <button class="dc-omit-btn" style="background:transparent;color:var(--red);border:1px solid var(--red);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">⛔ Omit</button>'
               + '</div>';
           }).join('') +
           '</div>' +
@@ -19208,6 +19228,7 @@ async function runDataCheck() {
               + ' <a href="'+watchUrl+'" target="_blank" style="color:var(--muted);margin-left:4px">▶ Watch</a>'
               + ' <button class="dc-reparse-btn" style="background:transparent;color:var(--amber);border:1px solid var(--amber);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">↺ Re-parse</button>'
               + ' <button class="dc-deckviewer-btn" style="background:transparent;color:var(--muted);border:1px solid var(--border);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">🔍 Deck Viewer</button>'
+              + ' <button class="dc-omit-btn" style="background:transparent;color:var(--red);border:1px solid var(--red);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">⛔ Omit</button>'
               + '</div>';
           }).join('') +
           '</div>' +
@@ -19231,10 +19252,12 @@ async function runDataCheck() {
             'YDK is wrong or outdated, or it\'s a real sided/tech choice the classifier is misreading — nothing here is ' +
             'changed automatically.' +
           '</div>' +
+          '<button id="dc-reparse-all-conflicts" style="background:transparent;color:var(--amber);border:1px solid var(--amber);font-family:monospace;font-weight:bold;font-size:11px;padding:4px 10px;border-radius:4px;cursor:pointer;margin-bottom:6px">↺ Re-parse All (' + conflicts.length + ')</button>' +
+          ' <button id="dc-confirmydk-all" style="background:transparent;color:var(--green);border:1px solid var(--green);font-family:monospace;font-weight:bold;font-size:11px;padding:4px 10px;border-radius:4px;cursor:pointer;margin-bottom:6px">✓ Select All to Match YDK (' + conflicts.length + ')</button>' +
           '<div style="display:flex;flex-direction:column;gap:4px;max-height:360px;overflow-y:auto">' +
           conflicts.map(c => {
             const watchUrl = 'https://www.duelingbook.com/replay?id=' + encodeURIComponent(c.replayId);
-            return '<div class="dc-row" data-player="'+_escapeHtml(c.player)+'" data-replayid="'+_escapeHtml(c.replayId)+'" style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
+            return '<div class="dc-row" data-player="'+_escapeHtml(c.player)+'" data-replayid="'+_escapeHtml(c.replayId)+'" data-side="'+_escapeHtml(c.side)+'" data-deck="'+_escapeHtml(c.decklistDeck)+'" style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
               + _escapeHtml(c.player) + ' vs ' + _escapeHtml(c.oppName)
               + (c.eventLabel ? ' <span style="color:var(--amber)">· '+_escapeHtml(c.eventLabel)+'</span>' : '')
               + ' <span style="color:var(--muted)">· '+(c.side==='my'?'this player\'s':'opponent\'s')+' deck</span>'
@@ -19244,6 +19267,8 @@ async function runDataCheck() {
               + ' <a href="'+watchUrl+'" target="_blank" style="color:var(--muted);margin-left:4px">▶ Watch</a>'
               + ' <button class="dc-reparse-btn" style="background:transparent;color:var(--amber);border:1px solid var(--amber);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">↺ Re-parse</button>'
               + ' <button class="dc-deckviewer-btn" style="background:transparent;color:var(--muted);border:1px solid var(--border);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">🔍 Deck Viewer</button>'
+              + ' <button class="dc-confirmydk-btn" style="background:transparent;color:var(--green);border:1px solid var(--green);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">✓ Confirm YDK</button>'
+              + ' <button class="dc-omit-btn" style="background:transparent;color:var(--red);border:1px solid var(--red);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">⛔ Omit</button>'
               + '</div>';
           }).join('') +
           '</div>' +
@@ -19268,6 +19293,7 @@ async function runDataCheck() {
             'matchup\'s two directions (e.g. Warrior-vs-X and X-vs-Warrior) from summing to 100% in Format Data. Fix it ' +
             'from either side\'s own result/score/deck override controls, then re-check.' +
           '</div>' +
+          '<button id="dc-reparse-all-mirrors" style="background:transparent;color:var(--red);border:1px solid var(--red);font-family:monospace;font-weight:bold;font-size:11px;padding:4px 10px;border-radius:4px;cursor:pointer;margin-bottom:6px">↺ Re-parse All (' + mirrorDesyncs.length + ')</button>' +
           '<div style="display:flex;flex-direction:column;gap:4px;max-height:360px;overflow-y:auto">' +
           mirrorDesyncs.map(m => {
             const watchUrl = 'https://www.duelingbook.com/replay?id=' + encodeURIComponent(m.replayId);
@@ -19284,6 +19310,12 @@ async function runDataCheck() {
             return '<div style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
               + _escapeHtml(m.replayId) + (m.eventLabel ? ' <span style="color:var(--amber)">· '+_escapeHtml(m.eventLabel)+'</span>' : '')
               + ' <a href="'+watchUrl+'" target="_blank" style="color:var(--muted);margin-left:4px">▶ Watch</a>'
+              // Omitted is global per replayId (never player-relative, unlike
+              // the per-copy Re-parse buttons below), so one button covers
+              // both sides of this pair — any valid copy's player works here.
+              + '<div class="dc-row" data-player="'+_escapeHtml(m.player1)+'" data-replayid="'+_escapeHtml(m.replayId)+'" style="display:inline">'
+                + ' <button class="dc-omit-btn" style="background:transparent;color:var(--red);border:1px solid var(--red);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">⛔ Omit Both Copies</button>'
+              + '</div>'
               + '<br>' + line2
               + '<div class="dc-row" data-player="'+_escapeHtml(m.player1)+'" data-replayid="'+_escapeHtml(m.replayId)+'" style="margin-top:4px">'
                 + _escapeHtml(m.player1) + '\'s copy: '
@@ -19324,6 +19356,60 @@ async function runDataCheck() {
         '</details>' +
       '</div>';
 
+    // Already-resolved state, not errors — a place to see and undo an
+    // explicit omit, and (per the user's request) a visibility window onto
+    // overridden matches too, since those no longer show up in the Result
+    // Mismatches list above after being excluded from it as "already
+    // reviewed." Collapsed by default: nothing here needs action.
+    const omittedList = d.omittedMatches || [];
+    const overriddenList = d.overriddenMatches || [];
+    const omittedOverriddenHtml = (!omittedList.length && !overriddenList.length) ? '' :
+      '<div style="margin-bottom:14px">' +
+        '<details>' +
+          '<summary style="font-size:12px;font-weight:bold;color:var(--muted);cursor:pointer">' +
+            '🗄 Omitted & Overridden Data (' + omittedList.length + ' omitted, ' + overriddenList.length + ' overridden)' +
+          '</summary>' +
+          '<div style="font-size:11px;color:var(--dim);margin:6px 0 8px">' +
+            'Matches explicitly omitted from Format Data (permanently, until un-omitted below), and matches with a ' +
+            'result/score override — both already resolved by a human, shown here for visibility/audit rather than ' +
+            'buried in the error lists above.' +
+          '</div>' +
+          (!omittedList.length ? '' :
+            '<div style="font-size:11px;font-weight:bold;color:var(--red);margin:6px 0 4px">⛔ Omitted (' + omittedList.length + ') — excluded from Format Data</div>' +
+            '<div style="display:flex;flex-direction:column;gap:4px;max-height:280px;overflow-y:auto;margin-bottom:8px">' +
+            omittedList.map(o => {
+              const watchUrl = 'https://www.duelingbook.com/replay?id=' + encodeURIComponent(o.replayId);
+              return '<div class="dc-row" data-player="'+_escapeHtml(o.player)+'" data-replayid="'+_escapeHtml(o.replayId)+'" style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
+                + _escapeHtml(o.player) + ' vs ' + _escapeHtml(o.oppName)
+                + (o.eventLabel ? ' <span style="color:var(--amber)">· '+_escapeHtml(o.eventLabel)+'</span>' : '')
+                + (o.recordedResult ? ' <span style="color:var(--muted)">· recorded '+(o.recordedResult==='w'?'W':o.recordedResult==='l'?'L':_escapeHtml(o.recordedResult))+'</span>' : '')
+                + (o.omittedNote ? '<br><span style="color:var(--dim)">Note: '+_escapeHtml(o.omittedNote)+'</span>' : '')
+                + ' <a href="'+watchUrl+'" target="_blank" style="color:var(--muted);margin-left:4px">▶ Watch</a>'
+                + ' <button class="dc-unomit-btn" style="background:transparent;color:var(--green);border:1px solid var(--green);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">↩ Un-omit</button>'
+                + '</div>';
+            }).join('') +
+            '</div>'
+          ) +
+          (!overriddenList.length ? '' :
+            '<div style="font-size:11px;font-weight:bold;color:var(--amber);margin:6px 0 4px">✅ Overridden (' + overriddenList.length + ') — still counted, result/score corrected by a human</div>' +
+            '<div style="display:flex;flex-direction:column;gap:4px;max-height:280px;overflow-y:auto">' +
+            overriddenList.map(o => {
+              const watchUrl = 'https://www.duelingbook.com/replay?id=' + encodeURIComponent(o.replayId);
+              return '<div class="dc-row" data-player="'+_escapeHtml(o.player)+'" data-replayid="'+_escapeHtml(o.replayId)+'" style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
+                + _escapeHtml(o.player) + ' vs ' + _escapeHtml(o.oppName)
+                + (o.eventLabel ? ' <span style="color:var(--amber)">· '+_escapeHtml(o.eventLabel)+'</span>' : '')
+                + (o.recordedResult ? ' <span style="color:var(--muted)">· now '+(o.recordedResult==='w'?'W':o.recordedResult==='l'?'L':_escapeHtml(o.recordedResult))+'</span>' : '')
+                + (o.recordedScore ? ' <span style="color:var(--muted)">'+_escapeHtml(o.recordedScore)+'</span>' : '')
+                + (o.overrideNote ? '<br><span style="color:var(--dim)">Note: '+_escapeHtml(o.overrideNote)+'</span>' : '')
+                + ' <a href="'+watchUrl+'" target="_blank" style="color:var(--muted);margin-left:4px">▶ Watch</a>'
+                + ' <button class="dc-omit-btn" style="background:transparent;color:var(--red);border:1px solid var(--red);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">⛔ Omit</button>'
+                + '</div>';
+            }).join('') +
+            '</div>'
+          ) +
+        '</details>' +
+      '</div>';
+
     details.innerHTML = ciHtml +
       section('🔧 Auto-fixable — remaining after auto-fix', 'var(--green)', d.missingMirrors, m =>
         '<div style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
@@ -19348,27 +19434,32 @@ async function runDataCheck() {
       incompleteHtml +
       conflictHtml +
       mirrorDesyncHtml +
-      unrecognizedHtml;
+      unrecognizedHtml +
+      omittedOverriddenHtml;
 
-    // Delegated click handler for the per-row "Re-parse" / "Deck Viewer"
-    // buttons added above (result-mismatch and incomplete-match rows only —
-    // the only two categories with a specific replay worth re-parsing or
-    // eyeballing in Deck Viewer). One listener on the container instead of
-    // one per button, since `details.innerHTML` gets fully replaced on
-    // every Check & Fix Data run anyway.
+    // Delegated click handler for the per-row "Re-parse" / "Deck Viewer" /
+    // "Omit" / "Un-omit" / "Confirm YDK" buttons added above. One listener
+    // on the container instead of one per button, since `details.innerHTML`
+    // gets fully replaced on every Check & Fix Data run anyway.
     if (!details.dataset.dcRowActionsBound) {
       details.dataset.dcRowActionsBound = '1';
       details.addEventListener('click', e => {
         const reparseBtn = e.target.closest('.dc-reparse-btn');
         const dvBtn = e.target.closest('.dc-deckviewer-btn');
-        const btn = reparseBtn || dvBtn;
+        const omitBtn = e.target.closest('.dc-omit-btn');
+        const unomitBtn = e.target.closest('.dc-unomit-btn');
+        const confirmYdkBtn = e.target.closest('.dc-confirmydk-btn');
+        const btn = reparseBtn || dvBtn || omitBtn || unomitBtn || confirmYdkBtn;
         if (!btn) return;
         const row = btn.closest('.dc-row');
         if (!row) return;
         const player = row.dataset.player || '';
         const replayId = row.dataset.replayid || '';
         if (reparseBtn) adminReparseReplay(player, replayId, reparseBtn);
-        else gotoDeckViewerForReplay(player, replayId, dvBtn);
+        else if (dvBtn) gotoDeckViewerForReplay(player, replayId, dvBtn);
+        else if (omitBtn) adminOmitReplay(player, replayId, omitBtn, true);
+        else if (unomitBtn) adminOmitReplay(player, replayId, unomitBtn, false);
+        else if (confirmYdkBtn) adminConfirmYdkDeck(player, replayId, row.dataset.side || '', row.dataset.deck || '', confirmYdkBtn);
       });
     }
 
@@ -19381,6 +19472,22 @@ async function runDataCheck() {
     const reparseAllIncompleteBtn = document.getElementById('dc-reparse-all-incomplete');
     if (reparseAllIncompleteBtn) reparseAllIncompleteBtn.onclick = () =>
       adminReparseAll(incompleteMatches.map(m => ({ player: m.player, replayId: m.replayId })), reparseAllIncompleteBtn);
+    const reparseAllConflictsBtn = document.getElementById('dc-reparse-all-conflicts');
+    if (reparseAllConflictsBtn) reparseAllConflictsBtn.onclick = () =>
+      adminReparseAll(conflicts.map(c => ({ player: c.player, replayId: c.replayId })), reparseAllConflictsBtn);
+    const confirmYdkAllBtn = document.getElementById('dc-confirmydk-all');
+    if (confirmYdkAllBtn) confirmYdkAllBtn.onclick = () =>
+      adminConfirmYdkAll(conflicts.map(c => ({ player: c.player, replayId: c.replayId, side: c.side, deck: c.decklistDeck })), confirmYdkAllBtn);
+    // Each mirror desync is one replay shared by two cross-linked copies
+    // (player1's and player2's), so re-parsing "all" of them means hitting
+    // both copies per pair, not just one — otherwise half the desyncs would
+    // survive the bulk run untouched.
+    const reparseAllMirrorsBtn = document.getElementById('dc-reparse-all-mirrors');
+    if (reparseAllMirrorsBtn) reparseAllMirrorsBtn.onclick = () =>
+      adminReparseAll(mirrorDesyncs.flatMap(m => [
+        { player: m.player1, replayId: m.replayId },
+        { player: m.player2, replayId: m.replayId },
+      ]), reparseAllMirrorsBtn);
   } catch(e) {
     res.style.color = 'var(--red)';
     res.textContent = '✗ Error: ' + e.message;
@@ -19584,6 +19691,111 @@ async function adminReparseAll(items, btn) {
     if (i < items.length - 1) await sleep(250);
   }
   const summary = `✓ Re-parsed ${ok}/${items.length}` + (fail ? ` (${fail} failed)` : '') + ' — re-run Check & Fix Data to see the result';
+  st(summary, fail ? 'var(--amber)' : 'var(--green)');
+  if (btn) { btn.textContent = summary; btn.style.background = fail ? 'var(--amber)' : 'var(--green)'; btn.style.color = '#050508'; }
+}
+
+// Permanently (until un-omitted) excludes one replay from every Format Data
+// number — see the `omitted` field threaded through buildMatchRecord and the
+// server's override registry. Not perspective-relative like a result/score/
+// deck override: omitting is true for both cross-linked sides equally, so a
+// single PATCH through whichever batch holds this replayId is enough — the
+// server's own applyGlobalOverrideToAllBatchCopies propagates it to every
+// other copy. `quiet` suppresses the per-item toast for bulk use, same
+// convention as adminReparseReplay.
+async function adminOmitReplay(playerName, replayId, btn, omit, quiet) {
+  if (btn) { btn.disabled = true; btn.textContent = omit ? '⏳ Omitting...' : '⏳ Un-omitting...'; }
+  const say = (msg, color) => { if (!quiet) st(msg, color); };
+  try {
+    const batch = await _findBatchForReplay(playerName, replayId);
+    if (!batch) { say('Could not find that replay in ' + playerName + '\'s batches', 'var(--amber)'); return false; }
+    const res = await fetch(API + '/batches/' + batch.id + '/replay/' + encodeURIComponent(replayId) + '/override', {
+      method: 'PATCH', headers: authHeaders(),
+      body: JSON.stringify({ omitted: omit })
+    });
+    const d = await res.json().catch(() => null);
+    if (!res.ok || !d || !d.ok) { say('Failed to ' + (omit?'omit':'un-omit') + ': ' + (d && d.error || 'unknown error'), 'var(--red)'); return false; }
+    say((omit ? 'Omitted' : 'Un-omitted') + ' ' + playerName + '\'s match (' + replayId + ') ' + (omit ? 'from' : 'back into') + ' Format Data', 'var(--green)');
+    if (btn) { btn.textContent = omit ? '✓ Omitted — re-run Check & Fix Data' : '✓ Un-omitted — re-run Check & Fix Data'; btn.style.background = 'var(--green)'; btn.style.color = '#050508'; }
+    // Stale cache would otherwise keep showing this match counted (or not)
+    // the old way in both Format Data and the next Check & Fix Data run.
+    _globalRecords = [];
+    if (typeof _lastDataCheck !== 'undefined') _lastDataCheck = null;
+    return true;
+  } catch (e) {
+    say((omit?'Omit':'Un-omit') + ' error: ' + e.message, 'var(--red)');
+    return false;
+  } finally {
+    if (btn && !btn.textContent.startsWith('✓')) { btn.disabled = false; btn.textContent = omit ? '⛔ Omit' : '↩ Un-omit'; }
+  }
+}
+
+// Bulk "Select All to Match YDK" / Omit runners — same sequential-with-delay
+// pattern as adminReparseAll, so a few hundred rows don't hammer the server
+// with a burst of concurrent requests.
+async function adminOmitAll(items, omit, btn) {
+  if (!items || !items.length) return;
+  if (btn) btn.disabled = true;
+  let ok = 0, fail = 0;
+  for (let i = 0; i < items.length; i++) {
+    if (btn) btn.textContent = `⏳ ${omit?'Omitting':'Un-omitting'} ${i+1}/${items.length}...`;
+    const success = await adminOmitReplay(items[i].player, items[i].replayId, null, omit, true);
+    if (success) ok++; else fail++;
+    if (i < items.length - 1) await sleep(250);
+  }
+  const summary = `✓ ${omit?'Omitted':'Un-omitted'} ${ok}/${items.length}` + (fail ? ` (${fail} failed)` : '') + ' — re-run Check & Fix Data to see the result';
+  st(summary, fail ? 'var(--amber)' : 'var(--green)');
+  if (btn) { btn.textContent = summary; btn.style.background = fail ? 'var(--amber)' : 'var(--green)'; btn.style.color = '#050508'; }
+}
+
+// Locks in the saved YDK decklist's deck type as this side's override,
+// exactly matching what the "🪪 Event decklist vs. observed cards disagree"
+// section is flagging — per the user, a full saved decklist is better
+// evidence than one replay's own card-classifier guess, which only sees
+// whatever happened to be revealed that match. `side` is 'my' or 'opp' as
+// already computed by findEventDecklistConflicts from THIS row's own batch
+// owner's perspective, so it maps directly onto myDeckOverride/oppDeckOverride
+// with no flipping needed — the server's twin-propagation handles the
+// opponent's cross-linked copy on its own, same as any other deck override.
+async function adminConfirmYdkDeck(playerName, replayId, side, deck, btn, quiet) {
+  if (!side || !deck) return false;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Confirming...'; }
+  const say = (msg, color) => { if (!quiet) st(msg, color); };
+  try {
+    const batch = await _findBatchForReplay(playerName, replayId);
+    if (!batch) { say('Could not find that replay in ' + playerName + '\'s batches', 'var(--amber)'); return false; }
+    const field = side === 'my' ? 'myDeckOverride' : 'oppDeckOverride';
+    const res = await fetch(API + '/batches/' + batch.id + '/replay/' + encodeURIComponent(replayId) + '/override', {
+      method: 'PATCH', headers: authHeaders(),
+      body: JSON.stringify({ [field]: deck })
+    });
+    const d = await res.json().catch(() => null);
+    if (!res.ok || !d || !d.ok) { say('Failed to confirm YDK deck: ' + (d && d.error || 'unknown error'), 'var(--red)'); return false; }
+    say('Set ' + (side==='my'?playerName:'opponent') + '\'s deck to ' + deck + ' for ' + replayId, 'var(--green)');
+    if (btn) { btn.textContent = '✓ Confirmed — re-run Check & Fix Data'; btn.style.background = 'var(--green)'; btn.style.color = '#050508'; }
+    _globalRecords = [];
+    if (typeof _lastDataCheck !== 'undefined') _lastDataCheck = null;
+    return true;
+  } catch (e) {
+    say('Confirm YDK error: ' + e.message, 'var(--red)');
+    return false;
+  } finally {
+    if (btn && !btn.textContent.startsWith('✓')) { btn.disabled = false; btn.textContent = '✓ Confirm YDK'; }
+  }
+}
+
+// Bulk version of adminConfirmYdkDeck — same sequential-with-delay pattern.
+async function adminConfirmYdkAll(items, btn) {
+  if (!items || !items.length) return;
+  if (btn) btn.disabled = true;
+  let ok = 0, fail = 0;
+  for (let i = 0; i < items.length; i++) {
+    if (btn) btn.textContent = `⏳ Confirming ${i+1}/${items.length}...`;
+    const success = await adminConfirmYdkDeck(items[i].player, items[i].replayId, items[i].side, items[i].deck, null, true);
+    if (success) ok++; else fail++;
+    if (i < items.length - 1) await sleep(250);
+  }
+  const summary = `✓ Confirmed ${ok}/${items.length}` + (fail ? ` (${fail} failed)` : '') + ' — re-run Check & Fix Data to see the result';
   st(summary, fail ? 'var(--amber)' : 'var(--green)');
   if (btn) { btn.textContent = summary; btn.style.background = fail ? 'var(--amber)' : 'var(--green)'; btn.style.color = '#050508'; }
 }

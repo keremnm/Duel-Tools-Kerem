@@ -995,6 +995,8 @@ function reapplyOverridesToParsed(r) {
   }
   r.parsed.scoreOverride = r.scoreOverride || null;
   if (r.overrideNote) r.parsed.overrideNote = r.overrideNote;
+  if (r.omitted) r.parsed.omitted = true;
+  if (r.omittedNote) r.parsed.omittedNote = r.omittedNote;
 }
 
 function applyOverrideToReplay(r, data, flip) {
@@ -1025,6 +1027,18 @@ function applyOverrideToReplay(r, data, flip) {
   if (data.overrideNote !== undefined) {
     r.overrideNote = data.overrideNote || '';
     if (r.parsed) r.parsed.overrideNote = data.overrideNote || '';
+  }
+  // Omission (excluded from Format Data entirely) is NOT perspective-
+  // relative like W/L or score — a match being omitted is true for both
+  // sides equally, so unlike everything else in this function it's never
+  // flipped for the opponent's twin.
+  if (data.omitted !== undefined) {
+    r.omitted = !!data.omitted;
+    if (r.parsed) r.parsed.omitted = !!data.omitted;
+  }
+  if (data.omittedNote !== undefined) {
+    r.omittedNote = data.omittedNote || '';
+    if (r.parsed) r.parsed.omittedNote = data.omittedNote || '';
   }
 }
 
@@ -1080,6 +1094,13 @@ function applyGlobalOverrideToReplay(r, batchPlayer) {
   if (g.note) {
     r.overrideNote = g.note;
     if (r.parsed) r.parsed.overrideNote = g.note;
+  }
+  // Same for both sides of a cross-linked pair — no winner-relative flip.
+  r.omitted = !!g.omitted;
+  if (r.parsed) r.parsed.omitted = !!g.omitted;
+  if (g.omittedNote) {
+    r.omittedNote = g.omittedNote;
+    if (r.parsed) r.parsed.omittedNote = g.omittedNote;
   }
   if (g.deckOverrides) {
     const myDeck = lookupDeckOverride(g.deckOverrides, batchPlayer);
@@ -1138,8 +1159,15 @@ function mergeGlobalOverride(replayId, data, batchPlayer, oppName) {
     if (data.oppDeckOverride) g.deckOverrides[oppName.toLowerCase()] = data.oppDeckOverride;
     else delete g.deckOverrides[oppName.toLowerCase()];
   }
+  if (data.omitted !== undefined) {
+    g.omitted = !!data.omitted;
+    if (!g.omitted) g.omittedNote = ''; // un-omitting clears the reason along with the flag
+  }
+  if (data.omittedNote !== undefined) {
+    g.omittedNote = data.omittedNote || '';
+  }
 
-  const isEmpty = !g.winner && !g.note && Object.keys(g.deckOverrides).length === 0;
+  const isEmpty = !g.winner && !g.note && !g.omitted && Object.keys(g.deckOverrides).length === 0;
   if (isEmpty) return null;
   g.replayId = replayId;
   g.updatedAt = Date.now();
@@ -1475,6 +1503,14 @@ function computeDataCheck() {
   const byReplayId = {};
   const resultMismatches = [];
   const incompleteMatches = [];
+  // Manually omitted (see the /override endpoint's `omitted` field — excluded
+  // from Format Data entirely, permanently, until un-omitted) and overridden
+  // (result/score corrected by a human, but still counted) replays. Neither
+  // is an "error" — both are already-resolved/reviewed state — so they're
+  // reported separately from the categories above rather than folded into
+  // the issue count, purely so there's a place to see and undo them.
+  const omittedMatches = [];
+  const overriddenMatches = [];
   for (const batch of Object.values(db.batches)) {
     for (const r of (batch.replays||[])) {
       if (!byReplayId[r.replayId]) byReplayId[r.replayId] = [];
@@ -1491,6 +1527,30 @@ function computeDataCheck() {
         savedAt: r.savedAt || null,
         _replay: r,
       });
+
+      if (r.omitted) {
+        omittedMatches.push({
+          replayId: r.replayId, batchId: batch.id, player: batch.player || '',
+          oppName: r.oppName || (r.parsed && r.parsed.oppName) || '',
+          eventLabel: r.eventLabel || '',
+          recordedResult: r.resultOverride || (r.parsed && r.parsed.resultOverride) || (r.parsed && r.parsed.result) || r.result || '',
+          omittedNote: r.omittedNote || '',
+          savedAt: r.savedAt || null,
+        });
+      }
+      const hasAnyOverride = !!(r.resultOverride || (r.parsed && r.parsed.resultOverride) ||
+        r.scoreOverride || (r.parsed && r.parsed.scoreOverride));
+      if (hasAnyOverride && !r.isManual) {
+        overriddenMatches.push({
+          replayId: r.replayId, batchId: batch.id, player: batch.player || '',
+          oppName: r.oppName || (r.parsed && r.parsed.oppName) || '',
+          eventLabel: r.eventLabel || '',
+          recordedResult: r.resultOverride || (r.parsed && r.parsed.resultOverride) || '',
+          recordedScore: r.scoreOverride ? `${r.scoreOverride.my}-${r.scoreOverride.opp}` : '',
+          overrideNote: r.overrideNote || (r.parsed && r.parsed.overrideNote) || '',
+          savedAt: r.savedAt || null,
+        });
+      }
 
       if (!r.isManual) {
         const games = (r.parsed && r.parsed.games) || [];
@@ -1587,7 +1647,7 @@ function computeDataCheck() {
     }
     missingMirrors.push({ replayId, player: only.player, oppName: only.oppName, resolvedOpponent: resolved.name, batchId: only.batchId, eventLabel: only.eventLabel, isManual: only.isManual, _replay: only._replay, _batchPlayer: only.player });
   }
-  return { byReplayId, missingMirrors, unrecognizedOpponents, duplicates, selfAliasConflicts, resultMismatches, incompleteMatches };
+  return { byReplayId, missingMirrors, unrecognizedOpponents, duplicates, selfAliasConflicts, resultMismatches, incompleteMatches, omittedMatches, overriddenMatches };
 }
 
 // In-memory store for the Live Tracker relay — see the route handler below
@@ -1883,6 +1943,8 @@ const server = http.createServer(async (req, res) => {
       selfAliasConflicts: dc.selfAliasConflicts,
       resultMismatches: dc.resultMismatches,
       incompleteMatches: dc.incompleteMatches,
+      omittedMatches: dc.omittedMatches,
+      overriddenMatches: dc.overriddenMatches,
       ciCheck: verifyWilsonCI(),
     });
   }
@@ -2791,6 +2853,9 @@ const server = http.createServer(async (req, res) => {
         if (data.resultOverride !== undefined) {
           console.log(`[override] Result override for ${r.replayId}: ${data.resultOverride||'cleared'}`);
         }
+        if (data.omitted !== undefined) {
+          console.log(`[override] Omit flag for ${r.replayId}: ${data.omitted ? 'omitted' : 'un-omitted'}`);
+        }
 
         // Write-through to the global, replayId-keyed override registry —
         // the single source of truth that every GET re-projects onto every
@@ -2810,6 +2875,8 @@ const server = http.createServer(async (req, res) => {
           myDeckOverride: data.myDeckOverride!==undefined ? data.myDeckOverride : undefined,
           oppDeckOverride:data.oppDeckOverride!==undefined? data.oppDeckOverride: undefined,
           note: data.overrideNote || undefined,
+          omitted: data.omitted!==undefined ? data.omitted : undefined,
+          omittedNote: data.omittedNote || undefined,
         });
         const globalSave = await saveDB('overrides');
         if (globalSave && globalSave.ok === false) {
