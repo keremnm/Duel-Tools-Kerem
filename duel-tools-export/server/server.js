@@ -1458,6 +1458,7 @@ function impliedGameRecord(games, batchPlayer) {
 function computeDataCheck() {
   const byReplayId = {};
   const resultMismatches = [];
+  const incompleteMatches = [];
   for (const batch of Object.values(db.batches)) {
     for (const r of (batch.replays||[])) {
       if (!byReplayId[r.replayId]) byReplayId[r.replayId] = [];
@@ -1493,6 +1494,31 @@ function computeDataCheck() {
               hasOverride: !!(r.resultOverride || (r.parsed && r.parsed.resultOverride)),
               overrideNote: r.overrideNote || (r.parsed && r.parsed.overrideNote) || '',
               crossLinked: !!r.crossLinked,
+              savedAt: r.savedAt || null,
+            });
+          }
+        }
+
+        // A real match is only verified as actually decided once one side
+        // has reached 2 game wins — best-of-3's normal finish line. A score
+        // like 1-0, 0-1 or 1-1 (with no override saying it's final) means
+        // the data stops short of that: could be a legitimate single-game
+        // forfeit, or could just be a parsing gap where later games were
+        // never recorded — there's no way to tell which from here. Counting
+        // it as a full match feeds an unverified result into every stats
+        // view (same reasoning as Format Data's own `incomplete` exclusion
+        // in buildMatchRecord — this is the system-wide version of that).
+        const hasOverride = !!(r.resultOverride || (r.parsed && r.parsed.resultOverride));
+        if (!hasOverride) {
+          const myW  = r.scoreOverride ? r.scoreOverride.my  : (r.parsed && typeof r.parsed.myW  === 'number' ? r.parsed.myW  : null);
+          const oppW = r.scoreOverride ? r.scoreOverride.opp : (r.parsed && typeof r.parsed.oppW === 'number' ? r.parsed.oppW : null);
+          if (myW !== null && oppW !== null && myW < 2 && oppW < 2) {
+            incompleteMatches.push({
+              replayId: r.replayId, batchId: batch.id, player: batch.player || '',
+              oppName: r.oppName || (r.parsed && r.parsed.oppName) || '',
+              eventLabel: r.eventLabel || '',
+              recordedResult: (r.parsed && r.parsed.result) || r.result || '',
+              myW, oppW,
               savedAt: r.savedAt || null,
             });
           }
@@ -1535,7 +1561,7 @@ function computeDataCheck() {
     }
     missingMirrors.push({ replayId, player: only.player, oppName: only.oppName, resolvedOpponent: resolved.name, batchId: only.batchId, eventLabel: only.eventLabel, isManual: only.isManual, _replay: only._replay, _batchPlayer: only.player });
   }
-  return { byReplayId, missingMirrors, unrecognizedOpponents, duplicates, selfAliasConflicts, resultMismatches };
+  return { byReplayId, missingMirrors, unrecognizedOpponents, duplicates, selfAliasConflicts, resultMismatches, incompleteMatches };
 }
 
 // In-memory store for the Live Tracker relay — see the route handler below
@@ -1830,6 +1856,7 @@ const server = http.createServer(async (req, res) => {
       duplicates: dc.duplicates,
       selfAliasConflicts: dc.selfAliasConflicts,
       resultMismatches: dc.resultMismatches,
+      incompleteMatches: dc.incompleteMatches,
       ciCheck: verifyWilsonCI(),
     });
   }

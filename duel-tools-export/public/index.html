@@ -11829,6 +11829,20 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
     const effMyW  = _scoreOv ? _scoreOv.my  : p.myW;
     const effOppW = _scoreOv ? _scoreOv.opp : p.oppW;
     const effScore = _scoreOv ? (p.draws>0 ? `${effMyW}-${effOppW}-${p.draws}` : `${effMyW}-${effOppW}`) : p.score;
+    // A real (non-manual) match is only verified as actually decided once
+    // one side has reached 2 game wins — the normal best-of-3 finish line.
+    // A score like 1-0, 0-1 or 1-1 means the replay data stops short of
+    // that: it could be a legitimate single-game forfeit, or it could just
+    // be a parsing gap where later games were never recorded, and there's no
+    // way to tell which from the replay alone. Counting it as a full match
+    // either way silently feeds an unverified result into every stats view
+    // that reads buildMatchRecord — which is exactly the kind of thing that
+    // produces the N/win-rate discrepancies Format Data keeps surfacing. An
+    // explicit resultOverride (a human saying "yes, this is really final")
+    // still counts it as decided — only the UNoverridden, under-2-wins case
+    // is flagged incomplete. Not applied to manual entries (isManual return
+    // above) — those are already a human's explicit, trusted record.
+    const incomplete = !_resOv && !(effMyW >= 2 || effOppW >= 2);
     return {
       replayId, player,
       oppName:  p.oppName || replayResult.oppName || '',
@@ -11846,6 +11860,7 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
       myW:       effMyW,
       oppW:      effOppW,
       draws:     p.draws,
+      incomplete,
       resultOverride: _resOv,
       scoreOverride:  _scoreOv,
       overrideNote:   replayResult.overrideNote || p.overrideNote || '',
@@ -11988,6 +12003,8 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
   const effMyW2  = _scoreOv2 ? _scoreOv2.my  : parsed.myW;
   const effOppW2 = _scoreOv2 ? _scoreOv2.opp : parsed.oppW;
   const effScore2 = _scoreOv2 ? (parsed.draws>0 ? `${effMyW2}-${effOppW2}-${parsed.draws}` : `${effMyW2}-${effOppW2}`) : parsed.score;
+  // See the matching comment in the fast path above.
+  const incomplete2 = !_resOv2 && !(effMyW2 >= 2 || effOppW2 >= 2);
 
   return {
     replayId:  replayId,
@@ -12007,6 +12024,7 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
     myW:       effMyW2,
     oppW:      effOppW2,
     draws:     parsed.draws,
+    incomplete: incomplete2,
     resultOverride: _resOv2,
     scoreOverride:  _scoreOv2,
     overrideNote:   replayResult.overrideNote || '',
@@ -12196,7 +12214,10 @@ function filterFormatDataRecords(records) {
 function populateFormatDataDropdown() {
   const sel = document.getElementById('fd-deck-select');
   if (!sel) return;
-  const filtered = filterFormatDataRecords(_globalRecords);
+  // Exclude incomplete matches from the dropdown counts too, so they match
+  // the "Total Matches" number shown after picking a deck (see the
+  // `incomplete` exclusion in renderFormatDataTable).
+  const filtered = filterFormatDataRecords(_globalRecords).filter(r => !r.incomplete);
   const counts = {};
   filtered.forEach(r => { const k = r.myDeck||'Unknown'; counts[k] = (counts[k]||0)+1; });
   const decks = Object.keys(counts).sort((a,b) => counts[b]-counts[a]);
@@ -12221,7 +12242,15 @@ function renderFormatDataTable(deckType) {
   populateFormatDataDropdown();
   const sel = document.getElementById('fd-deck-select');
   const deck = deckType || (sel ? sel.value : '');
-  const records = filterFormatDataRecords(_globalRecords).filter(r => (r.myDeck||'Unknown') === deck);
+  const deckRecordsAll = filterFormatDataRecords(_globalRecords).filter(r => (r.myDeck||'Unknown') === deck);
+  // Incomplete matches (a real, non-manual replay where neither side reached
+  // the 2 game wins a best-of-3 needs to actually be decided, and nothing
+  // overrode it as final) are excluded from every number below — counting an
+  // unverified partial result as a full match is exactly what produces N/
+  // win-rate mismatches between two decks' pages. See buildMatchRecord's
+  // `incomplete` flag for the full reasoning.
+  const records = deckRecordsAll.filter(r => !r.incomplete);
+  const incompleteExcluded = deckRecordsAll.length - records.length;
   if (!records.length) {
     out.innerHTML = `<div class="dd-empty">No replays found for ${deck||'this deck'}.</div>`;
     return;
@@ -12348,7 +12377,8 @@ function renderFormatDataTable(deckType) {
 
   const note = document.createElement('div');
   note.style.cssText = 'font-size:10px;color:var(--dim);margin-top:4px';
-  note.textContent = 'Deck types auto-classified by TF-IDF model. 95% CI via Wilson score interval. Mirror matches excluded from the opponent breakdown above. Pre-Side Win % = Game 1 only; Post-Side Win % = Games 2+3 combined — shown as N/A where there\'s no per-game data (manual/forfeit entries, or replays whose game winner was never parsed). Click a row to see every individual match\'s Game 1/2/3 results.';
+  note.textContent = 'Deck types auto-classified by TF-IDF model. 95% CI via Wilson score interval. Mirror matches excluded from the opponent breakdown above. Pre-Side Win % = Game 1 only; Post-Side Win % = Games 2+3 combined — shown as N/A where there\'s no per-game data (manual/forfeit entries, or replays whose game winner was never parsed). Click a row to see every individual match\'s Game 1/2/3 results.'
+    + (incompleteExcluded ? ` ${incompleteExcluded} match${incompleteExcluded!==1?'es':''} excluded from every number above as unverified — a real (non-manual, non-overridden) replay where neither side reached 2 game wins (e.g. a 1-0, 0-1 or 1-1 score), which can\'t be told apart from an incomplete parse from the replay alone. See Admin → Cross-Links → Check & Fix Data to review these.` : '');
   out.appendChild(note);
 }
 
@@ -18736,6 +18766,9 @@ async function loadCrosslinksSection(el) {
     '</button> ' +
     '<button id="dc-export-mismatches-btn" onclick="exportResultMismatchesCsv()" style="display:none;background:transparent;color:var(--red);border:1px solid var(--red);font-family:monospace;font-weight:bold;font-size:14px;padding:10px 20px;border-radius:6px;cursor:pointer">' +
       '⬇ Export Result Mismatches (CSV)' +
+    '</button> ' +
+    '<button id="dc-export-incomplete-btn" onclick="exportIncompleteMatchesCsv()" style="display:none;background:transparent;color:var(--red);border:1px solid var(--red);font-family:monospace;font-weight:bold;font-size:14px;padding:10px 20px;border-radius:6px;cursor:pointer">' +
+      '⬇ Export Incomplete Matches (CSV)' +
     '</button>' +
     '<div id="dc-check-details" style="margin-top:14px"></div>';
 }
@@ -18809,6 +18842,8 @@ async function runDataCheck() {
     if (exportBtn) exportBtn.style.display = d.duplicates.length ? '' : 'none';
     const exportMismatchBtn = document.getElementById('dc-export-mismatches-btn');
     if (exportMismatchBtn) exportMismatchBtn.style.display = (d.resultMismatches||[]).length ? '' : 'none';
+    const exportIncompleteBtn = document.getElementById('dc-export-incomplete-btn');
+    if (exportIncompleteBtn) exportIncompleteBtn.style.display = (d.incompleteMatches||[]).length ? '' : 'none';
 
     // "Needs a human" (unrecognized opponent) is informational, not an error —
     // it just means that opponent hasn't been archived/aliased as a known
@@ -18821,13 +18856,17 @@ async function runDataCheck() {
     // with what the replay's own parsed games show — but which side is right
     // can't be determined automatically (could be a legitimate forfeit/DQ
     // ruling, or could be a mistake), so these are surfaced for a human to
-    // judge, never auto-changed.
+    // judge, never auto-changed. Incomplete matches (never reached 2 game
+    // wins, no override saying it's final) are the same kind of "needs a
+    // human" problem — Format Data already excludes these from its own
+    // numbers, this is just the system-wide visibility into the same thing.
     const selfConflicts = d.selfAliasConflicts || [];
     const mismatches = d.resultMismatches || [];
-    const realProblems = d.missingMirrors.length + d.duplicates.length + selfConflicts.length + mismatches.length;
+    const incompleteMatches = d.incompleteMatches || [];
+    const realProblems = d.missingMirrors.length + d.duplicates.length + selfConflicts.length + mismatches.length + incompleteMatches.length;
     res.style.color = realProblems ? 'var(--amber)' : 'var(--green)';
     res.textContent = (realProblems
-      ? `Found ${realProblems} issue${realProblems!==1?'s':''} across ${d.uniqueReplayIds} saved matches: ${d.missingMirrors.length} auto-fixable, ${d.duplicates.length} duplicate${d.duplicates.length!==1?'s':''}${selfConflicts.length?`, ${selfConflicts.length} bad alias${selfConflicts.length!==1?'es':''}`:''}${mismatches.length?`, ${mismatches.length} result mismatch${mismatches.length!==1?'es':''}`:''}.`
+      ? `Found ${realProblems} issue${realProblems!==1?'s':''} across ${d.uniqueReplayIds} saved matches: ${d.missingMirrors.length} auto-fixable, ${d.duplicates.length} duplicate${d.duplicates.length!==1?'s':''}${selfConflicts.length?`, ${selfConflicts.length} bad alias${selfConflicts.length!==1?'es':''}`:''}${mismatches.length?`, ${mismatches.length} result mismatch${mismatches.length!==1?'es':''}`:''}${incompleteMatches.length?`, ${incompleteMatches.length} incomplete`:''}.`
       : `✓ All ${d.uniqueReplayIds} saved matches are correctly mirrored — no asymmetry found.`) + fixSummary;
 
     const section = (title, color, items, renderRow) => {
@@ -18896,6 +18935,37 @@ async function runDataCheck() {
         '</details>' +
       '</div>';
 
+    // A real, non-manual, non-overridden replay where neither side reached 2
+    // game wins — the result could be a legitimate single-game forfeit, or
+    // just a parsing gap; can't tell from the data alone, so (same as
+    // resultMismatches) this is review-only and never auto-fixed.
+    const incompleteHtml = !incompleteMatches.length ? '' :
+      '<div style="margin-bottom:14px">' +
+        '<details open>' +
+          '<summary style="font-size:12px;font-weight:bold;color:var(--red);cursor:pointer">' +
+            '❓ Incomplete — never reached a 2-game match win (' + incompleteMatches.length + ')' +
+          '</summary>' +
+          '<div style="font-size:11px;color:var(--dim);margin:6px 0 8px">' +
+            'These matches have a recorded score like 1-0, 0-1 or 1-1 — short of the 2 wins a best-of-3 needs to actually ' +
+            'be decided — with nothing marking it as a final result. That could be a legitimate single-game forfeit, or ' +
+            'just a replay whose later games never got recorded. Format Data already excludes these from its own numbers; ' +
+            'if one of these really was a complete match, fix it from the match\'s own result/score override controls.' +
+          '</div>' +
+          '<div style="display:flex;flex-direction:column;gap:4px;max-height:360px;overflow-y:auto">' +
+          incompleteMatches.map(m => {
+            const watchUrl = 'https://www.duelingbook.com/replay?id=' + encodeURIComponent(m.replayId);
+            return '<div style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
+              + _escapeHtml(m.player) + ' vs ' + _escapeHtml(m.oppName)
+              + (m.eventLabel ? ' <span style="color:var(--amber)">· '+_escapeHtml(m.eventLabel)+'</span>' : '')
+              + ' <span style="color:var(--dim)">— recorded score</span> <b>'+m.myW+'-'+m.oppW+'</b>'
+              + (m.recordedResult ? ' <span style="color:var(--muted)">('+(m.recordedResult==='w'?'W':m.recordedResult==='l'?'L':m.recordedResult)+')</span>' : '')
+              + ' <a href="'+watchUrl+'" target="_blank" style="color:var(--muted);margin-left:4px">▶ Watch</a>'
+              + '</div>';
+          }).join('') +
+          '</div>' +
+        '</details>' +
+      '</div>';
+
     const unrecognizedHtml = !d.unrecognizedOpponents.length ? '' :
       '<div style="margin-bottom:14px">' +
         '<details>' +
@@ -18940,6 +19010,7 @@ async function runDataCheck() {
         + '</div>'
       ) +
       mismatchHtml +
+      incompleteHtml +
       unrecognizedHtml;
   } catch(e) {
     res.style.color = 'var(--red)';
@@ -19013,6 +19084,38 @@ function exportResultMismatchesCsv() {
   const a = document.createElement('a');
   a.href = url;
   a.download = 'duel-tools-result-mismatches-' + new Date().toISOString().slice(0,10) + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Builds a CSV of every flagged incomplete match (never reached 2 game wins,
+// no override marking it final) from the most recent Check & Fix Data
+// result — a review list, same as the other exports here. Nothing is
+// changed; this is just easier to work through outside the in-page list.
+function exportIncompleteMatchesCsv() {
+  const d = _lastDataCheck;
+  if (!d || !d.incompleteMatches || !d.incompleteMatches.length) return;
+  const esc = v => {
+    const s = (v===null||v===undefined) ? '' : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
+  };
+  const rows = [['Replay ID','Player','Opponent Name','Event','Recorded Result','My Wins','Opp Wins','Batch ID','Saved At']];
+  d.incompleteMatches.forEach(m => {
+    rows.push([
+      m.replayId, m.player||'', m.oppName||'', m.eventLabel||'',
+      m.recordedResult==='w' ? 'W' : m.recordedResult==='l' ? 'L' : (m.recordedResult||''),
+      m.myW, m.oppW, m.batchId||'',
+      m.savedAt ? new Date(m.savedAt).toISOString() : '',
+    ]);
+  });
+  const csv = rows.map(row => row.map(esc).join(',')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'duel-tools-incomplete-matches-' + new Date().toISOString().slice(0,10) + '.csv';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
