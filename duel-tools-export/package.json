@@ -4,7 +4,7 @@
   "description": "Yu-Gi-Oh Goat Format replay analysis tool",
   "main": "server/server.js",
   "scripts": {
-    "start": "node --max-old-space-size=3584 server/server.js",
+    "start": "node --max-old-space-size=6144 server/server.js",
     "dev": "node server/server.js"
   },
   "dependencies": {
