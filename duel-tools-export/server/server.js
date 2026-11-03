@@ -1400,6 +1400,39 @@ function crossLinkReplay(replayData, opponentUsername, originalBatchPlayer) {
   return { linked: true, duplicate: false, batchId: batch.id, player: opponentEntry.name };
 }
 
+// Tallies, for ONE stored replay copy, how many of its own parsed games its
+// batch owner actually won/lost. g.winner is a literal username — either the
+// player who was parsing at the time, or their opponent's name — and for a
+// player with more than one known name (their DuelingBook account name vs a
+// GFWL display name, or any other registered alias), that recorded winner
+// name can legitimately be an ALIAS rather than their canonical batch.player
+// string. The client's own parseMatch() already accounts for this via an
+// alias-aware check when it derives the authoritative match result, so this
+// needs the same alias set — found via findPlayerByUsername/playerNames,
+// the exact same resolution crossLinkReplay etc. already use — plus the same
+// substring/suffix fallback the client's matchesPlayerName() uses, so this
+// never disagrees with what the client itself would compute.
+function impliedGameRecord(games, batchPlayer) {
+  const entry = findPlayerByUsername(batchPlayer) || { name: batchPlayer, aliases: [] };
+  const names = new Set(playerNames(entry));
+  let w = 0, l = 0;
+  (games||[]).forEach(g => {
+    if (!g.winner) return;
+    const wl = g.winner.toLowerCase();
+    let isMatch = names.has(wl);
+    if (!isMatch) {
+      for (const n of names) {
+        if (n.length >= 4 && wl.length >= 4 &&
+            (wl.startsWith(n+' ') || wl.startsWith(n+'_') || n.startsWith(wl+' ') || n.startsWith(wl+'_'))) {
+          isMatch = true; break;
+        }
+      }
+    }
+    if (isMatch) w++; else l++;
+  });
+  return { w, l };
+}
+
 // Shared data-check computation — used by both GET /api/admin/data-check
 // (read-only report) and POST /api/admin/data-check/autofix (the targeted
 // fix) below, so both always agree on exactly which replays are missing a
@@ -1412,8 +1445,19 @@ function crossLinkReplay(replayData, opponentUsername, originalBatchPlayer) {
 // missingMirrors entries carry _replay/_batchPlayer — references to the real
 // in-memory objects, used ONLY by the autofix endpoint and stripped before
 // anything is sent to the client.
+//
+// Separately (and independently of the mirror-pairing checks above),
+// resultMismatches flags any single replay copy whose OFFICIAL recorded
+// result (after any override) disagrees with what its own parsed per-game
+// winners add up to — e.g. recorded as a win while the games show more
+// losses than wins. This can legitimately happen (a forfeit/DQ ruling
+// overriding what was actually played) or it can be a real mistake (a bad
+// manual override, or stale data from before a correction) — there's no way
+// to tell which from the data alone, so this is reported for a human to
+// judge case by case and is never auto-fixed.
 function computeDataCheck() {
   const byReplayId = {};
+  const resultMismatches = [];
   for (const batch of Object.values(db.batches)) {
     for (const r of (batch.replays||[])) {
       if (!byReplayId[r.replayId]) byReplayId[r.replayId] = [];
@@ -1430,6 +1474,30 @@ function computeDataCheck() {
         savedAt: r.savedAt || null,
         _replay: r,
       });
+
+      if (!r.isManual) {
+        const games = (r.parsed && r.parsed.games) || [];
+        const implied = impliedGameRecord(games, batch.player);
+        if (implied.w || implied.l) {
+          const effResult = r.resultOverride || (r.parsed && r.parsed.resultOverride) || (r.parsed && r.parsed.result) || r.result || '';
+          const impliedWin  = implied.w > implied.l;
+          const impliedLoss = implied.l > implied.w;
+          if ((effResult === 'w' && impliedLoss) || (effResult === 'l' && impliedWin)) {
+            resultMismatches.push({
+              replayId: r.replayId, batchId: batch.id, player: batch.player || '',
+              oppName: r.oppName || (r.parsed && r.parsed.oppName) || '',
+              eventLabel: r.eventLabel || '',
+              recordedResult: effResult,
+              recordedScore: r.scoreOverride ? `${r.scoreOverride.my}-${r.scoreOverride.opp}` : ((r.parsed && r.parsed.score) || ''),
+              impliedW: implied.w, impliedL: implied.l,
+              hasOverride: !!(r.resultOverride || (r.parsed && r.parsed.resultOverride)),
+              overrideNote: r.overrideNote || (r.parsed && r.parsed.overrideNote) || '',
+              crossLinked: !!r.crossLinked,
+              savedAt: r.savedAt || null,
+            });
+          }
+        }
+      }
     }
   }
   const missingMirrors = [];
@@ -1467,7 +1535,7 @@ function computeDataCheck() {
     }
     missingMirrors.push({ replayId, player: only.player, oppName: only.oppName, resolvedOpponent: resolved.name, batchId: only.batchId, eventLabel: only.eventLabel, isManual: only.isManual, _replay: only._replay, _batchPlayer: only.player });
   }
-  return { byReplayId, missingMirrors, unrecognizedOpponents, duplicates, selfAliasConflicts };
+  return { byReplayId, missingMirrors, unrecognizedOpponents, duplicates, selfAliasConflicts, resultMismatches };
 }
 
 // In-memory store for the Live Tracker relay — see the route handler below
@@ -1761,6 +1829,7 @@ const server = http.createServer(async (req, res) => {
       unrecognizedOpponents: dc.unrecognizedOpponents,
       duplicates: dc.duplicates,
       selfAliasConflicts: dc.selfAliasConflicts,
+      resultMismatches: dc.resultMismatches,
       ciCheck: verifyWilsonCI(),
     });
   }

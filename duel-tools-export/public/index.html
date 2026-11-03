@@ -11801,7 +11801,21 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
     const gameRecords  = p.games.map(g => ({
       gameNum:  g.gameNum,
       winner:   g.winner,
-      myWon:    g.winner && g.winner.toLowerCase() === player.toLowerCase(),
+      // g.winner is the literal username DuelingBook's log recorded as the
+      // winner of that specific game — which, for a player with more than
+      // one known name (a DuelingBook account name that differs from their
+      // competitive/GFWL display name, or any other registered alias), can
+      // legitimately be a DIFFERENT string than this record's own `player`.
+      // parseMatch() already accounts for this when it derives the match-level
+      // result/myW/oppW (via its alias-aware _isPlayer), so comparing g.winner
+      // against ONLY the bare `player` string here was a real bug: it could
+      // show a game as a loss in the per-game G1/G2/G3 breakdown (and in the
+      // Pre-Side/Post-Side Win % tallies, which read this same myWon flag)
+      // even when the match-level result correctly recorded it as a win.
+      // matchesPlayerName() is the same alias-aware check used elsewhere
+      // (e.g. the merge-replay winner recount) — using it here keeps the
+      // per-game breakdown consistent with the match-level result.
+      myWon:    g.winner && matchesPlayerName(g.winner, player, aliases),
       myCards:  (g.mine||[]).map(c=>c.name.toLowerCase()),
       oppCards: (g.opp||[]).map(c=>c.name.toLowerCase()),
     }));
@@ -11944,10 +11958,14 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
   const oppClass = classifyWithG1Bias(oppGamesCards) || classifyFromCards(parsed.allOpp);
 
   // Per-game card lists for card win rate calculation
+  // See the matching comment in the fast path above — g.winner is a literal
+  // username and can legitimately be an ALIAS of this player rather than
+  // their canonical `player` string, so this needs the same alias-aware
+  // check parseMatch's _isPlayer already used to compute parsed.result.
   const gameRecords = parsed.games.map(g => ({
     gameNum:   g.gameNum,
     winner:    g.winner,
-    myWon:     g.winner && g.winner.toLowerCase() === player.toLowerCase(),
+    myWon:     g.winner && matchesPlayerName(g.winner, player, aliases),
     myCards:   g.mine.map(c => c.name.toLowerCase()),
     oppCards:  g.opp.map(c => c.name.toLowerCase()),
     myDeck:    myClass  ? myClass.dc  : 'Unknown',
@@ -18703,7 +18721,10 @@ async function loadCrosslinksSection(el) {
         'matchup table stop adding up (one deck shows more matches against the other than that other deck ' +
         'shows back). Anything auto-fixable gets fixed automatically as part of this same click — no need to ' +
         'separately run Scan &amp; Link above. Opponents that don\'t match a known player/alias yet are reported ' +
-        'for visibility only, not as errors — that\'s expected for players who just haven\'t been archived yet.' +
+        'for visibility only, not as errors — that\'s expected for players who just haven\'t been archived yet. ' +
+        'This also cross-checks every replay\'s recorded result against its own parsed Game 1/2/3 winners and flags ' +
+        'any that disagree — those are reported for review only, never auto-changed, since the recorded result might ' +
+        'be a legitimate forfeit/DQ ruling rather than a mistake.' +
       '</div>' +
     '</div>' +
     '<div id="dc-check-result" style="font-size:13.5px;color:var(--muted);min-height:22px;margin:12px 0"></div>' +
@@ -18712,6 +18733,9 @@ async function loadCrosslinksSection(el) {
     '</button> ' +
     '<button id="dc-export-dupes-btn" onclick="exportDuplicatesCsv()" style="display:none;background:transparent;color:var(--text);border:1px solid var(--border);font-family:monospace;font-weight:bold;font-size:14px;padding:10px 20px;border-radius:6px;cursor:pointer">' +
       '⬇ Export Duplicates (CSV)' +
+    '</button> ' +
+    '<button id="dc-export-mismatches-btn" onclick="exportResultMismatchesCsv()" style="display:none;background:transparent;color:var(--red);border:1px solid var(--red);font-family:monospace;font-weight:bold;font-size:14px;padding:10px 20px;border-radius:6px;cursor:pointer">' +
+      '⬇ Export Result Mismatches (CSV)' +
     '</button>' +
     '<div id="dc-check-details" style="margin-top:14px"></div>';
 }
@@ -18783,6 +18807,8 @@ async function runDataCheck() {
     _lastDataCheck = d;
     const exportBtn = document.getElementById('dc-export-dupes-btn');
     if (exportBtn) exportBtn.style.display = d.duplicates.length ? '' : 'none';
+    const exportMismatchBtn = document.getElementById('dc-export-mismatches-btn');
+    if (exportMismatchBtn) exportMismatchBtn.style.display = (d.resultMismatches||[]).length ? '' : 'none';
 
     // "Needs a human" (unrecognized opponent) is informational, not an error —
     // it just means that opponent hasn't been archived/aliased as a known
@@ -18791,11 +18817,17 @@ async function runDataCheck() {
     // Self-alias conflicts ARE a real data problem (a bad alias), but they
     // can't be fixed by mirroring/linking — only by editing the alias — so
     // they're called out separately rather than lumped into "auto-fixable".
+    // Result mismatches are also a real problem — the recorded W/L disagrees
+    // with what the replay's own parsed games show — but which side is right
+    // can't be determined automatically (could be a legitimate forfeit/DQ
+    // ruling, or could be a mistake), so these are surfaced for a human to
+    // judge, never auto-changed.
     const selfConflicts = d.selfAliasConflicts || [];
-    const realProblems = d.missingMirrors.length + d.duplicates.length + selfConflicts.length;
+    const mismatches = d.resultMismatches || [];
+    const realProblems = d.missingMirrors.length + d.duplicates.length + selfConflicts.length + mismatches.length;
     res.style.color = realProblems ? 'var(--amber)' : 'var(--green)';
     res.textContent = (realProblems
-      ? `Found ${realProblems} issue${realProblems!==1?'s':''} across ${d.uniqueReplayIds} saved matches: ${d.missingMirrors.length} auto-fixable, ${d.duplicates.length} duplicate${d.duplicates.length!==1?'s':''}${selfConflicts.length?`, ${selfConflicts.length} bad alias${selfConflicts.length!==1?'es':''}`:''}.`
+      ? `Found ${realProblems} issue${realProblems!==1?'s':''} across ${d.uniqueReplayIds} saved matches: ${d.missingMirrors.length} auto-fixable, ${d.duplicates.length} duplicate${d.duplicates.length!==1?'s':''}${selfConflicts.length?`, ${selfConflicts.length} bad alias${selfConflicts.length!==1?'es':''}`:''}${mismatches.length?`, ${mismatches.length} result mismatch${mismatches.length!==1?'es':''}`:''}.`
       : `✓ All ${d.uniqueReplayIds} saved matches are correctly mirrored — no asymmetry found.`) + fixSummary;
 
     const section = (title, color, items, renderRow) => {
@@ -18826,6 +18858,42 @@ async function runDataCheck() {
         + (m.actual ? '{low:'+m.actual.low+', high:'+m.actual.high+'}' : (m.error ? 'an error: '+_escapeHtml(m.error) : 'nothing'))
         + '</div>'
       ).join('')) +
+      '</div>';
+
+    // Each flagged match's recorded result disagrees with what its own
+    // parsed per-game winners add up to. Collapsed by default (there can be
+    // a lot of these across the whole dataset) and explicitly NOT presented
+    // as something this tool fixes — only a human who knows the real
+    // tournament history can judge whether the override is a legitimate
+    // ruling or a mistake.
+    const mismatchHtml = !mismatches.length ? '' :
+      '<div style="margin-bottom:14px">' +
+        '<details open>' +
+          '<summary style="font-size:12px;font-weight:bold;color:var(--red);cursor:pointer">' +
+            '🚩 Result doesn\'t match the parsed games — needs human review (' + mismatches.length + ')' +
+          '</summary>' +
+          '<div style="font-size:11px;color:var(--dim);margin:6px 0 8px">' +
+            'These matches\' recorded W/L disagrees with what their own parsed games show. That can be legitimate — ' +
+            'a forfeit or DQ ruling overriding what was actually played — or it can be a mistake (a bad manual override, ' +
+            'or stale data). Nothing here is changed automatically; check the override note and the replay itself, then ' +
+            'correct it from the match\'s own result/score override controls if it\'s wrong.' +
+          '</div>' +
+          '<div style="display:flex;flex-direction:column;gap:4px;max-height:360px;overflow-y:auto">' +
+          mismatches.map(m => {
+            const watchUrl = 'https://www.duelingbook.com/replay?id=' + encodeURIComponent(m.replayId);
+            return '<div style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
+              + _escapeHtml(m.player) + ' vs ' + _escapeHtml(m.oppName)
+              + (m.eventLabel ? ' <span style="color:var(--amber)">· '+_escapeHtml(m.eventLabel)+'</span>' : '')
+              + '<br>Recorded: <b style="color:'+(m.recordedResult==='w'?'var(--green)':'var(--red)')+'">'+(m.recordedResult==='w'?'W':'L')+' '+_escapeHtml(m.recordedScore||'')+'</b>'
+              + ' <span style="color:var(--dim)">— but parsed games show</span> <b>'+m.impliedW+'-'+m.impliedL+'</b>'
+              + (m.hasOverride ? ' <span style="color:var(--amber)">· has a result override</span>' : '')
+              + (m.crossLinked ? ' <span style="color:var(--muted)">· cross-linked mirror</span>' : '')
+              + (m.overrideNote ? '<br><span style="color:var(--dim)">Note: '+_escapeHtml(m.overrideNote)+'</span>' : '')
+              + ' <a href="'+watchUrl+'" target="_blank" style="color:var(--muted);margin-left:4px">▶ Watch</a>'
+              + '</div>';
+          }).join('') +
+          '</div>' +
+        '</details>' +
       '</div>';
 
     const unrecognizedHtml = !d.unrecognizedOpponents.length ? '' :
@@ -18871,6 +18939,7 @@ async function runDataCheck() {
         + _escapeHtml(dup.replayId) + ' — ' + dup.copies.map(c=>_escapeHtml(c.player)).join(', ')
         + '</div>'
       ) +
+      mismatchHtml +
       unrecognizedHtml;
   } catch(e) {
     res.style.color = 'var(--red)';
@@ -18910,6 +18979,40 @@ function exportDuplicatesCsv() {
   const a = document.createElement('a');
   a.href = url;
   a.download = 'duel-tools-duplicate-replays-' + new Date().toISOString().slice(0,10) + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Builds a CSV of every flagged result-vs-games mismatch from the most
+// recent Check & Fix Data result — one row per match, with the recorded
+// result/score, what the parsed games imply, and the override note (if any),
+// so these can be worked through one by one outside the cramped in-page
+// list. This is a review list, not a fix list — nothing here was changed.
+function exportResultMismatchesCsv() {
+  const d = _lastDataCheck;
+  if (!d || !d.resultMismatches || !d.resultMismatches.length) return;
+  const esc = v => {
+    const s = (v===null||v===undefined) ? '' : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
+  };
+  const rows = [['Replay ID','Player','Opponent Name','Event','Recorded Result','Recorded Score','Implied Wins (from games)','Implied Losses (from games)','Has Override','Override Note','Cross-Linked Mirror','Batch ID','Saved At']];
+  d.resultMismatches.forEach(m => {
+    rows.push([
+      m.replayId, m.player||'', m.oppName||'', m.eventLabel||'',
+      m.recordedResult==='w' ? 'W' : 'L', m.recordedScore||'',
+      m.impliedW, m.impliedL, m.hasOverride ? 'yes' : '', m.overrideNote||'',
+      m.crossLinked ? 'yes' : '', m.batchId||'',
+      m.savedAt ? new Date(m.savedAt).toISOString() : '',
+    ]);
+  });
+  const csv = rows.map(row => row.map(esc).join(',')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'duel-tools-result-mismatches-' + new Date().toISOString().slice(0,10) + '.csv';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
