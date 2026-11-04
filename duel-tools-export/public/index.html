@@ -10797,7 +10797,12 @@ function openAddMatchModal() {
 
 // ── Result override modal — collects the corrected game score + a required
 // explanation, instead of just flipping W/L with no record of why. ──────────
-function showResultOverrideModal(m) {
+// `applyFn`, when given, replaces the default applyResultOverride(m, payload)
+// save handler — used by the admin Check & Fix Data panel, where `m` is a
+// bare {player, replayId, oppName, ...} row rather than a real match object
+// backed by _activeBatch/_activeProfile, so the default handler's batch
+// lookup (which depends on those) wouldn't find anything to save to.
+function showResultOverrideModal(m, applyFn) {
   const existing = document.getElementById('result-override-overlay');
   if (existing) existing.remove();
 
@@ -10882,7 +10887,7 @@ function showResultOverrideModal(m) {
     if (!reason) { errEl.textContent = 'Please explain why this result is being overridden.'; return; }
     saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
     const resultOverride = my > opp ? 'w' : 'l';
-    await applyResultOverride(m, { resultOverride, scoreOverride: { my, opp }, overrideNote: reason });
+    await (applyFn || applyResultOverride)(m, { resultOverride, scoreOverride: { my, opp }, overrideNote: reason });
     overlay.remove();
   };
 
@@ -12181,7 +12186,10 @@ function reconcileCrossLinkedDeckLabels(records) {
   _mirrorDesyncs = [];
   const byReplayId = new Map();
   for (const r of records) {
-    if (!r.replayId || r.isManual) continue;
+    // An omitted record is already resolved/excluded from Format Data — treat
+    // it as if it doesn't exist for mirror reconciliation too, so it can't
+    // still surface as a "Cross-linked mirrors disagree" row after omission.
+    if (!r.replayId || r.isManual || r.omitted) continue;
     if (!byReplayId.has(r.replayId)) byReplayId.set(r.replayId, []);
     byReplayId.get(r.replayId).push(r);
   }
@@ -12257,7 +12265,9 @@ function reconcileCrossLinkedDeckLabels(records) {
 function findEventDecklistConflicts(records) {
   const out = [];
   for (const r of records) {
-    if (r.isManual) continue;
+    // Same reasoning as reconcileCrossLinkedDeckLabels above — an omitted
+    // record is already resolved, so it shouldn't keep surfacing here either.
+    if (r.isManual || r.omitted) continue;
     if (r.myDeckSource === 'eventDecklist' && r.myClassifiedDeck && r.myClassifiedConf !== 'Low' && r.myClassifiedDeck !== r.myDeck) {
       out.push({ side: 'my', player: r.player, oppName: r.oppName, eventLabel: r.eventLabel, replayId: r.replayId,
         decklistDeck: r.myDeck, classifiedDeck: r.myClassifiedDeck, classifiedConf: r.myClassifiedConf });
@@ -19007,6 +19017,9 @@ async function loadCrosslinksSection(el) {
     '</button> ' +
     '<button id="dc-export-incomplete-btn" onclick="exportIncompleteMatchesCsv()" style="display:none;background:transparent;color:var(--red);border:1px solid var(--red);font-family:monospace;font-weight:bold;font-size:14px;padding:10px 20px;border-radius:6px;cursor:pointer">' +
       '⬇ Export Incomplete Matches (CSV)' +
+    '</button> ' +
+    '<button id="dc-export-aliases-btn" onclick="exportBadAliasesCsv()" style="display:none;background:transparent;color:var(--red);border:1px solid var(--red);font-family:monospace;font-weight:bold;font-size:14px;padding:10px 20px;border-radius:6px;cursor:pointer">' +
+      '⬇ Export Bad Aliases (CSV)' +
     '</button>' +
     '<div id="dc-check-details" style="margin-top:14px"></div>';
 }
@@ -19097,6 +19110,8 @@ async function runDataCheck() {
     if (exportMismatchBtn) exportMismatchBtn.style.display = (d.resultMismatches||[]).length ? '' : 'none';
     const exportIncompleteBtn = document.getElementById('dc-export-incomplete-btn');
     if (exportIncompleteBtn) exportIncompleteBtn.style.display = (d.incompleteMatches||[]).length ? '' : 'none';
+    const exportAliasesBtn = document.getElementById('dc-export-aliases-btn');
+    if (exportAliasesBtn) exportAliasesBtn.style.display = (d.selfAliasConflicts||[]).length ? '' : 'none';
 
     // "Needs a human" (unrecognized opponent) is informational, not an error —
     // it just means that opponent hasn't been archived/aliased as a known
@@ -19216,10 +19231,11 @@ async function runDataCheck() {
             'complete match, fix it from the match\'s own result/score override controls.' +
           '</div>' +
           '<button id="dc-reparse-all-incomplete" style="background:transparent;color:var(--amber);border:1px solid var(--amber);font-family:monospace;font-weight:bold;font-size:11px;padding:4px 10px;border-radius:4px;cursor:pointer;margin-bottom:6px">↺ Re-parse All (' + incompleteMatches.length + ')</button>' +
+          ' <button id="dc-omit-all-incomplete" style="background:transparent;color:var(--red);border:1px solid var(--red);font-family:monospace;font-weight:bold;font-size:11px;padding:4px 10px;border-radius:4px;cursor:pointer;margin-bottom:6px">⛔ Omit All (' + incompleteMatches.length + ')</button>' +
           '<div style="display:flex;flex-direction:column;gap:4px;max-height:360px;overflow-y:auto">' +
           incompleteMatches.map(m => {
             const watchUrl = 'https://www.duelingbook.com/replay?id=' + encodeURIComponent(m.replayId);
-            return '<div class="dc-row" data-player="'+_escapeHtml(m.player)+'" data-replayid="'+_escapeHtml(m.replayId)+'" style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
+            return '<div class="dc-row" data-player="'+_escapeHtml(m.player)+'" data-replayid="'+_escapeHtml(m.replayId)+'" data-oppname="'+_escapeHtml(m.oppName||'')+'" data-myw="'+_escapeHtml(String(m.myW))+'" data-oppw="'+_escapeHtml(String(m.oppW))+'" style="font-size:11px;font-family:monospace;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:4px;padding:5px 8px">'
               + _escapeHtml(m.player) + ' vs ' + _escapeHtml(m.oppName)
               + (m.eventLabel ? ' <span style="color:var(--amber)">· '+_escapeHtml(m.eventLabel)+'</span>' : '')
               + ' <span style="color:var(--dim)">— recorded score</span> <b>'+m.myW+'-'+m.oppW+'</b>'
@@ -19228,6 +19244,7 @@ async function runDataCheck() {
               + ' <a href="'+watchUrl+'" target="_blank" style="color:var(--muted);margin-left:4px">▶ Watch</a>'
               + ' <button class="dc-reparse-btn" style="background:transparent;color:var(--amber);border:1px solid var(--amber);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">↺ Re-parse</button>'
               + ' <button class="dc-deckviewer-btn" style="background:transparent;color:var(--muted);border:1px solid var(--border);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">🔍 Deck Viewer</button>'
+              + ' <button class="dc-override-btn" style="background:transparent;color:var(--green);border:1px solid var(--green);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">⚖ Override</button>'
               + ' <button class="dc-omit-btn" style="background:transparent;color:var(--red);border:1px solid var(--red);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;margin-left:4px">⛔ Omit</button>'
               + '</div>';
           }).join('') +
@@ -19449,7 +19466,8 @@ async function runDataCheck() {
         const omitBtn = e.target.closest('.dc-omit-btn');
         const unomitBtn = e.target.closest('.dc-unomit-btn');
         const confirmYdkBtn = e.target.closest('.dc-confirmydk-btn');
-        const btn = reparseBtn || dvBtn || omitBtn || unomitBtn || confirmYdkBtn;
+        const overrideBtn = e.target.closest('.dc-override-btn');
+        const btn = reparseBtn || dvBtn || omitBtn || unomitBtn || confirmYdkBtn || overrideBtn;
         if (!btn) return;
         const row = btn.closest('.dc-row');
         if (!row) return;
@@ -19460,6 +19478,14 @@ async function runDataCheck() {
         else if (omitBtn) adminOmitReplay(player, replayId, omitBtn, true);
         else if (unomitBtn) adminOmitReplay(player, replayId, unomitBtn, false);
         else if (confirmYdkBtn) adminConfirmYdkDeck(player, replayId, row.dataset.side || '', row.dataset.deck || '', confirmYdkBtn);
+        else if (overrideBtn) {
+          const myW = parseInt(row.dataset.myw, 10);
+          const oppW = parseInt(row.dataset.oppw, 10);
+          showResultOverrideModal({
+            player, replayId, oppName: row.dataset.oppname || '',
+            myW: isNaN(myW) ? 0 : myW, oppW: isNaN(oppW) ? 0 : oppW,
+          }, adminApplyResultOverride);
+        }
       });
     }
 
@@ -19472,6 +19498,9 @@ async function runDataCheck() {
     const reparseAllIncompleteBtn = document.getElementById('dc-reparse-all-incomplete');
     if (reparseAllIncompleteBtn) reparseAllIncompleteBtn.onclick = () =>
       adminReparseAll(incompleteMatches.map(m => ({ player: m.player, replayId: m.replayId })), reparseAllIncompleteBtn);
+    const omitAllIncompleteBtn = document.getElementById('dc-omit-all-incomplete');
+    if (omitAllIncompleteBtn) omitAllIncompleteBtn.onclick = () =>
+      adminOmitAll(incompleteMatches.map(m => ({ player: m.player, replayId: m.replayId })), true, omitAllIncompleteBtn);
     const reparseAllConflictsBtn = document.getElementById('dc-reparse-all-conflicts');
     if (reparseAllConflictsBtn) reparseAllConflictsBtn.onclick = () =>
       adminReparseAll(conflicts.map(c => ({ player: c.player, replayId: c.replayId })), reparseAllConflictsBtn);
@@ -19593,6 +19622,32 @@ function exportIncompleteMatchesCsv() {
   const a = document.createElement('a');
   a.href = url;
   a.download = 'duel-tools-incomplete-matches-' + new Date().toISOString().slice(0,10) + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function exportBadAliasesCsv() {
+  const d = _lastDataCheck;
+  if (!d || !d.selfAliasConflicts || !d.selfAliasConflicts.length) return;
+  const esc = v => {
+    const s = (v===null||v===undefined) ? '' : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
+  };
+  const rows = [['Replay ID','Player','Opponent Name (bad alias)','Event','Manual Entry','Reason','Batch ID']];
+  d.selfAliasConflicts.forEach(c => {
+    rows.push([
+      c.replayId, c.player||'', c.oppName||'', c.eventLabel||'',
+      c.isManual ? 'yes' : '', c.reason||'', c.batchId||'',
+    ]);
+  });
+  const csv = rows.map(row => row.map(esc).join(',')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'duel-tools-bad-aliases-' + new Date().toISOString().slice(0,10) + '.csv';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -19746,6 +19801,33 @@ async function adminOmitAll(items, omit, btn) {
   const summary = `✓ ${omit?'Omitted':'Un-omitted'} ${ok}/${items.length}` + (fail ? ` (${fail} failed)` : '') + ' — re-run Check & Fix Data to see the result';
   st(summary, fail ? 'var(--amber)' : 'var(--green)');
   if (btn) { btn.textContent = summary; btn.style.background = fail ? 'var(--amber)' : 'var(--green)'; btn.style.color = '#050508'; }
+}
+
+// Admin-panel-safe result/score override — unlike applyResultOverride (which
+// depends on _activeBatch/_activeProfile being populated, true only when
+// viewing a match through Deck Viewer/Profile), this looks up the owning
+// batch itself via _findBatchForReplay, same as adminOmitReplay/
+// adminConfirmYdkDeck above, so it works from any Check & Fix Data row. The
+// server's own twin-propagation + global override registry still apply the
+// correction to the opponent's cross-linked copy on their own — nothing here
+// needs to flip anything for "both players".
+async function adminApplyResultOverride(m, payload) {
+  try {
+    const batch = await _findBatchForReplay(m.player, m.replayId);
+    if (!batch) { st('Could not find that replay in ' + m.player + '\'s batches', 'var(--amber)'); return false; }
+    const res = await fetch(API + '/batches/' + batch.id + '/replay/' + encodeURIComponent(m.replayId) + '/override', {
+      method: 'PATCH', headers: authHeaders(), body: JSON.stringify(payload)
+    });
+    const d = await res.json().catch(() => null);
+    if (!res.ok || !d || !d.ok) { st('Failed to save override: ' + (d && d.error || 'unknown error'), 'var(--red)'); return false; }
+    st('Override saved for ' + m.player + ' vs ' + (m.oppName||'opponent') + ' — re-run Check & Fix Data to see the result', 'var(--green)');
+    _globalRecords = [];
+    if (typeof _lastDataCheck !== 'undefined') _lastDataCheck = null;
+    return true;
+  } catch (e) {
+    st('Override error: ' + e.message, 'var(--red)');
+    return false;
+  }
 }
 
 // Locks in the saved YDK decklist's deck type as this side's override,

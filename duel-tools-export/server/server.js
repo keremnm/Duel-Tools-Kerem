@@ -1566,7 +1566,11 @@ function computeDataCheck() {
         // so overridden replays are skipped entirely rather than tagged.
         const hasOverride = !!(r.resultOverride || (r.parsed && r.parsed.resultOverride) ||
           r.scoreOverride || (r.parsed && r.parsed.scoreOverride));
-        if (!hasOverride && (implied.w || implied.l)) {
+        // A manually-omitted replay is already resolved (it's excluded from
+        // Format Data entirely and shown in its own Omitted Data section) —
+        // flagging it here too would just make an already-handled match
+        // keep showing up in the "needs human review" list forever.
+        if (!hasOverride && !r.omitted && (implied.w || implied.l)) {
           const effResult = (r.parsed && r.parsed.result) || r.result || '';
           const impliedWin  = implied.w > implied.l;
           const impliedLoss = implied.l > implied.w;
@@ -1594,7 +1598,9 @@ function computeDataCheck() {
         // view (same reasoning as Format Data's own `incomplete` exclusion
         // in buildMatchRecord — this is the system-wide version of that).
         const hasResultOverride = !!(r.resultOverride || (r.parsed && r.parsed.resultOverride));
-        if (!hasResultOverride) {
+        // Same reasoning as resultMismatches above — an omitted replay is
+        // already resolved, so it shouldn't also sit in this review queue.
+        if (!hasResultOverride && !r.omitted) {
           const myW  = r.scoreOverride ? r.scoreOverride.my  : (r.parsed && typeof r.parsed.myW  === 'number' ? r.parsed.myW  : null);
           const oppW = r.scoreOverride ? r.scoreOverride.opp : (r.parsed && typeof r.parsed.oppW === 'number' ? r.parsed.oppW : null);
           const scoreIssue = (myW !== null && oppW !== null) ? bo3ScoreIssue(myW, oppW) : null;
