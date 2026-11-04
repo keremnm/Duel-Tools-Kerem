@@ -828,12 +828,12 @@ select{cursor:pointer}
           </select>
           <div class="slbl" style="margin:0">YEAR</div>
           <select id="fd-year-filter" onchange="renderFormatDataTable()"
-            style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
+            style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
             <option value="">All</option>
           </select>
           <div class="slbl" style="margin:0">GFWL S#</div>
           <select id="fd-season-filter" onchange="renderFormatDataTable()"
-            style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
+            style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
             <option value="">All</option>
           </select>
           <button onclick="switchTab('topcards', document.getElementById('ntab-topcards'))" title="Per-card win rates within a deck type — see which cards are actually winning you games"
@@ -862,16 +862,32 @@ select{cursor:pointer}
             style="background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--green);font-family:monospace;font-weight:bold;font-size:13px;padding:7px 12px;outline:none;cursor:pointer;min-width:240px">
             <option value="">Loading…</option>
           </select>
+          <div class="slbl" style="margin:0">YEAR</div>
+          <select id="tc-year-filter" onchange="renderTopCardsTable()"
+            style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
+            <option value="">All</option>
+          </select>
+          <div class="slbl" style="margin:0">GFWL S#</div>
+          <select id="tc-season-filter" onchange="renderTopCardsTable()"
+            style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
+            <option value="">All</option>
+          </select>
           <div class="slbl" style="margin:0">MIN MATCHES</div>
           <select id="tc-minsample-select" onchange="renderTopCardsTable()"
-            style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:60px">
+            style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:60px">
             <option value="5">5+</option>
             <option value="10" selected>10+</option>
             <option value="20">20+</option>
             <option value="50">50+</option>
           </select>
+          <div style="margin-left:auto;display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px">
+            <button id="tc-view-list-btn" onclick="setTopCardsViewMode('list')" title="Text table"
+              style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">☰ List</button>
+            <button id="tc-view-images-btn" onclick="setTopCardsViewMode('images')" title="Card image grid"
+              style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">🖼 Images</button>
+          </div>
           <button id="tc-recompute-btn" onclick="recomputeTopCards()" title="Re-fetches from the server instead of reusing the cached replay data (same cache Format Data uses)."
-            style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer">
+            style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer">
             ↻ Recompute
           </button>
         </div>
@@ -12572,9 +12588,12 @@ function _recordMatchesYear(r, year) {
 // current selection (e.g. picking a season narrows what the year counts
 // show) but not the deck selection, consistent with these being system-wide
 // filters rather than per-deck ones.
-function populateFormatDataYearSeasonFilters() {
-  const yearSel = document.getElementById('fd-year-filter');
-  const seasonSel = document.getElementById('fd-season-filter');
+//
+// Shared by Format Data AND Top Cards (same underlying _globalRecords, same
+// filter semantics) — pass in that page's own Year/Season <select>
+// elements. Kept as one function so the two pages' filters can never drift
+// out of sync with each other.
+function populateYearSeasonFilterPair(yearSel, seasonSel) {
   const curSeason = seasonSel ? seasonSel.value : '';
   const curYear = yearSel ? yearSel.value : '';
   const usable = _globalRecords.filter(r => !r.incomplete && !r.omitted);
@@ -12617,14 +12636,24 @@ function populateFormatDataYearSeasonFilters() {
   }
 }
 
-// Applies the Year + GFWL Season filter dropdowns to a list of global match
-// records. A record matches the year filter if its event resolves (via the
-// server-synced event-dates cache, or a literal year in the label) to that
-// year; it matches the season filter if its event's group code IS that
-// GFWL season code.
-function filterFormatDataRecords(records) {
-  const yearSel = document.getElementById('fd-year-filter');
-  const seasonSel = document.getElementById('fd-season-filter');
+function populateFormatDataYearSeasonFilters() {
+  populateYearSeasonFilterPair(document.getElementById('fd-year-filter'), document.getElementById('fd-season-filter'));
+}
+
+function populateTopCardsYearSeasonFilters() {
+  populateYearSeasonFilterPair(document.getElementById('tc-year-filter'), document.getElementById('tc-season-filter'));
+}
+
+// Applies a page's Year + GFWL Season filter dropdowns to a list of global
+// match records. A record matches the year filter if its event resolves
+// (via the server-synced event-dates cache, or a literal year in the label)
+// to that year; it matches the season filter if its event's group code IS
+// that GFWL season code. Shared by Format Data and Top Cards — see
+// populateYearSeasonFilterPair above for why this is factored out rather
+// than duplicated per page.
+function _filterRecordsByYearSeason(records, yearSelId, seasonSelId) {
+  const yearSel = document.getElementById(yearSelId);
+  const seasonSel = document.getElementById(seasonSelId);
   const filterYear = yearSel ? yearSel.value : '';
   const filterSeason = seasonSel ? seasonSel.value : '';
   let out = records;
@@ -12635,6 +12664,12 @@ function filterFormatDataRecords(records) {
     out = out.filter(r => eventGroupKey(r.eventLabel||'') === filterSeason);
   }
   return out;
+}
+function filterFormatDataRecords(records) {
+  return _filterRecordsByYearSeason(records, 'fd-year-filter', 'fd-season-filter');
+}
+function filterTopCardsRecords(records) {
+  return _filterRecordsByYearSeason(records, 'tc-year-filter', 'tc-season-filter');
 }
 
 function populateFormatDataDropdown() {
@@ -12842,6 +12877,7 @@ async function loadTopCards(force) {
     out.innerHTML = '<div class="dd-empty">Loading replay data…</div>';
     await loadGlobalRecords(force);
   }
+  populateTopCardsYearSeasonFilters();
   populateTopCardsDropdown();
   const sel = document.getElementById('tc-deck-select');
   renderTopCardsTable(sel ? sel.value : '');
@@ -12849,27 +12885,34 @@ async function loadTopCards(force) {
 
 // "↻ Recompute" — same semantics as Format Data's: throws away the cached
 // _globalRecords and re-fetches from the server, keeping the currently
-// selected deck type so re-checking after a fix made elsewhere doesn't
-// lose your place.
+// selected deck type AND year/season filters so re-checking after a fix
+// made elsewhere doesn't lose your place.
 async function recomputeTopCards() {
   const btn = document.getElementById('tc-recompute-btn');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Recomputing...'; }
   const deckSel = document.getElementById('tc-deck-select');
+  const yearSel = document.getElementById('tc-year-filter');
+  const seasonSel = document.getElementById('tc-season-filter');
   const keepDeck = deckSel ? deckSel.value : '';
+  const keepYear = yearSel ? yearSel.value : '';
+  const keepSeason = seasonSel ? seasonSel.value : '';
   await loadTopCards(true);
+  if (yearSel && keepYear) yearSel.value = keepYear;
+  if (seasonSel && keepSeason) seasonSel.value = keepSeason;
   if (deckSel && keepDeck && [...deckSel.options].some(o=>o.value===keepDeck)) deckSel.value = keepDeck;
   renderTopCardsTable(deckSel ? deckSel.value : '');
   if (btn) { btn.disabled = false; btn.textContent = '↻ Recompute'; }
 }
 
-// Same deck-type dropdown Format Data uses (same counts, same exclusions) —
-// kept as its own copy rather than shared with populateFormatDataDropdown
-// since the two dropdowns live on different pages and must not fight over
-// each other's current selection.
+// Same deck-type dropdown Format Data uses (same counts, same exclusions,
+// now also respecting the Year/Season filters above it) — kept as its own
+// copy rather than shared with populateFormatDataDropdown since the two
+// dropdowns live on different pages and must not fight over each other's
+// current selection.
 function populateTopCardsDropdown() {
   const sel = document.getElementById('tc-deck-select');
   if (!sel) return;
-  const filtered = _globalRecords.filter(r => !r.incomplete && !r.omitted);
+  const filtered = filterTopCardsRecords(_globalRecords).filter(r => !r.incomplete && !r.omitted);
   const counts = {};
   filtered.forEach(r => { const k = r.myDeck||'Unknown'; counts[k] = (counts[k]||0)+1; });
   const decks = Object.keys(counts).sort((a,b) => counts[b]-counts[a]);
@@ -12882,16 +12925,32 @@ function populateTopCardsDropdown() {
   sel.value = decks.includes(cur) ? cur : decks[0];
 }
 
-// Per-card win rate within one deck type. Every unique card that showed up
-// in at least one non-incomplete/non-omitted match piloting that deck is
-// tallied once PER MATCH it appeared in (r.allMyCards is already deduped
-// per-match by buildMatchRecord, and this re-dedupes via a Set anyway as a
-// belt-and-suspenders guard) — never once per copy, so a card drawn/played
-// multiple times in the same duel still only counts as one observation of
-// "this match had that card." Sorted by win rate, highest first; ties
-// broken by larger sample size. A minimum-sample-size filter (the "MIN
-// MATCHES" dropdown) keeps a card seen in 1-2 matches at 100%/0% from
-// drowning out everything with a real sample.
+// List vs Images view — purely a this-session display preference (not
+// persisted to the server), same data either way.
+let _tcViewMode = 'list';
+function setTopCardsViewMode(mode) {
+  _tcViewMode = mode;
+  const listBtn = document.getElementById('tc-view-list-btn');
+  const imgBtn = document.getElementById('tc-view-images-btn');
+  [[listBtn,'list'],[imgBtn,'images']].forEach(([btn,m]) => {
+    if (!btn) return;
+    if (m === mode) { btn.style.background = 'var(--card)'; btn.style.color = 'var(--text)'; }
+    else { btn.style.background = 'none'; btn.style.color = 'var(--muted)'; }
+  });
+  renderTopCardsTable();
+}
+
+// Per-card win rate within one deck type, scoped to the Year/Season filters
+// above it exactly the way Format Data's matchup table is. Every unique
+// card that showed up in at least one non-incomplete/non-omitted match
+// piloting that deck is tallied once PER MATCH it appeared in (r.allMyCards
+// is already deduped per-match by buildMatchRecord, and this re-dedupes via
+// a Set anyway as a belt-and-suspenders guard) — never once per copy, so a
+// card drawn/played multiple times in the same duel still only counts as
+// one observation of "this match had that card." Sorted by win rate,
+// highest first; ties broken by larger sample size. A minimum-sample-size
+// filter (the "MIN MATCHES" dropdown) keeps a card seen in 1-2 matches at
+// 100%/0% from drowning out everything with a real sample.
 function renderTopCardsTable(deckType) {
   const out = document.getElementById('tc-output');
   if (!out) return;
@@ -12899,26 +12958,27 @@ function renderTopCardsTable(deckType) {
     out.innerHTML = '<div class="dd-empty">No replays found. Import or analyze a batch first.</div>';
     return;
   }
+  populateTopCardsYearSeasonFilters();
   populateTopCardsDropdown();
   const sel = document.getElementById('tc-deck-select');
   const deck = deckType || (sel ? sel.value : '');
   const minSel = document.getElementById('tc-minsample-select');
   const minSample = minSel ? (parseInt(minSel.value,10)||0) : 10;
 
-  const records = _globalRecords.filter(r => !r.incomplete && !r.omitted && (r.myDeck||'Unknown') === deck);
+  const records = filterTopCardsRecords(_globalRecords).filter(r => !r.incomplete && !r.omitted && (r.myDeck||'Unknown') === deck);
   if (!records.length) {
-    out.innerHTML = `<div class="dd-empty">No replays found for ${deck||'this deck'}.</div>`;
+    out.innerHTML = `<div class="dd-empty">No replays found for ${_escapeHtml(deck||'this deck')}.</div>`;
     return;
   }
 
-  const stats = {}; // lowercased card name -> { name, w, l }
+  const stats = {}; // lowercased card name -> { name, id, w, l }
   records.forEach(r => {
     const seen = new Set(r.allMyCards||[]);
     seen.forEach(key => {
       if (!key) return;
       if (!stats[key]) {
         const card = (r.allMine||[]).find(c => (c.name||'').toLowerCase() === key);
-        stats[key] = { name: card ? card.name : key, w: 0, l: 0 };
+        stats[key] = { name: card ? card.name : key, id: card ? (card.id||null) : null, w: 0, l: 0 };
       }
       if (r.matchWon) stats[key].w++;
       else if (r.matchLost) stats[key].l++;
@@ -12936,8 +12996,18 @@ function renderTopCardsTable(deckType) {
   }
 
   const totalMatches = records.length;
-  let html = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${_escapeHtml(deck)} — ${totalMatches} match(es), ${rows.length} card(s) with ${minSample}+ decided matches</div>`;
-  html += '<table style="width:100%;border-collapse:collapse;font-family:monospace;font-size:12.5px">';
+  const summary = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${_escapeHtml(deck)} — ${totalMatches} match(es), ${rows.length} card(s) with ${minSample}+ decided matches</div>`;
+
+  if (_tcViewMode === 'images') {
+    out.innerHTML = summary + '<div id="tc-grid" class="dd-empty">Loading card images…</div>';
+    renderTopCardsGrid(rows);
+  } else {
+    out.innerHTML = summary + buildTopCardsListHtml(rows);
+  }
+}
+
+function buildTopCardsListHtml(rows) {
+  let html = '<table style="width:100%;border-collapse:collapse;font-family:monospace;font-size:12.5px">';
   html += '<thead><tr style="border-bottom:1px solid var(--border);color:var(--muted);text-align:left">' +
     '<th style="padding:6px 8px">Card</th><th style="padding:6px 8px;text-align:right">W-L</th>' +
     '<th style="padding:6px 8px;text-align:right">N</th><th style="padding:6px 8px;text-align:right">Win %</th>' +
@@ -12954,7 +13024,37 @@ function renderTopCardsTable(deckType) {
       `</tr>`;
   });
   html += '</tbody></table>';
-  out.innerHTML = html;
+  return html;
+}
+
+// Image-grid view — same rows as the list, rendered as card art tiles with
+// a win%/N badge, closer to how masterduelmeta.com's Top Cards page reads.
+// Images resolve via the same passcode → ygoprodeck imageId lookup already
+// used by the event-decklist image exporter (lookupPasscodeNames /
+// window._cardDataCache) — fetched lazily here (only when this view is
+// actually opened) rather than on every render, since most sessions will
+// stay on the List view. A card with no resolvable id, or whose image
+// 404s, falls back to a plain labeled box instead of a broken-image icon.
+async function renderTopCardsGrid(rows) {
+  const idsToResolve = rows.map(r => r.id).filter(Boolean);
+  if (idsToResolve.length) { try { await lookupPasscodeNames(idsToResolve); } catch(e) {} }
+  // Guard against the user switching deck/view/tab during the lookup above.
+  const gridEl = document.getElementById('tc-grid');
+  if (!gridEl) return;
+  const tiles = rows.map(r => {
+    const imgId = r.id && window._cardDataCache[r.id] ? (window._cardDataCache[r.id].imageId || r.id) : null;
+    const wp = pct(r.w, r.n);
+    const badgeColor = wp>=50 ? 'var(--green)' : 'var(--red)';
+    const img = imgId
+      ? `<img src="https://images.ygoprodeck.com/images/cards/${imgId}.jpg" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"/>`
+      : '';
+    const fallback = `<div style="display:${imgId?'none':'flex'};position:absolute;inset:0;align-items:center;justify-content:center;text-align:center;font-size:9px;line-height:1.3;color:#777;padding:4px;box-sizing:border-box;background:#1a1a1a">${_escapeHtml(r.name)}</div>`;
+    const badge = `<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.78);color:${badgeColor};font-size:11px;font-weight:700;text-align:center;padding:3px 2px;line-height:1.3">${wp}% <span style="color:#9a9aa8;font-weight:400">(${r.n})</span></div>`;
+    return `<div title="${_escapeHtml(r.name)}" style="position:relative;width:100px;height:146px;border-radius:6px;overflow:hidden;background:#1a1a1a;border:1px solid var(--border)">${img}${fallback}${badge}</div>`;
+  }).join('');
+  gridEl.removeAttribute('class');
+  gridEl.setAttribute('style', 'display:flex;flex-wrap:wrap;gap:8px');
+  gridEl.innerHTML = tiles;
 }
 
 // Expands/collapses the per-match Game 1/2/3 log directly under a clicked
