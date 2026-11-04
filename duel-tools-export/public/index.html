@@ -40,6 +40,13 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Courie
 .ntab{background:none;border:none;color:var(--muted);font-family:monospace;font-size:13px;padding:7px 16px;cursor:pointer;border-radius:6px;letter-spacing:.05em;transition:all .15s;flex-shrink:0;white-space:nowrap}
 .ntab:hover{color:var(--text);background:var(--card)}
 .ntab.on{color:var(--green);background:var(--card)}
+/* Hover dropdown for a nav tab with sub-pages (currently just Format Data ->
+   Top Cards). Pure CSS hover reveal, same visual language as .ntab itself. */
+.ntab-dropdown{position:relative;display:inline-flex;flex-shrink:0}
+.ntab-dropdown .ntab-submenu{display:none;position:absolute;top:100%;left:0;margin-top:2px;background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:4px;min-width:170px;z-index:60;box-shadow:0 6px 16px rgba(0,0,0,.45)}
+.ntab-dropdown:hover .ntab-submenu,.ntab-dropdown:focus-within .ntab-submenu{display:block}
+.ntab-submenu button{display:block;width:100%;text-align:left;background:none;border:none;color:var(--muted);font-family:monospace;font-size:12px;padding:7px 10px;cursor:pointer;border-radius:4px;white-space:nowrap}
+.ntab-submenu button:hover{color:var(--text);background:var(--card)}
 .topbar-right{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:nowrap;flex-shrink:0}
 .tpill{font-size:11px;color:var(--muted);background:var(--card);border:1px solid var(--border);border-radius:20px;padding:3px 13px;min-width:160px;max-width:340px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tbtn{background:var(--card);border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:4px 10px;border-radius:6px;cursor:pointer;white-space:nowrap}
@@ -217,7 +224,7 @@ select{cursor:pointer}
 .card-grid.lg .cth{max-width:130px;margin:0 auto}
 
 /* ── Format Data tab ── */
-#pg-formatdata{flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:18px 20px;scrollbar-width:thin;scrollbar-color:var(--border) var(--bg)}
+#pg-formatdata,#pg-topcards{flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:18px 20px;scrollbar-width:thin;scrollbar-color:var(--border) var(--bg)}
 #pg-profiles{flex-direction:column;overflow:hidden}
 .dd-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px}
 .dd-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
@@ -524,7 +531,7 @@ select{cursor:pointer}
   /* ══════════════════════════════════════════════════════════════
      DECK DATA + STATS (secondary — just make scrollable)
      ══════════════════════════════════════════════════════════════ */
-  #pg-formatdata { padding: 10px !important; }
+  #pg-formatdata, #pg-topcards { padding: 10px !important; }
   .dd-tabs { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
   .dd-tabs::-webkit-scrollbar { display: none; }
   .dd-table { font-size: 11px; }
@@ -618,7 +625,13 @@ select{cursor:pointer}
       <button class="ntab on" id="ntab-profiles" onclick="switchTab('profiles',this)">Profiles</button>
       <button class="ntab" id="ntab-deck" onclick="switchTab('deck',this)">Deck Viewer</button>
       <button class="ntab" id="ntab-rps" onclick="switchTab('rps',this)">RPS Analysis</button>
-      <button class="ntab" id="ntab-formatdata" onclick="switchTab('formatdata',this)">Format Data</button>
+      <div class="ntab-dropdown">
+        <button class="ntab" id="ntab-formatdata" onclick="switchTab('formatdata',this)">Format Data</button>
+        <div class="ntab-submenu">
+          <button onclick="switchTab('topcards', document.getElementById('ntab-topcards'))">📇 Top Cards</button>
+        </div>
+      </div>
+      <button class="ntab" id="ntab-topcards" onclick="switchTab('topcards',this)" style="display:none"></button>
       <button class="ntab" id="ntab-ingame" onclick="switchTab('ingame',this)">In-Game Tools</button>
       <button class="ntab" id="gfwl-prep-tab" onclick="switchTab('gfwl',this)">GFWL Archive</button>
       <button class="ntab" id="ntab-events" onclick="switchTab('events',this)">🏆 Events</button>
@@ -632,6 +645,7 @@ select{cursor:pointer}
         <option value="deck">Deck Viewer</option>
         <option value="rps">RPS Analysis</option>
         <option value="formatdata">Format Data</option>
+        <option value="topcards">📇 Top Cards</option>
         <option value="gfwl">GFWL Archive</option>
         <option value="events">Events</option>
       </select>
@@ -814,20 +828,54 @@ select{cursor:pointer}
           </select>
           <div class="slbl" style="margin:0">YEAR</div>
           <select id="fd-year-filter" onchange="renderFormatDataTable()"
-            style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;width:84px">
+            style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
             <option value="">All</option>
           </select>
           <div class="slbl" style="margin:0">GFWL S#</div>
           <select id="fd-season-filter" onchange="renderFormatDataTable()"
-            style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;width:84px">
+            style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
             <option value="">All</option>
           </select>
-          <button id="fd-recompute-btn" onclick="recomputeFormatData()" title="Format Data caches every saved replay in memory after the first load this session — this forces a fresh re-fetch and rebuild from the server instead of reusing that cache, so changes made elsewhere (e.g. running Scan & Link on Admin → Cross-Links) actually show up here without a full page reload."
+          <button onclick="switchTab('topcards', document.getElementById('ntab-topcards'))" title="Per-card win rates within a deck type — see which cards are actually winning you games"
             style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer">
+            📇 Top Cards
+          </button>
+          <button id="fd-recompute-btn" onclick="recomputeFormatData()" title="Format Data caches every saved replay in memory after the first load this session — this forces a fresh re-fetch and rebuild from the server instead of reusing that cache, so changes made elsewhere (e.g. running Scan & Link on Admin → Cross-Links) actually show up here without a full page reload."
+            style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer">
             ↻ Recompute
           </button>
         </div>
         <div id="fd-output"><div class="dd-empty">Loading replay data…</div></div>
+      </div>
+    </div>
+
+    <!-- Top Cards page -->
+    <div class="page" id="pg-topcards">
+      <div style="max-width:980px;margin:0 auto;width:100%;display:flex;flex-direction:column;gap:18px">
+        <div>
+          <div style="font-size:16px;font-weight:bold;color:var(--text);margin-bottom:4px">📇 Top Cards</div>
+          <div style="font-size:12px;color:var(--muted)">Per-card win rates within a deck type, highest win rate first — same replay data as Format Data, broken down by card instead of matchup.</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <div class="slbl" style="margin:0">DECK TYPE</div>
+          <select id="tc-deck-select" onchange="renderTopCardsTable(this.value)"
+            style="background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--green);font-family:monospace;font-weight:bold;font-size:13px;padding:7px 12px;outline:none;cursor:pointer;min-width:240px">
+            <option value="">Loading…</option>
+          </select>
+          <div class="slbl" style="margin:0">MIN MATCHES</div>
+          <select id="tc-minsample-select" onchange="renderTopCardsTable()"
+            style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:60px">
+            <option value="5">5+</option>
+            <option value="10" selected>10+</option>
+            <option value="20">20+</option>
+            <option value="50">50+</option>
+          </select>
+          <button id="tc-recompute-btn" onclick="recomputeTopCards()" title="Re-fetches from the server instead of reusing the cached replay data (same cache Format Data uses)."
+            style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer">
+            ↻ Recompute
+          </button>
+        </div>
+        <div id="tc-output"><div class="dd-empty">Loading replay data…</div></div>
       </div>
     </div>
 
@@ -877,6 +925,7 @@ select{cursor:pointer}
             <div id="profile-view-updated" style="font-size:11px;color:var(--dim)"></div>
           </div>
           <button onclick="exportPlayerXLSX(_activeProfile?.player)" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 12px;border-radius:6px;cursor:pointer" title="Export to Excel">⬇ Export</button>
+          <button onclick="deleteProfileFromServer()" id="profile-delete-btn" style="display:none;background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:11px;padding:6px 12px;border-radius:6px;cursor:pointer" title="Admin only: permanently deletes this player's registry entry and every batch/replay of theirs from the server">🗑 Delete Profile</button>
           <button onclick="loadProfileBatch()" id="profile-load-btn"
             style="margin-left:auto;background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:12px;padding:7px 18px;border-radius:6px;cursor:pointer">
             ▶ Load into Analyzer
@@ -2493,6 +2542,7 @@ function switchTab(name, btn) {
   if (name === 'admin')    renderAdminPage();
   // Format Data tab always shows ALL saved replays — never filtered by active batch
   if (name === 'formatdata') loadFormatData();
+  if (name === 'topcards') loadTopCards();
   if (name === 'events') eventsShowList();
 }
 
@@ -2611,6 +2661,11 @@ function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 // ══════════════════════════════════════════════════════════════════════
 // BATCH MANAGEMENT
 // ══════════════════════════════════════════════════════════════════════
+// Last batch list fetched from the server, kept around so the player-search
+// box can re-filter the Recent Batches list live (on every keystroke)
+// without a network round-trip per character.
+let _lastBatchListCache = [];
+
 async function loadBatches() {
   try {
     // IMPORTANT: this must send the auth token. Without it the server sees
@@ -2624,19 +2679,29 @@ async function loadBatches() {
     // batch tile (added first, below) still renders instead of the whole
     // list silently failing.
     const list = Array.isArray(data) ? data : [];
-    renderBatchList(list);
+    _lastBatchListCache = list;
+    const q = (document.getElementById('player-search')||{value:''}).value || '';
+    renderBatchList(list, q);
   } catch(e) { console.error('loadBatches:', e); renderBatchList([]); }
 }
 
-function renderBatchList(list) {
+// `filterQuery`, when non-empty, narrows the list down to players whose
+// name or a known alias contains it (same substring match the player-search
+// dropdown already used, just applied to this list too) — previously the
+// search box only ever opened a separate dropdown of registered players and
+// never touched this list at all, so searching "thefi" still showed every
+// OTHER player's batches here too.
+function renderBatchList(list, filterQuery) {
   const el = document.getElementById('batch-list');
   el.innerHTML = '';
+  const q = (filterQuery||'').trim().toLowerCase();
 
   // Show every temp batch created this session, most recent first. Parsing
   // another Temp Batch does NOT discard an earlier one anymore — each is
   // kept as its own auto-numbered entry ("Temp Batch #1", "#2", ...) until
   // explicitly cleared with the ✕ on that tile.
-  [..._tempBatches].reverse().forEach(tb => el.appendChild(igtBuildBatchItem(tb, list)));
+  const tempList = q ? _tempBatches.filter(tb => (tb.name||'').toLowerCase().includes(q)) : _tempBatches;
+  [...tempList].reverse().forEach(tb => el.appendChild(igtBuildBatchItem(tb, list)));
 
   // Group real batches by player (case-insensitive)
   const byPlayer = {};
@@ -2647,9 +2712,19 @@ function renderBatchList(list) {
   });
 
   // Sort players alphabetically
-  const playerKeys = Object.keys(byPlayer).sort();
-  if (!playerKeys.length && !_tempBatches.length) {
-    el.innerHTML = '<div class="no-batches">No batches yet.</div>'; return;
+  let playerKeys = Object.keys(byPlayer).sort();
+  if (q) {
+    playerKeys = playerKeys.filter(key => {
+      if (key.includes(q)) return true;
+      const reg = window._playerRegistry && window._playerRegistry[key];
+      return !!(reg && (reg.aliases||[]).some(a => a && a.toLowerCase().includes(q)));
+    });
+  }
+  if (!playerKeys.length && !tempList.length) {
+    el.innerHTML = q
+      ? '<div class="no-batches">No batches match &quot;'+_escapeHtml(filterQuery)+'&quot;.</div>'
+      : '<div class="no-batches">No batches yet.</div>';
+    return;
   }
 
   playerKeys.forEach(key => {
@@ -2700,10 +2775,26 @@ async function deletePlayerBatches(e, batches) {
   e.stopPropagation();
   const player = batches[0].player || batches[0].name;
   if (!confirm('Delete all batches for ' + player + '?')) return;
+  // The server can refuse this (not authenticated, a miner past the 24h
+  // window, or a 'user' role with no delete rights at all — see DELETE
+  // /api/batches/:id) and previously this silently ignored that: the button
+  // looked like it did nothing because loadBatches() just re-rendered the
+  // SAME unchanged list. Surface a real failure instead of hiding it.
+  let failed = 0, lastErr = '';
   for (const b of batches) {
-    await fetch(API+'/batches/'+b.id, { method:'DELETE', headers: authHeaders() });
-    if (_activeBatch && _activeBatch.id === b.id) _activeBatch = null;
+    try {
+      const res = await fetch(API+'/batches/'+b.id, { method:'DELETE', headers: authHeaders() });
+      if (!res.ok) {
+        failed++;
+        const d = await res.json().catch(()=>null);
+        lastErr = (d && d.error) || ('HTTP '+res.status);
+      } else if (_activeBatch && _activeBatch.id === b.id) {
+        _activeBatch = null;
+      }
+    } catch (e2) { failed++; lastErr = e2.message; }
   }
+  if (failed) st(`Could not delete ${failed}/${batches.length} batch${batches.length!==1?'es':''} for ${player}: ${lastErr}`, 'var(--red)');
+  else st(`Deleted all batches for ${player}`, 'var(--green)');
   loadBatches();
 }
 
@@ -2775,6 +2866,10 @@ function clearTempBatch(e, id) {
 
 // ── Player search ──────────────────────────────────────────────────────────
 function onPlayerSearch(val) {
+  // Live-filter Recent Batches below, in addition to the registered-player
+  // dropdown further down — see renderBatchList's filterQuery param.
+  renderBatchList(_lastBatchListCache, val);
+
   const dropdown = document.getElementById('player-search-dropdown');
   if (!val.trim()) { dropdown.style.display='none'; return; }
   const q = val.toLowerCase();
@@ -6245,7 +6340,18 @@ function renameBatch(e, id, currentPlayer) {
 async function deleteBatch(e, id) {
   e.stopPropagation();
   if (!confirm('Delete this batch?')) return;
-  await fetch(`${API}/batches/${id}`, { method:'DELETE', headers: authHeaders() });
+  // See the matching comment in deletePlayerBatches — a refused delete (bad
+  // role, miner past the 24h window, not authenticated) used to fail
+  // silently here too.
+  let res;
+  try {
+    res = await fetch(`${API}/batches/${id}`, { method:'DELETE', headers: authHeaders() });
+  } catch (e2) { st('Delete failed: ' + e2.message, 'var(--red)'); return; }
+  if (!res.ok) {
+    const d = await res.json().catch(()=>null);
+    st('Delete failed: ' + ((d && d.error) || ('HTTP '+res.status)), 'var(--red)');
+    return;
+  }
   if (_activeBatch && _activeBatch.id === id) {
     _activeBatch = null;
     document.getElementById('rps-empty').style.display='flex';
@@ -9733,6 +9839,42 @@ function filterMatches(query) {
     const matchEvent = (el.dataset.event||'').toLowerCase().includes(q);
     el.style.display = q && !matchOpp && !matchEvent ? 'none' : '';
   });
+
+  // Group headers/bodies (Season 9, PWCQ92, ...) used to stay visible no
+  // matter what was searched — only the individual match rows inside them
+  // were ever filtered, so searching "pwcq" still listed every OTHER
+  // event's group header too, just with nothing matching inside it. Hide
+  // any group whose own key doesn't match the query AND has no visible
+  // (matching) match rows left inside it; a group that DOES have a match
+  // auto-expands for the duration of the search so the result is actually
+  // visible without a manual click, and collapses back to whatever state
+  // the user left it in once the search is cleared.
+  document.querySelectorAll('#match-list .match-group-hdr').forEach(hdr => {
+    const key = hdr.dataset.groupKey || '';
+    const rawKey = hdr.dataset.groupKeyRaw || '';
+    const body = hdr.nextElementSibling; // renderMatchSidebar always appends hdr then body as siblings
+    const arrow = hdr.querySelector('.match-group-arrow');
+    if (!q) {
+      // Search cleared — restore whatever collapse state the user last left
+      // this group in (default collapsed), same lookup renderMatchSidebar
+      // itself uses.
+      hdr.style.display = '';
+      if (body) {
+        const wasCollapsed = !window._matchGroupCollapsed || window._matchGroupCollapsed[rawKey] !== false;
+        body.style.display = wasCollapsed ? 'none' : 'flex';
+        if (arrow) arrow.textContent = wasCollapsed ? '▶' : '▾';
+      }
+      return;
+    }
+    const keyMatches = key.includes(q);
+    const hasVisibleChild = body ? !!body.querySelector('.match-item:not([style*="display: none"])') : false;
+    const show = keyMatches || hasVisibleChild;
+    hdr.style.display = show ? '' : 'none';
+    if (body) {
+      body.style.display = show ? 'flex' : 'none';
+      if (show && arrow) arrow.textContent = '▾'; // auto-expand so the match is actually visible while searching
+    }
+  });
 }
 
 function renderMatchSidebar(query) {
@@ -9776,8 +9918,12 @@ function renderMatchSidebar(query) {
 
     // Group header
     const hdr = document.createElement('div');
+    hdr.className = 'match-group-hdr';
+    hdr.dataset.groupKey = key.toLowerCase();
+    hdr.dataset.groupKeyRaw = key; // exact key, for restoring window._matchGroupCollapsed[key] when a search clears
     hdr.style.cssText = 'display:flex;align-items:center;gap:6px;padding:5px 8px;background:var(--card2);border:1px solid var(--border);border-radius:5px;cursor:pointer;user-select:none;margin-bottom:1px';
     const arrow = document.createElement('span');
+    arrow.className = 'match-group-arrow';
     arrow.style.cssText = 'color:var(--muted);font-size:10px;transition:transform .15s;display:inline-block';
     arrow.textContent = isCollapsed ? '▶' : '▾';
     const lbl = document.createElement('span');
@@ -9822,6 +9968,8 @@ function renderMatchSidebar(query) {
 
     // Group body
     const body = document.createElement('div');
+    body.className = 'match-group-body';
+    body.dataset.groupKey = key.toLowerCase();
     body.style.cssText = 'display:flex;flex-direction:column;gap:2px;margin-bottom:4px;padding-left:4px';
     body.style.display = isCollapsed ? 'none' : 'flex';
 
@@ -12679,6 +12827,134 @@ function renderFormatDataTable(deckType) {
     + (incompleteExcluded ? ` ${incompleteExcluded} match${incompleteExcluded!==1?'es':''} excluded from every number above as not a valid best-of-3 score — a real (non-manual, non-overridden) replay whose recorded wins are either short of the 2 needed to decide it (e.g. 1-0, 0-1, 1-1) or impossible to reach in a real match (e.g. 3-0, 0-3, 2-2). See Admin → Cross-Links → Check & Fix Data to review these.` : '')
     + (omittedExcluded ? ` ${omittedExcluded} match${omittedExcluded!==1?'es':''} manually omitted from every number above — see Admin → Cross-Links → Check & Fix Data → Omitted Data to review or un-omit.` : '');
   out.appendChild(note);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// TOP CARDS — per-card win rates within a deck type, highest first.
+// Same idea as masterduelmeta.com/top-cards, scoped to this league's own
+// replay data instead of ranked-ladder aggregate stats. Shares Format
+// Data's _globalRecords cache (and its loadGlobalRecords loader), so
+// switching between the two tabs is instant after the first load.
+// ══════════════════════════════════════════════════════════════════════
+async function loadTopCards(force) {
+  const out = document.getElementById('tc-output');
+  if (!_globalRecords.length || force) {
+    out.innerHTML = '<div class="dd-empty">Loading replay data…</div>';
+    await loadGlobalRecords(force);
+  }
+  populateTopCardsDropdown();
+  const sel = document.getElementById('tc-deck-select');
+  renderTopCardsTable(sel ? sel.value : '');
+}
+
+// "↻ Recompute" — same semantics as Format Data's: throws away the cached
+// _globalRecords and re-fetches from the server, keeping the currently
+// selected deck type so re-checking after a fix made elsewhere doesn't
+// lose your place.
+async function recomputeTopCards() {
+  const btn = document.getElementById('tc-recompute-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Recomputing...'; }
+  const deckSel = document.getElementById('tc-deck-select');
+  const keepDeck = deckSel ? deckSel.value : '';
+  await loadTopCards(true);
+  if (deckSel && keepDeck && [...deckSel.options].some(o=>o.value===keepDeck)) deckSel.value = keepDeck;
+  renderTopCardsTable(deckSel ? deckSel.value : '');
+  if (btn) { btn.disabled = false; btn.textContent = '↻ Recompute'; }
+}
+
+// Same deck-type dropdown Format Data uses (same counts, same exclusions) —
+// kept as its own copy rather than shared with populateFormatDataDropdown
+// since the two dropdowns live on different pages and must not fight over
+// each other's current selection.
+function populateTopCardsDropdown() {
+  const sel = document.getElementById('tc-deck-select');
+  if (!sel) return;
+  const filtered = _globalRecords.filter(r => !r.incomplete && !r.omitted);
+  const counts = {};
+  filtered.forEach(r => { const k = r.myDeck||'Unknown'; counts[k] = (counts[k]||0)+1; });
+  const decks = Object.keys(counts).sort((a,b) => counts[b]-counts[a]);
+  const cur = sel.value;
+  if (!decks.length) {
+    sel.innerHTML = '<option value="">No replays yet</option>';
+    return;
+  }
+  sel.innerHTML = decks.map(d => `<option value="${d}">${d} (${counts[d]})</option>`).join('');
+  sel.value = decks.includes(cur) ? cur : decks[0];
+}
+
+// Per-card win rate within one deck type. Every unique card that showed up
+// in at least one non-incomplete/non-omitted match piloting that deck is
+// tallied once PER MATCH it appeared in (r.allMyCards is already deduped
+// per-match by buildMatchRecord, and this re-dedupes via a Set anyway as a
+// belt-and-suspenders guard) — never once per copy, so a card drawn/played
+// multiple times in the same duel still only counts as one observation of
+// "this match had that card." Sorted by win rate, highest first; ties
+// broken by larger sample size. A minimum-sample-size filter (the "MIN
+// MATCHES" dropdown) keeps a card seen in 1-2 matches at 100%/0% from
+// drowning out everything with a real sample.
+function renderTopCardsTable(deckType) {
+  const out = document.getElementById('tc-output');
+  if (!out) return;
+  if (!_globalRecords.length) {
+    out.innerHTML = '<div class="dd-empty">No replays found. Import or analyze a batch first.</div>';
+    return;
+  }
+  populateTopCardsDropdown();
+  const sel = document.getElementById('tc-deck-select');
+  const deck = deckType || (sel ? sel.value : '');
+  const minSel = document.getElementById('tc-minsample-select');
+  const minSample = minSel ? (parseInt(minSel.value,10)||0) : 10;
+
+  const records = _globalRecords.filter(r => !r.incomplete && !r.omitted && (r.myDeck||'Unknown') === deck);
+  if (!records.length) {
+    out.innerHTML = `<div class="dd-empty">No replays found for ${deck||'this deck'}.</div>`;
+    return;
+  }
+
+  const stats = {}; // lowercased card name -> { name, w, l }
+  records.forEach(r => {
+    const seen = new Set(r.allMyCards||[]);
+    seen.forEach(key => {
+      if (!key) return;
+      if (!stats[key]) {
+        const card = (r.allMine||[]).find(c => (c.name||'').toLowerCase() === key);
+        stats[key] = { name: card ? card.name : key, w: 0, l: 0 };
+      }
+      if (r.matchWon) stats[key].w++;
+      else if (r.matchLost) stats[key].l++;
+    });
+  });
+
+  const rows = Object.values(stats)
+    .map(s => ({ ...s, n: s.w + s.l }))
+    .filter(s => s.n >= minSample)
+    .sort((a,b) => (pct(b.w,b.n) - pct(a.w,a.n)) || (b.n - a.n));
+
+  if (!rows.length) {
+    out.innerHTML = `<div class="dd-empty">No cards with ${minSample}+ decided matches for ${_escapeHtml(deck)}. Try lowering Min Matches.</div>`;
+    return;
+  }
+
+  const totalMatches = records.length;
+  let html = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${_escapeHtml(deck)} — ${totalMatches} match(es), ${rows.length} card(s) with ${minSample}+ decided matches</div>`;
+  html += '<table style="width:100%;border-collapse:collapse;font-family:monospace;font-size:12.5px">';
+  html += '<thead><tr style="border-bottom:1px solid var(--border);color:var(--muted);text-align:left">' +
+    '<th style="padding:6px 8px">Card</th><th style="padding:6px 8px;text-align:right">W-L</th>' +
+    '<th style="padding:6px 8px;text-align:right">N</th><th style="padding:6px 8px;text-align:right">Win %</th>' +
+    '<th style="padding:6px 8px;text-align:right">95% CI</th></tr></thead><tbody>';
+  rows.forEach(r => {
+    const wp = pct(r.w, r.n);
+    const ci = wilsonCI(r.w, r.n);
+    html += `<tr style="border-bottom:1px solid var(--border)">` +
+      `<td style="padding:6px 8px;color:var(--text)">${_escapeHtml(r.name)}</td>` +
+      `<td style="padding:6px 8px;text-align:right;color:var(--muted)">${r.w}-${r.l}</td>` +
+      `<td style="padding:6px 8px;text-align:right;color:var(--muted)">${r.n}</td>` +
+      `<td style="padding:6px 8px;text-align:right;font-weight:bold;color:${wp>=50?'var(--green)':'var(--red)'}">${wp}%</td>` +
+      `<td style="padding:6px 8px;text-align:right;color:var(--muted)">${ci.low}–${ci.high}%</td>` +
+      `</tr>`;
+  });
+  html += '</tbody></table>';
+  out.innerHTML = html;
 }
 
 // Expands/collapses the per-match Game 1/2/3 log directly under a clicked
@@ -15762,6 +16038,8 @@ async function openProfile(player, batches, records) {
 
   const _amb = document.getElementById('profile-add-match-btn');
   if (_amb) _amb.style.display = isMinerRole(_userRole) ? 'block' : 'none';
+  const _delProfBtn = document.getElementById('profile-delete-btn');
+  if (_delProfBtn) _delProfBtn.style.display = isAdminRole(_userRole) ? 'inline-block' : 'none';
 
   // Header
   document.getElementById('profile-view-name').textContent = player;
@@ -16294,6 +16572,54 @@ function closeProfile() {
   _activeProfile = null;
   document.getElementById('profile-view').style.display = 'none';
   document.getElementById('profile-browser').style.display = 'flex';
+}
+
+// Admin-only, permanently removes a player's entire profile from the
+// server: their registry entry (aliases/tags/teams/event decklists) AND
+// every batch/replay filed under their name. Deliberately "one sided" —
+// unlike overrides/omits/merges this does NOT touch any opponent's own
+// cross-linked copy of a shared match, only this player's own side (the
+// server route enforces the same scoping — see DELETE /api/players/:name).
+async function deleteProfileFromServer() {
+  if (!_activeProfile || !_activeProfile.player) return;
+  const player = _activeProfile.player;
+  const batches = _activeProfile.batches || [];
+  const totalReplays = batches.reduce((s,b)=>s+((b.replays||[]).length),0);
+  if (!confirm(
+    'Permanently delete ' + player + "'s entire profile from the server?\n\n" +
+    'This removes:\n' +
+    '• ' + batches.length + ' batch(es), ' + totalReplays + ' replay(s) — ' + player + "'s own copies only\n" +
+    '• Their player registry entry (aliases, tags, teams, saved event decklists)\n\n' +
+    "This does NOT touch any opponent's own cross-linked copy of these same matches — " +
+    'only ' + player + "'s side is removed. This cannot be undone."
+  )) return;
+
+  const btn = document.getElementById('profile-delete-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Deleting...'; }
+
+  let res, data;
+  try {
+    res = await fetch(API + '/players/' + encodeURIComponent(player), { method:'DELETE', headers: authHeaders() });
+    data = await res.json().catch(() => null);
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '🗑 Delete Profile'; }
+    st('Delete failed: ' + e.message, 'var(--red)');
+    return;
+  }
+
+  if (!res.ok) {
+    if (btn) { btn.disabled = false; btn.textContent = '🗑 Delete Profile'; }
+    st('Delete failed: ' + ((data && data.error) || ('HTTP ' + res.status)), 'var(--red)');
+    return;
+  }
+
+  st(player + "'s profile and all their data deleted from the server (" +
+     (data.deletedBatches||0) + ' batch(es), ' + (data.deletedReplays||0) + ' replay(s))', 'var(--green)');
+
+  if (window._playerRegistry) delete window._playerRegistry[player.toLowerCase()];
+  if (_activeBatch && batches.some(b => b.id === _activeBatch.id)) _activeBatch = null;
+  closeProfile();
+  loadBatches();
 }
 
 async function loadSpecificBatch(batchId) {
@@ -18585,7 +18911,7 @@ function applyRoleUI() {
     // Mobile nav dropdown — remove the same options
     const mobileSel = document.getElementById('nav-mobile-sel');
     if (mobileSel) {
-      ['profiles','rps','formatdata','gfwl'].forEach(v => {
+      ['profiles','rps','formatdata','topcards','gfwl'].forEach(v => {
         const opt = mobileSel.querySelector(`option[value="${v}"]`);
         if (opt) opt.remove();
       });
@@ -18594,7 +18920,7 @@ function applyRoleUI() {
     // Profiles is the default active tab, but it's hidden for this role —
     // land on Deck Viewer instead so there's something to look at.
     const activePage = document.querySelector('.page.on');
-    const hiddenPages = ['pg-profiles','pg-rps','pg-formatdata','pg-gfwl'];
+    const hiddenPages = ['pg-profiles','pg-rps','pg-formatdata','pg-topcards','pg-gfwl'];
     if (!activePage || hiddenPages.includes(activePage.id)) {
       const deckBtn = document.getElementById('ntab-deck');
       switchTab('deck', deckBtn);

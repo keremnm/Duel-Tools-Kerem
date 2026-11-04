@@ -2390,6 +2390,49 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, p);
     });
   }
+  // ── DELETE /api/players/:name — admin-only, permanently removes a player's
+  // own registry entry AND every batch/replay filed under their name or any
+  // alias. Deliberately "one sided": unlike overrides/omits/merges, this
+  // never propagates to anyone else — it does NOT touch another player's own
+  // cross-linked copy of a shared match, only this player's own side.
+  if (parts[0]==='players' && parts[1] && !parts[2] && method==='DELETE') {
+    if (!isAdmin(req)) return json(res, 403, { error: 'Admins only' });
+    const rawName = decodeURIComponent(parts[1]);
+    const key = rawName.toLowerCase();
+    const entry = db.players[key] || findPlayerByUsername(rawName);
+    // Alias set this delete matches against — registry aliases plus any
+    // batch-level aliases recorded under the same name (a batch can carry
+    // its own .aliases even without a registry entry — see
+    // findPlayerByUsername above).
+    const aliasSet = new Set([key]);
+    if (entry) playerNames(entry).forEach(n => aliasSet.add(n));
+    for (const b of Object.values(db.batches)) {
+      const bKey = (b.player||'').toLowerCase();
+      if (bKey && aliasSet.has(bKey)) (b.aliases||[]).forEach(a => aliasSet.add((a||'').toLowerCase()));
+    }
+    const toDelete = Object.values(db.batches).filter(b => aliasSet.has((b.player||'').toLowerCase()));
+    if (!entry && !toDelete.length) return json(res, 404, { error: 'No profile or batches found for that name' });
+    let deletedReplays = 0;
+    for (const b of toDelete) deletedReplays += (b.replays||[]).length;
+    logChange(req, 'delete_profile', {
+      batchPlayer: entry ? entry.name : rawName,
+      deletedBatches: toDelete.length,
+      deletedReplays,
+    });
+    for (const b of toDelete) {
+      delete db.batches[b.id];
+      await deleteBatchFromPostgres(b.id);
+    }
+    if (entry) {
+      // entry may be keyed under a different lowercased key than `key` if it
+      // was resolved via findPlayerByUsername's alias fallback rather than a
+      // direct hit on db.players[key].
+      const entryKey = Object.keys(db.players).find(k => db.players[k] === entry);
+      if (entryKey) delete db.players[entryKey];
+    }
+    await saveDB('players');
+    return json(res, 200, { ok:true, deletedBatches: toDelete.length, deletedReplays });
+  }
 
   // ── GET /api/scout/:name — pre-match opponent scouting report ──────────────
   // Aggregates a player's known match history into deck usage % and win %
