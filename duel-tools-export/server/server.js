@@ -2840,10 +2840,49 @@ const server = http.createServer(async (req, res) => {
         if (twinsUpdated) console.log(`[merge] Propagated merged replay to ${twinsUpdated} cross-linked twin batch(es) for ${replayId}`);
       }
 
+      // A continuation replay merged in here (e.g. after a disconnect) was
+      // very often ALSO scraped/archived as its own standalone match before
+      // anyone recognized it was a continuation — by whoever ran this
+      // player's scraper, AND independently by whoever ran the opponent's,
+      // since both sides of that same continuation replay exist on
+      // DuelingBook as their own replay ID. Once its games are folded into
+      // THIS match (above), that standalone copy is now a stale duplicate of
+      // games already counted here — left alone, it would double-count the
+      // same games as a second, separate match everywhere (Format Data,
+      // duplicate detection, profile records) on BOTH players' profiles, not
+      // just this one. So: delete any standalone entry for every merged-in
+      // replay ID, league-wide, across every batch (this player's own,
+      // including any unmerged-alias batch, AND the opponent's) — not just
+      // the twin batches found above, since a standalone leftover is not a
+      // cross-linked twin and wouldn't be found by that loop.
+      let standaloneRemoved = 0, standaloneBatchesTouched = 0;
+      if (isDeliberateMerge && Array.isArray(data.mergedReplays)) {
+        const mergedIds = new Set(data.mergedReplays.map(x => x && x.replayId).filter(Boolean));
+        if (mergedIds.size) {
+          const touchedBatchIds = new Set();
+          for (const ob of Object.values(db.batches)) {
+            if (!ob.replays || !ob.replays.length) continue;
+            const before = ob.replays.length;
+            ob.replays = ob.replays.filter(rep => !mergedIds.has(rep.replayId));
+            const removed = before - ob.replays.length;
+            if (removed > 0) { standaloneRemoved += removed; touchedBatchIds.add(ob.id); }
+          }
+          for (const bid of touchedBatchIds) {
+            const tRes = await flushBatchNow(bid);
+            if (!tRes.ok) console.error(`[merge] FAILED to durably save batch ${bid} after removing absorbed standalone replay(s):`, tRes.error);
+          }
+          standaloneBatchesTouched = touchedBatchIds.size;
+          if (standaloneRemoved) {
+            console.log(`[merge] Removed ${standaloneRemoved} standalone ${[...mergedIds].join(',')} entr${standaloneRemoved!==1?'ies':'y'} across ${standaloneBatchesTouched} batch(es) now folded into ${replayId}`);
+            logChange(req, 'merge_absorb_standalone', { replayId, mergedIds: [...mergedIds], removed: standaloneRemoved, batchesTouched: standaloneBatchesTouched });
+          }
+        }
+      }
+
       if (!primarySave.ok) {
         return json(res, 500, { ok:false, error: 'Merge was applied but FAILED TO SAVE: ' + primarySave.error, twinsUpdated, twinsFailed });
       }
-      return json(res, 200, { ok:true, twinsUpdated, twinsFailed });
+      return json(res, 200, { ok:true, twinsUpdated, twinsFailed, standaloneRemoved, standaloneBatchesTouched });
     });
   }
 

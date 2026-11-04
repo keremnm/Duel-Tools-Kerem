@@ -11621,6 +11621,26 @@ async function mergeReplayIntoMatch(m, newId, gameNums) {
       }
     }
 
+    // The continuation replay (newId) was very often ALSO scraped/archived
+    // as its own standalone match before anyone recognized it was a
+    // continuation — by this player's own scraper, AND independently by the
+    // opponent's, since both sides of that same continuation replay exist on
+    // DuelingBook as their own replay ID. The server just deleted any such
+    // standalone leftover league-wide (see the merge PATCH route) so it
+    // can't double-count the same games as a second, separate match — this
+    // mirrors that same cleanup onto every client-side batch cache so the
+    // UI reflects it immediately instead of showing a stale duplicate until
+    // the next reload.
+    const allCachedBatches = [
+      ownerBatch, _activeBatch,
+      ...(_allProfileBatches||[]), ...(_activeProfile?.batches||[]),
+      ...(window._gfwlBatchCache ? Object.values(window._gfwlBatchCache) : []),
+    ];
+    for (const cb of allCachedBatches) {
+      if (!cb || !cb.replays || !cb.replays.length) continue;
+      cb.replays = cb.replays.filter(rep => rep.replayId !== newId);
+    }
+
     st('Replay merged — ' + remapped.length + ' game(s) added', 'var(--green)');
     buildDeck();
     renderMatchSidebar((document.getElementById('dsearch')||{value:''}).value||'');
@@ -12382,14 +12402,36 @@ async function recomputeFormatData() {
   if (btn) { btn.disabled = false; btn.textContent = '↻ Recompute'; }
 }
 
+// Same year-match test filterFormatDataRecords uses, factored out so the
+// dropdown-count code below and the actual filtering logic can never drift
+// apart (and show a count next to "2023" that disagrees with what picking
+// "2023" actually filters down to).
+function _recordMatchesYear(r, year) {
+  const code = eventGroupKey(r.eventLabel||'');
+  const d = code ? getEventDate(code) : null;
+  if (d) return d.startsWith(year);
+  return (r.eventLabel||'').includes(year);
+}
+
 // Year + GFWL Season filter dropdowns, populated from every saved replay
 // system-wide (not just the currently-selected deck type), so the options
 // stay available even if the chosen deck has no matches in a given year.
+// Each option is also annotated with how many replays fall into it — same
+// idea as the deck dropdown's "Chaos Turbo (8918)" — so picking a filter
+// isn't a guess about how much data is actually behind it. Incomplete/
+// omitted records are excluded from these counts, same as everywhere else
+// in Format Data, and each dropdown's counts respect the OTHER dropdown's
+// current selection (e.g. picking a season narrows what the year counts
+// show) but not the deck selection, consistent with these being system-wide
+// filters rather than per-deck ones.
 function populateFormatDataYearSeasonFilters() {
   const yearSel = document.getElementById('fd-year-filter');
   const seasonSel = document.getElementById('fd-season-filter');
+  const curSeason = seasonSel ? seasonSel.value : '';
+  const curYear = yearSel ? yearSel.value : '';
+  const usable = _globalRecords.filter(r => !r.incomplete && !r.omitted);
   const yearsSet = new Set(), seasonsSet = new Set();
-  _globalRecords.forEach(r => {
+  usable.forEach(r => {
     const code = eventGroupKey(r.eventLabel||'');
     if (!code) return;
     if (isGFWLSeason(code)) { seasonsSet.add(code.toUpperCase()); return; }
@@ -12401,7 +12443,15 @@ function populateFormatDataYearSeasonFilters() {
   if (yearSel) {
     const cur = yearSel.value;
     const years = [...yearsSet].sort((a,b)=>b-a);
-    yearSel.innerHTML = '<option value="">All</option>' + years.map(y=>`<option value="${y}"${y===cur?'selected':''}>${y}</option>`).join('');
+    // Respect the current season selection, if any, same cross-filtering
+    // filterFormatDataRecords itself does.
+    const seasonScoped = curSeason ? usable.filter(r => eventGroupKey(r.eventLabel||'') === curSeason) : usable;
+    const allCount = seasonScoped.length;
+    yearSel.innerHTML = '<option value="">All (' + allCount + ')</option>' +
+      years.map(y => {
+        const n = seasonScoped.filter(r => _recordMatchesYear(r, y)).length;
+        return `<option value="${y}"${y===cur?' selected':''}>${y} (${n})</option>`;
+      }).join('');
   }
   if (seasonSel) {
     const cur = seasonSel.value;
@@ -12409,7 +12459,13 @@ function populateFormatDataYearSeasonFilters() {
       const na = parseInt(a.replace(/^S/i,''),10) || 0, nb = parseInt(b.replace(/^S/i,''),10) || 0;
       return nb - na;
     });
-    seasonSel.innerHTML = '<option value="">All</option>' + seasons.map(s=>`<option value="${s}"${s===cur?'selected':''}>${s}</option>`).join('');
+    const yearScoped = curYear ? usable.filter(r => _recordMatchesYear(r, curYear)) : usable;
+    const allCount = yearScoped.length;
+    seasonSel.innerHTML = '<option value="">All (' + allCount + ')</option>' +
+      seasons.map(s => {
+        const n = yearScoped.filter(r => eventGroupKey(r.eventLabel||'') === s).length;
+        return `<option value="${s}"${s===cur?' selected':''}>${s} (${n})</option>`;
+      }).join('');
   }
 }
 
@@ -12425,12 +12481,7 @@ function filterFormatDataRecords(records) {
   const filterSeason = seasonSel ? seasonSel.value : '';
   let out = records;
   if (filterYear) {
-    out = out.filter(r => {
-      const code = eventGroupKey(r.eventLabel||'');
-      const d = code ? getEventDate(code) : null;
-      if (d) return d.startsWith(filterYear);
-      return (r.eventLabel||'').includes(filterYear);
-    });
+    out = out.filter(r => _recordMatchesYear(r, filterYear));
   }
   if (filterSeason) {
     out = out.filter(r => eventGroupKey(r.eventLabel||'') === filterSeason);
@@ -19720,8 +19771,15 @@ async function adminReparseReplay(playerName, replayId, btn, quiet) {
     if (btn) { btn.textContent = '✓ Re-parsed — re-run Check & Fix Data'; btn.style.background = 'var(--green)'; btn.style.color = '#050508'; }
     // The match's new data won't show up anywhere else (Format Data, Check &
     // Fix Data's own next run) until this stale cache is thrown away.
+    // Deliberately NOT also nulling _lastDataCheck here (an earlier version
+    // of this did): every "Export ... CSV" button guards on
+    // `if (!_lastDataCheck) return;`, so nulling it made every export button
+    // silently stop working the instant a human clicked even one row action
+    // (Re-parse/Omit/Override/Confirm YDK) after running the check — exactly
+    // what "the export buttons don't do anything" turned out to be. The
+    // button's own "re-run Check & Fix Data" text is what tells the user the
+    // on-screen list is stale; nothing needed the cache itself to go null.
     _globalRecords = [];
-    if (typeof _lastDataCheck !== 'undefined') _lastDataCheck = null;
     return true;
   } catch (e) {
     say('Re-parse error: ' + e.message, 'var(--red)');
@@ -19775,7 +19833,6 @@ async function adminOmitReplay(playerName, replayId, btn, omit, quiet) {
     // Stale cache would otherwise keep showing this match counted (or not)
     // the old way in both Format Data and the next Check & Fix Data run.
     _globalRecords = [];
-    if (typeof _lastDataCheck !== 'undefined') _lastDataCheck = null;
     return true;
   } catch (e) {
     say((omit?'Omit':'Un-omit') + ' error: ' + e.message, 'var(--red)');
@@ -19822,7 +19879,6 @@ async function adminApplyResultOverride(m, payload) {
     if (!res.ok || !d || !d.ok) { st('Failed to save override: ' + (d && d.error || 'unknown error'), 'var(--red)'); return false; }
     st('Override saved for ' + m.player + ' vs ' + (m.oppName||'opponent') + ' — re-run Check & Fix Data to see the result', 'var(--green)');
     _globalRecords = [];
-    if (typeof _lastDataCheck !== 'undefined') _lastDataCheck = null;
     return true;
   } catch (e) {
     st('Override error: ' + e.message, 'var(--red)');
@@ -19856,7 +19912,6 @@ async function adminConfirmYdkDeck(playerName, replayId, side, deck, btn, quiet)
     say('Set ' + (side==='my'?playerName:'opponent') + '\'s deck to ' + deck + ' for ' + replayId, 'var(--green)');
     if (btn) { btn.textContent = '✓ Confirmed — re-run Check & Fix Data'; btn.style.background = 'var(--green)'; btn.style.color = '#050508'; }
     _globalRecords = [];
-    if (typeof _lastDataCheck !== 'undefined') _lastDataCheck = null;
     return true;
   } catch (e) {
     say('Confirm YDK error: ' + e.message, 'var(--red)');
