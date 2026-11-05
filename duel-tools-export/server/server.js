@@ -3519,7 +3519,7 @@ const server = http.createServer(async (req, res) => {
         } catch(e) { failed++; }
         await new Promise(r => setTimeout(r, 300)); // same polite pacing as the existing FL import loop
       }
-      await saveDB(['events','players']);
+      await saveDB(['events','players','eventDates']);
       console.log(`[events] Backfill complete — touched ${touched} event(s), ${failed} failed, out of ${codeList.length}.`);
       logChange(req, 'events_backfill', { totalEvents: codeList.length, touched, failed });
       _eventsBackfillRunning = false;
@@ -3923,7 +3923,7 @@ const server = http.createServer(async (req, res) => {
       // top) every time this endpoint is hit, regardless of whether :player
       // has a deck in it — not just the one matched deck below.
       const capturedEvent = captureEventTopDecks(eventId, data);
-      if (capturedEvent) { try { await saveDB('events'); } catch(e) { console.warn('[events] save after fl-event capture failed:', e.message); } }
+      if (capturedEvent) { try { await saveDB(['events','eventDates']); } catch(e) { console.warn('[events] save after fl-event capture failed:', e.message); } }
       const decks = data.topDecks || [];
       const match = decks.find(d => ((d.builderName||'').toLowerCase().replace(/_/g, ' ')) === player);
       if (!match) return json(res, 200, { ok: true, deck: null });
@@ -4857,6 +4857,17 @@ function captureEventTopDecks(code, flData) {
       decks,
       updatedAt: Date.now(),
     };
+    // Also feed any real date FL gave us for this event into the shared
+    // eventDates catalog (db.eventDates / upsertEventDateFromFL) — that's
+    // the store getEventDate()/_recordYear() on the client actually read
+    // from for Year/Season filtering and chronological sorting everywhere
+    // (Format Data, Profiles, RPS, Deck Viewer, Power Rankings, etc). Before
+    // this, a brand-new event code learned here (via Import Event Data/
+    // Import Event Decks on a batch, or an admin events backfill) only ever
+    // showed up correctly in the Events tab's own gallery — every other
+    // page kept treating it as undated until someone separately ran the FL
+    // replay-import flow for a player or hand-edited the static catalog.
+    if (db.events[c].date) upsertEventDateFromFL(c, db.events[c].date);
     return true;
   } catch(e) {
     console.error('[events] captureEventTopDecks failed for', code, ':', e.message);

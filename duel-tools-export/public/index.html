@@ -848,8 +848,8 @@ select{cursor:pointer}
             style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
             <option value="">All</option>
           </select>
-          <button id="fd-custom-edit-btn" onclick="openCustomFilterModal('fd')" title="Edit Custom Year/Season/Event filter" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 8px;border-radius:4px;cursor:pointer">✎</button>
-          <button id="fd-custom-clear-btn" onclick="clearCustomFilter('fd')" title="Clear Custom filter" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 8px;border-radius:4px;cursor:pointer">✕</button>
+          <button id="fd-custom-edit-btn" onclick="openCustomFilterModal('fd')" title="Edit Custom Year/Season/Event filter" style="display:none;align-items:center;gap:4px;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 10px;border-radius:4px;cursor:pointer;white-space:nowrap">✎ Edit Custom Filter</button>
+          <button id="fd-custom-clear-btn" onclick="clearCustomFilter('fd')" title="Clear Custom filter" style="display:none;align-items:center;gap:4px;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 10px;border-radius:4px;cursor:pointer;white-space:nowrap">✕ Clear</button>
           <div style="margin-left:auto;display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px">
             <button id="fd-lists-all-btn" onclick="setFormatDataListsMode('all')" title="Every recorded match for this deck"
               style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">All Lists</button>
@@ -899,8 +899,8 @@ select{cursor:pointer}
             style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
             <option value="">All</option>
           </select>
-          <button id="tc-custom-edit-btn" onclick="openCustomFilterModal('tc')" title="Edit Custom Year/Season/Event filter" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 8px;border-radius:4px;cursor:pointer">✎</button>
-          <button id="tc-custom-clear-btn" onclick="clearCustomFilter('tc')" title="Clear Custom filter" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 8px;border-radius:4px;cursor:pointer">✕</button>
+          <button id="tc-custom-edit-btn" onclick="openCustomFilterModal('tc')" title="Edit Custom Year/Season/Event filter" style="display:none;align-items:center;gap:4px;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 10px;border-radius:4px;cursor:pointer;white-space:nowrap">✎ Edit Custom Filter</button>
+          <button id="tc-custom-clear-btn" onclick="clearCustomFilter('tc')" title="Clear Custom filter" style="display:none;align-items:center;gap:4px;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 10px;border-radius:4px;cursor:pointer;white-space:nowrap">✕ Clear</button>
           <div class="slbl" style="margin:0">MIN MATCHES</div>
           <div style="display:flex;align-items:center">
             <input id="tc-minmatches-input" type="text" inputmode="decimal" value="5" oninput="renderTopCardsTable()"
@@ -965,8 +965,8 @@ select{cursor:pointer}
             style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
             <option value="">All</option>
           </select>
-          <button id="lb-custom-edit-btn" onclick="openCustomFilterModal('lb')" title="Edit Custom Year/Season/Event filter" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 8px;border-radius:4px;cursor:pointer">✎</button>
-          <button id="lb-custom-clear-btn" onclick="clearCustomFilter('lb')" title="Clear Custom filter" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 8px;border-radius:4px;cursor:pointer">✕</button>
+          <button id="lb-custom-edit-btn" onclick="openCustomFilterModal('lb')" title="Edit Custom Year/Season/Event filter" style="display:none;align-items:center;gap:4px;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 10px;border-radius:4px;cursor:pointer;white-space:nowrap">✎ Edit Custom Filter</button>
+          <button id="lb-custom-clear-btn" onclick="clearCustomFilter('lb')" title="Clear Custom filter" style="display:none;align-items:center;gap:4px;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 10px;border-radius:4px;cursor:pointer;white-space:nowrap">✕ Clear</button>
           <div class="slbl" style="margin:0">MIN MATCHES</div>
           <input id="lb-minmatches-input" type="text" inputmode="numeric" value="10" oninput="renderLeaderboard()"
             title="Minimum decided matches a player must have to be ranked — keeps a 1-0 record from topping the board"
@@ -1004,10 +1004,10 @@ select{cursor:pointer}
             style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
             <option value="">All</option>
           </select>
-          <button id="pr-custom-edit-btn" onclick="openCustomFilterModal('pr')" title="Edit Custom Year/Season/Event filter" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 8px;border-radius:4px;cursor:pointer">✎</button>
-          <button id="pr-custom-clear-btn" onclick="clearCustomFilter('pr')" title="Clear Custom filter" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 8px;border-radius:4px;cursor:pointer">✕</button>
+          <button id="pr-custom-edit-btn" onclick="openCustomFilterModal('pr')" title="Edit Custom Year/Season/Event filter" style="display:none;align-items:center;gap:4px;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 10px;border-radius:4px;cursor:pointer;white-space:nowrap">✎ Edit Custom Filter</button>
+          <button id="pr-custom-clear-btn" onclick="clearCustomFilter('pr')" title="Clear Custom filter" style="display:none;align-items:center;gap:4px;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 10px;border-radius:4px;cursor:pointer;white-space:nowrap">✕ Clear</button>
           <div class="slbl" style="margin:0">MIN MATCHES</div>
-          <input id="pr-minmatches-input" type="text" inputmode="numeric" value="10" oninput="renderPowerRankings()"
+          <input id="pr-minmatches-input" type="text" inputmode="numeric" value="100" oninput="renderPowerRankings()"
             title="Minimum decided non-mirror matches a deck type must have to be ranked — keeps a tiny sample from landing in S or D tier on noise"
             style="width:46px;text-align:right;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 8px;border-radius:6px;outline:none"/>
           <div style="display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px">
@@ -2050,6 +2050,42 @@ async function loadEventDates() {
     const data = await fetch(API+'/event-dates').then(r=>r.json());
     if (data && !data.error) _eventDates = data;
   } catch(e) {}
+}
+
+// Best-effort: for any event code among replays/decks just added that we
+// don't already have a real date for, ask Format Library in the background
+// (the same miner-gated GET /api/proxy/fl-event/:code endpoint "Import
+// Event Data"/"Import Event Decks" already use) so a brand-new event — a
+// GFWL season, GFWC2026, whatever — gets its calendar date learned right
+// when it's first seen, instead of only once someone separately runs a
+// full event-data import for it. Learned dates are written into the
+// shared server-side eventDates catalog (see captureEventTopDecks ->
+// upsertEventDateFromFL in server.js) that getEventDate() reads from
+// everywhere — Format Data, Top Cards, Leaderboard, Power Rankings,
+// Profiles, RPS, Deck Viewer, Custom Filter — so this one hook is what
+// makes a newly-learned date show up correctly on all of them, without
+// touching any of those pages individually.
+// Fire-and-forget: never blocks the caller, never surfaces an error to the
+// user — a 404 (event not on FL), 401 (token expired) or network hiccup
+// here just means the date stays unlearned for now, exactly as before this
+// existed.
+function learnUnknownEventDates(codes, playerHint) {
+  if (!isMinerRole(_userRole)) return; // endpoint is miner-gated; skip the doomed calls
+  const unknown = [...new Set((codes||[]).filter(Boolean).map(c => String(c).toUpperCase().trim()))]
+    .filter(c => c && !/^S\d+$/i.test(c) && c !== 'LADDER' && c !== 'ACAD' && !getEventDate(c));
+  if (!unknown.length) return;
+  const player = playerHint || '';
+  (async () => {
+    let any = false;
+    for (const code of unknown) {
+      try {
+        const r = await fetch(API+'/proxy/fl-event/'+encodeURIComponent(code)+'?player='+encodeURIComponent(player), { headers: authHeaders() });
+        if (r.ok) any = true;
+      } catch(e) {}
+      await new Promise(res => setTimeout(res, 300)); // same polite pacing as the existing FL import loops
+    }
+    if (any) loadEventDates();
+  })();
 }
 
 // Known event series base dates for ordering when FL cache is empty
@@ -6583,6 +6619,10 @@ async function go() {
   loadBatches();
   closeBatchPanel();
 
+  // Learn the calendar date for any event code in this batch we don't
+  // already know — see learnUnknownEventDates above.
+  learnUnknownEventDates([...Object.values(_idEventMap), _batchEventLabel], player);
+
   _stopping = false; _matches = []; _activeMatch = -1; _rpsGFWLOnly = false; _rpsYearFilter = ''; _rpsFilterSelected = null; _tempRpsPerspective = _tempRpsPerspective || 'p1';
   // Clear RPS output so filter panel rebuilds fresh for new batch
   const _rpsOut = document.getElementById('rps-out'); if (_rpsOut) _rpsOut.innerHTML = '';
@@ -9049,6 +9089,7 @@ function importEventDecks() {
     if (!files.length) return;
     const failRows = [];
     let imported = 0;
+    const _importedEventIds = []; // for learnUnknownEventDates, below the loop
 
     // Derive event ID from first file's name as fallback
     const _xlsxEventId = files.length > 0 ? (() => {
@@ -9100,6 +9141,7 @@ function importEventDecks() {
         });
         if (!saveRes.ok) throw new Error('Save failed: HTTP '+saveRes.status);
         imported++;
+        if (eventId) _importedEventIds.push(eventId);
         st('Saved deck for '+playerName+' ('+eventId+')', 'var(--green)');
       } catch(e) {
         failRows.push({ File: file.name, Player: playerName, Reason: e.message });
@@ -9110,6 +9152,13 @@ function importEventDecks() {
     if (failRows.length) exportFailureXLSX(failRows, 'deck_import_failures.xlsx');
     st('Deck import complete — '+imported+'/'+files.length+' decks saved'+(failRows.length?' ('+failRows.length+' failed)':''), imported < files.length ? 'var(--amber)' : 'var(--green)');
     loadBatches();
+    // Learn the calendar date for any event code among the YDKs just
+    // imported that we don't already know — see learnUnknownEventDates
+    // above. No single reliable player name here (files can span several
+    // players), so this is called without a playerHint; /proxy/fl-event
+    // still captures and learns the event's date either way, it just
+    // won't also match a specific builder's deck.
+    learnUnknownEventDates(_importedEventIds, '');
   };
   inp.click();
 }
@@ -14248,7 +14297,7 @@ function renderPowerRankings() {
   }
 
   const minInput = document.getElementById('pr-minmatches-input');
-  const rawMin = minInput ? parseInt(minInput.value, 10) : 10;
+  const rawMin = minInput ? parseInt(minInput.value, 10) : 100;
   const minSample = (isNaN(rawMin) || rawMin < 0) ? 0 : rawMin;
 
   // Per-deck-type win rate vs field — identical computation to Matchups'
@@ -15072,6 +15121,11 @@ async function addToBatch() {
   idEvents.forEach(x => { if (x.eventLabel) _idEventMapA[x.id] = x.eventLabel; });
   const _idRoundMapA = {};
   idEvents.forEach(x => { if (x.round) _idRoundMapA[x.id] = x.round; });
+  // Learn the calendar date for any event code here we don't already know
+  // — see learnUnknownEventDates above. (batch-event-label-inp may not be
+  // filled yet this early, but addToBatch() re-reads and uses it below —
+  // fine either way, this call is purely best-effort enrichment.)
+  learnUnknownEventDates(Object.values(_idEventMapA), _activeBatch.player);
 
   // Filter out already-loaded replays
   const existing = new Set((_activeBatch.replays||[]).map(r => r.replayId));
@@ -17460,7 +17514,15 @@ async function openProfile(player, batches, records) {
   const _amb = document.getElementById('profile-add-match-btn');
   if (_amb) _amb.style.display = isMinerRole(_userRole) ? 'block' : 'none';
   const _delProfBtn = document.getElementById('profile-delete-btn');
-  if (_delProfBtn) _delProfBtn.style.display = isAdminRole(_userRole) ? 'inline-block' : 'none';
+  if (_delProfBtn) {
+    _delProfBtn.style.display = isAdminRole(_userRole) ? 'inline-block' : 'none';
+    // Defensive reset: this button is one shared DOM node reused across
+    // every profile — always start a freshly-opened profile with it
+    // enabled and showing its normal label, regardless of what state the
+    // last profile left it in.
+    _delProfBtn.disabled = false;
+    _delProfBtn.textContent = '🗑 Delete Profile';
+  }
 
   // Header
   document.getElementById('profile-view-name').textContent = player;
@@ -18036,6 +18098,12 @@ async function deleteProfileFromServer() {
 
   st(player + "'s profile and all their data deleted from the server (" +
      (data.deletedBatches||0) + ' batch(es), ' + (data.deletedReplays||0) + ' replay(s))', 'var(--green)');
+
+  // Reset the button on success too — it's a single shared DOM node reused
+  // across every profile (not recreated per profile), so without this it
+  // was left disabled, reading "⏳ Deleting...", for every profile opened
+  // afterward until a full page reload.
+  if (btn) { btn.disabled = false; btn.textContent = '🗑 Delete Profile'; }
 
   if (window._playerRegistry) delete window._playerRegistry[player.toLowerCase()];
   if (_activeBatch && batches.some(b => b.id === _activeBatch.id)) _activeBatch = null;
