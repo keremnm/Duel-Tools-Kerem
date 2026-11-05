@@ -224,7 +224,7 @@ select{cursor:pointer}
 .card-grid.lg .cth{max-width:130px;margin:0 auto}
 
 /* ── Format Data tab ── */
-#pg-formatdata,#pg-topcards{flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:18px 20px;scrollbar-width:thin;scrollbar-color:var(--border) var(--bg)}
+#pg-formatdata,#pg-topcards,#pg-leaderboard{flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:18px 20px;scrollbar-width:thin;scrollbar-color:var(--border) var(--bg)}
 #pg-profiles{flex-direction:column;overflow:hidden}
 .dd-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px}
 .dd-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
@@ -531,7 +531,7 @@ select{cursor:pointer}
   /* ══════════════════════════════════════════════════════════════
      DECK DATA + STATS (secondary — just make scrollable)
      ══════════════════════════════════════════════════════════════ */
-  #pg-formatdata, #pg-topcards { padding: 10px !important; }
+  #pg-formatdata, #pg-topcards, #pg-leaderboard { padding: 10px !important; }
   .dd-tabs { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
   .dd-tabs::-webkit-scrollbar { display: none; }
   .dd-table { font-size: 11px; }
@@ -626,7 +626,7 @@ select{cursor:pointer}
       <button class="ntab" id="ntab-deck" onclick="switchTab('deck',this)">Deck Viewer</button>
       <button class="ntab" id="ntab-rps" onclick="switchTab('rps',this)">RPS Analysis</button>
       <div class="ntab-dropdown">
-        <button class="ntab" id="ntab-formatdata" onclick="switchTab('formatdata',this)">Matchups</button>
+        <button class="ntab" id="ntab-formatdata" onclick="switchTab('formatdata',this)">Format Data</button>
         <div class="ntab-submenu">
           <button onclick="switchTab('topcards', document.getElementById('ntab-topcards'))">📇 Top Cards</button>
           <button onclick="switchTab('leaderboard', document.getElementById('ntab-leaderboard'))">🏅 Leaderboard</button>
@@ -646,7 +646,7 @@ select{cursor:pointer}
         <option value="profiles">Profiles</option>
         <option value="deck">Deck Viewer</option>
         <option value="rps">RPS Analysis</option>
-        <option value="formatdata">Matchups</option>
+        <option value="formatdata">Format Data</option>
         <option value="topcards">📇 Top Cards</option>
         <option value="leaderboard">🏅 Leaderboard</option>
         <option value="gfwl">GFWL Archive</option>
@@ -1097,7 +1097,7 @@ select{cursor:pointer}
           </div>
 
           <!-- RIGHT: teams + event decklists panel -->
-          <div style="width:480px;flex-shrink:0;border-left:1px solid var(--border);background:var(--panel);overflow-y:auto;display:flex;flex-direction:column">
+          <div style="width:640px;flex-shrink:0;border-left:1px solid var(--border);background:var(--panel);overflow-y:auto;display:flex;flex-direction:column">
 
             <!-- Tags -->
             <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
@@ -2556,6 +2556,12 @@ const STAPLE_CARDS = new Set([
   'pot of greed','graceful charity','ring of destruction'
 ]);
 function isStapleCard(name) { return STAPLE_CARDS.has((name||'').toLowerCase().trim()); }
+
+// Top Cards excludes these entirely (not just hides their "GN" label like
+// STAPLE_CARDS above) — known-good staples that are in basically every deck
+// regardless of archetype, so surfacing their win% there is just noise, not
+// signal about the deck itself.
+const TOP_CARDS_IGNORED_CARDS = new Set(['pot of greed', 'graceful charity']);
 
 // Which game(s) of a match a card was seen in, formatted as "G1", "G2/3",
 // "G1/2/3", etc. Staples (see above) never get a label — they show up in
@@ -9982,6 +9988,16 @@ function renderMatchSidebar(query) {
     return;
   }
 
+  // Placement badges below need _eventPlacements — kick off a background
+  // load the first time this sidebar renders without it (never blocks this
+  // render; badges just aren't there yet) and re-render once it's in, so
+  // reopening/re-searching isn't required to see them appear. Guarded by
+  // _eventPlacementsLoading so a second renderMatchSidebar call before the
+  // first load finishes doesn't fire a duplicate fetch.
+  if (!_eventPlacements && !_eventPlacementsLoading) {
+    loadEventPlacements().then(() => renderMatchSidebar((document.getElementById('dsearch')||{value:''}).value||''));
+  }
+
   // Group by event GROUP KEY (S8: WK 1 -> S8, FLC40 WK1 -> FLC40, bare -> Untagged)
   const groups = {};
   _matches.forEach((m, idx) => {
@@ -10030,7 +10046,25 @@ function renderMatchSidebar(query) {
     const wl = document.createElement('span');
     wl.style.cssText = 'font-size:10px;color:var(--muted)';
     wl.innerHTML = `<span style="color:var(--green)">${w}W</span> <span style="color:var(--dim)">—</span> <span style="color:var(--red)">${l}L</span> <span style="color:var(--dim)">· ${items.length}</span>`;
-    hdr.appendChild(arrow); hdr.appendChild(lbl); hdr.appendChild(wl);
+    hdr.appendChild(arrow); hdr.appendChild(lbl);
+    // Event placement badge (1st/2nd/Top 8/54th/etc) — same FL-sourced
+    // placement data and badge styling as Deck Viewer's placement badges,
+    // resolved for whichever player this group of matches belongs to.
+    // Silently omitted for GFWL season groups (never FL-tracked, same
+    // exclusion as Tops Only elsewhere) and while placement data hasn't
+    // loaded yet (see the loadEventPlacements() kick-off below).
+    if (!_isGS && key !== 'Untagged') {
+      const placeNum = findPlayerEventPlaceNum(key, items[0] && items[0].m && items[0].m.player);
+      const tier = placeNum != null ? placementTierBadge(placeNum) : null;
+      if (tier) {
+        const placeBadge = document.createElement('span');
+        placeBadge.style.cssText = `font-size:9px;font-weight:bold;color:${tier.color};border:1px solid ${tier.color};border-radius:3px;padding:0 5px;white-space:nowrap`;
+        placeBadge.textContent = tier.text;
+        placeBadge.title = 'Placement at ' + key;
+        hdr.appendChild(placeBadge);
+      }
+    }
+    hdr.appendChild(wl);
 
     // Build Event YDK button — for real event IDs (including GFWL season
     // groups, e.g. "S9") with no saved decklist, and ALSO for the "Untagged"
@@ -11402,13 +11436,22 @@ async function applyResultOverride(m, payload) {
 // requires "to Hand" in the same line, so it only fires for the searched/
 // regained-to-hand case the request specifically asked for, not an
 // unrelated "Added a counter" or similar log line.
-const USAGE_ACTION_RE = /\b(normal summoned|special summoned|flip summoned|tribute summoned|set|activated|attacked)\b/i;
+// Matches both past-tense ("Normal Summoned", "Activated", "Set") and
+// present/3rd-person ("Normal Summons", "Activates", "Sets") phrasing —
+// SP_REAL_ACTIONS above is past-tense only (proven against whatever log
+// field the Slow Play Analyzer reads), but public_log/private_log entries
+// elsewhere in this file are handled tense-agnostically (calcDeckChange
+// above checks 'Drew' specifically but otherwise leans on substrings like
+// 'from Deck' that don't vary by tense), so this errs toward matching both
+// rather than risk silently under-counting usage because of a tense this
+// hasn't been verified against yet.
+const USAGE_ACTION_RE = /\b(normal summon(?:ed|s)?|special summon(?:ed|s)?|flip summon(?:ed|s)?|tribute summon(?:ed|s)?|sets?|activat(?:ed|es)|attack(?:ed|s)?)\b/i;
 function isUsageActionLog(publicLog, privateLog) {
   for (const log of [privateLog, publicLog]) {
     if (!log) continue;
     const s = String(log);
     if (USAGE_ACTION_RE.test(s)) return true;
-    if (/added/i.test(s) && /to hand/i.test(s)) return true;
+    if (/\badd(?:ed|s)?\b/i.test(s) && /to hand/i.test(s)) return true;
   }
   return false;
 }
@@ -12757,6 +12800,16 @@ function _monthsAgoISO(n) {
 }
 function _recordMatchesYear(r, year) {
   const code = eventGroupKey(r.eventLabel||'');
+  // GFWL season-coded events have no FL-resolvable date of their own (see
+  // getEventDate) but DO map onto a calendar year via GFWL_SEASON_YEAR_MAP
+  // — e.g. picking "2026" in Year now also pulls in S8/S9 matches. Not
+  // attempted for the relative Last 3/6 Months options below — a season
+  // only pins down a year/half, not a precise enough date to compare
+  // against a rolling cutoff.
+  if (isGFWLSeason(code)) {
+    if (year === 'last3m' || year === 'last6m') return false;
+    return gfwlSeasonToYear(code) === year;
+  }
   const d = code ? getEventDate(code) : null;
   // Relative ranges need an actual resolved date to compare against — a
   // record whose event date is unknown can't be verified as recent, so it's
@@ -12794,7 +12847,16 @@ function populateYearSeasonFilterPair(yearSel, seasonSel) {
   usable.forEach(r => {
     const code = eventGroupKey(r.eventLabel||'');
     if (!code) return;
-    if (isGFWLSeason(code)) { seasonsSet.add(code.toUpperCase()); return; }
+    if (isGFWLSeason(code)) {
+      seasonsSet.add(code.toUpperCase());
+      // Also count this season's matches toward its mapped calendar year
+      // (see GFWL_SEASON_YEAR_MAP / _recordMatchesYear) so the Year
+      // dropdown's counts include season-coded matches, not just
+      // FL-dated ones.
+      const mappedYear = gfwlSeasonToYear(code);
+      if (mappedYear) yearsSet.add(mappedYear);
+      return;
+    }
     const d = getEventDate(code);
     if (d) yearsSet.add(d.slice(0,4));
     const y = (r.eventLabel||'').match(/(20\d{2})/);
@@ -12843,24 +12905,31 @@ function populateTopCardsYearSeasonFilters() {
 
 // Applies a page's Year + GFWL Season filter dropdowns to a list of global
 // match records. A record matches the year filter if its event resolves
-// (via the server-synced event-dates cache, or a literal year in the label)
-// to that year; it matches the season filter if its event's group code IS
-// that GFWL season code. Shared by Format Data and Top Cards — see
-// populateYearSeasonFilterPair above for why this is factored out rather
-// than duplicated per page.
+// (via the server-synced event-dates cache, a literal year in the label, or
+// the GFWL_SEASON_YEAR_MAP below for a season-coded event) to that year; it
+// matches the season filter if its event's group code IS that GFWL season
+// code. Shared by Format Data and Top Cards — see populateYearSeasonFilterPair
+// above for why this is factored out rather than duplicated per page.
+//
+// When a Season is selected, it ISOLATES the data to just that season —
+// Year is ignored entirely rather than ANDed with it. A season already
+// fully specifies its own time window (see GFWL_SEASON_YEAR_MAP), so
+// requiring a match against both risked an unrelated/stale Year selection
+// silently suppressing a season's data (or, worse, looking like the Season
+// filter "leaked" other data in when the combination produced a confusing
+// result) — picking Season now always means exactly that season, full stop.
 function _filterRecordsByYearSeason(records, yearSelId, seasonSelId) {
   const yearSel = document.getElementById(yearSelId);
   const seasonSel = document.getElementById(seasonSelId);
   const filterYear = yearSel ? yearSel.value : '';
   const filterSeason = seasonSel ? seasonSel.value : '';
-  let out = records;
-  if (filterYear) {
-    out = out.filter(r => _recordMatchesYear(r, filterYear));
-  }
   if (filterSeason) {
-    out = out.filter(r => eventGroupKey(r.eventLabel||'') === filterSeason);
+    return records.filter(r => eventGroupKey(r.eventLabel||'') === filterSeason);
   }
-  return out;
+  if (filterYear) {
+    return records.filter(r => _recordMatchesYear(r, filterYear));
+  }
+  return records;
 }
 // Applies the "Tops Only" filter on top of whatever Year/Season already
 // narrowed down to — a no-op in 'all' mode (the default), so neither page
@@ -13123,6 +13192,29 @@ async function loadEventPlacements(force) {
     return _eventPlacements;
   })();
   return _eventPlacementsLoading;
+}
+
+// Looks up a given player's raw placement number for one event code from
+// the same bulk placement data recordIsTopsOnly (below) and Deck Viewer's
+// placement badges both already read — same alias-aware builderName match
+// as recordIsTopsOnly uses, pulled out standalone so a caller that just
+// wants "what place did THIS player get" (no Tops/cutoff math) doesn't have
+// to duplicate the alias-resolution logic. Returns null when placements
+// haven't loaded yet, the event isn't FL-tracked (GFWL, same exclusion as
+// everywhere else this data is used), or this player has no matching
+// decklist entry in that event's bracket.
+function findPlayerEventPlaceNum(code, playerName) {
+  if (!_eventPlacements || !code) return null;
+  const ev = _eventPlacements[code.toUpperCase().trim()];
+  if (!ev || !ev.decks || !ev.decks.length) return null;
+  const playerKey = (playerName||'').toLowerCase().trim();
+  if (!playerKey) return null;
+  const reg = window._playerRegistry && window._playerRegistry[playerKey];
+  const aliasSet = new Set([playerKey, ...((reg&&reg.aliases)||[]).map(a=>(a||'').toLowerCase().trim())]);
+  const deck = ev.decks.find(d => aliasSet.has((d.builderName||'').toLowerCase().trim()));
+  // deck.placeNum is already a clean number straight from the server (see
+  // GET /api/events/placements-bulk) — no re-parsing needed here.
+  return deck && deck.placeNum != null ? deck.placeNum : null;
 }
 
 // True if this match record's own decklist for its event placed within the
@@ -13406,7 +13498,7 @@ function renderTopCardsTable(deckType) {
   const stats = {}; // lowercased card name -> { name, id, w, l, matches }
   records.forEach(r => {
     _tcCardObservations(r).forEach(({ key, win }) => {
-      if (!key) return;
+      if (!key || TOP_CARDS_IGNORED_CARDS.has(key)) return;
       if (!stats[key]) {
         const card = (r.allMine||[]).find(c => (c.name||'').toLowerCase() === key)
                   || (r.allUsageMine||[]).find(c => (c.name||'').toLowerCase() === key);
@@ -13572,16 +13664,14 @@ function showTopCardsCardModal(idx) {
 // pool, etc.) later without having to redesign the page.
 // ══════════════════════════════════════════════════════════════════════
 
-// A player's "winningest deck" needs its own minimum sample, separate from
-// the page's own Min Matches floor (which gates the PLAYER's total match
-// count, not any one deck of theirs) — otherwise a deck they 2-0'd once
-// would always rank by win% above a deck they went 40-20 with. 5 is a
-// modest floor; if NO deck clears it, the ranking widens to every deck the
-// player has (still sorted by win%, tie-broken by N) rather than showing
-// nothing — so with a thin sample overall, a small-N deck can still win out
-// on win% alone, same as it would for the floor-clearing case once there's
-// enough data to fill the floor.
-const LB_DECK_MIN_SAMPLE = 5;
+// "Winningest deck" = the deck type (same applied/classified deck type
+// Deck Viewer and Matchups both read off r.myDeck — YDK-based where a
+// decklist is saved, classifier-based otherwise) this player has won the
+// MOST GAMES with, by raw win count — not highest win%. Win% alone let a
+// deck they 2-0'd once (100%) outrank a deck they went 200-100 with (67%),
+// which is backwards for what "winningest" means in plain English and
+// doesn't reflect the deck the player is actually known for. Ties (equal
+// win count) break by win%, then by total matches.
 
 async function loadLeaderboard(force) {
   const out = document.getElementById('lb-output');
@@ -13644,9 +13734,8 @@ function renderLeaderboard() {
   const rows = Object.entries(byPlayer).map(([player, agg]) => {
     const n = agg.w + agg.l;
     const deckStats = Object.entries(agg.decks).map(([dk, d]) => ({ dk, w: d.w, l: d.l, n: d.w + d.l }));
-    const eligible = deckStats.filter(d => d.n >= LB_DECK_MIN_SAMPLE);
-    const pool = eligible.length ? eligible : deckStats;
-    pool.sort((a, b) => (pct(b.w, b.n) - pct(a.w, a.n)) || (b.n - a.n));
+    const pool = deckStats;
+    pool.sort((a, b) => (b.w - a.w) || (pct(b.w, b.n) - pct(a.w, a.n)) || (b.n - a.n));
     return { player, w: agg.w, l: agg.l, n, bestDeck: pool[0] || null };
   })
     .filter(r => r.n >= minMatches)
@@ -13669,7 +13758,7 @@ function renderLeaderboard() {
   table.style.marginTop = '4px';
   table.innerHTML = '<thead><tr><th>#</th><th>Player</th><th>N</th><th>W-L</th><th>Win %</th>' +
     '<th title="95% confidence interval on this player\'s overall win rate (Wilson score interval)">95% CI</th>' +
-    `<th title="This player's best-performing deck by win rate — restricted to decks with at least ${LB_DECK_MIN_SAMPLE} decided matches where any deck clears that floor, widened to every deck they've played otherwise">Winningest Deck</th></tr></thead>`;
+    '<th title="The deck type this player has won the MOST GAMES with, by raw win count — same applied deck type shown in Deck Viewer/Matchups">Winningest Deck</th></tr></thead>';
   const tbody = document.createElement('tbody');
 
   rows.forEach((r, idx) => {
@@ -13695,8 +13784,8 @@ function renderLeaderboard() {
 
   const note = document.createElement('div');
   note.style.cssText = 'font-size:10px;color:var(--dim);margin-top:4px';
-  note.textContent = 'Ranked by overall win rate (ties broken by more matches). "Winningest Deck" is each player\'s own best-performing deck type by win rate ' +
-    `— restricted to decks with at least ${LB_DECK_MIN_SAMPLE} decided matches where any deck clears that floor, widened to every deck they've played otherwise. Incomplete/omitted matches excluded, same as Matchups and Top Cards.`;
+  note.textContent = 'Ranked by overall win rate (ties broken by more matches). "Winningest Deck" is the deck type this player has won the most GAMES with (raw win count, ties by win% then matches) — ' +
+    'the same applied deck type Deck Viewer and Matchups use (YDK-based where a decklist is saved, classifier-based otherwise). Incomplete/omitted matches excluded, same as Matchups and Top Cards.';
   out.appendChild(note);
 }
 
@@ -16588,6 +16677,34 @@ function isGFWLSeason(groupKey) {
   return /^S\d+$/i.test(groupKey);
 }
 
+// GFWL season -> calendar year (+ which half of that year), per the
+// mapping given directly: S1->2022, S2/S3->2023, S4/S5->2024, S6/S7->2025,
+// S8/S9->2026 (S8 = first half of 2026, S9 = second half). Lets a GFWL
+// season-coded match (which has no FL-resolvable date of its own — see
+// getEventDate) still count toward the Year filter instead of being
+// invisible to it entirely (previously only the separate GFWL S# dropdown
+// could ever select a season's matches). `half` isn't used for the
+// relative Last 3/6 Months options (those stay keyed off an actual
+// resolved date — approximating a season's midpoint would be guesswork),
+// only for literal Year matching below.
+const GFWL_SEASON_YEAR_MAP = {
+  1: { year: '2022', half: 2 }, // only one season that year — no split
+  2: { year: '2023', half: 1 },
+  3: { year: '2023', half: 2 },
+  4: { year: '2024', half: 1 },
+  5: { year: '2024', half: 2 },
+  6: { year: '2025', half: 1 },
+  7: { year: '2025', half: 2 },
+  8: { year: '2026', half: 1 },
+  9: { year: '2026', half: 2 },
+};
+function gfwlSeasonToYear(groupKey) {
+  const m = /^S(\d+)$/i.exec((groupKey||'').trim());
+  if (!m) return null;
+  const entry = GFWL_SEASON_YEAR_MAP[parseInt(m[1], 10)];
+  return entry ? entry.year : null;
+}
+
 // Most recent real (non-GFWL-season) event date found among a batch's
 // replays, as a 'YYYY-MM-DD' string, or null if none of its events have a
 // resolvable date (e.g. a GFWL-season-only batch, or unrecognized codes).
@@ -17817,7 +17934,7 @@ function renderEventDecks(player, batches, records) {
     const row = document.createElement('div');
     row.className = 'edl-item';
     row.dataset.code = deck.code;
-    row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--card2);border:1px solid var(--border2);border-radius:6px;overflow:hidden;min-width:0';
+    row.style.cssText = 'display:flex;align-items:center;flex-wrap:wrap;gap:6px;row-gap:5px;padding:6px 10px;background:var(--card2);border:1px solid var(--border2);border-radius:6px;min-width:0';
 
     // Code + deck type
     const codeSpan = document.createElement('span');
