@@ -224,7 +224,7 @@ select{cursor:pointer}
 .card-grid.lg .cth{max-width:130px;margin:0 auto}
 
 /* ── Format Data tab ── */
-#pg-formatdata,#pg-topcards,#pg-leaderboard{flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:18px 20px;scrollbar-width:thin;scrollbar-color:var(--border) var(--bg)}
+#pg-formatdata,#pg-topcards,#pg-leaderboard,#pg-powerrankings{flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:18px 20px;scrollbar-width:thin;scrollbar-color:var(--border) var(--bg)}
 #pg-profiles{flex-direction:column;overflow:hidden}
 .dd-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px}
 .dd-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
@@ -531,7 +531,7 @@ select{cursor:pointer}
   /* ══════════════════════════════════════════════════════════════
      DECK DATA + STATS (secondary — just make scrollable)
      ══════════════════════════════════════════════════════════════ */
-  #pg-formatdata, #pg-topcards, #pg-leaderboard { padding: 10px !important; }
+  #pg-formatdata, #pg-topcards, #pg-leaderboard, #pg-powerrankings { padding: 10px !important; }
   .dd-tabs { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
   .dd-tabs::-webkit-scrollbar { display: none; }
   .dd-table { font-size: 11px; }
@@ -630,10 +630,12 @@ select{cursor:pointer}
         <div class="ntab-submenu">
           <button onclick="switchTab('topcards', document.getElementById('ntab-topcards'))">📇 Top Cards</button>
           <button onclick="switchTab('leaderboard', document.getElementById('ntab-leaderboard'))">🏅 Leaderboard</button>
+          <button onclick="switchTab('powerrankings', document.getElementById('ntab-powerrankings'))">📊 Power Rankings</button>
         </div>
       </div>
       <button class="ntab" id="ntab-topcards" onclick="switchTab('topcards',this)" style="display:none"></button>
       <button class="ntab" id="ntab-leaderboard" onclick="switchTab('leaderboard',this)" style="display:none"></button>
+      <button class="ntab" id="ntab-powerrankings" onclick="switchTab('powerrankings',this)" style="display:none"></button>
       <button class="ntab" id="ntab-ingame" onclick="switchTab('ingame',this)">In-Game Tools</button>
       <button class="ntab" id="gfwl-prep-tab" onclick="switchTab('gfwl',this)">GFWL Archive</button>
       <button class="ntab" id="ntab-events" onclick="switchTab('events',this)">🏆 Events</button>
@@ -649,6 +651,7 @@ select{cursor:pointer}
         <option value="formatdata">Format Data</option>
         <option value="topcards">📇 Top Cards</option>
         <option value="leaderboard">🏅 Leaderboard</option>
+        <option value="powerrankings">📊 Power Rankings</option>
         <option value="gfwl">GFWL Archive</option>
         <option value="events">Events</option>
       </select>
@@ -820,6 +823,12 @@ select{cursor:pointer}
     <div class="page" id="pg-formatdata">
       <div style="max-width:980px;margin:0 auto;width:100%;display:flex;flex-direction:column;gap:18px">
         <div>
+          <div style="display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px;width:fit-content;margin-bottom:10px">
+            <button onclick="switchTab('formatdata', document.getElementById('ntab-formatdata'))" style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:12px;padding:6px 12px;border-radius:4px;cursor:pointer;white-space:nowrap">Matchups</button>
+            <button onclick="switchTab('topcards', document.getElementById('ntab-topcards'))" style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:12px;padding:6px 12px;border-radius:4px;cursor:pointer;white-space:nowrap">📇 Top Cards</button>
+            <button onclick="switchTab('leaderboard', document.getElementById('ntab-leaderboard'))" style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:12px;padding:6px 12px;border-radius:4px;cursor:pointer;white-space:nowrap">🏅 Leaderboard</button>
+            <button onclick="switchTab('powerrankings', document.getElementById('ntab-powerrankings'))" style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:12px;padding:6px 12px;border-radius:4px;cursor:pointer;white-space:nowrap">📊 Power Rankings</button>
+          </div>
           <div style="font-size:16px;font-weight:bold;color:var(--text);margin-bottom:4px">Matchups</div>
           <div style="font-size:12px;color:var(--muted)">Matchup win rates across every saved replay in Duel Tools. Pick a deck type to see how it performs against the field.</div>
         </div>
@@ -845,14 +854,6 @@ select{cursor:pointer}
             <button id="fd-lists-tops-btn" onclick="setFormatDataListsMode('tops')" title="Only matches whose decklist placed Top 8 (events under 128 entrants) or Top 16 (128+) at a Format Library-tracked event. GFWL is excluded — it isn't an FL-tracked bracket."
               style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Tops Only</button>
           </div>
-          <button onclick="switchTab('topcards', document.getElementById('ntab-topcards'))" title="Per-card win rates within a deck type — see which cards are actually winning you games"
-            style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer">
-            📇 Top Cards
-          </button>
-          <button onclick="switchTab('leaderboard', document.getElementById('ntab-leaderboard'))" title="Players ranked by win rate, with each player's winningest deck type"
-            style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer">
-            🏅 Leaderboard
-          </button>
           <button id="fd-recompute-btn" onclick="recomputeFormatData()" title="Format Data caches every saved replay in memory after the first load this session — this forces a fresh re-fetch and rebuild from the server instead of reusing that cache, so changes made elsewhere (e.g. running Scan & Link on Admin → Cross-Links) actually show up here without a full page reload."
             style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer">
             ↻ Recompute
@@ -866,8 +867,12 @@ select{cursor:pointer}
     <div class="page" id="pg-topcards">
       <div style="max-width:980px;margin:0 auto;width:100%;display:flex;flex-direction:column;gap:18px">
         <div>
-          <button onclick="switchTab('formatdata', document.getElementById('ntab-formatdata'))" title="Back to Matchups"
-            style="background:none;border:none;color:var(--muted);font-family:monospace;font-size:11px;padding:0;margin-bottom:8px;cursor:pointer;display:inline-flex;align-items:center;gap:4px">← Back to Matchups</button>
+          <div style="display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px;width:fit-content;margin-bottom:10px">
+            <button onclick="switchTab('formatdata', document.getElementById('ntab-formatdata'))" style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:12px;padding:6px 12px;border-radius:4px;cursor:pointer;white-space:nowrap">Matchups</button>
+            <button onclick="switchTab('topcards', document.getElementById('ntab-topcards'))" style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:12px;padding:6px 12px;border-radius:4px;cursor:pointer;white-space:nowrap">📇 Top Cards</button>
+            <button onclick="switchTab('leaderboard', document.getElementById('ntab-leaderboard'))" style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:12px;padding:6px 12px;border-radius:4px;cursor:pointer;white-space:nowrap">🏅 Leaderboard</button>
+            <button onclick="switchTab('powerrankings', document.getElementById('ntab-powerrankings'))" style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:12px;padding:6px 12px;border-radius:4px;cursor:pointer;white-space:nowrap">📊 Power Rankings</button>
+          </div>
           <div style="font-size:16px;font-weight:bold;color:var(--text);margin-bottom:4px">📇 Top Cards</div>
           <div style="font-size:12px;color:var(--muted)">Per-card win rates within a deck type, highest win rate first — same replay data as Format Data, broken down by card instead of matchup.</div>
         </div>
@@ -876,6 +881,11 @@ select{cursor:pointer}
           <select id="tc-deck-select" onchange="renderTopCardsTable(this.value)"
             style="background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--green);font-family:monospace;font-weight:bold;font-size:13px;padding:7px 12px;outline:none;cursor:pointer;min-width:240px">
             <option value="">Loading…</option>
+          </select>
+          <div class="slbl" style="margin:0">VS</div>
+          <select id="tc-opponent-select" onchange="renderTopCardsTable()" title="Narrow this deck's Top Cards down to just the matches against one opponent deck type"
+            style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:160px">
+            <option value="">All Matchups</option>
           </select>
           <div class="slbl" style="margin:0">YEAR</div>
           <select id="tc-year-filter" onchange="renderTopCardsTable()"
@@ -938,8 +948,12 @@ select{cursor:pointer}
     <div class="page" id="pg-leaderboard">
       <div style="max-width:980px;margin:0 auto;width:100%;display:flex;flex-direction:column;gap:18px">
         <div>
-          <button onclick="switchTab('formatdata', document.getElementById('ntab-formatdata'))" title="Back to Matchups"
-            style="background:none;border:none;color:var(--muted);font-family:monospace;font-size:11px;padding:0;margin-bottom:8px;cursor:pointer;display:inline-flex;align-items:center;gap:4px">← Back to Matchups</button>
+          <div style="display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px;width:fit-content;margin-bottom:10px">
+            <button onclick="switchTab('formatdata', document.getElementById('ntab-formatdata'))" style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:12px;padding:6px 12px;border-radius:4px;cursor:pointer;white-space:nowrap">Matchups</button>
+            <button onclick="switchTab('topcards', document.getElementById('ntab-topcards'))" style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:12px;padding:6px 12px;border-radius:4px;cursor:pointer;white-space:nowrap">📇 Top Cards</button>
+            <button onclick="switchTab('leaderboard', document.getElementById('ntab-leaderboard'))" style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:12px;padding:6px 12px;border-radius:4px;cursor:pointer;white-space:nowrap">🏅 Leaderboard</button>
+            <button onclick="switchTab('powerrankings', document.getElementById('ntab-powerrankings'))" style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:12px;padding:6px 12px;border-radius:4px;cursor:pointer;white-space:nowrap">📊 Power Rankings</button>
+          </div>
           <div style="font-size:16px;font-weight:bold;color:var(--text);margin-bottom:4px">🏅 Leaderboard</div>
           <div style="font-size:12px;color:var(--muted)">Players ranked by win rate across every saved replay, with each player's winningest deck type. Ranking is by win rate for now.</div>
         </div>
@@ -964,6 +978,49 @@ select{cursor:pointer}
           </button>
         </div>
         <div id="lb-output"><div class="dd-empty">Loading replay data…</div></div>
+      </div>
+    </div>
+
+    <!-- Power Rankings page -->
+    <div class="page" id="pg-powerrankings">
+      <div style="max-width:980px;margin:0 auto;width:100%;display:flex;flex-direction:column;gap:18px">
+        <div>
+          <div style="display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px;width:fit-content;margin-bottom:10px">
+            <button onclick="switchTab('formatdata', document.getElementById('ntab-formatdata'))" style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:12px;padding:6px 12px;border-radius:4px;cursor:pointer;white-space:nowrap">Matchups</button>
+            <button onclick="switchTab('topcards', document.getElementById('ntab-topcards'))" style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:12px;padding:6px 12px;border-radius:4px;cursor:pointer;white-space:nowrap">📇 Top Cards</button>
+            <button onclick="switchTab('leaderboard', document.getElementById('ntab-leaderboard'))" style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:12px;padding:6px 12px;border-radius:4px;cursor:pointer;white-space:nowrap">🏅 Leaderboard</button>
+            <button onclick="switchTab('powerrankings', document.getElementById('ntab-powerrankings'))" style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:12px;padding:6px 12px;border-radius:4px;cursor:pointer;white-space:nowrap">📊 Power Rankings</button>
+          </div>
+          <div style="font-size:16px;font-weight:bold;color:var(--text);margin-bottom:4px">📊 Power Rankings</div>
+          <div style="font-size:12px;color:var(--muted)">A dynamic tier list of every deck type in the format, ranked by win rate vs field (mirror matches excluded) — same number as Matchups' "Win Rate vs Field".</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <div class="slbl" style="margin:0">YEAR</div>
+          <select id="pr-year-filter" onchange="renderPowerRankings()"
+            style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
+            <option value="">All</option>
+          </select>
+          <div class="slbl" style="margin:0">GFWL S#</div>
+          <select id="pr-season-filter" onchange="renderPowerRankings()"
+            style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
+            <option value="">All</option>
+          </select>
+          <div class="slbl" style="margin:0">MIN MATCHES</div>
+          <input id="pr-minmatches-input" type="text" inputmode="numeric" value="10" oninput="renderPowerRankings()"
+            title="Minimum decided non-mirror matches a deck type must have to be ranked — keeps a tiny sample from landing in S or D tier on noise"
+            style="width:46px;text-align:right;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 8px;border-radius:6px;outline:none"/>
+          <div style="display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px">
+            <button id="pr-lists-all-btn" onclick="setPowerRankingsListsMode('all')" title="Every recorded match"
+              style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">All Lists</button>
+            <button id="pr-lists-tops-btn" onclick="setPowerRankingsListsMode('tops')" title="Only matches whose decklist placed Top 8 (events under 128 entrants) or Top 16 (128+) at a Format Library-tracked event. GFWL is excluded — it isn't an FL-tracked bracket."
+              style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Tops Only</button>
+          </div>
+          <button id="pr-recompute-btn" onclick="recomputePowerRankings()" title="Re-fetches from the server instead of reusing the cached replay data (same cache Matchups/Top Cards/Leaderboard use)."
+            style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer">
+            ↻ Recompute
+          </button>
+        </div>
+        <div id="pr-output"><div class="dd-empty">Loading replay data…</div></div>
       </div>
     </div>
 
@@ -2646,6 +2703,7 @@ function switchTab(name, btn) {
   if (name === 'formatdata') loadFormatData();
   if (name === 'topcards') loadTopCards();
   if (name === 'leaderboard') loadLeaderboard();
+  if (name === 'powerrankings') loadPowerRankings();
   if (name === 'events') eventsShowList();
 }
 
@@ -13282,13 +13340,17 @@ async function recomputeTopCards() {
   const deckSel = document.getElementById('tc-deck-select');
   const yearSel = document.getElementById('tc-year-filter');
   const seasonSel = document.getElementById('tc-season-filter');
+  const oppSel = document.getElementById('tc-opponent-select');
   const keepDeck = deckSel ? deckSel.value : '';
   const keepYear = yearSel ? yearSel.value : '';
   const keepSeason = seasonSel ? seasonSel.value : '';
+  const keepOpp = oppSel ? oppSel.value : '';
   await loadTopCards(true);
   if (yearSel && keepYear) yearSel.value = keepYear;
   if (seasonSel && keepSeason) seasonSel.value = keepSeason;
   if (deckSel && keepDeck && [...deckSel.options].some(o=>o.value===keepDeck)) deckSel.value = keepDeck;
+  populateTopCardsOpponentDropdown();
+  if (oppSel && keepOpp && [...oppSel.options].some(o=>o.value===keepOpp)) oppSel.value = keepOpp;
   renderTopCardsTable(deckSel ? deckSel.value : '');
   if (btn) { btn.disabled = false; btn.textContent = '↻ Recompute'; }
 }
@@ -13312,6 +13374,40 @@ function populateTopCardsDropdown() {
   }
   sel.innerHTML = decks.map(d => `<option value="${d}">${d} (${counts[d]})</option>`).join('');
   sel.value = decks.includes(cur) ? cur : decks[0];
+}
+
+// Opponent-deck filter — narrows Top Cards down from "every match this
+// deck played" to just the matches against one specific opponent deck
+// type (or "Mirror Match" for deck-vs-itself), same r.oppDeck field
+// Matchups' per-opponent breakdown table groups by. Unlike that table,
+// this doesn't require the mirrorPaired cross-link — Matchups needs that
+// so its two opponent-deck numbers sum to 100% across both decks' pages,
+// but "which cards win vs X" is a one-sided question with no such
+// requirement, so every match with a known opponent deck counts here.
+// Re-run on every renderTopCardsTable call (deck type can change the
+// available opponent list), so it always reflects the CURRENTLY selected
+// deck + Year/Season/Lists filters above it.
+function populateTopCardsOpponentDropdown() {
+  const sel = document.getElementById('tc-opponent-select');
+  if (!sel) return;
+  const deckSel = document.getElementById('tc-deck-select');
+  const deck = deckSel ? deckSel.value : '';
+  const records = filterTopCardsRecords(_globalRecords).filter(r => !r.incomplete && !r.omitted && (r.myDeck||'Unknown') === deck);
+  const mirrorCount = records.filter(r => (r.oppDeck||'Unknown') === deck).length;
+  const counts = {};
+  records.forEach(r => {
+    const opp = r.oppDeck || 'Unknown';
+    if (opp === deck || opp === 'Unknown') return;
+    counts[opp] = (counts[opp]||0) + 1;
+  });
+  const opps = Object.keys(counts).sort((a,b) => counts[b]-counts[a]);
+  const cur = sel.value;
+  let html = `<option value="">All Matchups (${records.length})</option>`;
+  if (mirrorCount) html += `<option value="__MIRROR__">Mirror Match (${mirrorCount})</option>`;
+  html += opps.map(o => `<option value="${_escapeHtml(o)}">${_escapeHtml(o)} (${counts[o]})</option>`).join('');
+  sel.innerHTML = html;
+  const validValues = ['', '__MIRROR__', ...opps];
+  sel.value = validValues.includes(cur) ? cur : '';
 }
 
 // List vs Images view — purely a this-session display preference (not
@@ -13483,9 +13579,16 @@ function renderTopCardsTable(deckType) {
   const sel = document.getElementById('tc-deck-select');
   const deck = deckType || (sel ? sel.value : '');
 
-  const records = filterTopCardsRecords(_globalRecords).filter(r => !r.incomplete && !r.omitted && (r.myDeck||'Unknown') === deck);
+  populateTopCardsOpponentDropdown();
+  const oppSel = document.getElementById('tc-opponent-select');
+  const oppFilter = oppSel ? oppSel.value : '';
+
+  let records = filterTopCardsRecords(_globalRecords).filter(r => !r.incomplete && !r.omitted && (r.myDeck||'Unknown') === deck);
+  if (oppFilter === '__MIRROR__') records = records.filter(r => (r.oppDeck||'Unknown') === deck);
+  else if (oppFilter) records = records.filter(r => (r.oppDeck||'Unknown') === oppFilter);
   if (!records.length) {
-    out.innerHTML = `<div class="dd-empty">No replays found for ${_escapeHtml(deck||'this deck')}${_tcListsMode==='tops'?' in Tops Only lists':''}.</div>`;
+    const oppLbl = oppFilter === '__MIRROR__' ? ' in Mirror matches' : (oppFilter ? ' vs '+_escapeHtml(oppFilter) : '');
+    out.innerHTML = `<div class="dd-empty">No replays found for ${_escapeHtml(deck||'this deck')}${oppLbl}${_tcListsMode==='tops'?' in Tops Only lists':''}.</div>`;
     return;
   }
 
@@ -13526,7 +13629,8 @@ function renderTopCardsTable(deckType) {
   const totalMatches = records.length;
   const phaseNote = _tcMatchPhase === 'full' ? '' : (_tcMatchPhase === 'preside' ? ' · Pre-Side (G1)' : ' · Post-Side (G2+G3)');
   const metricNote = _tcMetric === 'usage' ? ' · Usage Rate' : '';
-  const summary = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${_escapeHtml(deck)}${_tcListsMode==='tops'?' · Tops Only':''}${phaseNote}${metricNote} — ${totalMatches} match(es), ${rows.length} card(s) with ${minLabel}+ decided ${unitWordPlural}. <span style="color:var(--dim)">Click a card to see which matches it came from.</span></div>`;
+  const oppNote = oppFilter === '__MIRROR__' ? ' · vs Mirror' : (oppFilter ? ' · vs '+_escapeHtml(oppFilter) : '');
+  const summary = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${_escapeHtml(deck)}${oppNote}${_tcListsMode==='tops'?' · Tops Only':''}${phaseNote}${metricNote} — ${totalMatches} match(es), ${rows.length} card(s) with ${minLabel}+ decided ${unitWordPlural}. <span style="color:var(--dim)">Click a card to see which matches it came from.</span></div>`;
 
   if (_tcViewMode === 'images') {
     out.innerHTML = summary + '<div id="tc-grid" class="dd-empty">Loading card images…</div>';
@@ -13787,6 +13891,158 @@ function renderLeaderboard() {
   note.textContent = 'Ranked by overall win rate (ties broken by more matches). "Winningest Deck" is the deck type this player has won the most GAMES with (raw win count, ties by win% then matches) — ' +
     'the same applied deck type Deck Viewer and Matchups use (YDK-based where a decklist is saved, classifier-based otherwise). Incomplete/omitted matches excluded, same as Matchups and Top Cards.';
   out.appendChild(note);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// POWER RANKINGS — a dynamic tier list of every deck type in the format,
+// ranked by win rate vs field (same number as Matchups' "Win Rate vs
+// Field" chip — mirror matches excluded, exact same computation). Same
+// idea as pokemonmeta.com's tier list, scoped to this league's own
+// replay data. Shares Format Data's _globalRecords cache.
+// ══════════════════════════════════════════════════════════════════════
+let _prListsMode = 'all'; // 'all' | 'tops'
+
+// Same DB-Ladder exclusion as Matchups (this is meta/tournament-strength
+// data, same spirit) — "casual DB ladder games" shouldn't move a deck's
+// tier up or down any more than they should skew the Matchups table.
+function filterPowerRankingsRecords(records) {
+  return _applyListsMode(_filterRecordsByYearSeason(records, 'pr-year-filter', 'pr-season-filter'), _prListsMode)
+    .filter(r => !isDbLadderRecord(r));
+}
+
+async function loadPowerRankings(force) {
+  const out = document.getElementById('pr-output');
+  if (!_globalRecords.length || force) {
+    out.innerHTML = '<div class="dd-empty">Loading replay data…</div>';
+    await loadGlobalRecords(force);
+  }
+  if (_prListsMode === 'tops' && !_eventPlacements) await loadEventPlacements();
+  populateYearSeasonFilterPair(document.getElementById('pr-year-filter'), document.getElementById('pr-season-filter'));
+  renderPowerRankings();
+}
+
+async function setPowerRankingsListsMode(mode) {
+  _prListsMode = mode;
+  _syncListsModeButtons('pr-lists-all-btn', 'pr-lists-tops-btn', mode);
+  if (mode === 'tops' && !_eventPlacements) {
+    const out = document.getElementById('pr-output');
+    if (out) out.innerHTML = '<div class="dd-empty">Loading placement data…</div>';
+    await loadEventPlacements();
+  }
+  renderPowerRankings();
+}
+
+async function recomputePowerRankings() {
+  const btn = document.getElementById('pr-recompute-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Recomputing...'; }
+  const yearSel = document.getElementById('pr-year-filter');
+  const seasonSel = document.getElementById('pr-season-filter');
+  const keepYear = yearSel ? yearSel.value : '';
+  const keepSeason = seasonSel ? seasonSel.value : '';
+  await loadPowerRankings(true);
+  if (yearSel && keepYear) yearSel.value = keepYear;
+  if (seasonSel && keepSeason) seasonSel.value = keepSeason;
+  renderPowerRankings();
+  if (btn) { btn.disabled = false; btn.textContent = '↻ Recompute'; }
+}
+
+// Tier cutoffs — win rate vs field. A 50% deck is exactly average, so even
+// a handful of points above/below is real signal at these sample sizes —
+// these bands are intentionally tighter than a typical "S/A/B/C/D" video
+// game tier list for that reason. Adjust the `min` values here if the
+// field's actual spread ever warrants wider/narrower bands.
+const PR_TIERS = [
+  { key: 'S', label: 'S', min: 56, color: '#ff5577' },
+  { key: 'A', label: 'A', min: 52, color: '#ffbb44' },
+  { key: 'B', label: 'B', min: 48, color: '#4ec9ff' },
+  { key: 'C', label: 'C', min: 44, color: '#8a8aa8' },
+  { key: 'D', label: 'D', min: -Infinity, color: '#6b6b85' },
+];
+function _prTierFor(wp) {
+  return PR_TIERS.find(t => wp >= t.min) || PR_TIERS[PR_TIERS.length - 1];
+}
+
+function renderPowerRankings() {
+  const out = document.getElementById('pr-output');
+  if (!out) return;
+  if (!_globalRecords.length) {
+    out.innerHTML = '<div class="dd-empty">No replays found. Import or analyze a batch first.</div>';
+    return;
+  }
+  populateYearSeasonFilterPair(document.getElementById('pr-year-filter'), document.getElementById('pr-season-filter'));
+
+  const records = filterPowerRankingsRecords(_globalRecords).filter(r => !r.incomplete && !r.omitted);
+  if (!records.length) {
+    out.innerHTML = `<div class="dd-empty">No replays match the current filters${_prListsMode==='tops'?' (Tops Only)':''}.</div>`;
+    return;
+  }
+
+  const minInput = document.getElementById('pr-minmatches-input');
+  const rawMin = minInput ? parseInt(minInput.value, 10) : 10;
+  const minSample = (isNaN(rawMin) || rawMin < 0) ? 0 : rawMin;
+
+  // Per-deck-type win rate vs field — identical computation to Matchups'
+  // "Win Rate vs Field" chip: mirror matches (deck vs itself) excluded,
+  // every other decided match for that deck counted.
+  const byDeck = {};
+  records.forEach(r => {
+    const deck = r.myDeck || 'Unknown';
+    if (deck === 'Unknown') return;
+    const opp = r.oppDeck || 'Unknown';
+    if (opp === deck) return; // mirror — excluded, same as Matchups' Win Rate vs Field
+    if (!r.matchWon && !r.matchLost) return;
+    if (!byDeck[deck]) byDeck[deck] = { w: 0, l: 0 };
+    if (r.matchWon) byDeck[deck].w++; else byDeck[deck].l++;
+  });
+
+  const rows = Object.entries(byDeck)
+    .map(([deck, rec]) => ({ deck, w: rec.w, l: rec.l, n: rec.w + rec.l }))
+    .filter(r => r.n >= minSample)
+    .map(r => ({ ...r, wp: pct(r.w, r.n), ci: wilsonCI(r.w, r.n) }))
+    .sort((a, b) => (b.wp - a.wp) || (b.n - a.n));
+
+  if (!rows.length) {
+    out.innerHTML = `<div class="dd-empty">No deck types with ${minSample}+ decided non-mirror matches. Try lowering Min Matches.</div>`;
+    return;
+  }
+
+  out.innerHTML = '';
+
+  const note = document.createElement('div');
+  note.style.cssText = 'font-size:12px;color:var(--muted);margin-bottom:10px';
+  note.textContent = `${rows.length} deck type(s)${_prListsMode==='tops'?' · Tops Only':''}, ranked by win rate vs field (mirror matches excluded — same number as Matchups' "Win Rate vs Field"). 95% CI via Wilson score interval. Click a deck to open it on Matchups.`;
+  out.appendChild(note);
+
+  PR_TIERS.forEach(tier => {
+    const tierRows = rows.filter(r => _prTierFor(r.wp).key === tier.key);
+    if (!tierRows.length) return;
+    const section = document.createElement('div');
+    section.style.cssText = 'display:flex;align-items:stretch;border:1px solid var(--border2);border-radius:8px;overflow:hidden;margin-bottom:8px';
+    const label = document.createElement('div');
+    label.style.cssText = `width:56px;flex-shrink:0;background:${tier.color};color:#0a0a0f;font-weight:bold;font-size:22px;display:flex;align-items:center;justify-content:center;font-family:monospace`;
+    label.textContent = tier.label;
+    section.appendChild(label);
+    const cardsWrap = document.createElement('div');
+    cardsWrap.style.cssText = 'flex:1;display:flex;flex-wrap:wrap;gap:8px;padding:10px;background:var(--card2);min-width:0';
+    tierRows.forEach(r => {
+      const card = document.createElement('div');
+      card.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 12px;min-width:150px;cursor:pointer';
+      card.title = 'Click to open ' + r.deck + ' on Matchups';
+      card.onclick = () => {
+        switchTab('formatdata', document.getElementById('ntab-formatdata'));
+        setTimeout(() => {
+          const sel = document.getElementById('fd-deck-select');
+          if (sel && [...sel.options].some(o => o.value === r.deck)) { sel.value = r.deck; renderFormatDataTable(r.deck); }
+        }, 50);
+      };
+      card.innerHTML = `<div style="font-weight:bold;color:var(--text);font-size:13px;margin-bottom:2px">${_escapeHtml(r.deck)}</div>` +
+        `<div style="font-size:17px;font-weight:bold;color:${r.wp>=50?'var(--green)':'var(--red)'}">${r.wp}%</div>` +
+        `<div style="font-size:10px;color:var(--muted)">${r.w}-${r.l} (${r.n}) · ${r.ci.low}–${r.ci.high}%</div>`;
+      cardsWrap.appendChild(card);
+    });
+    section.appendChild(cardsWrap);
+    out.appendChild(section);
+  });
 }
 
 // Expands/collapses the per-match Game 1/2/3 log directly under a clicked
@@ -19813,7 +20069,7 @@ function applyRoleUI() {
     // Mobile nav dropdown — remove the same options
     const mobileSel = document.getElementById('nav-mobile-sel');
     if (mobileSel) {
-      ['profiles','rps','formatdata','topcards','leaderboard','gfwl'].forEach(v => {
+      ['profiles','rps','formatdata','topcards','leaderboard','powerrankings','gfwl'].forEach(v => {
         const opt = mobileSel.querySelector(`option[value="${v}"]`);
         if (opt) opt.remove();
       });
@@ -19822,7 +20078,7 @@ function applyRoleUI() {
     // Profiles is the default active tab, but it's hidden for this role —
     // land on Deck Viewer instead so there's something to look at.
     const activePage = document.querySelector('.page.on');
-    const hiddenPages = ['pg-profiles','pg-rps','pg-formatdata','pg-topcards','pg-leaderboard','pg-gfwl'];
+    const hiddenPages = ['pg-profiles','pg-rps','pg-formatdata','pg-topcards','pg-leaderboard','pg-powerrankings','pg-gfwl'];
     if (!activePage || hiddenPages.includes(activePage.id)) {
       const deckBtn = document.getElementById('ntab-deck');
       switchTab('deck', deckBtn);
