@@ -836,8 +836,14 @@ select{cursor:pointer}
             style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
             <option value="">All</option>
           </select>
+          <div style="margin-left:auto;display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px">
+            <button id="fd-lists-all-btn" onclick="setFormatDataListsMode('all')" title="Every recorded match for this deck"
+              style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">All Lists</button>
+            <button id="fd-lists-tops-btn" onclick="setFormatDataListsMode('tops')" title="Only matches whose decklist placed Top 8 (events under 128 entrants) or Top 16 (128+) at a Format Library-tracked event. GFWL is excluded — it isn't an FL-tracked bracket."
+              style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Tops Only</button>
+          </div>
           <button onclick="switchTab('topcards', document.getElementById('ntab-topcards'))" title="Per-card win rates within a deck type — see which cards are actually winning you games"
-            style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer">
+            style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer">
             📇 Top Cards
           </button>
           <button id="fd-recompute-btn" onclick="recomputeFormatData()" title="Format Data caches every saved replay in memory after the first load this session — this forces a fresh re-fetch and rebuild from the server instead of reusing that cache, so changes made elsewhere (e.g. running Scan & Link on Admin → Cross-Links) actually show up here without a full page reload."
@@ -873,18 +879,24 @@ select{cursor:pointer}
             <option value="">All</option>
           </select>
           <div class="slbl" style="margin:0">MIN MATCHES</div>
-          <select id="tc-minsample-select" onchange="renderTopCardsTable()"
-            style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:60px">
-            <option value="5">5+</option>
-            <option value="10" selected>10+</option>
-            <option value="20">20+</option>
-            <option value="50">50+</option>
-          </select>
-          <div style="margin-left:auto;display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px">
+          <div style="display:flex;align-items:center">
+            <input id="tc-minmatches-input" type="text" inputmode="decimal" value="20" oninput="renderTopCardsTable()"
+              title="Minimum matches a card must appear in to be listed — a % of this deck's total matches by default, or a raw count (click the % / # button to switch)"
+              style="width:46px;text-align:right;background:var(--card2);border:1px solid var(--border);border-right:none;color:var(--text);font-family:monospace;font-size:12px;padding:6px 6px;border-radius:6px 0 0 6px;outline:none"/>
+            <button id="tc-minmatches-unit-btn" onclick="toggleTopCardsMinMatchesUnit()" title="Switch between % of this deck's matches and a raw match count"
+              style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-weight:bold;font-size:12px;padding:6px 9px;border-radius:0 6px 6px 0;cursor:pointer;min-width:30px">%</button>
+          </div>
+          <div style="display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px">
             <button id="tc-view-list-btn" onclick="setTopCardsViewMode('list')" title="Text table"
-              style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">☰ List</button>
+              style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">☰ List</button>
             <button id="tc-view-images-btn" onclick="setTopCardsViewMode('images')" title="Card image grid"
-              style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">🖼 Images</button>
+              style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">🖼 Images</button>
+          </div>
+          <div style="margin-left:auto;display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px">
+            <button id="tc-lists-all-btn" onclick="setTopCardsListsMode('all')" title="Every recorded match for this deck"
+              style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">All Lists</button>
+            <button id="tc-lists-tops-btn" onclick="setTopCardsListsMode('tops')" title="Only matches whose decklist placed Top 8 (events under 128 entrants) or Top 16 (128+) at a Format Library-tracked event. GFWL is excluded — it isn't an FL-tracked bracket."
+              style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Tops Only</button>
           </div>
           <button id="tc-recompute-btn" onclick="recomputeTopCards()" title="Re-fetches from the server instead of reusing the cached replay data (same cache Format Data uses)."
             style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer">
@@ -1647,167 +1659,175 @@ const DECK_CATEGORY = {
 const ALL_DECK_CLASSES = Object.keys(DECK_CATEGORY);
 
 const TFIDF_WEIGHTS = {
-  'armed samurai - ben kei':           { 'Ben Kai OTK': 0.99 },
-  'armed samurai':                     { 'Ben Kai OTK': 0.99 },
-  'ben-kei':                           { 'Ben Kai OTK': 0.99 },
-  'relinquished':                      { 'Chaos Relinquished': 0.99 },
-  'black illusion ritual':             { 'Chaos Relinquished': 0.95 },
-  'necrovalley':                       { 'Gravekeeper': 0.99 },
-  'last turn':                         { 'Last Turn': 0.99 },
-  'jowgen the spiritualist':           { 'Last Turn': 0.90 },
-  'royal magical library':             { 'Library FTK': 0.99 },
-  'spell reproduction':                { 'Library FTK': 0.92, 'Empty Jar': 0.50 },
-  'des lacooda':                       { 'Pacman': 0.90 },
-  'golem sentry':                      { 'Pacman': 0.85 },
-  'swarm of locusts':                  { 'Pacman': 0.85 },
-  'swarm of scarabs':                  { 'Pacman': 0.85 },
-  'bazoo the soul-eater':              { 'Bazoo Return': 0.99 },
-  'stealth bird':                      { 'Panda Burn': 0.95 },
-  'solar flare dragon':                { 'Drain Burn': 0.95 },
-  'meteor of destruction':             { 'Speed Burn': 0.95 },
-  'strike ninja':                      { 'Strike Ninja Return': 0.95 },
-  'dimensional fissure':               { 'Strike Ninja Return': 0.80 },
-  'thunder dragon':                    { 'Chaos Turbo': 0.80, 'Chaos Control': 0.70, 'Chaos Warrior': 0.72 },
-  'night assailant':                   { 'Chaos Turbo': 0.90 },
-  'phoenix wing wind blast':           { 'Chaos Turbo': 0.75 },
-  'raigeki break':                     { 'Chaos Turbo': 0.55, 'Chaos Warrior': 0.45 },
-  'abyss soldier':                     { 'Chaos Control': 0.80, 'Goat Control': 0.60 },
-  'reflect bounder':                   { 'Chaos Control': 0.75 },
-  'injection fairy lily':              { 'Chaos Control': 0.55, 'Chaos Warrior': 0.50, 'Stein OTK': 0.45, 'Rescue Cat OTK': 0.45, 'Rescue Cat OTK': 0.45 },
-  'scapegoat':                         { 'Goat Control': 0.65, 'Chaos Control': 0.50, 'Stein OTK': 0.40, 'Reasoning Gate Turbo': 0.30, 'Stein OTK': 0.40, 'Rescue Cat OTK': 0.38 },
-  'metamorphosis':                     { 'Goat Control': 0.65, 'Chaos Control': 0.45, 'Stein OTK': 0.55, 'Reasoning Gate Turbo': 0.40 },
-  'thousand-eyes restrict':            { 'Goat Control': 0.80 },
-  'tsukuyomi':                         { 'Goat Control': 0.75, 'Chaos Control': 0.20 },
-  'tribe-infecting virus':             { 'Goat Control': 0.70 },
-  'magical merchant':                  { 'Goat Control': 0.75 },
-  'airknight parshath':                { 'Goat Control': 0.55, 'Reasoning Gate Turbo': 0.50 },
-
-  'chaos sorcerer':                    { 'Chaos Turbo': 0.20, 'Chaos Control': 0.20, 'Chaos Warrior': 0.22, 'Chaos Return': 0.22, 'Chaos Recruiter': 0.18, 'Reasoning Gate Turbo': 0.20, 'Chaos Relinquished': 0.30 },
-  'black luster soldier - envoy of the beginning': { 'Chaos Turbo': 0.12, 'Chaos Control': 0.12, 'Chaos Warrior': 0.12, 'Goat Control': 0.10, 'Warrior': 0.10, 'Chaos Return': 0.14, 'Chaos Recruiter': 0.10, 'Chaos Relinquished': 0.25, 'Reasoning Gate Turbo': 0.12 },
-  'sinister serpent':                  { 'Chaos Turbo': 0.25, 'Chaos Control': 0.28, 'Goat Control': 0.25, 'Chaos Warrior': 0.22 },
-  'magician of faith':                 { 'Chaos Turbo': 0.30, 'Chaos Control': 0.30, 'Goat Control': 0.28, 'Chaos Warrior': 0.28 },
-  'dekoichi the battlechanted locomotive': { 'Chaos Turbo': 0.65, 'Chaos Control': 0.60, 'Goat Control': 0.55 },
-  "gravekeeper's spy":                 { 'Chaos Turbo': 0.38, 'Chaos Control': 0.36, 'Goat Control': 0.33, 'Gravekeeper': 0.25 }, // low alone — Necrovalley required to confirm GK
-  'card destruction':                  { 'Chaos Turbo': 0.45, 'Chaos Control': 0.35, 'Chaos Warrior': 0.35 },
-  'royal decree':                      { 'Chaos Control': 0.55, 'Goat Control': 0.52 },
-  'asura priest':                      { 'Chaos Control': 0.55, 'Goat Control': 0.52 },
-  'creature swap':                     { 'Chaos Control': 0.50, 'Goat Control': 0.50, 'Chaos Recruiter': 0.40 },
-  'reinforcement of the army':         { 'Warrior': 0.55, 'Chaos Warrior': 0.52, 'Chaos Return': 0.25, 'Aggro Lockdown': 0.40, 'Gearfried Warriors': 0.50, 'Stein OTK': 0.35, 'Rescue Cat OTK': 0.32 },
-  'blade knight':                      { 'Warrior': 0.52, 'Chaos Warrior': 0.50, 'Chaos Return': 0.42, 'Aggro Lockdown': 0.38 },
-  'don zaloog':                        { 'Warrior': 0.55, 'Chaos Warrior': 0.48 },
-  'mystic swordsman lv2':              { 'Warrior': 0.52, 'Chaos Warrior': 0.32, 'Earth Aggro': 0.30 },
-  'kycoo the ghost destroyer':         { 'Warrior': 0.60, 'Chaos Warrior': 0.55, 'Bazoo Return': 0.50 },
-  'exiled force':                      { 'Warrior': 0.40, 'Chaos Warrior': 0.38, 'Stein OTK': 0.32 },
-  'sasuke samurai':                    { 'Warrior': 0.70 },
-  'trap dustshoot':                    { 'Warrior': 0.52, 'Aggro Lockdown': 0.42 },
-  'solemn judgment':                   { 'Warrior': 0.40, 'Chaos Return': 0.40, 'Aggro Lockdown': 0.42 },
-  'sakuretsu armor':                   { 'Warrior': 0.48, 'Aggro Lockdown': 0.35 },
-  'dust tornado':                      { 'Warrior': 0.42, 'Earth Aggro': 0.38 },
-  'd.d. assailant':                    { 'Warrior': 0.45, 'Earth Aggro': 0.50, 'Aggro Lockdown': 0.45 },
-  'warrior returning alive':           { 'Warrior': 0.55, 'Chaos Warrior': 0.40, 'Gearfried Warriors': 0.55 },
-  'zombyra the dark':                  { 'Chaos Warrior': 0.30, 'Warrior': 0.20 }, // zombyra alone is not a reliable CW indicator
-  // Gearfried weights now handled above
-  'jurai gumo':                        { 'Aggro Lockdown': 0.95 },
-  'skill drain':                       { 'Aggro Lockdown': 0.40, 'Drain Burn': 0.70 },
-  'time seal':                         { 'Aggro Lockdown': 0.85 },
-  'drop off':                          { 'Aggro Lockdown': 0.82 },
-  'final attack orders':               { 'Aggro Lockdown': 0.78 },
-  'goblin attack force':               { 'Aggro Lockdown': 0.35, 'Earth Aggro': 0.75, 'Drain Burn': 0.30 },
-  'swift gaia the fierce knight':      { 'Aggro Lockdown': 0.75 },
-  'giant orc':                         { 'Aggro Lockdown': 0.70 },
-  'gigantes':                          { 'Earth Aggro': 1.10, 'Rescue Cat Earth Aggro': 0.65 },
-  'giant rat':                         { 'Earth Aggro': 0.80, 'Chaos Recruiter': 0.25, 'Panda Burn': 0.20, 'Rescue Cat Earth Aggro': 0.50 },
-  'the rock spirit':                   { 'Earth Aggro': 0.95 },
-  'gemini elf':                        { 'Earth Aggro': 0.65, 'Aggro Lockdown': 0.30 },
-  'exarion universe':                  { 'Earth Aggro': 0.60, 'Chaos Control': 0.30 },
-  'ryu kokki':                         { 'Zombie': 0.90, 'Thunder Clap': 0.05 },
-  'spirit reaper':                     { 'Zombie': 0.78 },
-  'despair from the dark':             { 'Zombie': 0.80 },
-  'call of the mummy':                 { 'Zombie': 0.90 },
-  'card of safe return':               { 'Zombie': 0.75 },
-  'gearfried the iron knight':         { 'Gearfried Warriors': 0.92, 'Warrior': 0.20 },
-  'blast with chain':                  { 'Gearfried Warriors': 0.90, 'Warrior': 0.15 },
-  'smoke grenade of the thief':        { 'Gearfried Warriors': 0.85, 'Warrior': 0.15 },
-  'zaborg the thunder monarch':        { 'Thunder Clap': 0.55, 'Monarch': 0.55 },
-  'brain control':                     { 'Thunder Clap': 0.45, 'Warrior': 0.20, 'Earth Aggro': 0.20 },
-  'pyramid turtle':                    { 'Zombie': 0.82 },
-  'vampire lord':                      { 'Zombie': 0.80 },
-  'regenerating mummy':                { 'Zombie': 0.78 },
-  'double coston':                     { 'Zombie': 0.78 },
-  'book of life':                      { 'Zombie': 0.82 },
-  'return from the different dimension': { 'Chaos Return': 0.88, 'Bazoo Return': 0.60, 'Strike Ninja Return': 0.75 },
-  'shining angel':                     { 'Chaos Return': 0.70, 'Chaos Recruiter': 0.40 },
-  'roulette barrel':                   { 'Chaos Return': 0.80 },
-  'd.d. survivor':                     { 'Chaos Return': 0.75, 'Bazoo Return': 0.45 },
-  'manju of the ten thousand hands':   { 'Chaos Relinquished': 0.72 },
-  'mystic shine ball':                 { 'Chaos Fairy': 0.90 },
-  'the agent of creation - venus':     { 'Chaos Fairy': 0.85 },
-  'senju of the thousand hands':       { 'Chaos Relinquished': 0.70 },
-  'recruiter of the guardians':        { 'Chaos Recruiter': 0.92 },
-  'newdoria':                          { 'Chaos Recruiter': 0.80 },
-  'mystic tomato':                     { 'Chaos Recruiter': 0.48, 'Monarch': 0.45 },
-  "gravekeeper's guard":               { 'Gravekeeper': 0.88 },
-  "gravekeeper's assailant":           { 'Gravekeeper': 0.85 },
-  'royal tribute':                     { 'Gravekeeper': 0.95 },
-  'reasoning':                         { 'Reasoning Gate Turbo': 0.85, 'Reasoning Gate Machine': 0.83 },
-  'monster gate':                      { 'Reasoning Gate Turbo': 0.83, 'Reasoning Gate Machine': 0.81 },
-  'sacred crane':                      { 'Reasoning Gate Turbo': 0.82 },
-  'toon cannon soldier':               { 'Reasoning Gate Turbo': 0.65, 'Reasoning Gate Machine': 0.65, 'Library FTK': 0.60 },
-  'toon table of contents':            { 'Reasoning Gate Turbo': 0.60, 'Reasoning Gate Machine': 0.60, 'Library FTK': 0.70 },
-  'jinzo':                             { 'Reasoning Gate Turbo': 0.58, 'Reasoning Gate Machine': 0.60 },
-  'dark magician of chaos':            { 'Reasoning Gate Turbo': 0.50, 'Reasoning Gate Machine': 0.48 },
-  'megamorph':                         { 'Reasoning Gate Turbo': 0.60, 'Reasoning Gate Machine': 0.62, 'Stein OTK': 0.55 },
-  'limiter removal':                   { 'Reasoning Gate Machine': 0.85 },
-  'byser shock':                       { 'Reasoning Gate Machine': 0.78, 'Stein OTK': 0.60 },
-  'blowback dragon':                   { 'Reasoning Gate Machine': 0.82 },
-  'convulsion of nature':              { 'Library FTK': 0.78, 'Empty Jar': 0.45 },
-  'cyber-stein':                       { 'Stein OTK': 0.90, 'Stein OTK': 0.50 },
-  'giant trunade':                     { 'Stein OTK': 0.65, 'Stein OTK': 0.60, 'Rescue Cat OTK': 0.58 },
-  'amazoness archer':                  { 'Stein OTK': 0.95, 'Rescue Cat OTK': 0.92 },
-  'last will':                         { 'Stein OTK': 0.68, 'Rescue Cat OTK': 0.65, 'Rescue Cat OTK': 0.62 },
-  'secret barrel':                     { 'Stein OTK': 0.50, 'Drain Burn': 0.60, 'Panda Burn': 0.45, 'Speed Burn': 0.52 },
-  'the big march of animals':          { 'Rescue Cat OTK': 0.88 },
-  'rescue cat':                        { 'Rescue Cat OTK': 0.60, 'Rescue Cat Burn': 0.58, 'Rescue Cat Earth Aggro': 0.58, 'Rescue Cat OTK': 0.55 },
-  'gyaku-gire panda':                  { 'Rescue Cat OTK': 0.78, 'Rescue Cat Burn': 0.80, 'Rescue Cat Earth Aggro': 0.72, 'Rescue Cat OTK': 0.75, 'Panda Burn': 0.82 },
-  'des wombat':                        { 'Rescue Cat OTK': 0.88 },
-  'milus radiant':                     { 'Rescue Cat OTK': 0.82, 'Rescue Cat OTK': 0.78 },
-  'ojama trio':                        { 'Rescue Cat Burn': 0.75, 'Panda Burn': 0.68, 'Drain Burn': 0.42 },
-  'just desserts':                     { 'Rescue Cat Burn': 0.60, 'Panda Burn': 0.58, 'Drain Burn': 0.55, 'Speed Burn': 0.62 },
-  'big shield gardna':                 { 'Panda Burn': 0.65 },
-  'cyber jar':                         { 'Panda Burn': 0.55, 'Empty Jar': 0.80 },
-  'magic cylinder':                    { 'Panda Burn': 0.65, 'Speed Burn': 0.45 },
-  'des koala':                         { 'Panda Burn': 0.75, 'Drain Burn': 0.58 },
-  'nightmare wheel':                   { 'Panda Burn': 0.68, 'Drain Burn': 0.70 },
-  'chain energy':                      { 'Panda Burn': 0.65 },
-  'morphing jar':                      { 'Panda Burn': 0.42, 'Empty Jar': 0.78, 'Warrior': 0.25 },
-  'toon goblin attack force':          { 'Drain Burn': 0.90 },
-  'bad reaction to simochi':           { 'Drain Burn': 0.88 },
-  'poison of the old man':             { 'Speed Burn': 0.90 },
-  'tremendous fire':                   { 'Speed Burn': 0.88 },
-  'wall of revealing light':           { 'Last Turn': 0.70, 'Pacman': 0.60 },
-  'book of taiyou':                    { 'Empty Jar': 0.92 },
-  'the shallow grave':                 { 'Empty Jar': 0.88 },
-  'soul exchange':                     { 'Monarch': 1.20 },
-  'thestalos the firestorm monarch':   { 'Monarch': 1.10 },
-  'mobius the frost monarch':          { 'Monarch': 1.05 },
-  'granmarg the rock monarch':         { 'Monarch': 1.10 },
-  'zaborg the thunder monarch':        { 'Goat Control': 0.30, 'Chaos Return': 0.40, 'Monarch': 1.00 },
-  'amplifier':                         { 'Monarch': 0.80 },
-  'jinzo':                             { 'Reasoning Gate Turbo': 0.45, 'Reasoning Gate Machine': 0.50, 'Monarch': 0.50 },
-  'axe of despair':                    { 'Ben Kai OTK': 0.85 },
-  'big bang shot':                     { 'Ben Kai OTK': 0.88 },
-  'united we stand':                   { 'Ben Kai OTK': 0.72, 'Warrior': 0.18 },
-  'mataza the zapper':                 { 'Ben Kai OTK': 0.45, 'Warrior': 0.28 },
-  'pot of greed':        {},
-  'graceful charity':    {},
-  'heavy storm':         {},
+  'abyss soldier': { 'Goat Control': 0.6, 'Chaos Control': 0.2 },
+  'acid trap hole': { 'Stein OTK': 0.8 },
+  'airknight parshath': { 'Goat Control': 0.7, 'Reasoning Gate Turbo': 0.5 },
+  'amazoness archer': { 'Stein OTK': 0.95, 'Rescue Cat OTK': 0.65 },
+  'armed samurai - ben kei': { 'Ben Kai OTK': 0.99 },
+  'asura priest': { 'Chaos Control': 0.66, 'Goat Control': 0.4 },
+  'axe of despair': { 'Ben Kai OTK': 0.85 },
+  'bad reaction to simochi': { 'Drain Burn': 0.88 },
+  'bazoo the soul-eater': { 'Bazoo Return': 0.99 },
+  'berserk gorilla': { 'Stein OTK': 0.15 },
+  'big bang shot': { 'Ben Kai OTK': 0.88 },
+  'big shield gardna': { 'Panda Burn': 0.65 },
+  'black illusion ritual': { 'Chaos Relinquished': 0.95 },
+  'black luster soldier - envoy of the beginning': { 'Chaos Relinquished': 0.25, 'Thunder Clap': 0.25, 'Warrior': 0.2, 'Chaos Return': 0.14, 'Chaos Control': 0.12, 'Chaos Turbo': 0.12, 'Chaos Warrior': 0.12, 'Reasoning Gate Turbo': 0.12, 'Chaos Recruiter': 0.1, 'Goat Control': 0.1 },
+  'blade knight': { 'Warrior': 0.6, 'Chaos Warrior': 0.5, 'Chaos Return': 0.42, 'Aggro Lockdown': 0.38, 'Thunder Clap': 0.25 },
+  'blast with chain': { 'Gearfried Warriors': 0.99 },
+  'blowback dragon': { 'Reasoning Gate Machine': 0.82 },
+  'book of life': { 'Zombie': 0.9 },
+  'book of taiyou': { 'Empty Jar': 0.92 },
+  'brain control': { 'Thunder Clap': 0.45, 'Earth Aggro': 0.2 },
+  'byser shock': { 'Reasoning Gate Machine': 0.78, 'Stein OTK': 0.6 },
+  'call of the haunted': { 'Warrior': 0.55, 'Zombie': 0.3, 'Thunder Clap': 0.25, 'Rescue Cat OTK': 0.22, 'Monarch': 0.15, 'Stein OTK': 0.15 },
+  'card destruction': { 'Chaos Turbo': 0.45, 'Chaos Warrior': 0.35 },
+  'card of safe return': { 'Zombie': 0.75 },
+  'ceasefire': { 'Panda Burn': 0.33, 'Stein OTK': 0.25, 'Rescue Cat Burn': 0.2 },
+  'chain energy': { 'Panda Burn': 0.65 },
+  'chaos sorcerer': { 'Chaos Relinquished': 0.3, 'Chaos Return': 0.22, 'Chaos Warrior': 0.22, 'Chaos Control': 0.2, 'Chaos Turbo': 0.2, 'Reasoning Gate Turbo': 0.2, 'Chaos Recruiter': 0.18 },
+  'cold wave': { 'Monarch': 0.44 },
+  'convulsion of nature': { 'Library FTK': 0.78, 'Empty Jar': 0.45 },
+  'creature swap': { 'Chaos Control': 0.66, 'Chaos Recruiter': 0.4, 'Goat Control': 0.4, 'Chaos Fairy': 0.2 },
+  'cyber jar': { 'Empty Jar': 0.8, 'Panda Burn': 0.55, 'Stein OTK': 0.25 },
+  'cyber-stein': { 'Stein OTK': 0.5 },
+  'd.d. assailant': { 'Earth Aggro': 0.5, 'Aggro Lockdown': 0.45 },
+  'd.d. scout plane': { 'Strike Ninja Return': 0.75 },
+  'd.d. survivor': { 'Bazoo Return': 0.45 },
+  'd.d. warrior lady': { 'Chaos Return': 0.55, 'Warrior': 0.45 },
+  'dark magician of chaos': { 'Reasoning Gate Turbo': 0.5, 'Reasoning Gate Machine': 0.48 },
+  'dekoichi the battlechanted locomotive': { 'Chaos Turbo': 0.65, 'Chaos Control': 0.6, 'Goat Control': 0.4 },
+  'des koala': { 'Panda Burn': 0.75, 'Drain Burn': 0.58 },
+  'des lacooda': { 'Pacman': 0.9, 'Zombie': 0.15 },
+  'des wombat': { 'Rescue Cat Burn': 0.55, 'Rescue Cat OTK': 0.5 },
+  'despair from the dark': { 'Zombie': 0.8 },
+  'dimension fusion': { 'Strike Ninja Return': 0.8 },
+  'don zaloog': { 'Warrior': 0.55, 'Chaos Warrior': 0.48, 'Strike Ninja Return': 0.25 },
+  'double coston': { 'Zombie': 0.78 },
+  'drop off': { 'Aggro Lockdown': 0.82 },
+  'dust tornado': { 'Warrior': 0.42, 'Earth Aggro': 0.38 },
+  'enemy controller': { 'Rescue Cat OTK': 0.4, 'Stein OTK': 0.4 },
+  'exarion universe': { 'Earth Aggro': 0.6 },
+  'exiled force': { 'Warrior': 0.4, 'Chaos Warrior': 0.38, 'Stein OTK': 0.32 },
+  'final attack orders': { 'Aggro Lockdown': 0.78 },
+  'gearfried the iron knight': { 'Gearfried Warriors': 0.99 },
+  'gemini elf': { 'Earth Aggro': 0.65, 'Aggro Lockdown': 0.3 },
+  'giant orc': { 'Aggro Lockdown': 0.7 },
+  'giant rat': { 'Earth Aggro': 0.8, 'Rescue Cat Earth Aggro': 0.5, 'Zombie': 0.3, 'Chaos Recruiter': 0.25, 'Panda Burn': 0.2 },
+  'giant trunade': { 'Stein OTK': 0.6, 'Rescue Cat OTK': 0.58 },
+  'gigantes': { 'Earth Aggro': 1.1, 'Rescue Cat Earth Aggro': 0.55 },
+  'goblin attack force': { 'Earth Aggro': 0.75, 'Aggro Lockdown': 0.35, 'Drain Burn': 0.3 },
+  'golem sentry': { 'Pacman': 0.85 },
+  'granmarg the rock monarch': { 'Monarch': 1.1 },
+  'gravekeeper\'s assailant': { 'Gravekeeper': 0.85 },
+  'gravekeeper\'s guard': { 'Gravekeeper': 0.88 },
+  'gravekeeper\'s spy': { 'Chaos Turbo': 0.38, 'Chaos Control': 0.36, 'Goat Control': 0.33, 'Gravekeeper': 0.25, 'Strike Ninja Return': 0.25, 'Thunder Clap': 0.25, 'Monarch': 0.2 },
+  'gravity bind': { 'Panda Burn': 0.44, 'Rescue Cat Burn': 0.3 },
+  'gyaku-gire panda': { 'Panda Burn': 0.82, 'Rescue Cat Burn': 0.75, 'Rescue Cat Earth Aggro': 0.55, 'Rescue Cat OTK': 0.55 },
+  'injection fairy lily': { 'Chaos Warrior': 0.5, 'Rescue Cat OTK': 0.45, 'Stein OTK': 0.45, 'Rescue Cat Burn': 0.33 },
+  'iron blacksmith kotetsu': { 'Rescue Cat OTK': 0.35 },
+  'jar of greed': { 'Chaos Control': 0.44 },
+  'jinzo': { 'Reasoning Gate Machine': 0.6, 'Monarch': 0.5, 'Reasoning Gate Turbo': 0.45, 'Thunder Clap': 0.15 },
+  'jowgen the spiritualist': { 'Last Turn': 0.9 },
+  'jurai gumo': { 'Aggro Lockdown': 0.95 },
+  'just desserts': { 'Speed Burn': 0.62, 'Rescue Cat Burn': 0.6, 'Panda Burn': 0.58, 'Drain Burn': 0.55 },
+  'kycoo the ghost destroyer': { 'Warrior': 0.6, 'Chaos Warrior': 0.55, 'Bazoo Return': 0.5 },
+  'last turn': { 'Last Turn': 0.99 },
+  'last will': { 'Stein OTK': 0.68, 'Rescue Cat OTK': 0.65, 'Rescue Cat Earth Aggro': 0.55 },
+  'level limit - area b': { 'Panda Burn': 0.44, 'Rescue Cat Burn': 0.3 },
+  'limiter removal': { 'Reasoning Gate Machine': 0.85 },
+  'magic cylinder': { 'Panda Burn': 0.65, 'Speed Burn': 0.45 },
+  'magical cylinder': { 'Rescue Cat Burn': 0.3 },
+  'magical merchant': { 'Goat Control': 0.8 },
+  'magician of faith': { 'Chaos Control': 0.3, 'Chaos Turbo': 0.3, 'Chaos Warrior': 0.28, 'Goat Control': 0.28 },
+  'manju of the ten thousand hands': { 'Chaos Relinquished': 0.72 },
+  'mataza the zapper': { 'Ben Kai OTK': 0.45 },
+  'megamorph': { 'Reasoning Gate Machine': 0.62, 'Reasoning Gate Turbo': 0.6, 'Stein OTK': 0.55 },
+  'metamorphosis': { 'Chaos Control': 0.66, 'Goat Control': 0.55, 'Stein OTK': 0.55, 'Reasoning Gate Turbo': 0.4 },
+  'meteor of destruction': { 'Speed Burn': 0.95 },
+  'milus radiant': { 'Rescue Cat OTK': 0.75, 'Rescue Cat Earth Aggro': 0.65 },
+  'mind control': { 'Thunder Clap': 0.25 },
+  'mobius the frost monarch': { 'Monarch': 1.05, 'Thunder Clap': 0.3, 'Warrior': 0.2 },
+  'monster gate': { 'Reasoning Gate Turbo': 0.83, 'Reasoning Gate Machine': 0.81 },
+  'morphing jar': { 'Empty Jar': 0.78, 'Panda Burn': 0.42, 'Stein OTK': 0.25, 'Warrior': 0.25 },
+  'mystic shine ball': { 'Chaos Fairy': 0.9 },
+  'mystic swordsman lv2': { 'Warrior': 0.52, 'Chaos Warrior': 0.32, 'Earth Aggro': 0.3 },
+  'mystic tomato': { 'Chaos Recruiter': 0.48, 'Monarch': 0.45, 'Thunder Clap': 0.25 },
+  'necrovalley': { 'Gravekeeper': 0.99 },
+  'newdoria': { 'Chaos Recruiter': 0.8 },
+  'night assailant': { 'Chaos Turbo': 0.9 },
+  'nightmare wheel': { 'Drain Burn': 0.7, 'Panda Burn': 0.68 },
+  'ojama trio': { 'Rescue Cat Burn': 0.75, 'Panda Burn': 0.68, 'Drain Burn': 0.42 },
+  'phoenix wing wind blast': { 'Chaos Turbo': 0.75 },
+  'poison of the old man': { 'Speed Burn': 0.9 },
+  'premature burial': { 'Warrior': 0.55, 'Zombie': 0.3, 'Thunder Clap': 0.25, 'Stein OTK': 0.15 },
+  'pyramid turtle': { 'Zombie': 0.85 },
+  'raigeki break': { 'Chaos Turbo': 0.55, 'Chaos Warrior': 0.45 },
+  'reasoning': { 'Reasoning Gate Turbo': 0.85, 'Reasoning Gate Machine': 0.83 },
+  'regenerating mummy': { 'Zombie': 0.78 },
+  'reinforcement of the army': { 'Warrior': 0.55, 'Chaos Warrior': 0.52, 'Aggro Lockdown': 0.4, 'Stein OTK': 0.35, 'Rescue Cat OTK': 0.32, 'Chaos Return': 0.25, 'Gearfried Warriors': 0.25, 'Strike Ninja Return': 0.25 },
+  'relinquished': { 'Chaos Relinquished': 0.99 },
+  'rescue cat': { 'Rescue Cat Burn': 0.58, 'Rescue Cat Earth Aggro': 0.58, 'Rescue Cat OTK': 0.55 },
+  'return from the different dimension': { 'Chaos Return': 0.88, 'Strike Ninja Return': 0.75, 'Bazoo Return': 0.6 },
+  'roulette barrel': { 'Chaos Return': 0.8 },
+  'royal decree': { 'Chaos Control': 0.45, 'Goat Control': 0.4 },
+  'royal magical library': { 'Library FTK': 0.99 },
+  'royal tribute': { 'Gravekeeper': 0.95 },
+  'ryu kokki': { 'Zombie': 0.9 },
+  'sacred crane': { 'Reasoning Gate Turbo': 0.82 },
+  'sakuretsu armor': { 'Warrior': 0.48, 'Aggro Lockdown': 0.35 },
+  'sasuke samurai': { 'Warrior': 0.7 },
+  'scapegoat': { 'Chaos Control': 0.66, 'Goat Control': 0.55, 'Stein OTK': 0.4, 'Rescue Cat OTK': 0.38, 'Reasoning Gate Turbo': 0.3, 'Chaos Fairy': 0.2 },
+  'secret barrel': { 'Drain Burn': 0.6, 'Speed Burn': 0.52, 'Stein OTK': 0.5, 'Panda Burn': 0.45, 'Rescue Cat Burn': 0.44 },
+  'senju of the thousand hands': { 'Chaos Relinquished': 0.7 },
+  'shining angel': { 'Chaos Return': 0.79, 'Chaos Recruiter': 0.4, 'Thunder Clap': 0.25 },
+  'sinister serpent': { 'Chaos Control': 0.28, 'Chaos Turbo': 0.25, 'Goat Control': 0.25, 'Chaos Warrior': 0.22 },
+  'skill drain': { 'Drain Burn': 0.7, 'Aggro Lockdown': 0.4 },
+  'smoke grenade of the thief': { 'Gearfried Warriors': 0.85 },
+  'solar flare dragon': { 'Drain Burn': 0.95 },
+  'solemn judgment': { 'Aggro Lockdown': 0.42, 'Chaos Return': 0.4, 'Warrior': 0.4, 'Thunder Clap': 0.25, 'Pacman': 0.22, 'Drain Burn': 0.2 },
+  'soul exchange': { 'Monarch': 1.2 },
+  'spear dragon': { 'Stein OTK': 0.7 },
+  'spell reproduction': { 'Library FTK': 0.92, 'Empty Jar': 0.5 },
+  'spirit reaper': { 'Zombie': 0.4, 'Thunder Clap': 0.25 },
+  'stealth bird': { 'Panda Burn': 0.55 },
+  'strike ninja': { 'Strike Ninja Return': 0.95 },
+  'swarm of locusts': { 'Pacman': 0.85 },
+  'swarm of scarabs': { 'Pacman': 0.85 },
+  'swift gaia the fierce knight': { 'Aggro Lockdown': 0.75 },
+  'the agent of creation - venus': { 'Chaos Fairy': 0.85 },
+  'the big march of animals': { 'Rescue Cat OTK': 0.99 },
+  'the rock spirit': { 'Earth Aggro': 0.95 },
+  'the shallow grave': { 'Empty Jar': 0.88 },
+  'thestalos the firestorm monarch': { 'Monarch': 1.1 },
+  'thousand-eyes restrict': { 'Goat Control': 0.55 },
+  'threatening roar': { 'Rescue Cat Burn': 0.3, 'Stein OTK': 0.3 },
+  'thunder dragon': { 'Chaos Turbo': 0.8, 'Chaos Warrior': 0.72, 'Chaos Control': 0.7 },
+  'time seal': { 'Aggro Lockdown': 0.85 },
+  'toon cannon soldier': { 'Reasoning Gate Machine': 0.65, 'Reasoning Gate Turbo': 0.65, 'Library FTK': 0.6 },
+  'toon goblin attack force': { 'Drain Burn': 0.9 },
+  'toon table of contents': { 'Library FTK': 0.7, 'Reasoning Gate Machine': 0.6, 'Reasoning Gate Turbo': 0.6 },
+  'trap dustshoot': { 'Warrior': 0.52, 'Aggro Lockdown': 0.42 },
+  'tremendous fire': { 'Speed Burn': 0.88 },
+  'tsukuyomi': { 'Goat Control': 0.55, 'Chaos Control': 0.2 },
+  'united we stand': { 'Ben Kai OTK': 0.72, 'Stein OTK': 0.4, 'Rescue Cat OTK': 0.35 },
+  'upstart goblin': { 'Chaos Turbo': 0.77 },
+  'vampire lord': { 'Zombie': 0.99 },
+  'wall of revealing light': { 'Last Turn': 0.7, 'Pacman': 0.6 },
+  'xing zhen hu': { 'Warrior': 0.4 },
+  'zaborg the thunder monarch': { 'Monarch': 1.0, 'Thunder Clap': 0.75, 'Chaos Return': 0.4, 'Goat Control': 0.15 },
+  'zombyra the dark': { 'Chaos Warrior': 0.3, 'Warrior': 0.2 },
+  // Universal staples intentionally excluded from classification
+  'book of moon': {},
+  'delinquent duo': {},
+  'graceful charity': {},
+  'heavy storm': {},
+  'mirror force': {},
   'mystical space typhoon': {},
-  'mirror force':        {},
-  'torrential tribute':  {},
+  'pot of greed': {},
   'ring of destruction': {},
-  'snatch steal':        {},
-  'book of moon':        {},
-  'delinquent duo':      {},
+  'snatch steal': {},
+  'torrential tribute': {},
 };
 
 // Card serial number → name map for image lookups
@@ -12665,11 +12685,18 @@ function _filterRecordsByYearSeason(records, yearSelId, seasonSelId) {
   }
   return out;
 }
+// Applies the "Tops Only" filter on top of whatever Year/Season already
+// narrowed down to — a no-op in 'all' mode (the default), so neither page
+// pays for recordIsTopsOnly's lookup unless Tops Only is actually selected.
+function _applyListsMode(records, mode) {
+  if (mode !== 'tops') return records;
+  return records.filter(recordIsTopsOnly);
+}
 function filterFormatDataRecords(records) {
-  return _filterRecordsByYearSeason(records, 'fd-year-filter', 'fd-season-filter');
+  return _applyListsMode(_filterRecordsByYearSeason(records, 'fd-year-filter', 'fd-season-filter'), _fdListsMode);
 }
 function filterTopCardsRecords(records) {
-  return _filterRecordsByYearSeason(records, 'tc-year-filter', 'tc-season-filter');
+  return _applyListsMode(_filterRecordsByYearSeason(records, 'tc-year-filter', 'tc-season-filter'), _tcListsMode);
 }
 
 function populateFormatDataDropdown() {
@@ -12877,10 +12904,91 @@ async function loadTopCards(force) {
     out.innerHTML = '<div class="dd-empty">Loading replay data…</div>';
     await loadGlobalRecords(force);
   }
+  if (_tcListsMode === 'tops' && !_eventPlacements) await loadEventPlacements();
   populateTopCardsYearSeasonFilters();
   populateTopCardsDropdown();
   const sel = document.getElementById('tc-deck-select');
   renderTopCardsTable(sel ? sel.value : '');
+}
+
+// ── "All Lists" / "Tops Only" — a second filter dimension alongside Year/
+// Season, shared by Format Data and Top Cards (see recordIsTopsOnly and
+// loadEventPlacements below). Placement data is fetched once, lazily, the
+// first time either page actually switches to Tops Only — most sessions
+// never need it at all. ──────────────────────────────────────────────────
+let _eventPlacements = null;      // null = not loaded yet; {} once loaded
+let _eventPlacementsLoading = null; // in-flight promise, dedupes concurrent loads
+let _fdListsMode = 'all'; // 'all' | 'tops'
+let _tcListsMode = 'all';
+
+async function loadEventPlacements(force) {
+  if (_eventPlacements && !force) return _eventPlacements;
+  if (_eventPlacementsLoading && !force) return _eventPlacementsLoading;
+  _eventPlacementsLoading = (async () => {
+    try {
+      const res = await fetch(API+'/events/placements-bulk', { headers: authHeaders() });
+      const data = await res.json().catch(() => ({events:{}}));
+      _eventPlacements = data.events || {};
+    } catch(e) { console.warn('[placements] load failed:', e.message); _eventPlacements = _eventPlacements || {}; }
+    _eventPlacementsLoading = null;
+    return _eventPlacements;
+  })();
+  return _eventPlacementsLoading;
+}
+
+// True if this match record's own decklist for its event placed within the
+// Tops-Only cutoff — Top 8 for an event under 128 entrants, Top 16 for 128+
+// — using the bulk placement data above. A record whose event isn't FL-
+// tracked at all (this is how GFWL gets excluded — a GFWL "event" is never
+// fetched from Format Library in the first place, see captureEventTopDecks
+// server-side, so it simply never appears in this data) or whose player has
+// no matching decklist entry in that event's bracket never counts as Tops.
+function recordIsTopsOnly(r) {
+  if (!_eventPlacements) return false;
+  const code = (r.eventLabel||'').toUpperCase().trim();
+  if (!code) return false;
+  const ev = _eventPlacements[code];
+  if (!ev || !ev.decks || !ev.decks.length) return false;
+  const cutoff = (ev.size||0) >= 128 ? 16 : 8;
+  const playerKey = (r.player||'').toLowerCase().trim();
+  if (!playerKey) return false;
+  const reg = window._playerRegistry && window._playerRegistry[playerKey];
+  const aliasSet = new Set([playerKey, ...((reg&&reg.aliases)||[]).map(a=>(a||'').toLowerCase().trim())]);
+  const deck = ev.decks.find(d => aliasSet.has((d.builderName||'').toLowerCase().trim()));
+  if (!deck || deck.placeNum == null) return false;
+  return deck.placeNum <= cutoff;
+}
+
+function _syncListsModeButtons(allId, topsId, mode) {
+  const allBtn = document.getElementById(allId);
+  const topsBtn = document.getElementById(topsId);
+  [[allBtn,'all'],[topsBtn,'tops']].forEach(([btn,m]) => {
+    if (!btn) return;
+    if (m === mode) { btn.style.background = 'var(--card)'; btn.style.color = 'var(--text)'; }
+    else { btn.style.background = 'none'; btn.style.color = 'var(--muted)'; }
+  });
+}
+
+async function setFormatDataListsMode(mode) {
+  _fdListsMode = mode;
+  _syncListsModeButtons('fd-lists-all-btn', 'fd-lists-tops-btn', mode);
+  if (mode === 'tops' && !_eventPlacements) {
+    const out = document.getElementById('fd-output');
+    if (out) out.innerHTML = '<div class="dd-empty">Loading placement data…</div>';
+    await loadEventPlacements();
+  }
+  renderFormatDataTable();
+}
+
+async function setTopCardsListsMode(mode) {
+  _tcListsMode = mode;
+  _syncListsModeButtons('tc-lists-all-btn', 'tc-lists-tops-btn', mode);
+  if (mode === 'tops' && !_eventPlacements) {
+    const out = document.getElementById('tc-output');
+    if (out) out.innerHTML = '<div class="dd-empty">Loading placement data…</div>';
+    await loadEventPlacements();
+  }
+  renderTopCardsTable();
 }
 
 // "↻ Recompute" — same semantics as Format Data's: throws away the cached
@@ -12926,8 +13034,8 @@ function populateTopCardsDropdown() {
 }
 
 // List vs Images view — purely a this-session display preference (not
-// persisted to the server), same data either way.
-let _tcViewMode = 'list';
+// persisted to the server), same data either way. Defaults to Images.
+let _tcViewMode = 'images';
 function setTopCardsViewMode(mode) {
   _tcViewMode = mode;
   const listBtn = document.getElementById('tc-view-list-btn');
@@ -12940,18 +13048,59 @@ function setTopCardsViewMode(mode) {
   renderTopCardsTable();
 }
 
-// Per-card win rate within one deck type, scoped to the Year/Season filters
-// above it exactly the way Format Data's matchup table is. Every unique
-// card that showed up in at least one non-incomplete/non-omitted match
-// piloting that deck is tallied once PER MATCH it appeared in (r.allMyCards
-// is already deduped per-match by buildMatchRecord, and this re-dedupes via
-// a Set anyway as a belt-and-suspenders guard) — never once per copy, so a
-// card drawn/played multiple times in the same duel still only counts as
-// one observation of "this match had that card." Sorted by win rate,
-// highest first; ties broken by larger sample size. A minimum-sample-size
-// filter (the "MIN MATCHES" dropdown) keeps a card seen in 1-2 matches at
-// 100%/0% from drowning out everything with a real sample.
+// Switches Min Matches between "% of this deck's total matches" (the
+// default — 20%) and a raw match count, per the request that small decks
+// shouldn't need a user to know their total match count just to set a
+// sensible floor, while still allowing an exact number when that's what's
+// wanted. Carries a sane default across the switch rather than leaving
+// whatever number was there meaning something totally different in the new
+// unit (a literal "20" matches is reasonable; "20%" of a 10-match deck
+// rounds to 2, which is fine too, but going the OTHER way — "10" matches
+// becoming "10%" — is the one worth re-defaulting).
+let _tcMinMatchesUnit = 'pct'; // 'pct' | 'count'
+function toggleTopCardsMinMatchesUnit() {
+  _tcMinMatchesUnit = _tcMinMatchesUnit === 'pct' ? 'count' : 'pct';
+  const btn = document.getElementById('tc-minmatches-unit-btn');
+  const input = document.getElementById('tc-minmatches-input');
+  if (btn) btn.textContent = _tcMinMatchesUnit === 'pct' ? '%' : '#';
+  if (input) {
+    if (_tcMinMatchesUnit === 'count' && input.value.trim() === '20') input.value = '10';
+    else if (_tcMinMatchesUnit === 'pct' && input.value.trim() === '10') input.value = '20';
+  }
+  renderTopCardsTable();
+}
+
+// The currently-rendered rows, kept around so the drill-down modal
+// (showTopCardsCardModal) can look one up by index from an onclick handler
+// without re-deriving it from _globalRecords.
+let _tcLastRows = [];
+
+// Bumped on every renderTopCardsTable call, so a slow (or failed/retried)
+// image lookup from an OLDER render can tell it's stale and bail instead of
+// overwriting a newer render's grid — both renders reuse the same
+// id="tc-grid" element, so an id-existence check alone isn't enough to
+// catch this: a late callback finds the new grid under that same id and
+// would happily clobber it with the old render's rows otherwise.
+let _tcRenderGen = 0;
+
+// Per-card win rate within one deck type, scoped to the Year/Season/Lists
+// filters above it exactly the way Format Data's matchup table is. Every
+// unique card that showed up in at least one non-incomplete/non-omitted
+// match piloting that deck is tallied once PER MATCH it appeared in
+// (r.allMyCards is already deduped per-match by buildMatchRecord, and this
+// re-dedupes via a Set anyway as a belt-and-suspenders guard) — never once
+// per copy, so a card drawn/played multiple times in the same duel still
+// only counts as one observation of "this match had that card." Sorted by
+// win rate, highest first; ties broken by larger sample size. The MIN
+// MATCHES floor (a % of this deck's total matches by default, or a raw
+// count) keeps a card seen in 1-2 matches at 100%/0% from drowning out
+// everything with a real sample — and, just as importantly, keeps a
+// misclassified stray match's cards off the list entirely rather than
+// showing up as a deceptive 100% "top" card. Each row is clickable (see
+// showTopCardsCardModal) to see exactly which matches it came from, for
+// exactly that reason.
 function renderTopCardsTable(deckType) {
+  const myGen = ++_tcRenderGen;
   const out = document.getElementById('tc-output');
   if (!out) return;
   if (!_globalRecords.length) {
@@ -12962,24 +13111,29 @@ function renderTopCardsTable(deckType) {
   populateTopCardsDropdown();
   const sel = document.getElementById('tc-deck-select');
   const deck = deckType || (sel ? sel.value : '');
-  const minSel = document.getElementById('tc-minsample-select');
-  const minSample = minSel ? (parseInt(minSel.value,10)||0) : 10;
 
   const records = filterTopCardsRecords(_globalRecords).filter(r => !r.incomplete && !r.omitted && (r.myDeck||'Unknown') === deck);
   if (!records.length) {
-    out.innerHTML = `<div class="dd-empty">No replays found for ${_escapeHtml(deck||'this deck')}.</div>`;
+    out.innerHTML = `<div class="dd-empty">No replays found for ${_escapeHtml(deck||'this deck')}${_tcListsMode==='tops'?' in Tops Only lists':''}.</div>`;
     return;
   }
 
-  const stats = {}; // lowercased card name -> { name, id, w, l }
+  const minInput = document.getElementById('tc-minmatches-input');
+  const rawMin = minInput ? parseFloat(minInput.value) : 20;
+  const minVal = (isNaN(rawMin) || rawMin < 0) ? 0 : rawMin;
+  const minSample = _tcMinMatchesUnit === 'pct' ? Math.round(records.length * (minVal/100)) : Math.round(minVal);
+  const minLabel = _tcMinMatchesUnit === 'pct' ? `${minVal}% (${minSample})` : `${minSample}`;
+
+  const stats = {}; // lowercased card name -> { name, id, w, l, matches }
   records.forEach(r => {
     const seen = new Set(r.allMyCards||[]);
     seen.forEach(key => {
       if (!key) return;
       if (!stats[key]) {
         const card = (r.allMine||[]).find(c => (c.name||'').toLowerCase() === key);
-        stats[key] = { name: card ? card.name : key, id: card ? (card.id||null) : null, w: 0, l: 0 };
+        stats[key] = { name: card ? card.name : key, id: card ? (card.id||null) : null, w: 0, l: 0, matches: [] };
       }
+      stats[key].matches.push(r);
       if (r.matchWon) stats[key].w++;
       else if (r.matchLost) stats[key].l++;
     });
@@ -12989,18 +13143,19 @@ function renderTopCardsTable(deckType) {
     .map(s => ({ ...s, n: s.w + s.l }))
     .filter(s => s.n >= minSample)
     .sort((a,b) => (pct(b.w,b.n) - pct(a.w,a.n)) || (b.n - a.n));
+  _tcLastRows = rows;
 
   if (!rows.length) {
-    out.innerHTML = `<div class="dd-empty">No cards with ${minSample}+ decided matches for ${_escapeHtml(deck)}. Try lowering Min Matches.</div>`;
+    out.innerHTML = `<div class="dd-empty">No cards with ${minLabel}+ decided matches for ${_escapeHtml(deck)}. Try lowering Min Matches.</div>`;
     return;
   }
 
   const totalMatches = records.length;
-  const summary = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${_escapeHtml(deck)} — ${totalMatches} match(es), ${rows.length} card(s) with ${minSample}+ decided matches</div>`;
+  const summary = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${_escapeHtml(deck)}${_tcListsMode==='tops'?' · Tops Only':''} — ${totalMatches} match(es), ${rows.length} card(s) with ${minLabel}+ decided matches. <span style="color:var(--dim)">Click a card to see which matches it came from.</span></div>`;
 
   if (_tcViewMode === 'images') {
     out.innerHTML = summary + '<div id="tc-grid" class="dd-empty">Loading card images…</div>';
-    renderTopCardsGrid(rows);
+    renderTopCardsGrid(rows, myGen);
   } else {
     out.innerHTML = summary + buildTopCardsListHtml(rows);
   }
@@ -13012,10 +13167,10 @@ function buildTopCardsListHtml(rows) {
     '<th style="padding:6px 8px">Card</th><th style="padding:6px 8px;text-align:right">W-L</th>' +
     '<th style="padding:6px 8px;text-align:right">N</th><th style="padding:6px 8px;text-align:right">Win %</th>' +
     '<th style="padding:6px 8px;text-align:right">95% CI</th></tr></thead><tbody>';
-  rows.forEach(r => {
+  rows.forEach((r, idx) => {
     const wp = pct(r.w, r.n);
     const ci = wilsonCI(r.w, r.n);
-    html += `<tr style="border-bottom:1px solid var(--border)">` +
+    html += `<tr onclick="showTopCardsCardModal(${idx})" title="Click to see which matches this card came from" style="border-bottom:1px solid var(--border);cursor:pointer">` +
       `<td style="padding:6px 8px;color:var(--text)">${_escapeHtml(r.name)}</td>` +
       `<td style="padding:6px 8px;text-align:right;color:var(--muted)">${r.w}-${r.l}</td>` +
       `<td style="padding:6px 8px;text-align:right;color:var(--muted)">${r.n}</td>` +
@@ -13032,16 +13187,21 @@ function buildTopCardsListHtml(rows) {
 // Images resolve via the same passcode → ygoprodeck imageId lookup already
 // used by the event-decklist image exporter (lookupPasscodeNames /
 // window._cardDataCache) — fetched lazily here (only when this view is
-// actually opened) rather than on every render, since most sessions will
-// stay on the List view. A card with no resolvable id, or whose image
-// 404s, falls back to a plain labeled box instead of a broken-image icon.
-async function renderTopCardsGrid(rows) {
+// actually opened) rather than on every render. A card with no resolvable
+// id, or whose image 404s, falls back to a plain labeled box instead of a
+// broken-image icon. `gen` is this call's _tcRenderGen snapshot — if a
+// newer renderTopCardsTable call has already bumped the counter by the time
+// this async lookup resolves, this is a stale render and must NOT touch the
+// DOM: the newer render's #tc-grid element exists under the same id, so an
+// id-existence check alone wouldn't catch this and a slow/retried lookup
+// could clobber fresher data with stale rows.
+async function renderTopCardsGrid(rows, gen) {
   const idsToResolve = rows.map(r => r.id).filter(Boolean);
   if (idsToResolve.length) { try { await lookupPasscodeNames(idsToResolve); } catch(e) {} }
-  // Guard against the user switching deck/view/tab during the lookup above.
+  if (gen !== _tcRenderGen) return;
   const gridEl = document.getElementById('tc-grid');
   if (!gridEl) return;
-  const tiles = rows.map(r => {
+  const tiles = rows.map((r, idx) => {
     const imgId = r.id && window._cardDataCache[r.id] ? (window._cardDataCache[r.id].imageId || r.id) : null;
     const wp = pct(r.w, r.n);
     const badgeColor = wp>=50 ? 'var(--green)' : 'var(--red)';
@@ -13050,11 +13210,73 @@ async function renderTopCardsGrid(rows) {
       : '';
     const fallback = `<div style="display:${imgId?'none':'flex'};position:absolute;inset:0;align-items:center;justify-content:center;text-align:center;font-size:9px;line-height:1.3;color:#777;padding:4px;box-sizing:border-box;background:#1a1a1a">${_escapeHtml(r.name)}</div>`;
     const badge = `<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.78);color:${badgeColor};font-size:11px;font-weight:700;text-align:center;padding:3px 2px;line-height:1.3">${wp}% <span style="color:#9a9aa8;font-weight:400">(${r.n})</span></div>`;
-    return `<div title="${_escapeHtml(r.name)}" style="position:relative;width:100px;height:146px;border-radius:6px;overflow:hidden;background:#1a1a1a;border:1px solid var(--border)">${img}${fallback}${badge}</div>`;
+    return `<div onclick="showTopCardsCardModal(${idx})" title="${_escapeHtml(r.name)} — click to see matches" style="position:relative;width:100px;height:146px;border-radius:6px;overflow:hidden;background:#1a1a1a;border:1px solid var(--border);cursor:pointer">${img}${fallback}${badge}</div>`;
   }).join('');
   gridEl.removeAttribute('class');
   gridEl.setAttribute('style', 'display:flex;flex-wrap:wrap;gap:8px');
   gridEl.innerHTML = tiles;
+}
+
+// Drill-down modal — exactly which matches contributed a given card to the
+// current deck's Top Cards list, each with a one-click way to open it in
+// Deck Viewer. The main reason this exists: if a card looks wrong for the
+// deck selected, it's almost always because the match itself got auto-
+// classified into the wrong deck bucket (see the TF-IDF note on Format
+// Data), and this is the fastest way to find and fix that specific match
+// rather than doubting the whole feature.
+function showTopCardsCardModal(idx) {
+  const r = _tcLastRows[idx];
+  if (!r) return;
+  const existing = document.getElementById('tc-card-modal-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'tc-card-modal-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:560px;width:100%;max-height:80vh;overflow-y:auto;display:flex;flex-direction:column;gap:12px';
+  overlay.appendChild(box);
+
+  const wp = pct(r.w, r.n);
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;gap:10px';
+  hdr.innerHTML = `<span style="font-family:monospace;font-weight:bold;font-size:14px;color:var(--text)">${_escapeHtml(r.name)}</span>` +
+    `<span style="font-family:monospace;font-size:12px;color:var(--muted)">${r.w}-${r.l} (${wp}%)</span>`;
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = 'margin-left:auto;background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer';
+  closeBtn.onclick = () => overlay.remove();
+  hdr.appendChild(closeBtn);
+  box.appendChild(hdr);
+
+  const note = document.createElement('div');
+  note.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace';
+  note.textContent = `${r.n} match(es) this card showed up in while piloting this deck. If one of these doesn't belong, it usually means that match got auto-classified into the wrong deck — open it in Deck Viewer and set the deck type there (✎ next to the event code).`;
+  box.appendChild(note);
+
+  const list = document.createElement('div');
+  list.style.cssText = 'display:flex;flex-direction:column;gap:6px';
+  (r.matches||[]).forEach(m => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-family:monospace;font-size:11px;flex-wrap:wrap';
+    const resultColor = m.matchWon ? 'var(--green)' : (m.matchLost ? 'var(--red)' : 'var(--muted)');
+    const resultText = m.matchWon ? 'W' : (m.matchLost ? 'L' : '?');
+    row.innerHTML = `<span style="color:${resultColor};font-weight:bold">${resultText}</span>` +
+      `<span style="color:var(--text)">vs ${_escapeHtml(m.oppName||'Unknown')}</span>` +
+      `<span style="color:var(--muted)">${_escapeHtml(m.oppDeck||'Unknown')}</span>` +
+      `<span style="color:var(--dim)">${_escapeHtml(m.eventLabel||'—')}</span>`;
+    const viewBtn = document.createElement('button');
+    viewBtn.textContent = '🔍 View';
+    viewBtn.style.cssText = 'margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer';
+    viewBtn.onclick = () => { overlay.remove(); gotoDeckViewerForReplay(m.player, m.replayId, viewBtn); };
+    row.appendChild(viewBtn);
+    list.appendChild(row);
+  });
+  box.appendChild(list);
+
+  document.body.appendChild(overlay);
 }
 
 // Expands/collapses the per-match Game 1/2/3 log directly under a clicked
@@ -14532,6 +14754,33 @@ function eventsOrdinal(n) {
   if (n === null || n === undefined || isNaN(n)) return '';
   const s = ['th','st','nd','rd'], v = n % 100;
   return n + (s[(v-20)%10] || s[v] || s[0]);
+}
+
+// Extracts the leading numeric placement out of Format Library's raw
+// placement value (e.g. "1st" -> 1) — same tiny regex as the server's own
+// placementNum(), kept in sync by hand since one lives in server.js and the
+// other here. Used wherever a stored eventDecklists[i].place (a raw FL
+// string/number, set at import time and kept fresh by the admin "Backfill
+// Placements" button) needs to become a sortable/comparable number.
+function placementNum(p) {
+  if (p === null || p === undefined) return null;
+  const m = String(p).match(/\d+/);
+  return m ? parseInt(m[0], 10) : null;
+}
+
+// Human categories for a placement — "Top 8", "Top 16" etc. rather than a
+// bare number, since that's what's actually useful to scan at a glance in a
+// list of a dozen events. 1st/2nd/3rd-4th get their own medal labels since
+// those are the ones worth calling out individually.
+function placementTierBadge(placeNum) {
+  if (placeNum == null) return null;
+  if (placeNum === 1) return { text: '🥇 1st', color: 'var(--amber)' };
+  if (placeNum === 2) return { text: '🥈 2nd', color: 'var(--amber)' };
+  if (placeNum <= 4)  return { text: '🥉 Top 4', color: 'var(--amber)' };
+  if (placeNum <= 8)  return { text: 'Top 8', color: 'var(--green)' };
+  if (placeNum <= 16) return { text: 'Top 16', color: 'var(--green)' };
+  if (placeNum <= 32) return { text: 'Top 32', color: 'var(--muted)' };
+  return { text: eventsOrdinal(placeNum), color: 'var(--muted)' };
 }
 
 async function loadEventsTab(forceRefresh) {
@@ -17154,6 +17403,21 @@ function renderEventDecks(player, batches, records) {
     codeSpan.style.cssText = 'font-weight:bold;color:var(--amber);font-family:monospace;font-size:12px;min-width:0;white-space:nowrap';
     codeSpan.textContent = '🏆 '+deck.code;
     row.appendChild(codeSpan);
+
+    // Placement badge — pulled from deck.place, set at Format Library import
+    // time and kept fresh by the admin "⚙ Backfill Placements" button (see
+    // POST /api/events/backfill, which back-writes place/builder onto this
+    // exact eventDecklists entry). Shown as a tier ("Top 8") rather than a
+    // bare number — see placementTierBadge.
+    const placeNum = placementNum(deck.place);
+    const tier = placementTierBadge(placeNum);
+    if (tier) {
+      const placeBadge = document.createElement('span');
+      placeBadge.style.cssText = `font-size:10px;font-weight:bold;color:${tier.color};border:1px solid ${tier.color};border-radius:3px;padding:0 5px;white-space:nowrap`;
+      placeBadge.textContent = tier.text;
+      placeBadge.title = deck.builder ? `Placement for ${deck.builder}'s decklist` : 'Placement at this event';
+      row.appendChild(placeBadge);
+    }
 
     const displayDeckType = deck.deckTypeOverride || deckType;
     if (displayDeckType) {

@@ -3195,6 +3195,27 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { events: list, total: list.length });
   }
 
+  // ── GET /api/events/placements-bulk — every event's size + per-builder
+  // placement, all in one response. Backs the "Tops Only" filter on Format
+  // Data / Top Cards (Top 8 for events under 128 entrants, Top 16 for 128+,
+  // per-event cutoff decided client-side since it only needs `size`) —
+  // without this, scoping thousands of match records against placement data
+  // would mean one request per distinct event code. GFWL is naturally
+  // excluded: GFWL "events" are never fetched from Format Library (see
+  // captureEventTopDecks), so they simply never appear in db.events at all,
+  // the same way they're absent from the regular /api/events list. ─────────
+  if (parts[0]==='events' && parts[1]==='placements-bulk' && method==='GET') {
+    if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot view events' });
+    const events = {};
+    for (const ev of Object.values(db.events||{})) {
+      events[ev.code] = {
+        size: ev.size || (ev.decks||[]).length,
+        decks: (ev.decks||[]).map(d => ({ builderName: d.builderName||'', placeNum: d.placeNum!=null?d.placeNum:null })),
+      };
+    }
+    return json(res, 200, { events });
+  }
+
   // ── GET /api/events/:code — one event's full decklist gallery ───────────────
   if (parts[0]==='events' && parts[1] && !parts[2] && method==='GET') {
     if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot view events' });
