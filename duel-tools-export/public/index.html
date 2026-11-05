@@ -130,7 +130,7 @@ select{cursor:pointer}
 
 /* ── Deck page ── */
 #pg-deck{flex-direction:row}
-.deck-sb{width:280px;flex-shrink:0;background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+.deck-sb{width:380px;flex-shrink:0;background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
 .dsb-hdr{padding:10px 12px;border-bottom:1px solid var(--border);flex-shrink:0}
 .dsb-hl{font-size:10px;color:var(--muted);letter-spacing:.15em;text-transform:uppercase;margin-bottom:7px}
 .dsearch{width:100%;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:12px;padding:5px 8px;outline:none}
@@ -10206,7 +10206,7 @@ function renderMatchSidebar(query) {
       titleRow.style.cssText = 'display:flex;align-items:center;gap:4px';
       const titleEl = document.createElement('div');
       titleEl.className = 'mi-title'; titleEl.style.flex='1';
-      titleEl.textContent = 'vs '+(m.oppName||'?');
+      titleEl.textContent = 'vs '+(m.oppName ? displayOpponentName(m.oppName) : '?');
       const delBtn = document.createElement('button');
       delBtn.textContent = '✕';
       delBtn.style.cssText = 'background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px;padding:0 2px;font-family:monospace;flex-shrink:0;opacity:0;transition:opacity .15s';
@@ -10564,7 +10564,7 @@ async function renderMatchDisplay(m) {
   // Show override indicator if result was manually overridden
   const _resultOverride = m.resultOverride || null;
   const _displayResult = _resultOverride || m.result;
-  mhd.textContent = `${player} vs ${m.oppName} (${_displayResult==='w'?'W':_displayResult==='l'?'L':'D'} ${m.draws>0?m.score:`${m.myW}-${m.oppW}`})${_resultOverride?' ⚠ overridden':''}`;
+  mhd.textContent = `${player} vs ${displayOpponentName(m.oppName)} (${_displayResult==='w'?'W':_displayResult==='l'?'L':'D'} ${m.draws>0?m.score:`${m.myW}-${m.oppW}`})${_resultOverride?' ⚠ overridden':''}`;
   if (_resultOverride) mhd.title = 'Result manually overridden (original: '+(m.origResult==='w'?'W':m.origResult==='l'?'L':(m.result==='w'?'W':'L'))+' '+(m.origScore||'')+')';
   // Replay link row(s) — one per replay ID that makes up this match. A
   // merged match (see Merge Replay below) shows the original replay plus
@@ -12244,6 +12244,24 @@ function resolveRegisteredPlayer(rawName) {
     if (matchesPlayerName(rawName, entry.name, entry.aliases || [])) return entry;
   }
   return null;
+}
+
+// Deck Viewer shows exactly the username DuelingBook recorded for the
+// opponent in that one replay — which can be a stale name, a typo, or
+// simply not the name a player ended up registering their profile under.
+// If that raw name matches a currently-registered player's canonical name
+// OR any of their saved aliases, show their proper/canonical name instead;
+// otherwise leave the raw replay name exactly as-is. Pure display-time
+// lookup against the same window._playerRegistry resolveRegisteredPlayer()
+// already uses elsewhere — always reflects whatever aliases are on file
+// right now (no separate "re-scan"/cross-link step needed, and nothing new
+// to push via a zip to pick up an alias added later), and nothing is
+// written back to the replay itself: the raw name is still what's actually
+// stored and still what the opponent search box matches against.
+function displayOpponentName(rawName) {
+  if (!rawName) return rawName;
+  const entry = resolveRegisteredPlayer(rawName);
+  return (entry && entry.name) ? entry.name : rawName;
 }
 
 function buildMatchRecord(replayResult, player, aliases, batch) {
