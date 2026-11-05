@@ -626,12 +626,14 @@ select{cursor:pointer}
       <button class="ntab" id="ntab-deck" onclick="switchTab('deck',this)">Deck Viewer</button>
       <button class="ntab" id="ntab-rps" onclick="switchTab('rps',this)">RPS Analysis</button>
       <div class="ntab-dropdown">
-        <button class="ntab" id="ntab-formatdata" onclick="switchTab('formatdata',this)">Format Data</button>
+        <button class="ntab" id="ntab-formatdata" onclick="switchTab('formatdata',this)">Matchups</button>
         <div class="ntab-submenu">
           <button onclick="switchTab('topcards', document.getElementById('ntab-topcards'))">📇 Top Cards</button>
+          <button onclick="switchTab('leaderboard', document.getElementById('ntab-leaderboard'))">🏅 Leaderboard</button>
         </div>
       </div>
       <button class="ntab" id="ntab-topcards" onclick="switchTab('topcards',this)" style="display:none"></button>
+      <button class="ntab" id="ntab-leaderboard" onclick="switchTab('leaderboard',this)" style="display:none"></button>
       <button class="ntab" id="ntab-ingame" onclick="switchTab('ingame',this)">In-Game Tools</button>
       <button class="ntab" id="gfwl-prep-tab" onclick="switchTab('gfwl',this)">GFWL Archive</button>
       <button class="ntab" id="ntab-events" onclick="switchTab('events',this)">🏆 Events</button>
@@ -644,8 +646,9 @@ select{cursor:pointer}
         <option value="profiles">Profiles</option>
         <option value="deck">Deck Viewer</option>
         <option value="rps">RPS Analysis</option>
-        <option value="formatdata">Format Data</option>
+        <option value="formatdata">Matchups</option>
         <option value="topcards">📇 Top Cards</option>
+        <option value="leaderboard">🏅 Leaderboard</option>
         <option value="gfwl">GFWL Archive</option>
         <option value="events">Events</option>
       </select>
@@ -817,7 +820,7 @@ select{cursor:pointer}
     <div class="page" id="pg-formatdata">
       <div style="max-width:980px;margin:0 auto;width:100%;display:flex;flex-direction:column;gap:18px">
         <div>
-          <div style="font-size:16px;font-weight:bold;color:var(--text);margin-bottom:4px">Format Data</div>
+          <div style="font-size:16px;font-weight:bold;color:var(--text);margin-bottom:4px">Matchups</div>
           <div style="font-size:12px;color:var(--muted)">Matchup win rates across every saved replay in Duel Tools. Pick a deck type to see how it performs against the field.</div>
         </div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -846,6 +849,10 @@ select{cursor:pointer}
             style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer">
             📇 Top Cards
           </button>
+          <button onclick="switchTab('leaderboard', document.getElementById('ntab-leaderboard'))" title="Players ranked by win rate, with each player's winningest deck type"
+            style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer">
+            🏅 Leaderboard
+          </button>
           <button id="fd-recompute-btn" onclick="recomputeFormatData()" title="Format Data caches every saved replay in memory after the first load this session — this forces a fresh re-fetch and rebuild from the server instead of reusing that cache, so changes made elsewhere (e.g. running Scan & Link on Admin → Cross-Links) actually show up here without a full page reload."
             style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer">
             ↻ Recompute
@@ -859,6 +866,8 @@ select{cursor:pointer}
     <div class="page" id="pg-topcards">
       <div style="max-width:980px;margin:0 auto;width:100%;display:flex;flex-direction:column;gap:18px">
         <div>
+          <button onclick="switchTab('formatdata', document.getElementById('ntab-formatdata'))" title="Back to Matchups"
+            style="background:none;border:none;color:var(--muted);font-family:monospace;font-size:11px;padding:0;margin-bottom:8px;cursor:pointer;display:inline-flex;align-items:center;gap:4px">← Back to Matchups</button>
           <div style="font-size:16px;font-weight:bold;color:var(--text);margin-bottom:4px">📇 Top Cards</div>
           <div style="font-size:12px;color:var(--muted)">Per-card win rates within a deck type, highest win rate first — same replay data as Format Data, broken down by card instead of matchup.</div>
         </div>
@@ -903,7 +912,58 @@ select{cursor:pointer}
             ↻ Recompute
           </button>
         </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <div class="slbl" style="margin:0">MATCH PHASE</div>
+          <div style="display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px">
+            <button id="tc-phase-full-btn" onclick="setTopCardsMatchPhase('full')" title="Every decided game across the whole match, scored by the match's overall result (how this has always worked)"
+              style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Entire Match</button>
+            <button id="tc-phase-preside-btn" onclick="setTopCardsMatchPhase('preside')" title="Game 1 only, before either side sides their deck"
+              style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Pre-Side</button>
+            <button id="tc-phase-postside-btn" onclick="setTopCardsMatchPhase('postside')" title="Games 2+3 combined, after siding"
+              style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Post-Side</button>
+          </div>
+          <div class="slbl" style="margin:0 0 0 6px">METRIC</div>
+          <div style="display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px">
+            <button id="tc-metric-winrate-btn" onclick="setTopCardsMetric('winrate')" title="Counts a card if it was ever seen (drawn, revealed, searched — anywhere in hand/field/GY) that game"
+              style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Win Rate</button>
+            <button id="tc-metric-usage-btn" onclick="setTopCardsMetric('usage')" title="Experimental — counts a card only when the log shows it was actually Normal/Special/Flip/Tribute Summoned, Set, Activated, Attacked, or Added to Hand (searched/returned from GY or deck), not just drawn. Only replays parsed since this feature shipped carry this data — use Admin → Check & Fix Data → Re-parse All to backfill older replays."
+              style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Usage Rate</button>
+          </div>
+        </div>
         <div id="tc-output"><div class="dd-empty">Loading replay data…</div></div>
+      </div>
+    </div>
+
+    <!-- Leaderboard page -->
+    <div class="page" id="pg-leaderboard">
+      <div style="max-width:980px;margin:0 auto;width:100%;display:flex;flex-direction:column;gap:18px">
+        <div>
+          <button onclick="switchTab('formatdata', document.getElementById('ntab-formatdata'))" title="Back to Matchups"
+            style="background:none;border:none;color:var(--muted);font-family:monospace;font-size:11px;padding:0;margin-bottom:8px;cursor:pointer;display:inline-flex;align-items:center;gap:4px">← Back to Matchups</button>
+          <div style="font-size:16px;font-weight:bold;color:var(--text);margin-bottom:4px">🏅 Leaderboard</div>
+          <div style="font-size:12px;color:var(--muted)">Players ranked by win rate across every saved replay, with each player's winningest deck type. Ranking is by win rate for now.</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <div class="slbl" style="margin:0">YEAR</div>
+          <select id="lb-year-filter" onchange="renderLeaderboard()"
+            style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
+            <option value="">All</option>
+          </select>
+          <div class="slbl" style="margin:0">GFWL S#</div>
+          <select id="lb-season-filter" onchange="renderLeaderboard()"
+            style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
+            <option value="">All</option>
+          </select>
+          <div class="slbl" style="margin:0">MIN MATCHES</div>
+          <input id="lb-minmatches-input" type="text" inputmode="numeric" value="10" oninput="renderLeaderboard()"
+            title="Minimum decided matches a player must have to be ranked — keeps a 1-0 record from topping the board"
+            style="width:46px;text-align:right;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 8px;border-radius:6px;outline:none"/>
+          <button id="lb-recompute-btn" onclick="recomputeLeaderboard()" title="Re-fetches from the server instead of reusing the cached replay data (same cache Matchups/Top Cards use)."
+            style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer">
+            ↻ Recompute
+          </button>
+        </div>
+        <div id="lb-output"><div class="dd-empty">Loading replay data…</div></div>
       </div>
     </div>
 
@@ -2579,6 +2639,7 @@ function switchTab(name, btn) {
   // Format Data tab always shows ALL saved replays — never filtered by active batch
   if (name === 'formatdata') loadFormatData();
   if (name === 'topcards') loadTopCards();
+  if (name === 'leaderboard') loadLeaderboard();
   if (name === 'events') eventsShowList();
 }
 
@@ -11325,6 +11386,33 @@ async function applyResultOverride(m, payload) {
 // 7. username comes from play.owner (falls back to play.username)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// USAGE RATE — a second, independent signal tracked alongside deck-change
+// above (step 3). Deck-change answers "was this card ever drawn/searched/
+// revealed out of the deck" — true even for a card that sat dead in hand
+// the whole game. Usage answers a narrower question: "did the log show an
+// actual in-game ACTION on this card" — Normal/Special/Flip/Tribute
+// Summoned, Set, Activated, Attacked, or Added to Hand (from Graveyard or
+// Deck — i.e. searched/returned for later use). Reuses the exact verb
+// vocabulary already proven against real DuelingBook log text by the Slow
+// Play Analyzer's SP_REAL_ACTIONS list above, narrowed to just the
+// "this card did something" subset (drops drew/revealed/showed/declared/
+// lost/gained/paid/selected/excavated/detached/flipped/moved/placed/
+// discarded/banished/destroyed/sent/returned/tossed — all either passive
+// or not specific to the acting card). "Added" is checked separately and
+// requires "to Hand" in the same line, so it only fires for the searched/
+// regained-to-hand case the request specifically asked for, not an
+// unrelated "Added a counter" or similar log line.
+const USAGE_ACTION_RE = /\b(normal summoned|special summoned|flip summoned|tribute summoned|set|activated|attacked)\b/i;
+function isUsageActionLog(publicLog, privateLog) {
+  for (const log of [privateLog, publicLog]) {
+    if (!log) continue;
+    const s = String(log);
+    if (USAGE_ACTION_RE.test(s)) return true;
+    if (/added/i.test(s) && /to hand/i.test(s)) return true;
+  }
+  return false;
+}
+
 function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlayer2) {
   if (!plays || !plays.length) return null;
   // Build set of all names this player goes by (lowercase)
@@ -11417,6 +11505,11 @@ function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlaye
 
   // Flatten plays → rows (each play may have multiple log entries)
   const rows = [];
+  // Usage rows — same (game, username, cardName) shape as `rows` above, but
+  // flagged from isUsageActionLog instead of calcDeckChange. Built in the
+  // SAME pass/loop so its gameNumber counter can never drift out of sync
+  // with the deck-change rows' counter above.
+  const usageRows = [];
   let gameNumber = 0;
 
   for (const play of plays) {
@@ -11441,6 +11534,9 @@ function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlaye
       if (username && cardName && dc !== 0) {
         rows.push({ gameNumber, username, cardName, deckChange: dc });
       }
+      if (username && cardName && isUsageActionLog(pub, priv)) {
+        usageRows.push({ gameNumber, username, cardName });
+      }
     } else {
       for (const log of logList) {
         const pub  = log.public_log  || log.publicLog  || '';
@@ -11455,6 +11551,9 @@ function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlaye
 
         if (logUsername && cardName && dc !== 0) {
           rows.push({ gameNumber, username: logUsername, cardName, deckChange: dc });
+        }
+        if (logUsername && cardName && isUsageActionLog(pub, priv)) {
+          usageRows.push({ gameNumber, username: logUsername, cardName });
         }
       }
     }
@@ -11474,6 +11573,18 @@ function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlaye
     cardStats[g][u][n].cum += dc;
     if (cardStats[g][u][n].cum > cardStats[g][u][n].max)
       cardStats[g][u][n].max = cardStats[g][u][n].cum;
+  }
+
+  // Usage stats — boolean presence only (a card either had a real in-game
+  // action done to it this game, or it didn't; no need to track a count).
+  // Structure: usageStats[game][username] = Set<cardName>
+  const usageStats = {};
+  for (const row of usageRows) {
+    const { gameNumber: g, username: u, cardName: n } = row;
+    if (!g || !u || !n) continue;
+    if (!usageStats[g]) usageStats[g] = {};
+    if (!usageStats[g][u]) usageStats[g][u] = new Set();
+    usageStats[g][u].add(n);
   }
 
   // ── Step 4: Determine player1/player2 from plays ─────────────────────────
@@ -11564,6 +11675,22 @@ function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlaye
     return sortCardsByTypeThenName(cards, c => cardIdMap[c.name] && cardIdMap[c.name].card_type);
   }
 
+  // Usage Rate's equivalent of buildGameCards above — same per-game/
+  // per-username lookup, but reading usageStats' plain name Sets instead of
+  // cardStats' cumulative-count objects (usage is boolean presence only, no
+  // "amount" to compute). Returns [{id, name}], sorted the same way.
+  function buildGameUsageCards(g, username, allNames) {
+    const gUsage = usageStats[g] || {};
+    const names = allNames ? allNames.map(n=>n.toLowerCase()) : [username.toLowerCase()];
+    const uKey = Object.keys(gUsage).find(k => names.includes(k.toLowerCase()));
+    if (!uKey) return [];
+    const cards = [...gUsage[uKey]].map(name => {
+      const info = cardIdMap[name] || {};
+      return { id: info.id || info.serial_number || '', name };
+    });
+    return sortCardsByTypeThenName(cards, c => cardIdMap[c.name] && cardIdMap[c.name].card_type);
+  }
+
   // Build all games
   const gamesOut = gameNums.map(g => ({
     gameNum:  g,
@@ -11573,6 +11700,8 @@ function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlaye
     opp:      buildGameCards(g, oppName),
     mineRaw:  cardStats[g] ? (Object.entries(cardStats[g]).find(([k])=>_isPlayer(k))||[null,{}])[1] : {},
     oppRaw:   cardStats[g] ? (Object.entries(cardStats[g]).find(([k])=>!_isPlayer(k)&&k.toLowerCase()!=='system')||[null,{}])[1] : {},
+    usageMine: buildGameUsageCards(g, player, Array.from(_playerNames)),
+    usageOpp:  buildGameUsageCards(g, oppName),
   }));
 
   // Combine cards across all games (take max seen per card)
@@ -11594,9 +11723,22 @@ function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlaye
     // right below it was correctly grouped by type.
     return sortCardsByTypeThenName(Object.values(combined), c => cardIdMap[c.name] && cardIdMap[c.name].card_type);
   }
+  // Same idea for usageMine/usageOpp — simpler dedupe since usage entries
+  // are just {id,name} (no `.raw` count to take the max of; presence in any
+  // one game is enough to count match-wide).
+  function combineUsageAcrossGames(key) {
+    const combined = {};
+    gamesOut.forEach(g => {
+      const cards = key === 'mine' ? g.usageMine : g.usageOpp;
+      cards.forEach(card => { if (!combined[card.name]) combined[card.name] = { ...card }; });
+    });
+    return sortCardsByTypeThenName(Object.values(combined), c => cardIdMap[c.name] && cardIdMap[c.name].card_type);
+  }
 
   const allMine = combineAcrossGames('mine');
   const allOpp  = combineAcrossGames('opp');
+  const allUsageMine = combineUsageAcrossGames('mine');
+  const allUsageOpp  = combineUsageAcrossGames('opp');
 
   // Score
   let myW = 0, oppW = 0;
@@ -11609,7 +11751,7 @@ function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlaye
   const score  = draws > 0 ? `${myW}-${oppW}-${draws}` : `${myW}-${oppW}`;
   const result = myW >= 2 ? 'w' : oppW >= 2 ? 'l' : myW > oppW ? 'w' : oppW > myW ? 'l' : 'n';
 
-  return { replayId, player, oppName, games: gamesOut, allMine, allOpp, myW, oppW, draws, score, result, eventLabel: '' };
+  return { replayId, player, oppName, games: gamesOut, allMine, allOpp, allUsageMine, allUsageOpp, myW, oppW, draws, score, result, eventLabel: '' };
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -12093,6 +12235,13 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
       myWon:    g.winner && matchesPlayerName(g.winner, player, aliases),
       myCards:  (g.mine||[]).map(c=>c.name.toLowerCase()),
       oppCards: (g.opp||[]).map(c=>c.name.toLowerCase()),
+      // Usage Rate's per-game equivalent of myCards/oppCards above — see
+      // parseMatch's usageMine/usageOpp. Falls back to [] for any replay
+      // parsed before this field existed (its cached g.usageMine is simply
+      // absent), same "older data just shows nothing for the new thing"
+      // tradeoff the Pre-Side/Post-Side columns already accepted.
+      myUsageCards:  (g.usageMine||[]).map(c=>c.name.toLowerCase()),
+      oppUsageCards: (g.usageOpp||[]).map(c=>c.name.toLowerCase()),
     }));
     // Apply a saved result/score override — this is the single source of truth
     // for match outcome used by every stats view (profile record, deck matchups,
@@ -12156,6 +12305,8 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
       allMine:   p.allMine || [],
       allOpp:    p.allOpp  || [],
       allMyCards: (p.allMine||[]).map(c=>c.name.toLowerCase()),
+      allUsageMine: p.allUsageMine || [],
+      allMyUsageCards: (p.allUsageMine||[]).map(c=>c.name.toLowerCase()),
       // Which continuation replay(s), if any, have been merged into this
       // one (see mergeReplayIntoMatch above) — games/allMine/allOpp/score
       // above are already the COMBINED result, so no other field here needs
@@ -12198,6 +12349,7 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
       omittedNote: replayResult.omittedNote || '',
       games:[], allMine:[], allOpp:[],
       allMyCards:[],
+      allUsageMine:[], allMyUsageCards:[],
     };
   }
 
@@ -12272,6 +12424,8 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
     myWon:     g.winner && matchesPlayerName(g.winner, player, aliases),
     myCards:   g.mine.map(c => c.name.toLowerCase()),
     oppCards:  g.opp.map(c => c.name.toLowerCase()),
+    myUsageCards:  (g.usageMine||[]).map(c => c.name.toLowerCase()),
+    oppUsageCards: (g.usageOpp||[]).map(c => c.name.toLowerCase()),
     myDeck:    myClass  ? myClass.dc  : 'Unknown',
     oppDeck:   oppClass ? oppClass.dc : 'Unknown',
   }));
@@ -12332,6 +12486,8 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
     allMine:   parsed.allMine,
     allOpp:    parsed.allOpp,
     allMyCards: parsed.allMine.map(c => c.name.toLowerCase()),
+    allUsageMine: parsed.allUsageMine || [],
+    allMyUsageCards: (parsed.allUsageMine||[]).map(c => c.name.toLowerCase()),
   };
 }
 
@@ -12590,9 +12746,26 @@ async function recomputeFormatData() {
 // dropdown-count code below and the actual filtering logic can never drift
 // apart (and show a count next to "2023" that disagrees with what picking
 // "2023" actually filters down to).
+// ISO cutoff date (YYYY-MM-DD) for "N months ago" — used by the Year
+// filter's relative "Last 3 Months"/"Last 6 Months" options below. String
+// comparison against another ISO date works fine since both sides are
+// zero-padded YYYY-MM-DD.
+function _monthsAgoISO(n) {
+  const d = new Date();
+  d.setMonth(d.getMonth() - n);
+  return d.toISOString().slice(0, 10);
+}
 function _recordMatchesYear(r, year) {
   const code = eventGroupKey(r.eventLabel||'');
   const d = code ? getEventDate(code) : null;
+  // Relative ranges need an actual resolved date to compare against — a
+  // record whose event date is unknown can't be verified as recent, so it's
+  // excluded rather than guessed at (same "don't overcount" bias as the
+  // bare-year fallback below has for an unresolvable literal year).
+  if (year === 'last3m' || year === 'last6m') {
+    if (!d) return false;
+    return d >= _monthsAgoISO(year === 'last3m' ? 3 : 6);
+  }
   if (d) return d.startsWith(year);
   return (r.eventLabel||'').includes(year);
 }
@@ -12634,7 +12807,11 @@ function populateYearSeasonFilterPair(yearSel, seasonSel) {
     // filterFormatDataRecords itself does.
     const seasonScoped = curSeason ? usable.filter(r => eventGroupKey(r.eventLabel||'') === curSeason) : usable;
     const allCount = seasonScoped.length;
+    const last3Count = seasonScoped.filter(r => _recordMatchesYear(r, 'last3m')).length;
+    const last6Count = seasonScoped.filter(r => _recordMatchesYear(r, 'last6m')).length;
     yearSel.innerHTML = '<option value="">All (' + allCount + ')</option>' +
+      `<option value="last3m"${cur==='last3m'?' selected':''}>Last 3 Months (${last3Count})</option>` +
+      `<option value="last6m"${cur==='last6m'?' selected':''}>Last 6 Months (${last6Count})</option>` +
       years.map(y => {
         const n = seasonScoped.filter(r => _recordMatchesYear(r, y)).length;
         return `<option value="${y}"${y===cur?' selected':''}>${y} (${n})</option>`;
@@ -12692,8 +12869,20 @@ function _applyListsMode(records, mode) {
   if (mode !== 'tops') return records;
   return records.filter(recordIsTopsOnly);
 }
+// DB Ladder matches ("DB LADDER 07/2026" etc. — casual DuelingBook ladder
+// games, not a real tournament) are excluded from Format Data entirely,
+// same spirit as GFWL being excluded from Tops Only above: eventGroupKey
+// already reduces a label to its leading token ("DB LADDER 07/2026" -> "DB",
+// via the same split-on-whitespace-or-colon rule everything else here uses),
+// so an exact "DB" match is precise — it won't catch an unrelated code that
+// merely starts with those letters (e.g. "DBX2026" or "DB2026" reduce to
+// their own single token, never bare "DB").
+function isDbLadderRecord(r) {
+  return eventGroupKey(r.eventLabel||'') === 'DB';
+}
 function filterFormatDataRecords(records) {
-  return _applyListsMode(_filterRecordsByYearSeason(records, 'fd-year-filter', 'fd-season-filter'), _fdListsMode);
+  return _applyListsMode(_filterRecordsByYearSeason(records, 'fd-year-filter', 'fd-season-filter'), _fdListsMode)
+    .filter(r => !isDbLadderRecord(r));
 }
 function filterTopCardsRecords(records) {
   return _applyListsMode(_filterRecordsByYearSeason(records, 'tc-year-filter', 'tc-season-filter'), _tcListsMode);
@@ -13070,6 +13259,96 @@ function toggleTopCardsMinMatchesUnit() {
   renderTopCardsTable();
 }
 
+// Match Phase — which decided game(s) of a match count toward a card's
+// W/L. 'full' (default) is the original behavior: a card counts once per
+// match it was seen in, scored by that match's overall result. 'preside'
+// and 'postside' switch to per-GAME scoring (reusing the same gameNum/
+// myWon fields buildFormatDataMatchLog's Pre-Side/Post-Side columns
+// already read) — 'preside' only counts Game 1, 'postside' counts Games 2
+// and 3 individually, so a single match can contribute up to 2 Post-Side
+// observations for the same card (same semantics as Matchups' own
+// Pre-Side/Post-Side columns, which this mirrors on purpose so the two
+// pages never disagree about what those terms mean).
+let _tcMatchPhase = 'full'; // 'full' | 'preside' | 'postside'
+// Metric — which per-card presence signal counts as "this card was in
+// play" for a given game/match. 'winrate' (default, unchanged) credits a
+// card for merely being seen (drawn, revealed, searched — anywhere in
+// hand/field/GY per the existing deck-change tracking). 'usage' is the
+// new, experimental alternative: it only credits a card when the replay
+// log shows an actual in-game action on it (see USAGE_ACTION_RE below) —
+// meant to separate "this card won games" from "this card was just along
+// for the ride." Only replays parsed after this feature shipped carry the
+// usage data parseMatch() now also tracks (see parseMatch's usageMine/
+// usageOpp) — see Admin → Check & Fix Data → Re-parse All to backfill.
+let _tcMetric = 'winrate'; // 'winrate' | 'usage'
+
+// Generic 3-button toggle sync (Match Phase has 3 options, unlike the
+// 2-option _syncListsModeButtons above) — maps each button id to the mode
+// value that activates it.
+function _syncModeButtons(pairs, mode) {
+  pairs.forEach(([id, m]) => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    if (m === mode) { btn.style.background = 'var(--card)'; btn.style.color = 'var(--text)'; }
+    else { btn.style.background = 'none'; btn.style.color = 'var(--muted)'; }
+  });
+}
+
+function setTopCardsMatchPhase(phase) {
+  _tcMatchPhase = phase;
+  _syncModeButtons([
+    ['tc-phase-full-btn', 'full'],
+    ['tc-phase-preside-btn', 'preside'],
+    ['tc-phase-postside-btn', 'postside'],
+  ], phase);
+  renderTopCardsTable();
+}
+
+function setTopCardsMetric(metric) {
+  _tcMetric = metric;
+  _syncModeButtons([
+    ['tc-metric-winrate-btn', 'winrate'],
+    ['tc-metric-usage-btn', 'usage'],
+  ], metric);
+  renderTopCardsTable();
+}
+
+// Resolves, for the current Match Phase + Metric selection, which
+// (card, win/loss) observations one match record contributes. This is the
+// one place that has to know about all 3 phases × 2 metrics so
+// renderTopCardsTable's counting loop doesn't have to.
+//
+// 'full' phase (the original/default behavior): a card counts once per
+// match it was seen in (via the chosen metric's field), scored by that
+// match's OVERALL result — exactly as this always worked.
+//
+// 'preside'/'postside': per-GAME scoring using r.games[].gameNum/myWon/
+// winner — the same fields buildFormatDataMatchLog's Pre-Side/Post-Side
+// columns already read (see gameOutcomeTally there). 'preside' only looks
+// at Game 1; 'postside' looks at Games 2 and 3 individually, so a single
+// match can contribute 0, 1, or 2 Post-Side observations for the same
+// card (once per game it showed up in). A game whose winner was never
+// parsed (g.winner falsy — manual/forfeit entries have no per-game data
+// at all) is skipped rather than miscounted.
+function _tcCardObservations(r) {
+  const matchField = _tcMetric === 'usage' ? 'allMyUsageCards' : 'allMyCards';
+  const gameField  = _tcMetric === 'usage' ? 'myUsageCards'    : 'myCards';
+  const obs = [];
+  if (_tcMatchPhase === 'full') {
+    if (!r.matchWon && !r.matchLost) return obs;
+    const seen = new Set(r[matchField] || []);
+    seen.forEach(key => { if (key) obs.push({ key, win: r.matchWon }); });
+    return obs;
+  }
+  const gameNums = _tcMatchPhase === 'preside' ? [1] : [2, 3];
+  (r.games||[]).forEach(g => {
+    if (!gameNums.includes(g.gameNum) || !g.winner) return;
+    const seen = new Set(g[gameField] || []);
+    seen.forEach(key => { if (key) obs.push({ key, win: !!g.myWon }); });
+  });
+  return obs;
+}
+
 // The currently-rendered rows, kept around so the drill-down modal
 // (showTopCardsCardModal) can look one up by index from an onclick handler
 // without re-deriving it from _globalRecords.
@@ -13126,16 +13405,15 @@ function renderTopCardsTable(deckType) {
 
   const stats = {}; // lowercased card name -> { name, id, w, l, matches }
   records.forEach(r => {
-    const seen = new Set(r.allMyCards||[]);
-    seen.forEach(key => {
+    _tcCardObservations(r).forEach(({ key, win }) => {
       if (!key) return;
       if (!stats[key]) {
-        const card = (r.allMine||[]).find(c => (c.name||'').toLowerCase() === key);
+        const card = (r.allMine||[]).find(c => (c.name||'').toLowerCase() === key)
+                  || (r.allUsageMine||[]).find(c => (c.name||'').toLowerCase() === key);
         stats[key] = { name: card ? card.name : key, id: card ? (card.id||null) : null, w: 0, l: 0, matches: [] };
       }
-      stats[key].matches.push(r);
-      if (r.matchWon) stats[key].w++;
-      else if (r.matchLost) stats[key].l++;
+      if (!stats[key].matches.includes(r)) stats[key].matches.push(r);
+      if (win) stats[key].w++; else stats[key].l++;
     });
   });
 
@@ -13145,13 +13423,18 @@ function renderTopCardsTable(deckType) {
     .sort((a,b) => (pct(b.w,b.n) - pct(a.w,a.n)) || (b.n - a.n));
   _tcLastRows = rows;
 
+  const unitWord = _tcMatchPhase === 'full' ? 'match' : 'game';
+  const unitWordPlural = unitWord + 'es';
+
   if (!rows.length) {
-    out.innerHTML = `<div class="dd-empty">No cards with ${minLabel}+ decided matches for ${_escapeHtml(deck)}. Try lowering Min Matches.</div>`;
+    out.innerHTML = `<div class="dd-empty">No cards with ${minLabel}+ decided ${unitWordPlural} for ${_escapeHtml(deck)}. Try lowering Min Matches.</div>`;
     return;
   }
 
   const totalMatches = records.length;
-  const summary = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${_escapeHtml(deck)}${_tcListsMode==='tops'?' · Tops Only':''} — ${totalMatches} match(es), ${rows.length} card(s) with ${minLabel}+ decided matches. <span style="color:var(--dim)">Click a card to see which matches it came from.</span></div>`;
+  const phaseNote = _tcMatchPhase === 'full' ? '' : (_tcMatchPhase === 'preside' ? ' · Pre-Side (G1)' : ' · Post-Side (G2+G3)');
+  const metricNote = _tcMetric === 'usage' ? ' · Usage Rate' : '';
+  const summary = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${_escapeHtml(deck)}${_tcListsMode==='tops'?' · Tops Only':''}${phaseNote}${metricNote} — ${totalMatches} match(es), ${rows.length} card(s) with ${minLabel}+ decided ${unitWordPlural}. <span style="color:var(--dim)">Click a card to see which matches it came from.</span></div>`;
 
   if (_tcViewMode === 'images') {
     out.innerHTML = summary + '<div id="tc-grid" class="dd-empty">Loading card images…</div>';
@@ -13253,7 +13536,8 @@ function showTopCardsCardModal(idx) {
 
   const note = document.createElement('div');
   note.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace';
-  note.textContent = `${r.n} match(es) this card showed up in while piloting this deck. If one of these doesn't belong, it usually means that match got auto-classified into the wrong deck — open it in Deck Viewer and set the deck type there (✎ next to the event code).`;
+  note.textContent = `${r.matches.length} match(es) this card showed up in while piloting this deck. If one of these doesn't belong, it usually means that match got auto-classified into the wrong deck — open it in Deck Viewer and set the deck type there (✎ next to the event code).` +
+    (_tcMatchPhase !== 'full' ? ` Note: this is ${_tcMatchPhase==='preside'?'Pre-Side (Game 1)':'Post-Side (Games 2+3)'} mode, so the W/L shown below is each match's OVERALL result — this card's own ${_tcMatchPhase==='preside'?'Game 1':'Game 2/3'} result may differ from it.` : '');
   box.appendChild(note);
 
   const list = document.createElement('div');
@@ -13277,6 +13561,143 @@ function showTopCardsCardModal(idx) {
   box.appendChild(list);
 
   document.body.appendChild(overlay);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// LEADERBOARD — players ranked by win rate across every saved replay,
+// each with their own winningest deck type. Same underlying _globalRecords
+// as Matchups/Top Cards, aggregated by r.player instead of by r.myDeck.
+// Ranking is purely by win rate for now (see the page's own subtitle) —
+// a natural place to add more ranking modes (most matches, biggest deck
+// pool, etc.) later without having to redesign the page.
+// ══════════════════════════════════════════════════════════════════════
+
+// A player's "winningest deck" needs its own minimum sample, separate from
+// the page's own Min Matches floor (which gates the PLAYER's total match
+// count, not any one deck of theirs) — otherwise a deck they 2-0'd once
+// would always rank by win% above a deck they went 40-20 with. 5 is a
+// modest floor; if NO deck clears it, the ranking widens to every deck the
+// player has (still sorted by win%, tie-broken by N) rather than showing
+// nothing — so with a thin sample overall, a small-N deck can still win out
+// on win% alone, same as it would for the floor-clearing case once there's
+// enough data to fill the floor.
+const LB_DECK_MIN_SAMPLE = 5;
+
+async function loadLeaderboard(force) {
+  const out = document.getElementById('lb-output');
+  if (!_globalRecords.length || force) {
+    out.innerHTML = '<div class="dd-empty">Loading replay data…</div>';
+    await loadGlobalRecords(force);
+  }
+  populateYearSeasonFilterPair(document.getElementById('lb-year-filter'), document.getElementById('lb-season-filter'));
+  renderLeaderboard();
+}
+
+// "↻ Recompute" — same semantics as Matchups'/Top Cards' — throws away the
+// cached _globalRecords and re-fetches, keeping the current Year/Season/Min
+// Matches selection so re-checking after a fix elsewhere doesn't lose your
+// place.
+async function recomputeLeaderboard() {
+  const btn = document.getElementById('lb-recompute-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Recomputing...'; }
+  const yearSel = document.getElementById('lb-year-filter');
+  const seasonSel = document.getElementById('lb-season-filter');
+  const keepYear = yearSel ? yearSel.value : '';
+  const keepSeason = seasonSel ? seasonSel.value : '';
+  await loadLeaderboard(true);
+  if (yearSel && keepYear) yearSel.value = keepYear;
+  if (seasonSel && keepSeason) seasonSel.value = keepSeason;
+  renderLeaderboard();
+  if (btn) { btn.disabled = false; btn.textContent = '↻ Recompute'; }
+}
+
+function renderLeaderboard() {
+  const out = document.getElementById('lb-output');
+  if (!out) return;
+  if (!_globalRecords.length) {
+    out.innerHTML = '<div class="dd-empty">No replays found. Import or analyze a batch first.</div>';
+    return;
+  }
+  populateYearSeasonFilterPair(document.getElementById('lb-year-filter'), document.getElementById('lb-season-filter'));
+
+  const filtered = _filterRecordsByYearSeason(_globalRecords, 'lb-year-filter', 'lb-season-filter')
+    .filter(r => !r.incomplete && !r.omitted && (r.matchWon || r.matchLost));
+  if (!filtered.length) {
+    out.innerHTML = '<div class="dd-empty">No decided matches for this Year/Season selection.</div>';
+    return;
+  }
+
+  const minInput = document.getElementById('lb-minmatches-input');
+  const rawMin = minInput ? parseInt(minInput.value, 10) : 10;
+  const minMatches = (isNaN(rawMin) || rawMin < 0) ? 0 : rawMin;
+
+  const byPlayer = {};
+  filtered.forEach(r => {
+    const p = r.player || 'Unknown';
+    if (!byPlayer[p]) byPlayer[p] = { w: 0, l: 0, decks: {} };
+    if (r.matchWon) byPlayer[p].w++; else byPlayer[p].l++;
+    const dk = r.myDeck || 'Unknown';
+    if (!byPlayer[p].decks[dk]) byPlayer[p].decks[dk] = { w: 0, l: 0 };
+    if (r.matchWon) byPlayer[p].decks[dk].w++; else byPlayer[p].decks[dk].l++;
+  });
+
+  const rows = Object.entries(byPlayer).map(([player, agg]) => {
+    const n = agg.w + agg.l;
+    const deckStats = Object.entries(agg.decks).map(([dk, d]) => ({ dk, w: d.w, l: d.l, n: d.w + d.l }));
+    const eligible = deckStats.filter(d => d.n >= LB_DECK_MIN_SAMPLE);
+    const pool = eligible.length ? eligible : deckStats;
+    pool.sort((a, b) => (pct(b.w, b.n) - pct(a.w, a.n)) || (b.n - a.n));
+    return { player, w: agg.w, l: agg.l, n, bestDeck: pool[0] || null };
+  })
+    .filter(r => r.n >= minMatches)
+    .sort((a, b) => (pct(b.w, b.n) - pct(a.w, a.n)) || (b.n - a.n));
+
+  if (!rows.length) {
+    out.innerHTML = `<div class="dd-empty">No players with ${minMatches}+ decided matches. Try lowering Min Matches.</div>`;
+    return;
+  }
+
+  out.innerHTML = '';
+
+  const summary = document.createElement('div');
+  summary.style.cssText = 'font-size:12px;color:var(--muted);margin-bottom:4px';
+  summary.textContent = `${rows.length} player(s) with ${minMatches}+ decided matches.`;
+  out.appendChild(summary);
+
+  const table = document.createElement('table');
+  table.className = 'dd-table';
+  table.style.marginTop = '4px';
+  table.innerHTML = '<thead><tr><th>#</th><th>Player</th><th>N</th><th>W-L</th><th>Win %</th>' +
+    '<th title="95% confidence interval on this player\'s overall win rate (Wilson score interval)">95% CI</th>' +
+    `<th title="This player's best-performing deck by win rate — restricted to decks with at least ${LB_DECK_MIN_SAMPLE} decided matches where any deck clears that floor, widened to every deck they've played otherwise">Winningest Deck</th></tr></thead>`;
+  const tbody = document.createElement('tbody');
+
+  rows.forEach((r, idx) => {
+    const wp = pct(r.w, r.n);
+    const ci = wilsonCI(r.w, r.n);
+    const tr = document.createElement('tr');
+    const deckCell = r.bestDeck
+      ? `${_escapeHtml(r.bestDeck.dk)} <span style="color:var(--muted);font-size:11px">(${pct(r.bestDeck.w, r.bestDeck.n)}%, ${r.bestDeck.w}-${r.bestDeck.l})</span>`
+      : '<span style="color:var(--dim)">—</span>';
+    tr.innerHTML = `
+      <td style="color:var(--muted)">${idx + 1}</td>
+      <td style="font-weight:bold;color:var(--text)">${_escapeHtml(r.player)}</td>
+      <td class="dd-record">${r.n}</td>
+      <td><span class="dd-pct-w">${r.w}</span>-<span class="dd-pct-l">${r.l}</span></td>
+      <td style="font-weight:bold;color:${wp>=50?'var(--green)':'var(--red)'}">${wp}%</td>
+      <td style="color:var(--muted);font-size:11px">${ci.low}–${ci.high}%</td>
+      <td>${deckCell}</td>`;
+    tbody.appendChild(tr);
+  });
+
+  table.appendChild(tbody);
+  out.appendChild(table);
+
+  const note = document.createElement('div');
+  note.style.cssText = 'font-size:10px;color:var(--dim);margin-top:4px';
+  note.textContent = 'Ranked by overall win rate (ties broken by more matches). "Winningest Deck" is each player\'s own best-performing deck type by win rate ' +
+    `— restricted to decks with at least ${LB_DECK_MIN_SAMPLE} decided matches where any deck clears that floor, widened to every deck they've played otherwise. Incomplete/omitted matches excluded, same as Matchups and Top Cards.`;
+  out.appendChild(note);
 }
 
 // Expands/collapses the per-match Game 1/2/3 log directly under a clicked
@@ -19275,7 +19696,7 @@ function applyRoleUI() {
     // Mobile nav dropdown — remove the same options
     const mobileSel = document.getElementById('nav-mobile-sel');
     if (mobileSel) {
-      ['profiles','rps','formatdata','topcards','gfwl'].forEach(v => {
+      ['profiles','rps','formatdata','topcards','leaderboard','gfwl'].forEach(v => {
         const opt = mobileSel.querySelector(`option[value="${v}"]`);
         if (opt) opt.remove();
       });
@@ -19284,7 +19705,7 @@ function applyRoleUI() {
     // Profiles is the default active tab, but it's hidden for this role —
     // land on Deck Viewer instead so there's something to look at.
     const activePage = document.querySelector('.page.on');
-    const hiddenPages = ['pg-profiles','pg-rps','pg-formatdata','pg-topcards','pg-gfwl'];
+    const hiddenPages = ['pg-profiles','pg-rps','pg-formatdata','pg-topcards','pg-leaderboard','pg-gfwl'];
     if (!activePage || hiddenPages.includes(activePage.id)) {
       const deckBtn = document.getElementById('ntab-deck');
       switchTab('deck', deckBtn);
