@@ -839,7 +839,7 @@ select{cursor:pointer}
             <option value="">Loading…</option>
           </select>
           <div class="slbl" style="margin:0">YEAR</div>
-          <select id="fd-year-filter" onchange="renderFormatDataTable()"
+          <select id="fd-year-filter" onchange="onToolYearChange(this)"
             style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
             <option value="">All</option>
           </select>
@@ -848,6 +848,8 @@ select{cursor:pointer}
             style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
             <option value="">All</option>
           </select>
+          <button id="fd-custom-edit-btn" onclick="openCustomFilterModal('fd')" title="Edit Custom Year/Season/Event filter" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 8px;border-radius:4px;cursor:pointer">✎</button>
+          <button id="fd-custom-clear-btn" onclick="clearCustomFilter('fd')" title="Clear Custom filter" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 8px;border-radius:4px;cursor:pointer">✕</button>
           <div style="margin-left:auto;display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px">
             <button id="fd-lists-all-btn" onclick="setFormatDataListsMode('all')" title="Every recorded match for this deck"
               style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">All Lists</button>
@@ -888,7 +890,7 @@ select{cursor:pointer}
             <option value="">All Matchups</option>
           </select>
           <div class="slbl" style="margin:0">YEAR</div>
-          <select id="tc-year-filter" onchange="renderTopCardsTable()"
+          <select id="tc-year-filter" onchange="onToolYearChange(this)"
             style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
             <option value="">All</option>
           </select>
@@ -897,9 +899,11 @@ select{cursor:pointer}
             style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
             <option value="">All</option>
           </select>
+          <button id="tc-custom-edit-btn" onclick="openCustomFilterModal('tc')" title="Edit Custom Year/Season/Event filter" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 8px;border-radius:4px;cursor:pointer">✎</button>
+          <button id="tc-custom-clear-btn" onclick="clearCustomFilter('tc')" title="Clear Custom filter" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 8px;border-radius:4px;cursor:pointer">✕</button>
           <div class="slbl" style="margin:0">MIN MATCHES</div>
           <div style="display:flex;align-items:center">
-            <input id="tc-minmatches-input" type="text" inputmode="decimal" value="20" oninput="renderTopCardsTable()"
+            <input id="tc-minmatches-input" type="text" inputmode="decimal" value="5" oninput="renderTopCardsTable()"
               title="Minimum matches a card must appear in to be listed — a % of this deck's total matches by default, or a raw count (click the % / # button to switch)"
               style="width:46px;text-align:right;background:var(--card2);border:1px solid var(--border);border-right:none;color:var(--text);font-family:monospace;font-size:12px;padding:6px 6px;border-radius:6px 0 0 6px;outline:none"/>
             <button id="tc-minmatches-unit-btn" onclick="toggleTopCardsMinMatchesUnit()" title="Switch between % of this deck's matches and a raw match count"
@@ -932,13 +936,6 @@ select{cursor:pointer}
             <button id="tc-phase-postside-btn" onclick="setTopCardsMatchPhase('postside')" title="Games 2+3 combined, after siding"
               style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Post-Side</button>
           </div>
-          <div class="slbl" style="margin:0 0 0 6px">METRIC</div>
-          <div style="display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px">
-            <button id="tc-metric-winrate-btn" onclick="setTopCardsMetric('winrate')" title="Counts a card if it was ever seen (drawn, revealed, searched — anywhere in hand/field/GY) that game"
-              style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Win Rate</button>
-            <button id="tc-metric-usage-btn" onclick="setTopCardsMetric('usage')" title="Experimental — counts a card only when the log shows it was actually Normal/Special/Flip/Tribute Summoned, Set, Activated, Attacked, or Added to Hand (searched/returned from GY or deck), not just drawn. Only replays parsed since this feature shipped carry this data — use Admin → Check & Fix Data → Re-parse All to backfill older replays."
-              style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Usage Rate</button>
-          </div>
         </div>
         <div id="tc-output"><div class="dd-empty">Loading replay data…</div></div>
       </div>
@@ -959,7 +956,7 @@ select{cursor:pointer}
         </div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <div class="slbl" style="margin:0">YEAR</div>
-          <select id="lb-year-filter" onchange="renderLeaderboard()"
+          <select id="lb-year-filter" onchange="onToolYearChange(this)"
             style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
             <option value="">All</option>
           </select>
@@ -968,6 +965,8 @@ select{cursor:pointer}
             style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
             <option value="">All</option>
           </select>
+          <button id="lb-custom-edit-btn" onclick="openCustomFilterModal('lb')" title="Edit Custom Year/Season/Event filter" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 8px;border-radius:4px;cursor:pointer">✎</button>
+          <button id="lb-custom-clear-btn" onclick="clearCustomFilter('lb')" title="Clear Custom filter" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 8px;border-radius:4px;cursor:pointer">✕</button>
           <div class="slbl" style="margin:0">MIN MATCHES</div>
           <input id="lb-minmatches-input" type="text" inputmode="numeric" value="10" oninput="renderLeaderboard()"
             title="Minimum decided matches a player must have to be ranked — keeps a 1-0 record from topping the board"
@@ -996,7 +995,7 @@ select{cursor:pointer}
         </div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <div class="slbl" style="margin:0">YEAR</div>
-          <select id="pr-year-filter" onchange="renderPowerRankings()"
+          <select id="pr-year-filter" onchange="onToolYearChange(this)"
             style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
             <option value="">All</option>
           </select>
@@ -1005,6 +1004,8 @@ select{cursor:pointer}
             style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:84px">
             <option value="">All</option>
           </select>
+          <button id="pr-custom-edit-btn" onclick="openCustomFilterModal('pr')" title="Edit Custom Year/Season/Event filter" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 8px;border-radius:4px;cursor:pointer">✎</button>
+          <button id="pr-custom-clear-btn" onclick="clearCustomFilter('pr')" title="Clear Custom filter" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 8px;border-radius:4px;cursor:pointer">✕</button>
           <div class="slbl" style="margin:0">MIN MATCHES</div>
           <input id="pr-minmatches-input" type="text" inputmode="numeric" value="10" oninput="renderPowerRankings()"
             title="Minimum decided non-mirror matches a deck type must have to be ranked — keeps a tiny sample from landing in S or D tier on noise"
@@ -12893,13 +12894,116 @@ function _recordMatchesYear(r, year) {
 // show) but not the deck selection, consistent with these being system-wide
 // filters rather than per-deck ones.
 //
-// Shared by Format Data AND Top Cards (same underlying _globalRecords, same
-// filter semantics) — pass in that page's own Year/Season <select>
-// elements. Kept as one function so the two pages' filters can never drift
-// out of sync with each other.
-function populateYearSeasonFilterPair(yearSel, seasonSel) {
-  const curSeason = seasonSel ? seasonSel.value : '';
-  const curYear = yearSel ? yearSel.value : '';
+// ── CUSTOM YEAR/SEASON/EVENT-ID FILTER ──────────────────────────────────
+// An extra option alongside the plain Year dropdown, for when one
+// year/season isn't a fine enough cut — e.g. "every GFC/PWCQ/FLC-style
+// qualifier across both 2025 AND 2026, but skip regular season play."
+// One independent filter per tool page (scope key = the shared prefix of
+// that page's select ids — 'fd'|'tc'|'lb'|'pr') so switching Matchups into
+// Custom doesn't also flip Top Cards into Custom.
+//
+// Semantics: Year stays the enabling dimension exactly like the plain
+// dropdown today (same date/season resolution) — Custom just lets you
+// check MULTIPLE years instead of picking one. Within those years, the
+// Season checkboxes narrow season-CODED matches only — unchecking a
+// season excludes just that season's matches; an event with no season
+// code is untouched by this dimension (same as how the single-select
+// Season dropdown today only ever means anything for season-coded
+// events). The Event ID checkboxes work the same way over the 9 named
+// tournament categories below — unchecking one excludes matches whose
+// event code falls in that category; anything that matches NONE of the 9
+// categories (ordinary season play, DB Ladder, one-off codes) passes
+// through untouched, since those are governed by Year/Season instead.
+// All three groups default to fully checked the first time Custom is
+// opened for a scope, so turning Custom on with nothing unchecked
+// reproduces exactly what the plain Year selection already showed.
+let _customFilters = { fd: null, tc: null, lb: null, pr: null };
+
+// GFC vs GFCEU is the one real prefix collision here (GFCEU starts with
+// "GFC") — the GFC pattern excludes it via a negative lookahead so the two
+// stay distinct categories. LCQ covers both "LCQ" and "GLCQ" codes per
+// how the user described them: the same thing, just labeled LCQ here.
+const EVENT_ID_CATEGORIES = [
+  { key: 'GFCEU', label: 'GFCEU',    re: /^GFCEU/i },
+  { key: 'GFC',   label: 'GFC',      re: /^GFC(?!EU)/i },
+  { key: 'GFWC',  label: 'GFWC',     re: /^GFWC/i },
+  { key: 'PWCQ',  label: 'PWCQ',     re: /^PWCQ/i },
+  { key: 'FLC',   label: 'FLC',      re: /^FLC/i },
+  { key: 'CLASH', label: 'Clash',    re: /^CLASH/i },
+  { key: 'LCQ',   label: 'LCQ',      re: /^G?LCQ/i },
+  { key: 'GWW',   label: 'GWW',      re: /^GWW/i },
+  { key: 'MVP',   label: 'GFWL MVP', re: /^GFWL\s*MVP/i },
+];
+function _eventCategoryKeyFor(label) {
+  const L = (label||'').trim();
+  if (!L) return null;
+  const cat = EVENT_ID_CATEGORIES.find(c => c.re.test(L));
+  return cat ? cat.key : null;
+}
+// 'fd-year-filter' / 'fd-season-filter' -> 'fd'
+function _scopeFromSelId(id) {
+  return (id||'').replace(/-year-filter$|-season-filter$/, '');
+}
+// Which calendar year a record's event actually falls in — same
+// date-resolution order _recordMatchesYear uses (GFWL season map, then
+// FL-synced event date, then a literal 20xx in the label) — but returns
+// the year itself rather than testing it against one candidate, so the
+// Custom modal's multi-year checkboxes can ask "is this one of the
+// checked years" instead of "is this THE selected year."
+function _recordYear(r) {
+  const code = eventGroupKey(r.eventLabel||'');
+  if (isGFWLSeason(code)) return gfwlSeasonToYear(code);
+  const d = code ? getEventDate(code) : null;
+  if (d) return d.slice(0,4);
+  const y = (r.eventLabel||'').match(/(20\d{2})/);
+  return y ? y[1] : null;
+}
+function _recordMatchesCustomFilter(r, cf) {
+  const year = _recordYear(r);
+  if (!year || !cf.years.has(year)) return false;
+  const code = eventGroupKey(r.eventLabel||'');
+  if (isGFWLSeason(code)) return cf.seasons.has(code.toUpperCase());
+  const cat = _eventCategoryKeyFor(r.eventLabel||'');
+  if (cat && !cf.events.has(cat)) return false;
+  return true;
+}
+// Shows/hides each scope's "✎ Edit" / "✕ Clear" Custom-filter buttons.
+function _syncCustomFilterUI(scope) {
+  const active = !!_customFilters[scope];
+  const editBtn = document.getElementById(scope+'-custom-edit-btn');
+  const clearBtn = document.getElementById(scope+'-custom-clear-btn');
+  if (editBtn) editBtn.style.display = active ? 'inline-flex' : 'none';
+  if (clearBtn) clearBtn.style.display = active ? 'inline-flex' : 'none';
+}
+const _TOOL_RENDER_FNS = {
+  fd: () => renderFormatDataTable(),
+  tc: () => renderTopCardsTable(),
+  lb: () => renderLeaderboard(),
+  pr: () => renderPowerRankings(),
+};
+// Year <select> onchange handler shared by all 4 tool pages — picking
+// "⚙ Custom…" opens the modal instead of re-rendering immediately; picking
+// any concrete value (All/Last 3-6 Months/a specific year) exits Custom
+// mode for that scope, same as it always did before Custom existed.
+function onToolYearChange(sel) {
+  const scope = _scopeFromSelId(sel.id);
+  if (sel.value === 'custom') { openCustomFilterModal(scope); return; }
+  _customFilters[scope] = null;
+  sel.dataset.lastConcrete = sel.value;
+  const fn = _TOOL_RENDER_FNS[scope];
+  if (fn) fn();
+}
+function clearCustomFilter(scope) {
+  _customFilters[scope] = null;
+  const yearSel = document.getElementById(scope+'-year-filter');
+  if (yearSel) { yearSel.value = ''; yearSel.dataset.lastConcrete = ''; }
+  const fn = _TOOL_RENDER_FNS[scope];
+  if (fn) fn();
+}
+// Builds the known Years/Seasons sets exactly like populateYearSeasonFilterPair
+// does for its dropdowns — factored out so the modal's checkbox lists and
+// the dropdown's option lists can never show different years/seasons.
+function _knownYearsAndSeasons() {
   const usable = _globalRecords.filter(r => !r.incomplete && !r.omitted);
   const yearsSet = new Set(), seasonsSet = new Set();
   usable.forEach(r => {
@@ -12907,10 +13011,6 @@ function populateYearSeasonFilterPair(yearSel, seasonSel) {
     if (!code) return;
     if (isGFWLSeason(code)) {
       seasonsSet.add(code.toUpperCase());
-      // Also count this season's matches toward its mapped calendar year
-      // (see GFWL_SEASON_YEAR_MAP / _recordMatchesYear) so the Year
-      // dropdown's counts include season-coded matches, not just
-      // FL-dated ones.
       const mappedYear = gfwlSeasonToYear(code);
       if (mappedYear) yearsSet.add(mappedYear);
       return;
@@ -12920,37 +13020,187 @@ function populateYearSeasonFilterPair(yearSel, seasonSel) {
     const y = (r.eventLabel||'').match(/(20\d{2})/);
     if (y) yearsSet.add(y[1]);
   });
+  return { yearsSet, seasonsSet };
+}
+// The Custom filter popup — one per scope ('fd'|'tc'|'lb'|'pr'). Builds
+// three checkbox groups (Years, GFWL Seasons, Event ID) and, on Apply,
+// stores the result in _customFilters[scope] and re-renders that page.
+function openCustomFilterModal(scope) {
+  const existing = document.getElementById('custom-filter-modal-overlay');
+  if (existing) existing.remove();
+
+  const yearSel = document.getElementById(scope+'-year-filter');
+  const cf = _customFilters[scope];
+  const { yearsSet, seasonsSet } = _knownYearsAndSeasons();
+  const years = [...yearsSet].sort((a,b)=>a-b);
+  const seasons = [...seasonsSet].sort((a,b) => (parseInt(a.replace(/^S/i,''),10)||0) - (parseInt(b.replace(/^S/i,''),10)||0));
+
+  const selYears = cf ? cf.years : new Set(years);
+  const selSeasons = cf ? cf.seasons : new Set(seasons);
+  const selEvents = cf ? cf.events : new Set(EVENT_ID_CATEGORIES.map(c => c.key));
+
+  const overlay = document.createElement('div');
+  overlay.id = 'custom-filter-modal-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:640px;width:100%;max-height:85vh;overflow-y:auto;display:flex;flex-direction:column;gap:16px';
+  overlay.appendChild(box);
+
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'font-size:15px;font-weight:bold;color:var(--text)';
+  hdr.textContent = '⚙ Custom Filter';
+  box.appendChild(hdr);
+
+  const sub = document.createElement('div');
+  sub.style.cssText = 'font-size:11px;color:var(--muted);margin-top:-10px';
+  sub.textContent = 'Year is still the enabler — a match only counts if its year is checked below. GFWL Season and Event ID narrow further within that (unchecked = excluded; an event that matches neither list just isn\'t touched by that row).';
+  box.appendChild(sub);
+
+  function buildCheckboxSection(title, items, selectedSet, renderLabel) {
+    const wrap = document.createElement('div');
+    const hdrRow = document.createElement('div');
+    hdrRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px';
+    const t = document.createElement('div');
+    t.style.cssText = 'font-size:11px;color:var(--muted);letter-spacing:.1em;font-weight:bold';
+    t.textContent = title;
+    hdrRow.appendChild(t);
+    const allLink = document.createElement('button');
+    allLink.textContent = 'All';
+    allLink.type = 'button';
+    allLink.style.cssText = 'background:none;border:none;color:var(--blue);font-family:monospace;font-size:10px;cursor:pointer;padding:0 4px';
+    const noneLink = document.createElement('button');
+    noneLink.textContent = 'None';
+    noneLink.type = 'button';
+    noneLink.style.cssText = 'background:none;border:none;color:var(--blue);font-family:monospace;font-size:10px;cursor:pointer;padding:0 4px';
+    hdrRow.appendChild(allLink); hdrRow.appendChild(noneLink);
+    wrap.appendChild(hdrRow);
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px';
+    const checkboxes = [];
+    if (!items.length) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'font-size:11px;color:var(--dim)';
+      empty.textContent = 'None in your data yet.';
+      grid.appendChild(empty);
+    }
+    items.forEach(it => {
+      const key = typeof it === 'string' ? it : it.key;
+      const label = renderLabel ? renderLabel(it) : key;
+      const lbl = document.createElement('label');
+      lbl.style.cssText = 'display:flex;align-items:center;gap:5px;background:var(--card2);border:1px solid var(--border);border-radius:5px;padding:5px 9px;font-size:12px;color:var(--text);cursor:pointer;font-family:monospace';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = selectedSet.has(key);
+      cb.dataset.key = key;
+      lbl.appendChild(cb);
+      lbl.appendChild(document.createTextNode(label));
+      grid.appendChild(lbl);
+      checkboxes.push(cb);
+    });
+    allLink.onclick = () => checkboxes.forEach(cb => cb.checked = true);
+    noneLink.onclick = () => checkboxes.forEach(cb => cb.checked = false);
+    wrap.appendChild(grid);
+    wrap._checkboxes = checkboxes;
+    return wrap;
+  }
+
+  const yearSection = buildCheckboxSection('YEARS', years, selYears);
+  const seasonSection = buildCheckboxSection('GFWL SEASONS', seasons, selSeasons);
+  const eventSection = buildCheckboxSection('EVENT ID', EVENT_ID_CATEGORIES, selEvents, c => c.label);
+  box.appendChild(yearSection);
+  box.appendChild(seasonSection);
+  box.appendChild(eventSection);
+
+  const footer = document.createElement('div');
+  footer.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:4px';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:7px 16px;border-radius:6px;cursor:pointer';
+  cancelBtn.onclick = () => {
+    overlay.remove();
+    if (yearSel) yearSel.value = yearSel.dataset.lastConcrete || '';
+  };
+  const applyBtn = document.createElement('button');
+  applyBtn.textContent = 'Apply';
+  applyBtn.style.cssText = 'background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:12px;padding:7px 18px;border-radius:6px;cursor:pointer';
+  applyBtn.onclick = () => {
+    const years2 = new Set(yearSection._checkboxes.filter(cb => cb.checked).map(cb => cb.dataset.key));
+    if (!years2.size) { alert('Pick at least one year — Year is what enables everything else in this filter.'); return; }
+    const seasons2 = new Set(seasonSection._checkboxes.filter(cb => cb.checked).map(cb => cb.dataset.key));
+    const events2 = new Set(eventSection._checkboxes.filter(cb => cb.checked).map(cb => cb.dataset.key));
+    _customFilters[scope] = { years: years2, seasons: seasons2, events: events2 };
+    overlay.remove();
+    const fn = _TOOL_RENDER_FNS[scope];
+    if (fn) fn();
+  };
+  footer.appendChild(cancelBtn); footer.appendChild(applyBtn);
+  box.appendChild(footer);
+  overlay.onclick = e => { if (e.target === overlay) cancelBtn.click(); };
+
+  document.body.appendChild(overlay);
+}
+
+// Shared by Format Data, Top Cards, Leaderboard AND Power Rankings (same
+// underlying _globalRecords, same filter semantics) — pass in that page's
+// own Year/Season <select> elements. Kept as one function so none of the
+// four pages' filters can ever drift out of sync with each other.
+function populateYearSeasonFilterPair(yearSel, seasonSel) {
+  const scope = _scopeFromSelId(yearSel ? yearSel.id : (seasonSel ? seasonSel.id : ''));
+  const cf = _customFilters[scope];
+  const curSeason = seasonSel ? seasonSel.value : '';
+  const curYear = yearSel ? yearSel.value : '';
+  const usable = _globalRecords.filter(r => !r.incomplete && !r.omitted);
+  const { yearsSet, seasonsSet } = _knownYearsAndSeasons();
   if (yearSel) {
-    const cur = yearSel.value;
     const years = [...yearsSet].sort((a,b)=>b-a);
+    // Default to 2026 the very first time this select is ever populated
+    // (nothing chosen yet) — every call after that preserves whatever is
+    // actually selected, same as every other option here always has.
+    let cur = curYear;
+    if (!yearSel.dataset.defaulted) {
+      if (years.includes('2026')) cur = '2026';
+      yearSel.dataset.defaulted = '1';
+    }
     // Respect the current season selection, if any, same cross-filtering
-    // filterFormatDataRecords itself does.
-    const seasonScoped = curSeason ? usable.filter(r => eventGroupKey(r.eventLabel||'') === curSeason) : usable;
+    // filterFormatDataRecords itself does — skipped entirely while Custom
+    // is active, since Season is driven by the modal instead then.
+    const seasonScoped = (!cf && curSeason) ? usable.filter(r => eventGroupKey(r.eventLabel||'') === curSeason) : usable;
     const allCount = seasonScoped.length;
     const last3Count = seasonScoped.filter(r => _recordMatchesYear(r, 'last3m')).length;
     const last6Count = seasonScoped.filter(r => _recordMatchesYear(r, 'last6m')).length;
-    yearSel.innerHTML = '<option value="">All (' + allCount + ')</option>' +
+    yearSel.innerHTML = `<option value=""${cur===''?' selected':''}>All (${allCount})</option>` +
+      `<option value="custom"${cur==='custom'?' selected':''}>⚙ Custom…</option>` +
       `<option value="last3m"${cur==='last3m'?' selected':''}>Last 3 Months (${last3Count})</option>` +
       `<option value="last6m"${cur==='last6m'?' selected':''}>Last 6 Months (${last6Count})</option>` +
       years.map(y => {
         const n = seasonScoped.filter(r => _recordMatchesYear(r, y)).length;
         return `<option value="${y}"${y===cur?' selected':''}>${y} (${n})</option>`;
       }).join('');
+    if (cf) yearSel.value = 'custom';
+    else if (cur !== 'custom') yearSel.dataset.lastConcrete = cur;
   }
   if (seasonSel) {
-    const cur = seasonSel.value;
-    const seasons = [...seasonsSet].sort((a,b) => {
-      const na = parseInt(a.replace(/^S/i,''),10) || 0, nb = parseInt(b.replace(/^S/i,''),10) || 0;
-      return nb - na;
-    });
-    const yearScoped = curYear ? usable.filter(r => _recordMatchesYear(r, curYear)) : usable;
-    const allCount = yearScoped.length;
-    seasonSel.innerHTML = '<option value="">All (' + allCount + ')</option>' +
-      seasons.map(s => {
-        const n = yearScoped.filter(r => eventGroupKey(r.eventLabel||'') === s).length;
-        return `<option value="${s}"${s===cur?' selected':''}>${s} (${n})</option>`;
-      }).join('');
+    if (cf) {
+      seasonSel.disabled = true;
+      seasonSel.innerHTML = '<option value="">Set via Custom Filter</option>';
+    } else {
+      seasonSel.disabled = false;
+      const cur = curSeason;
+      const seasons = [...seasonsSet].sort((a,b) => {
+        const na = parseInt(a.replace(/^S/i,''),10) || 0, nb = parseInt(b.replace(/^S/i,''),10) || 0;
+        return nb - na;
+      });
+      const yearScoped = (curYear && curYear !== 'custom') ? usable.filter(r => _recordMatchesYear(r, curYear)) : usable;
+      const allCount = yearScoped.length;
+      seasonSel.innerHTML = '<option value="">All (' + allCount + ')</option>' +
+        seasons.map(s => {
+          const n = yearScoped.filter(r => eventGroupKey(r.eventLabel||'') === s).length;
+          return `<option value="${s}"${s===cur?' selected':''}>${s} (${n})</option>`;
+        }).join('');
+    }
   }
+  _syncCustomFilterUI(scope);
 }
 
 function populateFormatDataYearSeasonFilters() {
@@ -12976,7 +13226,13 @@ function populateTopCardsYearSeasonFilters() {
 // silently suppressing a season's data (or, worse, looking like the Season
 // filter "leaked" other data in when the combination produced a confusing
 // result) — picking Season now always means exactly that season, full stop.
+//
+// When this scope's Custom filter is active (see _customFilters above),
+// it completely overrides the plain Year/Season dropdown values — those
+// still show "Custom"/disabled in the UI but aren't read here at all.
 function _filterRecordsByYearSeason(records, yearSelId, seasonSelId) {
+  const cf = _customFilters[_scopeFromSelId(yearSelId)];
+  if (cf) return records.filter(r => _recordMatchesCustomFilter(r, cf));
   const yearSel = document.getElementById(yearSelId);
   const seasonSel = document.getElementById(seasonSelId);
   const filterYear = yearSel ? yearSel.value : '';
@@ -13041,8 +13297,12 @@ function renderFormatDataTable(deckType) {
     out.innerHTML = '<div class="dd-empty">No replays found. Import or analyze a batch first.</div>';
     return;
   }
-  // Re-populate the deck dropdown (and its counts) whenever the year/season
-  // filter changes, since the set of decks with data can shrink.
+  // Re-populate the Year/Season filters (so a Custom-filter Apply/Clear
+  // immediately disables/re-enables the Season select and shows/hides the
+  // ✎/✕ Custom buttons, same as Top Cards/Leaderboard/Power Rankings
+  // already do every render) and the deck dropdown (and its counts) —
+  // the set of decks with data can shrink when either filter changes.
+  populateFormatDataYearSeasonFilters();
   populateFormatDataDropdown();
   const sel = document.getElementById('fd-deck-select');
   const deck = deckType || (sel ? sel.value : '');
