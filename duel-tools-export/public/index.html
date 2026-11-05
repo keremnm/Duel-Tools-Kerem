@@ -3387,21 +3387,15 @@ async function gfwlLoadSeasonBatches(season, data) {
   if (!rosterNames.length) return;
   window._gfwlBatchCache = window._gfwlBatchCache || {};
   try {
-    const bList = await fetch(API+'/batches').then(r=>r.json()).catch(()=>[]);
-    const fetches = [];
+    // Shared cached /batches/all-full response instead of fetching each
+    // rostered player's batch(es) individually — see getAllBatchesFull.
+    const bList = await getAllBatchesFull();
     for (const pName of rosterNames) {
       const playerBatches = bList.filter(b=>(b.player||'').toLowerCase()===pName);
       for (const pb of playerBatches) {
-        if (!window._gfwlBatchCache[pb.id]) {
-          fetches.push(
-            fetch(API+'/batches/'+pb.id).then(r=>r.json())
-              .then(full => { if (full && full.replays) window._gfwlBatchCache[pb.id] = full; })
-              .catch(()=>{})
-          );
-        }
+        if (!window._gfwlBatchCache[pb.id] && pb.replays) window._gfwlBatchCache[pb.id] = pb;
       }
     }
-    if (fetches.length) await Promise.all(fetches);
   } catch(e) { console.warn('[GFWL] season batch load error:', e); }
 }
 
@@ -3597,23 +3591,18 @@ async function gfwlOpenSeasonStats(season) {
   loadingBanner.textContent = '⟳ Loading replay data for '+rosterNames.length+' players...';
   main.appendChild(loadingBanner);
 
-  // Fetch every rostered player's batch(es)
+  // Fetch every rostered player's batch(es) — shared cached
+  // /batches/all-full response instead of one fetch per batch, see
+  // getAllBatchesFull.
   const batchCache = {};
   try {
-    const bList = await fetch(API+'/batches', { headers: authHeaders() }).then(r=>r.json()).catch(()=>[]);
-    const list = Array.isArray(bList) ? bList : [];
-    const fetches = [];
+    const list = await getAllBatchesFull();
     for (const pName of rosterNames) {
       const playerBatches = list.filter(b => (b.player||'').toLowerCase() === pName);
       for (const pb of playerBatches) {
-        fetches.push(
-          fetch(API+'/batches/'+pb.id, { headers: authHeaders() }).then(r=>r.json())
-            .then(full => { if (full && full.replays) batchCache[pb.id] = full; })
-            .catch(()=>{})
-        );
+        if (pb.replays) batchCache[pb.id] = pb;
       }
     }
-    await Promise.all(fetches);
   } catch(e) { console.warn('[Season Stats] batch load error:', e); }
   loadingBanner.remove();
 
@@ -4712,26 +4701,18 @@ async function gfwlOpenTeam(season, teamName, team) {
   loadingBanner.textContent = '⟳ Loading replay data for '+roster.length+' players...';
   main.appendChild(loadingBanner);
 
-  // Fetch batch list and all player batches in parallel
+  // Fetch batch list and all player batches — shared cached
+  // /batches/all-full response instead of one fetch per batch, see
+  // getAllBatchesFull.
   async function loadAllBatches() {
     try {
-      const bList = await fetch(API+'/batches').then(r=>r.json()).catch(()=>[]);
-      // Fetch all player batches in parallel (Promise.all)
-      const fetches = [];
+      const bList = await getAllBatchesFull();
       for (const pName of rosterNames) {
         const playerBatches = bList.filter(b=>(b.player||'').toLowerCase()===pName);
         for (const pb of playerBatches) {
-          if (!gfwlBatchCache[pb.id]) {
-            fetches.push(
-              fetch(API+'/batches/'+pb.id)
-                .then(r=>r.json())
-                .then(full => { if (full && full.replays) gfwlBatchCache[pb.id] = full; })
-                .catch(()=>{})
-            );
-          }
+          if (!gfwlBatchCache[pb.id] && pb.replays) gfwlBatchCache[pb.id] = pb;
         }
       }
-      await Promise.all(fetches);
     } catch(e) { console.warn('GFWL batch load error:', e); }
     // Remove loading banner
     const banner = document.getElementById('gfwl-loading-banner');
@@ -5900,21 +5881,13 @@ async function gfwlOpenWeekReport(season, teamName, wk, oppTeamName, seasonRepla
 
   if (oppRoster.length) {
     try {
-      const bList = await fetch(API+'/batches').then(r=>r.json()).catch(()=>[]);
-      const oppFetches = [];
+      const bList = await getAllBatchesFull();
       for (const pName of oppRoster) {
         const pBatches = bList.filter(b=>(b.player||'').toLowerCase()===pName);
         for (const pb of pBatches) {
-          if (!window._gfwlBatchCache[pb.id]) {
-            oppFetches.push(
-              fetch(API+'/batches/'+pb.id).then(r=>r.json())
-                .then(full=>{ if(full&&full.replays) window._gfwlBatchCache[pb.id]=full; })
-                .catch(()=>{})
-            );
-          }
+          if (!window._gfwlBatchCache[pb.id] && pb.replays) window._gfwlBatchCache[pb.id] = pb;
         }
       }
-      if (oppFetches.length) await Promise.all(oppFetches);
     } catch(e) { console.warn('[WeekReport] opp batch fetch failed:', e.message); }
 
     for (const b of Object.values(window._gfwlBatchCache||{})) {
@@ -6135,21 +6108,13 @@ async function gfwlOpenRoundReport(season, teamName, round, oppTeamName, seasonR
 
   if (oppRoster.length) {
     try {
-      const bList = await fetch(API+'/batches').then(r=>r.json()).catch(()=>[]);
-      const oppFetches = [];
+      const bList = await getAllBatchesFull();
       for (const pName of oppRoster) {
         const pBatches = bList.filter(b=>(b.player||'').toLowerCase()===pName);
         for (const pb of pBatches) {
-          if (!window._gfwlBatchCache[pb.id]) {
-            oppFetches.push(
-              fetch(API+'/batches/'+pb.id).then(r=>r.json())
-                .then(full=>{ if(full&&full.replays) window._gfwlBatchCache[pb.id]=full; })
-                .catch(()=>{})
-            );
-          }
+          if (!window._gfwlBatchCache[pb.id] && pb.replays) window._gfwlBatchCache[pb.id] = pb;
         }
       }
-      if (oppFetches.length) await Promise.all(oppFetches);
     } catch(e) { console.warn('[RoundReport] opp batch fetch failed:', e.message); }
 
     for (const b of Object.values(window._gfwlBatchCache||{})) {
@@ -7218,10 +7183,9 @@ async function flFetchPreview() {
     // Collect replayIds already saved for the Duel Tools player so we can skip duplicates
     const existingIds = new Set();
     try {
-      const list = await fetch(API+'/batches').then(r=>r.json());
+      const list = await getAllBatchesFull();
       const mine = list.filter(b => (b.player||'').toLowerCase() === dtPlayer.toLowerCase());
-      const fulls = await Promise.all(mine.map(b => fetch(API+'/batches/'+b.id).then(r=>r.json()).catch(()=>b)));
-      for (const b of fulls) for (const r of (b.replays||[])) existingIds.add(r.replayId);
+      for (const b of mine) for (const r of (b.replays||[])) existingIds.add(r.replayId);
     } catch(e) {}
 
     const seen = new Set();
@@ -12753,8 +12717,10 @@ async function loadGlobalRecords(force) {
   // reload — which looks exactly like "the fix didn't work." `force` is
   // how the Recompute button (and nothing else) bypasses that: it always
   // re-fetches from the server and overwrites the cache, regardless of
-  // what's already in it.
-  if (force) _globalRecords = [];
+  // what's already in it. Also drops the shared getAllBatchesFull() cache
+  // Profiles/GFWL/Events read from, so hitting Recompute anywhere is one
+  // consistent "get me current data everywhere" action.
+  if (force) { _globalRecords = []; invalidateAllBatchesFullCache(); }
   // Fast path: one request for every batch's full replay data, pre-joined
   // server-side (see GET /api/batches/all-full). This is what used to take
   // 1 + N requests — one for the batch list, then one more per non-empty
@@ -12788,6 +12754,50 @@ async function loadGlobalRecords(force) {
   _globalRecords = records;
   return records;
 }
+
+// ── SHARED "all batches with full replay data" CACHE ────────────────────
+// Session-cached copy of GET /api/batches/all-full (every saved batch,
+// pre-joined with its replays, served straight from the server's
+// in-memory db object — no per-batch Postgres round trip). Several
+// features used to each reimplement "fetch the batch list, then fetch
+// every relevant batch individually via GET /api/batches/:id" — Player
+// Profiles on open, every GFWL Archive sub-page (season overview, season
+// stats, team page, week/round reports), and the Events tab's per-event
+// replay panel. GET /api/batches/:id deliberately re-reads Postgres on
+// EVERY call (see that route's own comment — it's what keeps a second
+// Railway instance, or the brief overlap during a rolling deploy, from
+// ever serving a stale override), so doing that N times in a loop meant N
+// live database round trips, all serialized through the single
+// (non-pooled) Postgres connection this server uses — a player or GFWL
+// team with many batches could take several seconds just for this, and
+// blocked every OTHER request on the server for as long as it ran. This
+// is the exact same data /batches/all-full already returns in one cheap,
+// memory-only response (Format Data has used it this way for a while) —
+// fetched once per session and reused everywhere else that needs it.
+let _allBatchesFullCache = null;    // null = not loaded yet this session
+let _allBatchesFullLoading = null;  // in-flight promise, dedupes concurrent callers
+async function getAllBatchesFull(force) {
+  if (_allBatchesFullCache && !force) return _allBatchesFullCache;
+  if (_allBatchesFullLoading && !force) return _allBatchesFullLoading;
+  _allBatchesFullLoading = (async () => {
+    try {
+      const res = await fetch(API+'/batches/all-full');
+      const list = await res.json();
+      _allBatchesFullCache = Array.isArray(list) ? list : [];
+    } catch(e) {
+      console.warn('[AllBatchesFull] load failed:', e.message);
+      _allBatchesFullCache = _allBatchesFullCache || [];
+    }
+    _allBatchesFullLoading = null;
+    return _allBatchesFullCache;
+  })();
+  return _allBatchesFullLoading;
+}
+// Drops the cache so the next read goes back to the server — call this
+// after anything that creates or changes which batches/replays exist, so
+// a Profile/GFWL/Events view opened right after doesn't show stale data.
+// Cheap and safe to call liberally; it doesn't fetch anything itself.
+function invalidateAllBatchesFullCache() { _allBatchesFullCache = null; }
 
 // ══════════════════════════════════════════════════════════════════════
 // FORMAT DATA — matchup win rates across every saved replay, by deck type
@@ -16180,9 +16190,12 @@ async function eventsRenderDeckCards(container, deck, eventCode, trackedPlayer) 
     // (see upsertEventDeckType in server.js).
     if (isMinerRole(_userRole) && deck.deckId && eventCode && trackedPlayer && trackedPlayer.batchIds && trackedPlayer.batchIds.length) {
       try {
-        const fulls = await Promise.all(trackedPlayer.batchIds.map(id =>
-          fetch(API+'/batches/'+id, { headers: authHeaders() }).then(r=>r.json()).catch(()=>null)
-        ));
+        // Shared cached /batches/all-full response instead of fetching
+        // each of this player's batches individually — see
+        // getAllBatchesFull.
+        const allFullMap = {};
+        for (const b of await getAllBatchesFull()) allFullMap[b.id] = b;
+        const fulls = trackedPlayer.batchIds.map(id => allFullMap[id] || null);
         let allCards = [];
         for (const b of fulls) {
           if (!b || !b.replays) continue;
@@ -16444,9 +16457,12 @@ async function eventsRenderReplaysPanel(container, code, trackedPlayer, builderN
 
   let replays = [];
   try {
-    const fulls = await Promise.all(trackedPlayer.batchIds.map(id =>
-      fetch(API+'/batches/'+id, { headers: authHeaders() }).then(r=>r.json()).catch(()=>null)
-    ));
+    // Shared cached /batches/all-full response instead of fetching each of
+    // this player's batches individually — see getAllBatchesFull.
+    const allFull = await getAllBatchesFull();
+    const fullById = {};
+    for (const b of allFull) fullById[b.id] = b;
+    const fulls = trackedPlayer.batchIds.map(id => fullById[id] || null);
     for (const b of fulls) {
       if (!b || !b.replays) continue;
       for (const r of b.replays) {
@@ -17384,13 +17400,15 @@ async function openProfile(player, batches, records) {
     // Make sure active batch is in the list
     if (!batches.find(b => b.id === _activeBatch.id)) batches = [_activeBatch, ...batches];
   } else {
-    // Fetch full batch data for this player's batches only (not all batches)
-    const fullBatches = await Promise.all(batches.map(async b => {
-      if (b.replays && b.replays.length > 0) return b; // already loaded
-      try { const r = await fetch(API+'/batches/'+b.id); return await r.json(); }
-      catch(e) { return b; }
-    }));
-    batches = fullBatches;
+    // Resolve full batch data for this player's batches from the shared,
+    // session-cached /batches/all-full response (see getAllBatchesFull
+    // above) instead of one live Postgres round trip per batch — this is
+    // what made opening a profile with more than a handful of batches
+    // feel like it had hung.
+    const allFull = await getAllBatchesFull();
+    const fullById = {};
+    for (const b of allFull) fullById[b.id] = b;
+    batches = batches.map(b => (b.replays && b.replays.length > 0) ? b : (fullById[b.id] || b));
     records = [];
     // Use cached player registry instead of fetching /players again
     const _openAliases = (() => {
