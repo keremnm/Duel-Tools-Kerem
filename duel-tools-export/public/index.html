@@ -7223,8 +7223,12 @@ async function flFetchPreview() {
     // Collect replayIds already saved for the Duel Tools player so we can skip duplicates
     const existingIds = new Set();
     try {
-      const list = await getAllBatchesFull();
-      const mine = list.filter(b => (b.player||'').toLowerCase() === dtPlayer.toLowerCase());
+      // Lightweight list (cheap, no replay data) filtered to this one
+      // player, then only THIS player's full batch data — not the whole
+      // system's, which getAllBatchesFull() would be here.
+      const lightList = await fetch(API+'/batches').then(r=>r.json()).catch(()=>[]);
+      const mineIds = lightList.filter(b => (b.player||'').toLowerCase() === dtPlayer.toLowerCase()).map(b=>b.id);
+      const mine = await getBatchesByIds(mineIds);
       for (const b of mine) for (const r of (b.replays||[])) existingIds.add(r.replayId);
     } catch(e) {}
 
@@ -12866,6 +12870,40 @@ async function getAllBatchesFull(force) {
 // Cheap and safe to call liberally; it doesn't fetch anything itself.
 function invalidateAllBatchesFullCache() { _allBatchesFullCache = null; }
 
+// Full replay data for a SPECIFIC, SMALL set of batch ids — e.g. exactly
+// the batches one Player Profile owns — via POST /api/batches/bulk,
+// instead of getAllBatchesFull() above. getAllBatchesFull() is the right
+// call when something genuinely needs every batch for every player (what
+// Format Data aggregates across), but opening a single profile never
+// needs anyone else's data — on a server that's accumulated a lot of
+// batches, pulling and parsing the ENTIRE system's replay data just to
+// open one profile is itself a large, slow transfer, which is exactly
+// what made Profiles feel freshly broken again after the first round of
+// this fix. Checks the all-full cache first (free, no network) for any id
+// already sitting in it, and only asks the server for whatever's left.
+async function getBatchesByIds(ids) {
+  const wanted = [...new Set((ids||[]).filter(Boolean))];
+  if (!wanted.length) return [];
+  const out = [];
+  const missing = [];
+  for (const id of wanted) {
+    const cached = _allBatchesFullCache && _allBatchesFullCache.find(b => b.id === id);
+    if (cached) out.push(cached); else missing.push(id);
+  }
+  if (!missing.length) return out;
+  try {
+    const res = await fetch(API+'/batches/bulk', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ ids: missing }),
+    });
+    const list = await res.json();
+    if (Array.isArray(list)) out.push(...list);
+  } catch(e) {
+    console.warn('[BatchesByIds] load failed:', e.message);
+  }
+  return out;
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // FORMAT DATA — matchup win rates across every saved replay, by deck type
 // ══════════════════════════════════════════════════════════════════════
@@ -16262,11 +16300,9 @@ async function eventsRenderDeckCards(container, deck, eventCode, trackedPlayer) 
     // (see upsertEventDeckType in server.js).
     if (isMinerRole(_userRole) && deck.deckId && eventCode && trackedPlayer && trackedPlayer.batchIds && trackedPlayer.batchIds.length) {
       try {
-        // Shared cached /batches/all-full response instead of fetching
-        // each of this player's batches individually — see
-        // getAllBatchesFull.
+        // Only this one player's own batches — see getBatchesByIds.
         const allFullMap = {};
-        for (const b of await getAllBatchesFull()) allFullMap[b.id] = b;
+        for (const b of await getBatchesByIds(trackedPlayer.batchIds)) allFullMap[b.id] = b;
         const fulls = trackedPlayer.batchIds.map(id => allFullMap[id] || null);
         let allCards = [];
         for (const b of fulls) {
@@ -16529,11 +16565,12 @@ async function eventsRenderReplaysPanel(container, code, trackedPlayer, builderN
 
   let replays = [];
   try {
-    // Shared cached /batches/all-full response instead of fetching each of
-    // this player's batches individually — see getAllBatchesFull.
-    const allFull = await getAllBatchesFull();
+    // Only this one player's own batches — see getBatchesByIds. (Not
+    // getAllBatchesFull: that's the whole system's data, unnecessary and
+    // slow for a single duelist's replay panel.)
+    const owned = await getBatchesByIds(trackedPlayer.batchIds);
     const fullById = {};
-    for (const b of allFull) fullById[b.id] = b;
+    for (const b of owned) fullById[b.id] = b;
     const fulls = trackedPlayer.batchIds.map(id => fullById[id] || null);
     for (const b of fulls) {
       if (!b || !b.replays) continue;
@@ -17472,14 +17509,20 @@ async function openProfile(player, batches, records) {
     // Make sure active batch is in the list
     if (!batches.find(b => b.id === _activeBatch.id)) batches = [_activeBatch, ...batches];
   } else {
-    // Resolve full batch data for this player's batches from the shared,
-    // session-cached /batches/all-full response (see getAllBatchesFull
-    // above) instead of one live Postgres round trip per batch — this is
-    // what made opening a profile with more than a handful of batches
-    // feel like it had hung.
-    const allFull = await getAllBatchesFull();
+    // Resolve full batch data for exactly THIS player's batches via
+    // getBatchesByIds — zero live Postgres round trips (same cheap,
+    // memory-only server read getAllBatchesFull uses), but scoped to only
+    // the ids this profile actually needs instead of every batch for
+    // every player system-wide. The first version of this fix used
+    // getAllBatchesFull() here, which traded N slow per-batch live-DB
+    // round trips for ONE very large whole-system transfer — faster on a
+    // small dataset, but on a server that's accumulated a lot of batches
+    // that single transfer got big and slow enough to make profiles look
+    // freshly broken again. This id-scoped version is the actual fix.
+    const needIds = batches.filter(b => !(b.replays && b.replays.length)).map(b => b.id);
+    const owned = await getBatchesByIds(needIds);
     const fullById = {};
-    for (const b of allFull) fullById[b.id] = b;
+    for (const b of owned) fullById[b.id] = b;
     batches = batches.map(b => (b.replays && b.replays.length > 0) ? b : (fullById[b.id] || b));
     records = [];
     // Use cached player registry instead of fetching /players again

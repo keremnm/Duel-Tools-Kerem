@@ -371,6 +371,19 @@ const BATCH_SAVE_DEBOUNCE_MS = 1500; // flush after 1.5s of inactivity
 const _dirtyBatches = new Set();
 function markBatchDirty(batchId) { _dirtyBatches.add(batchId); }
 
+// Cached, pre-serialized GET /api/batches/all-full response (see that
+// route further down). JSON.stringify-ing every saved replay system-wide
+// — full card/play-by-play data included — is real, synchronous,
+// single-threaded CPU work; redoing it from scratch on every single page
+// view (Format Data, every GFWL Archive page, Events, each Profile open)
+// is what was making the app feel broken/slow again even after batch
+// LOADING stopped doing N live Postgres reads: the data source was
+// already fast, but re-serializing the same large response over and over
+// wasn't. Invalidated by saveBatchToPostgres() — the one choke point
+// every batch-changing write in this file already goes through — so a
+// save is never more than one write away from showing up here.
+let _allFullCache = null; // { json: Buffer, gzip: Buffer|null } | null
+
 async function _flushBatchSaveQueue() {
   _batchSaveTimer = null;
   if (!_batchSaveQueue.size) return;
@@ -414,6 +427,13 @@ async function _flushBatchSaveQueue() {
 }
 
 async function saveBatchToPostgres(batchId) {
+  // Any batch write invalidates the cached /batches/all-full response (see
+  // that route below) — the single real choke point every batch-changing
+  // code path in this file already funnels through, so hooking it here
+  // covers every one of them (create, patch, manual match, cross-link
+  // repair, deck-type propagation, etc.) without having to chase down and
+  // touch each call site individually.
+  _allFullCache = null;
   if (!pgClient) { _pendingFlushKeys.add('batches:'+batchId); scheduleFlushRetry(); return; }
   const batch = db.batches[batchId];
   if (!batch) return;
@@ -2528,16 +2548,63 @@ const server = http.createServer(async (req, res) => {
   // is the same data, pre-joined, in a single pass.
   if (parts[0]==='batches' && parts[1]==='all-full' && !parts[2] && method==='GET') {
     if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot browse saved batches' });
-    const list = Object.values(db.batches).filter(b => (b.replays||[]).length);
-    // Re-derive each replay's override fields from the global, replayId-keyed
-    // registry before responding — see applyGlobalOverrideToReplay. This is
-    // what makes an override visible here even on a batch copy that's gone
-    // stale (a duplicate scrape, an unmerged alias batch, a cross-linked
-    // twin that never got its own propagation write).
-    for (const b of list) {
-      for (const r of (b.replays||[])) applyGlobalOverrideToReplay(r, b.player || null);
+    // Build (and JSON-serialize, and gzip) this response at most once per
+    // actual data change — see _allFullCache above. Every subsequent call
+    // reuses the same already-serialized bytes instead of redoing all of
+    // that work from scratch, which is what made this endpoint slow/feel
+    // hung once the dataset got big: it's the exact same CPU-bound cost
+    // whether one person asks for it once or Format Data, every Profile
+    // open, GFWL Archive, and Events all ask for it independently within
+    // the same few minutes.
+    if (!_allFullCache) {
+      const list = Object.values(db.batches).filter(b => (b.replays||[]).length);
+      // Re-derive each replay's override fields from the global, replayId-keyed
+      // registry before responding — see applyGlobalOverrideToReplay. This is
+      // what makes an override visible here even on a batch copy that's gone
+      // stale (a duplicate scrape, an unmerged alias batch, a cross-linked
+      // twin that never got its own propagation write).
+      for (const b of list) {
+        for (const r of (b.replays||[])) applyGlobalOverrideToReplay(r, b.player || null);
+      }
+      const jsonBuf = Buffer.from(JSON.stringify(list));
+      _allFullCache = { json: jsonBuf, gzip: null };
     }
-    return json(res, 200, list);
+    const headers = { 'Content-Type':'application/json', 'Access-Control-Allow-Origin':'*', 'Cache-Control':'no-store, no-cache, must-revalidate', 'Pragma':'no-cache' };
+    if (_allFullCache.json.length > 800 && acceptsGzip(res)) {
+      if (!_allFullCache.gzip) { try { _allFullCache.gzip = zlib.gzipSync(_allFullCache.json); } catch(e) { _allFullCache.gzip = null; } }
+      if (_allFullCache.gzip) {
+        headers['Content-Encoding'] = 'gzip';
+        headers['Vary'] = 'Accept-Encoding';
+        res.writeHead(200, headers);
+        res.end(_allFullCache.gzip);
+        return;
+      }
+    }
+    res.writeHead(200, headers);
+    res.end(_allFullCache.json);
+    return;
+  }
+  // ── POST /api/batches/bulk — full replay data for a specific SET of
+  // batch ids, in one response. Same cheap, memory-only source as
+  // /all-full above (zero live Postgres reads — just db.batches), but
+  // scoped to only the ids the caller actually needs instead of every
+  // batch for every player system-wide. Opening one Player Profile only
+  // ever needs that one player's own batches — on a server with a lot of
+  // accumulated data, pulling the entire system's batch set just to
+  // render one profile is a large, slow, unnecessary transfer (and was
+  // making Profiles feel like they'd stalled again, the same complaint
+  // /all-full was originally brought in to fix for Format Data). This is
+  // the id-scoped version of that same fix.
+  if (parts[0]==='batches' && parts[1]==='bulk' && !parts[2] && method==='POST') {
+    if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot browse saved batches' });
+    return readBody(req, data => {
+      const ids = Array.isArray(data.ids) ? data.ids.filter(Boolean) : [];
+      const list = ids.map(id => db.batches[id]).filter(Boolean);
+      for (const b of list) {
+        for (const r of (b.replays||[])) applyGlobalOverrideToReplay(r, b.player || null);
+      }
+      return json(res, 200, list);
+    });
   }
   // ── POST /api/batches ───────────────────────────────────────────────────────
   if (parts[0]==='batches' && !parts[1] && method==='POST') {
