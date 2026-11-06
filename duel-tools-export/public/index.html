@@ -10131,7 +10131,7 @@ function renderMatchSidebar(query) {
     // loaded yet (see the loadEventPlacements() kick-off below).
     if (!_isGS && key !== 'Untagged') {
       const placeNum = findPlayerEventPlaceNum(key, items[0] && items[0].m && items[0].m.player);
-      const tier = placeNum != null ? placementTierBadge(placeNum) : null;
+      const tier = placeNum != null ? placementTierBadge(placeNum, findPlayerEventSize(key)) : null;
       if (tier) {
         const placeBadge = document.createElement('span');
         placeBadge.style.cssText = `font-size:9px;font-weight:bold;color:${tier.color};border:1px solid ${tier.color};border-radius:3px;padding:0 5px;white-space:nowrap`;
@@ -13650,6 +13650,17 @@ function findPlayerEventPlaceNum(code, playerName) {
   return deck && deck.placeNum != null ? deck.placeNum : null;
 }
 
+// This event's entrant count, from the same bulk placement data above —
+// what placementTierBadge needs to know whether a 9th-16th finish gets
+// the "Top 16" label (128+ entrants only) or its literal placement
+// number. Returns null when placements haven't loaded yet or this event
+// isn't FL-tracked, same as findPlayerEventPlaceNum.
+function findPlayerEventSize(code) {
+  if (!_eventPlacements || !code) return null;
+  const ev = _eventPlacements[code.toUpperCase().trim()];
+  return ev ? (ev.size || 0) : null;
+}
+
 // True if this match record's own decklist for its event placed within the
 // Tops-Only cutoff — Top 8 for an event under 128 entrants, Top 16 for 128+
 // — using the bulk placement data above. A record whose event isn't FL-
@@ -15916,16 +15927,24 @@ function placementNum(p) {
 
 // Human categories for a placement — "Top 8", "Top 16" etc. rather than a
 // bare number, since that's what's actually useful to scan at a glance in a
-// list of a dozen events. 1st/2nd/3rd-4th get their own medal labels since
-// those are the ones worth calling out individually.
-function placementTierBadge(placeNum) {
+// list of a dozen events. 1st/2nd/3rd-4th/5th-8th always get their own
+// label regardless of how big the event was — those rounds (Finals,
+// Semis, Quarters) exist in brackets of any size. "Top 16" is different:
+// that's a real bracket round only in an event with 128+ entrants (an
+// 8-round, 256-entrant-style bracket actually HAS a Round of 16); a
+// smaller event's 9th-or-worse finish has no equivalent named round, so
+// it's shown as its actual numeric placement instead. `size` is that
+// event's entrant count — pass null/undefined/0 when it isn't known yet
+// (callers should treat placements 9+ as "unknown size" until
+// _eventPlacements/loadEventPlacements has loaded, same as Tops Only
+// already does via recordIsTopsOnly's cutoff).
+function placementTierBadge(placeNum, size) {
   if (placeNum == null) return null;
   if (placeNum === 1) return { text: '🥇 1st', color: 'var(--amber)' };
-  if (placeNum === 2) return { text: '🥈 2nd', color: 'var(--amber)' };
+  if (placeNum === 2) return { text: '🥈 Runner-up', color: 'var(--amber)' };
   if (placeNum <= 4)  return { text: '🥉 Top 4', color: 'var(--amber)' };
   if (placeNum <= 8)  return { text: 'Top 8', color: 'var(--green)' };
-  if (placeNum <= 16) return { text: 'Top 16', color: 'var(--green)' };
-  if (placeNum <= 32) return { text: 'Top 32', color: 'var(--muted)' };
+  if (placeNum <= 16 && (size||0) >= 128) return { text: 'Top 16', color: 'var(--green)' };
   return { text: eventsOrdinal(placeNum), color: 'var(--muted)' };
 }
 
@@ -17212,19 +17231,9 @@ function renderProfileGrid(batches) {
     topRow.appendChild(nameEl);
     card.appendChild(topRow);
 
-    // Tags row (only if player has tags)
-    const _tags = _pReg ? (_pReg.tags||[]) : [];
-    if (_tags.length) {
-      const tagsRow = document.createElement('div');
-      tagsRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:3px;justify-content:center';
-      for (const tag of _tags) {
-        const t = document.createElement('span');
-        t.style.cssText = 'font-size:9px;font-family:monospace;color:var(--muted);border:1px solid var(--border);padding:1px 5px;border-radius:3px';
-        t.textContent = tag;
-        tagsRow.appendChild(t);
-      }
-      card.appendChild(tagsRow);
-    }
+    // Tags intentionally NOT shown on the grid tile itself — still visible
+    // (and editable/removable) inside the opened profile via
+    // renderProfileTags above.
 
     grid.appendChild(card);
 
@@ -18560,6 +18569,14 @@ function renderEventDecks(player, batches, records) {
   const el = document.getElementById('profile-event-decklists') || document.getElementById('profile-event-decks');
   if (!el) return;
 
+  // Placement badges below need _eventPlacements (for entrant-count-aware
+  // Top 16 vs literal-number badging — see placementTierBadge) — kick off
+  // a background load the first time this panel renders without it, and
+  // re-render once it's in, same pattern as the Deck Viewer sidebar above.
+  if (!_eventPlacements && !_eventPlacementsLoading) {
+    loadEventPlacements().then(() => renderEventDecks(player, batches, records));
+  }
+
   // Remove old year filter dropdown if present
   const oldSel = document.getElementById('edl-year-filter');
   if (oldSel) oldSel.remove();
@@ -18609,9 +18626,10 @@ function renderEventDecks(player, batches, records) {
     // time and kept fresh by the admin "⚙ Backfill Placements" button (see
     // POST /api/events/backfill, which back-writes place/builder onto this
     // exact eventDecklists entry). Shown as a tier ("Top 8") rather than a
-    // bare number — see placementTierBadge.
+    // bare number — see placementTierBadge. Needs this event's entrant
+    // count too (Top 16 only applies at 128+) — see findPlayerEventSize.
     const placeNum = placementNum(deck.place);
-    const tier = placementTierBadge(placeNum);
+    const tier = placementTierBadge(placeNum, findPlayerEventSize(deck.code));
     if (tier) {
       const placeBadge = document.createElement('span');
       placeBadge.style.cssText = `font-size:10px;font-weight:bold;color:${tier.color};border:1px solid ${tier.color};border-radius:3px;padding:0 5px;white-space:nowrap`;
