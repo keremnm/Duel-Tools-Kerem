@@ -11040,11 +11040,42 @@ function openAddMatchModal() {
   let manualForfeit = false;
   const renderForfeitBtn = () => {
     forfeitBtn.textContent = manualForfeit ? '⚠ Manually Forfeited' : 'Mark as Manually Forfeited';
-    forfeitBtn.style.cssText = 'text-align:left;background:' + (manualForfeit ? 'var(--red)' : 'none') + ';color:' + (manualForfeit ? '#fff' : 'var(--muted)') + ';border:1px solid ' + (manualForfeit ? 'var(--red)' : 'var(--border)') + ';font-family:monospace;font-weight:bold;font-size:12px;padding:8px 10px;border-radius:6px;cursor:pointer';
+    forfeitBtn.style.cssText = 'text-align:left;background:' + (manualForfeit ? 'var(--red)' : 'none') + ';color:' + (manualForfeit ? '#fff' : 'var(--muted)') + ';border:1px solid ' + (manualForfeit ? 'var(--red)' : 'var(--border)') + ';font-family:monospace;font-weight:bold;font-size:12px;padding:8px 10px;border-radius:6px;cursor:pointer;opacity:' + (didNotOccur ? '.45' : '1');
   };
-  renderForfeitBtn();
-  forfeitBtn.onclick = () => { manualForfeit = !manualForfeit; renderForfeitBtn(); };
+  forfeitBtn.onclick = () => { if (didNotOccur) return; manualForfeit = !manualForfeit; renderForfeitBtn(); };
   box.appendChild(forfeitBtn);
+
+  // "Match Did Not Occur" toggle — for record-keeping only (e.g. a GFWL
+  // match that was scheduled but never actually played, a round pass with
+  // no opponent, etc.): something worth having a row for so it isn't
+  // mistaken for a missing/unrecorded match later, but with no real
+  // result to score. Forces 0-0 and marks the record omitted — same
+  // r.omitted/r.omittedNote fields Override's "omit" flag uses (see
+  // applyGlobalOverrideToReplay in server.js), which every stats page
+  // already filters out (Format Data, Top Cards, Leaderboard, Power
+  // Rankings all do `.filter(r => !r.omitted)`), so this never touches any
+  // win rate or count anywhere — it only exists so the match shows up in
+  // the profile's match list/history as "recorded, but didn't happen."
+  // Mutually exclusive with Manually Forfeited — a forfeit assigns a real
+  // win/loss, this explicitly has neither.
+  let didNotOccur = false;
+  const dnoBtn = document.createElement('button');
+  const renderDnoBtn = () => {
+    dnoBtn.textContent = didNotOccur ? '⊘ Match Did Not Occur (0-0, omitted)' : 'Mark as Match Did Not Occur';
+    dnoBtn.style.cssText = 'text-align:left;background:' + (didNotOccur ? 'var(--muted)' : 'none') + ';color:' + (didNotOccur ? '#050508' : 'var(--muted)') + ';border:1px solid var(--border);font-family:monospace;font-weight:bold;font-size:12px;padding:8px 10px;border-radius:6px;cursor:pointer';
+  };
+  dnoBtn.onclick = () => {
+    didNotOccur = !didNotOccur;
+    if (didNotOccur) {
+      manualForfeit = false;
+      scoreAField.inp.value = '0'; scoreBField.inp.value = '0';
+    }
+    scoreAField.inp.disabled = didNotOccur; scoreBField.inp.disabled = didNotOccur;
+    scoreAField.inp.style.opacity = scoreBField.inp.style.opacity = didNotOccur ? '.5' : '1';
+    renderForfeitBtn(); renderDnoBtn();
+  };
+  renderForfeitBtn(); renderDnoBtn();
+  box.appendChild(dnoBtn);
 
   const noteLbl = document.createElement('div');
   noteLbl.textContent = 'Notes:';
@@ -11080,7 +11111,7 @@ function openAddMatchModal() {
     if (!playerA || !playerB) { errEl.textContent = 'Both player names are required.'; return; }
     if (playerA.toLowerCase() === playerB.toLowerCase()) { errEl.textContent = 'Players must be different.'; return; }
     if (isNaN(scoreA) || isNaN(scoreB) || scoreA < 0 || scoreB < 0) { errEl.textContent = 'Enter a valid score for both players.'; return; }
-    if (scoreA === scoreB) { errEl.textContent = "Scores can't be tied — pick an actual winner."; return; }
+    if (scoreA === scoreB && !didNotOccur) { errEl.textContent = "Scores can't be tied — pick an actual winner."; return; }
     // Optional — blank or left as just the pre-filled prefix both mean "no
     // replay". Anything else has to actually look like a duelingbook replay
     // link, so a typo gets caught here instead of silently being dropped by
@@ -11102,6 +11133,7 @@ function openAddMatchModal() {
           deckB: deckBField.inp.value.trim(),
           scoreA, scoreB,
           manualForfeit,
+          didNotOccur,
           note: noteInput.value.trim(),
           replayUrl,
         })

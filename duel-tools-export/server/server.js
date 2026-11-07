@@ -428,11 +428,16 @@ async function _flushBatchSaveQueue() {
 
 async function saveBatchToPostgres(batchId) {
   // Any batch write invalidates the cached /batches/all-full response (see
-  // that route below) — the single real choke point every batch-changing
-  // code path in this file already funnels through, so hooking it here
-  // covers every one of them (create, patch, manual match, cross-link
-  // repair, deck-type propagation, etc.) without having to chase down and
-  // touch each call site individually.
+  // that route below). NOTE: this is NOT the only choke point — flushBatchNow
+  // below is the other one, used by every route that needs a CONFIRMED
+  // synchronous save (overrides, manual matches, merges) rather than this
+  // function's debounced one, and it invalidates the same cache itself for
+  // exactly that reason. Between the two, every batch-changing code path in
+  // this file is covered without having to chase down and touch each call
+  // site individually — but a NEW synchronous-save helper added later must
+  // invalidate _allFullCache too, or its writes will silently never show up
+  // in Format Data/Check & Fix Data/anything else reading /batches/all-full
+  // until some unrelated write happens to invalidate the cache for it.
   _allFullCache = null;
   if (!pgClient) { _pendingFlushKeys.add('batches:'+batchId); scheduleFlushRetry(); return; }
   const batch = db.batches[batchId];
@@ -459,6 +464,18 @@ async function saveBatchToPostgres(batchId) {
 // result — from any route where "the client was told this saved" needs to
 // be true, not just "a save was scheduled."
 async function flushBatchNow(batchId) {
+  // Same reasoning as the top of saveBatchToPostgres — this is the OTHER
+  // choke point every confirmed-synchronous batch write goes through
+  // (overrides, manual matches, merges, twin-propagation), and until this
+  // line was added it was the one that DIDN'T invalidate the cache: a bug
+  // found via overrides applied through "Select All to Match YDK" on Check
+  // & Fix Data appearing to do nothing — the writes landed fine (every
+  // individual override succeeded), but /batches/all-full kept serving its
+  // pre-override snapshot forever after, since nothing on this path ever
+  // cleared it, so every page that reads global records through that route
+  // (Format Data, Check & Fix Data's own conflict re-scan, GFWL) looked
+  // completely unchanged no matter how many corrections were saved.
+  _allFullCache = null;
   const batch = db.batches[batchId];
   if (!batch) return { ok: false, error: 'Batch not found' };
   markBatchDirty(batchId);
@@ -2633,16 +2650,26 @@ const server = http.createServer(async (req, res) => {
       const playerB = (data.playerB || '').trim();
       if (!playerA || !playerB) return json(res, 400, { error: 'Both player names are required.' });
       if (playerA.toLowerCase() === playerB.toLowerCase()) return json(res, 400, { error: 'Players must be different.' });
-      const scoreA = Number(data.scoreA), scoreB = Number(data.scoreB);
+      // "Match did not occur" — record-keeping only (e.g. a scheduled GFWL
+      // match that never actually got played). Forces 0-0 server-side too
+      // (never trust the client's score fields for this — if didNotOccur is
+      // set, 0-0 is the only score that makes sense) and skips the tie
+      // check, since 0-0 is explicitly what this case wants to save.
+      const didNotOccur = !!data.didNotOccur;
+      const scoreA = didNotOccur ? 0 : Number(data.scoreA);
+      const scoreB = didNotOccur ? 0 : Number(data.scoreB);
       if (!Number.isInteger(scoreA) || !Number.isInteger(scoreB) || scoreA < 0 || scoreB < 0) {
         return json(res, 400, { error: 'Enter a valid score for both players.' });
       }
-      if (scoreA === scoreB) return json(res, 400, { error: "Scores can't be tied — pick an actual winner." });
+      if (scoreA === scoreB && !didNotOccur) return json(res, 400, { error: "Scores can't be tied — pick an actual winner." });
       const eventId = (data.eventId || '').trim();
       const deckA = (data.deckA || '').trim();
       const deckB = (data.deckB || '').trim();
-      const manualForfeit = !!data.manualForfeit;
+      const manualForfeit = !!data.manualForfeit && !didNotOccur;
       const note = (data.note || '').trim();
+      // Default reason text when the user left Notes blank — "omitted" with
+      // no explanation at all is a worse record than a generic one.
+      const omittedNote = note || 'Match did not occur.';
       // Optional documentation link — most manual entries are forfeits with
       // no real replay, but occasionally one does exist (e.g. a match that
       // WAS played but needs its result corrected/recorded this way for some
@@ -2658,8 +2685,13 @@ const server = http.createServer(async (req, res) => {
       if (!batchA || !batchB) return json(res, 500, { error: 'Could not create or find a profile for one of these players.' });
       if (batchA.id === batchB.id) return json(res, 400, { error: 'Those two names resolve to the same existing profile.' });
 
-      const resultA = scoreA > scoreB ? 'w' : 'l';
-      const resultB = flipResult(resultA);
+      // A didNotOccur match has no winner — 'n' (neither), matching the
+      // convention the client's record-builder already uses elsewhere for
+      // "no result to score" (matchWon/matchLost both become false when
+      // result isn't 'w' or 'l'). Computing a real w/l out of 0-0 would be
+      // actively misleading, since it'd always read as a loss for both sides.
+      const resultA = didNotOccur ? 'n' : (scoreA > scoreB ? 'w' : 'l');
+      const resultB = didNotOccur ? 'n' : flipResult(resultA);
       const replayId = 'manual-' + crypto.randomUUID();
       const now = Date.now();
 
@@ -2667,11 +2699,18 @@ const server = http.createServer(async (req, res) => {
       batchA.replays.push({
         replayId, isManual: true, manualForfeit, manualNote: note, manualReplayUrl,
         plays: [], allPlays: [],
+        // omitted/omittedNote set here (rather than left to the global
+        // override registry) because this record is omitted from creation —
+        // see applyGlobalOverrideToReplay, which only ever touches these
+        // fields when a matching db.overrides[replayId] entry exists, so a
+        // baked-in true here is never silently reverted on a later read.
+        omitted: didNotOccur, omittedNote: didNotOccur ? omittedNote : '',
         parsed: {
           oppName: batchB.player, result: resultA,
           score: `${scoreA}-${scoreB}`, myW: scoreA, oppW: scoreB, draws: 0,
           myDeck: deckA || 'Unknown', oppDeck: deckB || 'Unknown',
           games: [], allMine: [], allOpp: [],
+          omitted: didNotOccur, omittedNote: didNotOccur ? omittedNote : '',
         },
         timedOut: false, eventLabel: eventId, oppName: batchB.player,
         crossLinked: true, savedAt: now,
@@ -2682,11 +2721,13 @@ const server = http.createServer(async (req, res) => {
       batchB.replays.push({
         replayId, isManual: true, manualForfeit, manualNote: note, manualReplayUrl,
         plays: [], allPlays: [],
+        omitted: didNotOccur, omittedNote: didNotOccur ? omittedNote : '',
         parsed: {
           oppName: batchA.player, result: resultB,
           score: `${scoreB}-${scoreA}`, myW: scoreB, oppW: scoreA, draws: 0,
           myDeck: deckB || 'Unknown', oppDeck: deckA || 'Unknown',
           games: [], allMine: [], allOpp: [],
+          omitted: didNotOccur, omittedNote: didNotOccur ? omittedNote : '',
         },
         timedOut: false, eventLabel: eventId, oppName: batchA.player,
         crossLinked: true, savedAt: now,
@@ -2714,7 +2755,7 @@ const server = http.createServer(async (req, res) => {
       }
       logChange(req, 'add_manual_match', {
         replayId, playerA: batchA.player, playerB: batchB.player,
-        scoreA, scoreB, eventId, manualForfeit, note, manualReplayUrl,
+        scoreA, scoreB, eventId, manualForfeit, didNotOccur, note, manualReplayUrl,
       });
       return json(res, 200, { ok: true, replayId, batchAId: batchA.id, batchBId: batchB.id, playerA: batchA.player, playerB: batchB.player });
     });
