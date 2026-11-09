@@ -50,12 +50,36 @@ let pgClient = null;
 // accurate winner, not just "whatever we happened to import". 'size' is
 // best-effort (Format Library's own entrant count when we can find one on
 // the response, else the number of decks we know about).
-let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {}, replayCache: {}, overrides: {}, _changeLog: [], events: {} };
+// db.pendingFLImports: Format Library bracket data (replays + YDK) already
+// downloaded and PARSED for a player who has no profile (batch) in Duel
+// Tools yet — populated by the "Import Events from Format Library" admin
+// flow (importFLEvent* routes below) when a bracket entry's builderName
+// doesn't resolve to an existing batch. Keyed by the player's name as
+// lowercased by the importer (normalized exactly like findBatchForBuilderName
+// does it, so the creation-time lookup below matches the same way). Shape:
+//   { displayName, entries: [ { eventId, deckId, deckTypeName, placement,
+//     placeNum, ydkData, replays: [ <same shape POST /batches/:id/replay
+//     accepts: replayId, plays, allPlays, parsed, timedOut, eventLabel,
+//     round, oppName, player1, player2> ], importedAt } ] }
+// Replays are stored ALREADY PARSED (built client-side via the same
+// loadReplay()+parseMatch() pipeline go() uses) — there is no server-side
+// replay parser to fall back on (parseMatch is client-only), so parsing
+// cannot be deferred to the moment a profile finally gets created; it has
+// to happen once, up front, at import time. The moment a matching batch is
+// created (see POST /api/batches below), every entry here for that name is
+// replayed into the new batch's own replays/eventDecklists via the exact
+// same addReplayToBatchData() used by the live import, then cleared.
+let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {}, replayCache: {}, overrides: {}, _changeLog: [], events: {}, pendingFLImports: {} };
 
 async function connectPostgres() {
   const { Client } = require('pg');
   const client = new Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 10000 });
   await client.connect();
+  // Fail any single query cleanly after 20s instead of hanging indefinitely.
+  // See the 2026-11 incident below (duel_tools_replay_cache) for exactly
+  // what an unbounded query with no timeout did to this app's availability
+  // once a table grew large enough.
+  try { await client.query('SET statement_timeout = 20000'); } catch(e) { console.warn('[PG] Could not set statement_timeout:', e.message); }
   await client.query(`
     CREATE TABLE IF NOT EXISTS duel_tools_data (
       key TEXT PRIMARY KEY,
@@ -85,26 +109,68 @@ async function connectPostgres() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
-  const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('players','users','gfwl','eventDates','overrides','_changeLog','events')");
-  for (const row of res.rows) { db[row.key] = row.value; }
-  const batchRes = await client.query('SELECT id, value FROM duel_tools_batches');
-  db.batches = {};
-  for (const row of batchRes.rows) { db.batches[row.id] = row.value; }
-  const replayCacheRes = await client.query('SELECT id, value FROM duel_tools_replay_cache');
+
+  // Make the client usable for writes as soon as the tables exist, rather
+  // than only after every data load below succeeds. Previously `pgClient`
+  // was assigned at the very end of this function, so if ANY of the loads
+  // below threw (see the replay-cache note just below), connectPostgres()
+  // rejected before ever setting it — leaving pgClient null and every write
+  // in the whole app (new batches, replays, YDKs, GFWL, event data) silently
+  // queuing/failing until some unrelated retry happened to reconnect
+  // successfully. Setting it here means a failure loading one piece of data
+  // no longer takes down the ability to write anything at all.
+  pgClient = client;
+
+  try {
+    const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('players','users','gfwl','eventDates','overrides','_changeLog','events','pendingFLImports')");
+    for (const row of res.rows) { db[row.key] = row.value; }
+  } catch(e) { console.error('[PG] Failed to load players/users/gfwl/etc — starting with whatever was already in memory:', e.message); }
+
+  try {
+    const batchRes = await client.query('SELECT id, value FROM duel_tools_batches');
+    db.batches = {};
+    for (const row of batchRes.rows) { db.batches[row.id] = row.value; }
+  } catch(e) { console.error('[PG] Failed to load batches — app may start with incomplete batch data until the next successful reconnect:', e.message); }
+
+  // ── duel_tools_replay_cache: NOT bulk-loaded anymore ──────────────────
+  // This table is a best-effort cache of full DuelingBook replay
+  // play-by-play JSON (see cacheReplay() below), written for every replay
+  // ANYONE ever fetches, with no size cap or eviction. Once it grew large
+  // enough, pulling the WHOLE table over the wire on every single
+  // connect/reconnect started failing outright — Postgres logs showed
+  // repeated "could not send data to client: Connection reset by peer" /
+  // "FATAL: connection to client lost" on exactly this SELECT, over and
+  // over, for days, almost certainly from this process running out of
+  // memory (or being killed by the platform) while buffering the result.
+  // Each failure threw out of this function (before pgClient was being set
+  // early, as it now is above), which nulled pgClient and triggered ANOTHER
+  // reconnect attempt that retried the exact same oversized load — an
+  // infinite crash/reconnect loop. That is the root cause of the 2026-11
+  // incident where new batches, replay saves, YDKs, and everything else
+  // intermittently hung or silently failed to persist: the app was spending
+  // nearly all its time crash-looping on this one query instead of being
+  // available to serve ordinary requests.
+  // Replay cache entries are only ever looked up ONE AT A TIME by replayId
+  // (see the GET /api/proxy/replay route), so there was never a need to
+  // hold the whole table in memory — getCachedReplay() below does a single
+  // cheap indexed lookup per id instead, falling back to the normal slow
+  // CapSolver fetch path on a miss, exactly like it always has.
   db.replayCache = {};
-  for (const row of replayCacheRes.rows) { db.replayCache[row.id] = row.value; }
+
   // Migrate any legacy batches still stored under the old single-blob key
-  const legacyRes = await client.query("SELECT value FROM duel_tools_data WHERE key='batches'");
-  if (legacyRes.rows.length && legacyRes.rows[0].value && Object.keys(legacyRes.rows[0].value).length) {
-    console.log('[PG] Migrating', Object.keys(legacyRes.rows[0].value).length, 'legacy batches to per-row storage...');
-    for (const [id, batch] of Object.entries(legacyRes.rows[0].value)) {
-      if (!db.batches[id]) db.batches[id] = batch; // don't overwrite if already split
+  try {
+    const legacyRes = await client.query("SELECT value FROM duel_tools_data WHERE key='batches'");
+    if (legacyRes.rows.length && legacyRes.rows[0].value && Object.keys(legacyRes.rows[0].value).length) {
+      console.log('[PG] Migrating', Object.keys(legacyRes.rows[0].value).length, 'legacy batches to per-row storage...');
+      for (const [id, batch] of Object.entries(legacyRes.rows[0].value)) {
+        if (!db.batches[id]) db.batches[id] = batch; // don't overwrite if already split
+      }
+      await saveAllBatchesToPostgres();
+      await client.query("DELETE FROM duel_tools_data WHERE key='batches'");
+      console.log('[PG] Legacy batch migration complete — old blob removed.');
     }
-    pgClient = client; // needed before saveAllBatchesToPostgres can run
-    await saveAllBatchesToPostgres();
-    await client.query("DELETE FROM duel_tools_data WHERE key='batches'");
-    console.log('[PG] Legacy batch migration complete — old blob removed.');
-  }
+  } catch(e) { console.error('[PG] Legacy batch migration check failed (non-fatal):', e.message); }
+
   if (!db.batches) db.batches = {};
   if (!db.players) db.players = {};
   if (!db.users)   db.users   = {};
@@ -114,7 +180,7 @@ async function connectPostgres() {
   if (!db.overrides) db.overrides = {};
   if (!db._changeLog) db._changeLog = [];
   if (!db.events) db.events = {};
-  pgClient = client;
+  if (!db.pendingFLImports) db.pendingFLImports = {};
   // Handle PG client-level errors (e.g. connection dropped by server)
   // Without this, 'error' events on the pg client crash Node
   client.on('error', (err) => {
@@ -261,6 +327,7 @@ function loadFileDB() {
       if (!db.overrides) db.overrides = {};
       if (!db._changeLog) db._changeLog = [];
       if (!db.events) db.events = {};
+      if (!db.pendingFLImports) db.pendingFLImports = {};
     }
   } catch(e) { console.error('File DB load error:', e.message); }
 }
@@ -277,7 +344,7 @@ function loadFileDB() {
 // change to player aliases/teams was silently never persisted again.
 // Always-save-everything is simpler and can't silently drop data — these
 // four keys are small enough that resaving all of them every time is cheap.
-const _ALWAYS_SAVE_KEYS = ['players','users','gfwl','eventDates','overrides','_changeLog','events'];
+const _ALWAYS_SAVE_KEYS = ['players','users','gfwl','eventDates','overrides','_changeLog','events','pendingFLImports'];
 const _dirtyKeys = new Set(_ALWAYS_SAVE_KEYS);
 
 // Guards POST /api/events/backfill against being kicked off twice at once.
@@ -565,6 +632,24 @@ async function cacheReplay(replayId, replayData) {
   // File-DB mode (local dev only — Railway always sets DATABASE_URL): no
   // separate write needed. db.replayCache rides along inside the full `db`
   // object the next time anything calls saveDB() and writes the json file.
+}
+
+// Per-replay-id cache lookup — see the "NOT bulk-loaded anymore" note on
+// connectPostgres() above for why this exists instead of a plain
+// `db.replayCache[replayId]` read. Checks the in-memory cache first
+// (anything this process has already fetched or written via cacheReplay()
+// above), then falls back to a single small indexed Postgres read on a
+// miss. A failure here is exactly as safe to ignore as a cache miss always
+// was — the caller (GET /api/proxy/replay) just falls through to the normal
+// slow CapSolver fetch path.
+async function getCachedReplay(replayId) {
+  if (db.replayCache[replayId]) return db.replayCache[replayId];
+  if (!pgClient) return null;
+  try {
+    const r = await pgClient.query('SELECT value FROM duel_tools_replay_cache WHERE id=$1', [replayId]);
+    if (r.rows.length) { db.replayCache[replayId] = r.rows[0].value; return r.rows[0].value; }
+  } catch(e) { console.warn('[replayCache] Lookup failed for', replayId, ':', e.message); }
+  return null;
 }
 
 async function saveDB(keys) {
@@ -890,6 +975,26 @@ function findPlayerByBuilderName(builderName) {
   if (!raw) return null;
   return findPlayerByUsername(raw) || findPlayerByUsername(raw.replace(/_/g, ' '));
 }
+// Same builderName resolution as findPlayerByBuilderName, but returns the
+// actual BATCH object — "has a profile" for import-attach purposes means a
+// batch exists, same distinction buildProfileNameIndex/findBatchForBuilderName-
+// equivalent logic draws for the Events tab Status column (a bare db.players
+// registry stub with no batch must not be treated as an attach target). Used
+// by the "Import Events from Format Library" bracket-preview endpoint, which
+// is called once per admin click (not once per list-render), so a direct
+// alias-aware scan here — rather than building the full index used for the
+// Status column's bulk computation — is the right tradeoff: simpler, and
+// fast enough at this call frequency.
+function findBatchForBuilderName(builderName) {
+  const raw = (builderName || '').trim();
+  if (!raw) return null;
+  for (const variant of [raw, raw.replace(/_/g, ' ')]) {
+    for (const batch of Object.values(db.batches)) {
+      if (isSameNameOrAlias(variant, batch.player)) return batch;
+    }
+  }
+  return null;
+}
 function findPlayerByUsername(username) {
   const ul = username.toLowerCase().trim();
   if (!ul) return null;
@@ -1023,6 +1128,135 @@ function computeEventStatus(ev, profileIndex) {
     missingPlayers.push(name);
   }
   return { status: missingPlayers.length ? 'missing_players' : 'complete', missingPlayers };
+}
+
+// Extracted from POST /api/batches/:id/replay (which now just calls this and
+// wraps the result in a response) so the Format-Library-import pending-attach
+// hook (see POST /api/batches below) can add an already-parsed replay to a
+// batch through the exact same dedup/timed-out-update/cross-link path a live
+// go() import uses — rather than a second, divergent copy of this logic that
+// would inevitably drift (miss a future fix to dedup or cross-linking, like
+// the stale-cache bug this app already hit once from two save paths that
+// looked equivalent but weren't). `data` is the same shape go() POSTs:
+// {replayId, plays, allPlays, parsed, timedOut, eventLabel, round, oppName,
+// player1, player2, noCrossLink?}. `req` is passed through for logChange's
+// attribution — a pending-import attach still passes the ORIGINAL importer's
+// req (captured at import time), not whatever request happens to create the
+// profile later, so the audit log correctly credits who actually pulled the
+// data in, not an unrelated future action.
+async function addReplayToBatchData(b, data, req) {
+  const dupIdx = (b.replays||[]).findIndex(r => r.replayId === data.replayId);
+  const dup = dupIdx >= 0 ? b.replays[dupIdx] : null;
+  const crossLinks = [];
+
+  const minPlays = (data.allPlays||[]).map(p => ({
+      play:p.play,owner:p.owner,username:p.username,player1:p.player1,player2:p.player2,
+      player1_choice:p.player1_choice||p.p1pick||undefined,
+      player2_choice:p.player2_choice||p.p2pick||undefined,
+      cards:p.cards?p.cards.map(c=>({name:c.name,owner:c.owner,id:c.id,serial_number:c.serial_number,card_type:c.card_type})):undefined,
+      card:p.card?{name:p.card.name,owner:p.card.owner,id:p.card.id,serial_number:p.card.serial_number,card_type:p.card.card_type}:undefined,
+      winner:p.winner,loser:p.loser,game:p.game,pick:p.pick,p1pick:p.p1pick,p2pick:p.p2pick,
+      log:Array.isArray(p.log)?p.log.map(l=>({type:l.type,owner:l.owner,username:l.username,card:l.card?{name:l.card.name,id:l.card.id,serial_number:l.card.serial_number}:undefined,game:l.game,public_log:l.public_log,private_log:l.private_log})):(p.log&&typeof p.log==='object'?{type:p.log.type,owner:p.log.owner,username:p.log.username,public_log:p.log.public_log,private_log:p.log.private_log}:undefined)
+  }));
+
+  if (!dup) {
+    // New replay — insert
+    if (!b.replays) b.replays = [];
+    try {
+    // Store parsed result if provided; strip allPlays either way
+    const strippedPlays = (minPlays||[]).map(stripPlay);
+    const parsedData = data.parsed || null;
+    b.replays.push({ replayId:data.replayId, plays:data.plays||[], allPlays:parsedData?[]:strippedPlays, parsed:parsedData, timedOut:!!data.timedOut, eventLabel:data.eventLabel||'', round:data.round||'', oppName:data.oppName||'', player1:data.player1||null, player2:data.player2||null, savedAt:Date.now() });
+    b.status = 'ready';
+    markBatchDirty(b.id);
+    logChange(req, 'add_replay', { batchId: b.id, batchPlayer: b.player, replayId: data.replayId, eventLabel: data.eventLabel || '', oppName: data.oppName || '' });
+    // Only cross-link when explicitly allowed (new batch creation, not manual add-to-batch)
+    if (data.oppName && !data.noCrossLink) {
+      const cl = crossLinkReplay(data, data.oppName, b.player);
+      if (cl) crossLinks.push(cl);
+      if (cl && cl.batchId) await saveBatchToPostgres(cl.batchId).catch(e=>console.error('[crosslink save]',e.message));
+    }
+    await saveBatchToPostgres(b.id);
+    } catch(saveErr) { console.error('[replay POST] Save error:', saveErr.message); throw saveErr; }
+  } else if (dup.timedOut && !data.timedOut) {
+    // Existing timed-out entry being updated with real data — overwrite it.
+    // Preserve any override that was already set directly on this
+    // placeholder (result/score/deck correction made while it was still
+    // pending) — replacing the object wholesale must not silently drop
+    // it, and it must also be re-baked into the fresh `parsed` block so
+    // it still wins over the newly-arrived raw parse.
+    const parsedData2 = data.parsed || null;
+    const preservedResultOverride  = dup.resultOverride  || null;
+    const preservedScoreOverride   = dup.scoreOverride   || null;
+    const preservedMyDeckOverride  = dup.myDeckOverride  || null;
+    const preservedOppDeckOverride = dup.oppDeckOverride || null;
+    const preservedOverrideNote    = dup.overrideNote    || '';
+    if (parsedData2) {
+      if (preservedMyDeckOverride)  parsedData2.myDeck  = preservedMyDeckOverride;
+      if (preservedOppDeckOverride) parsedData2.oppDeck = preservedOppDeckOverride;
+      if (preservedResultOverride)  { parsedData2.resultOverride = preservedResultOverride; parsedData2.resultEffective = preservedResultOverride; }
+      if (preservedScoreOverride)   parsedData2.scoreOverride = preservedScoreOverride;
+      if (preservedOverrideNote)    parsedData2.overrideNote = preservedOverrideNote;
+    }
+    b.replays[dupIdx] = { replayId:data.replayId, plays:data.plays||[], allPlays:parsedData2?[]:(minPlays||[]).map(stripPlay), parsed:parsedData2, timedOut:false, eventLabel:dup.eventLabel||data.eventLabel||'', round:dup.round||data.round||'', oppName:data.oppName||dup.oppName||'', player1:data.player1||dup.player1||null, player2:data.player2||dup.player2||null, savedAt:Date.now(),
+      resultOverride: preservedResultOverride, scoreOverride: preservedScoreOverride,
+      myDeckOverride: preservedMyDeckOverride, oppDeckOverride: preservedOppDeckOverride,
+      overrideNote: preservedOverrideNote, crossLinked: dup.crossLinked||false };
+    b.status = 'ready';
+    console.log(`[replay] Updated timed-out replay ${data.replayId} with real data`);
+    await saveBatchToPostgres(b.id);
+  }
+  return { duplicate: !!dup, crossLinks };
+}
+
+// Called right after a new batch is created (see POST /api/batches below) —
+// the one true creation point every "new profile" path in the app funnels
+// through (both the client's New Batch flow and findOrPromptPlayer's
+// "Create New Profile" button end here). Checks db.pendingFLImports for any
+// bucket whose stored player name is an alias match for this NEW batch's own
+// player name or aliases, and if found, replays every entry's already-parsed
+// replays into it (via addReplayToBatchData — same dedup/cross-link path a
+// live import uses) and writes its YDK(s) into the batch's eventDecklists,
+// in the exact shape importEventDecks() already produces client-side
+// ({eventId, ydkData, importedAt, filename}) so the Profile UI renders it
+// identically to a manually-imported decklist. Consumed buckets are deleted
+// from db.pendingFLImports so the same data never gets attached twice.
+// Alias-aware matching is checked in BOTH directions (a pending bucket keyed
+// under an old name the new batch lists as an alias, or vice versa) since
+// which name the importer happened to see from Format Library and which
+// name the admin happens to type when finally creating the profile aren't
+// guaranteed to be the same one.
+async function attachPendingFLImports(batch, req) {
+  const batchNames = [batch.player, ...(batch.aliases||[])].filter(Boolean);
+  if (!batchNames.length || !db.pendingFLImports) return { attachedEvents: [] };
+  const matchedKeys = Object.keys(db.pendingFLImports).filter(key =>
+    batchNames.some(n => isSameNameOrAlias(n, db.pendingFLImports[key].displayName || key))
+  );
+  if (!matchedKeys.length) return { attachedEvents: [] };
+
+  const attachedEvents = [];
+  for (const key of matchedKeys) {
+    const bucket = db.pendingFLImports[key];
+    if (!bucket || !Array.isArray(bucket.entries)) { delete db.pendingFLImports[key]; continue; }
+    for (const entry of bucket.entries) {
+      for (const replayData of (entry.replays||[])) {
+        try { await addReplayToBatchData(batch, replayData, req); }
+        catch(e) { console.error('[fl-import] Failed to attach pending replay', replayData.replayId, 'for', batch.player, ':', e.message); }
+      }
+      if (entry.ydkData) {
+        if (!batch.eventDecklists) batch.eventDecklists = [];
+        const dupIdx = batch.eventDecklists.findIndex(d => (d.eventId||'').toUpperCase() === (entry.eventId||'').toUpperCase());
+        const deckEntry = { eventId: entry.eventId, ydkData: entry.ydkData, importedAt: Date.now(), filename: `${batch.player}-${entry.eventId}.ydk` };
+        if (dupIdx >= 0) batch.eventDecklists[dupIdx] = deckEntry; else batch.eventDecklists.push(deckEntry);
+      }
+      attachedEvents.push(entry.eventId);
+    }
+    logChange(req, 'fl_import_pending_attached', { batchId: batch.id, batchPlayer: batch.player, pendingKey: key, events: bucket.entries.map(e=>e.eventId) });
+    delete db.pendingFLImports[key];
+  }
+  await saveBatchToPostgres(batch.id);
+  await saveDB('pendingFLImports');
+  return { attachedEvents };
 }
 
 function findOrCreateBatchForPlayer(playerEntry) {
@@ -2706,7 +2940,13 @@ const server = http.createServer(async (req, res) => {
       db.batches[id] = batch;
       await saveBatchToPostgres(id);
       logChange(req, 'create_batch', { batchId: id, batchPlayer: batch.player, batchName: batch.name });
-      return json(res, 200, batch);
+      // A Format-Library event import run before this profile existed may
+      // have stashed replays/YDKs for this exact player name — see
+      // attachPendingFLImports and the db.pendingFLImports comment above.
+      let flImport = null;
+      try { flImport = await attachPendingFLImports(batch, req); }
+      catch(e) { console.error('[fl-import] attachPendingFLImports failed for new batch', id, ':', e.message); }
+      return json(res, 200, flImport && flImport.attachedEvents.length ? { ...batch, flImportAttached: flImport.attachedEvents } : batch);
     });
   }
   // ── POST /api/matches/manual — record a match with no real DuelingBook
@@ -3244,68 +3484,21 @@ const server = http.createServer(async (req, res) => {
     const b = db.batches[parts[1]];
     if (!b) return json(res, 404, { error:'Not found' });
     return readBody(req, async data => {
-      const dupIdx = (b.replays||[]).findIndex(r => r.replayId === data.replayId);
-      const dup = dupIdx >= 0 ? b.replays[dupIdx] : null;
-      const crossLinks = [];
-
-      const minPlays = (data.allPlays||[]).map(p => ({
-          play:p.play,owner:p.owner,username:p.username,player1:p.player1,player2:p.player2,
-          player1_choice:p.player1_choice||p.p1pick||undefined,
-          player2_choice:p.player2_choice||p.p2pick||undefined,
-          cards:p.cards?p.cards.map(c=>({name:c.name,owner:c.owner,id:c.id,serial_number:c.serial_number,card_type:c.card_type})):undefined,
-          card:p.card?{name:p.card.name,owner:p.card.owner,id:p.card.id,serial_number:p.card.serial_number,card_type:p.card.card_type}:undefined,
-          winner:p.winner,loser:p.loser,game:p.game,pick:p.pick,p1pick:p.p1pick,p2pick:p.p2pick,
-          log:Array.isArray(p.log)?p.log.map(l=>({type:l.type,owner:l.owner,username:l.username,card:l.card?{name:l.card.name,id:l.card.id,serial_number:l.card.serial_number}:undefined,game:l.game,public_log:l.public_log,private_log:l.private_log})):(p.log&&typeof p.log==='object'?{type:p.log.type,owner:p.log.owner,username:p.log.username,public_log:p.log.public_log,private_log:p.log.private_log}:undefined)
-      }));
-
-      if (!dup) {
-        // New replay — insert
-        if (!b.replays) b.replays = [];
-        try {
-        // Store parsed result if provided; strip allPlays either way
-        const strippedPlays = (minPlays||[]).map(stripPlay);
-        const parsedData = data.parsed || null;
-        b.replays.push({ replayId:data.replayId, plays:data.plays||[], allPlays:parsedData?[]:strippedPlays, parsed:parsedData, timedOut:!!data.timedOut, eventLabel:data.eventLabel||'', round:data.round||'', oppName:data.oppName||'', player1:data.player1||null, player2:data.player2||null, savedAt:Date.now() });
-        b.status = 'ready';
-        markBatchDirty(b.id);
-        logChange(req, 'add_replay', { batchId: b.id, batchPlayer: b.player, replayId: data.replayId, eventLabel: data.eventLabel || '', oppName: data.oppName || '' });
-        // Only cross-link when explicitly allowed (new batch creation, not manual add-to-batch)
-        if (data.oppName && !data.noCrossLink) {
-          const cl = crossLinkReplay(data, data.oppName, b.player);
-          if (cl) crossLinks.push(cl);
-          if (cl && cl.batchId) await saveBatchToPostgres(cl.batchId).catch(e=>console.error('[crosslink save]',e.message));
-        }
-        await saveBatchToPostgres(b.id);
-        } catch(saveErr) { console.error('[replay POST] Save error:', saveErr.message); throw saveErr; }
-      } else if (dup.timedOut && !data.timedOut) {
-        // Existing timed-out entry being updated with real data — overwrite it.
-        // Preserve any override that was already set directly on this
-        // placeholder (result/score/deck correction made while it was still
-        // pending) — replacing the object wholesale must not silently drop
-        // it, and it must also be re-baked into the fresh `parsed` block so
-        // it still wins over the newly-arrived raw parse.
-        const parsedData2 = data.parsed || null;
-        const preservedResultOverride  = dup.resultOverride  || null;
-        const preservedScoreOverride   = dup.scoreOverride   || null;
-        const preservedMyDeckOverride  = dup.myDeckOverride  || null;
-        const preservedOppDeckOverride = dup.oppDeckOverride || null;
-        const preservedOverrideNote    = dup.overrideNote    || '';
-        if (parsedData2) {
-          if (preservedMyDeckOverride)  parsedData2.myDeck  = preservedMyDeckOverride;
-          if (preservedOppDeckOverride) parsedData2.oppDeck = preservedOppDeckOverride;
-          if (preservedResultOverride)  { parsedData2.resultOverride = preservedResultOverride; parsedData2.resultEffective = preservedResultOverride; }
-          if (preservedScoreOverride)   parsedData2.scoreOverride = preservedScoreOverride;
-          if (preservedOverrideNote)    parsedData2.overrideNote = preservedOverrideNote;
-        }
-        b.replays[dupIdx] = { replayId:data.replayId, plays:data.plays||[], allPlays:parsedData2?[]:(minPlays||[]).map(stripPlay), parsed:parsedData2, timedOut:false, eventLabel:dup.eventLabel||data.eventLabel||'', round:dup.round||data.round||'', oppName:data.oppName||dup.oppName||'', player1:data.player1||dup.player1||null, player2:data.player2||dup.player2||null, savedAt:Date.now(),
-          resultOverride: preservedResultOverride, scoreOverride: preservedScoreOverride,
-          myDeckOverride: preservedMyDeckOverride, oppDeckOverride: preservedOppDeckOverride,
-          overrideNote: preservedOverrideNote, crossLinked: dup.crossLinked||false };
-        b.status = 'ready';
-        console.log(`[replay] Updated timed-out replay ${data.replayId} with real data`);
-        await saveBatchToPostgres(b.id);
+      // Always answer the client, success or failure — addReplayToBatchData
+      // intentionally re-throws on a save error (see its own comment), and
+      // without a catch HERE that left the request hanging with no response
+      // at all until the client eventually gave up, which is indistinguishable
+      // from "stuck on Loading 1/1" (part of the 2026-11 incident — see the
+      // connectPostgres() notes above for the actual root cause of why saves
+      // were failing in the first place). Now a genuine save failure is
+      // reported back immediately and clearly instead of hanging silently.
+      try {
+        const result = await addReplayToBatchData(b, data, req);
+        return json(res, 200, { ok:true, duplicate: result.duplicate, crossLinks: result.crossLinks });
+      } catch(e) {
+        console.error('[replay POST] Failed to save replay', data && data.replayId, 'for batch', b.id, ':', e.message);
+        return json(res, 500, { error: 'Failed to save this replay: ' + e.message });
       }
-      return json(res, 200, { ok:true, duplicate:!!dup, crossLinks });
     });
   }
 
@@ -4135,6 +4328,130 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // ══════════════════════════════════════════════════════════════════════
+  // IMPORT EVENTS FROM FORMAT LIBRARY — admin picks one specific event (by
+  // ID, or by browsing/searching FL's own public event list below) and this
+  // pulls that event's FULL bracket: every player's YDK + their replays for
+  // that one event, attached to whichever of those players already have a
+  // profile (alias-aware), with everyone else's data held in
+  // db.pendingFLImports until a matching profile exists (see that comment
+  // and attachPendingFLImports above). Deliberately NOT a "mirror all of
+  // Format Library" feature — same one-event-at-a-time scope the existing
+  // single-player FL import already uses, just for every player in the
+  // bracket instead of one.
+  //
+  // Replay fetching + parsing (loadReplay()/parseMatch()) only exists
+  // client-side — there is no server-side replay parser to port (parseMatch
+  // is pure client JS, confirmed nowhere referenced from server.js). So this
+  // feature's heavy lifting (looping over the bracket, fetching each
+  // player's replays, parsing them) runs CLIENT-side, the same way the
+  // existing single-player FL import drives go(); these routes are the
+  // server-side pieces that client loop calls into: browse FL's event list,
+  // capture one event's full bracket + resolve it against existing
+  // profiles, and store an unresolved player's already-parsed results.
+  // ══════════════════════════════════════════════════════════════════════
+
+  // ── GET /api/fl-import/browse?page=N — Format Library's own public event
+  // list, filtered to GOAT, so an admin can pick an event instead of typing
+  // a code blind. Confirmed-real endpoint (not a guess like
+  // scrapeFormatLibraryEvents's 3 candidate URLs below): plain JSON array,
+  // no pagination wrapper — each object's `abbreviation` field is the exact
+  // code everything else in this file calls "eventId"/"code"
+  // interchangeably (db.events is keyed by it).
+  if (parts[0]==='fl-import' && parts[1]==='browse' && method==='GET') {
+    if (!isMiner(req)) return json(res, 403, { error: 'Miners and above only' });
+    if (!flToken()) return json(res, 500, { error: 'FORMATLIBRARY_TOKEN not set in environment' });
+    const page = Math.max(1, parseInt(url.searchParams.get('page')||'1', 10) || 1);
+    try {
+      const qs = new URLSearchParams({ page: String(page), limit: '25', sort: 'startedAt:desc' });
+      const { status, body } = await flApiRequest('/api/events?' + qs.toString());
+      if (status === 401) return json(res, 401, { error: FL_EXPIRED_MSG });
+      if (status !== 200) return json(res, 502, { error: 'Format Library returned status ' + status });
+      let rows;
+      try { rows = JSON.parse(body); } catch(e) { return json(res, 502, { error: 'Format Library returned a non-JSON response' }); }
+      if (!Array.isArray(rows)) return json(res, 502, { error: 'Unexpected response shape from Format Library' });
+      const events = rows
+        .filter(r => (r.formatName||'').toLowerCase() === 'goat')
+        .map(r => ({
+          code: r.abbreviation || '',
+          name: r.name || '',
+          date: (r.startedAt||'').slice(0, 10),
+          size: r.size || null,
+          winner: r.winnerName || null,
+          alreadyInDatabase: !!(r.abbreviation && db.events[r.abbreviation.toUpperCase()]),
+        }))
+        .filter(e => e.code);
+      return json(res, 200, { ok: true, events, page, hasMore: rows.length >= 25 });
+    } catch(e) {
+      return json(res, 502, { error: 'Format Library request failed: ' + e.message });
+    }
+  }
+
+  // ── GET /api/fl-import/bracket/:eventId — full bracket for one event,
+  // each deck annotated with whether a matching profile already exists
+  // (matchedBatchId/matchedPlayerName) so the client can show a preview
+  // ("N attach directly, M will be held pending") before committing to the
+  // fetch-replays-for-everyone loop.
+  if (parts[0]==='fl-import' && parts[1]==='bracket' && parts[2] && method==='GET') {
+    if (!isMiner(req)) return json(res, 403, { error: 'Miners and above only' });
+    if (!flToken()) return json(res, 500, { error: 'FORMATLIBRARY_TOKEN not set in environment' });
+    const eventId = decodeURIComponent(parts[2]).toUpperCase();
+    try {
+      const { status, body } = await flApiRequest('/api/events/subscriber/' + encodeURIComponent(eventId));
+      if (status === 401) return json(res, 401, { error: FL_EXPIRED_MSG });
+      if (status === 404) return json(res, 404, { error: 'Format Library has no event with that ID.' });
+      if (status !== 200) return json(res, 502, { error: 'Format Library returned status ' + status });
+      let data;
+      try { data = JSON.parse(body); } catch(e) { return json(res, 502, { error: 'Format Library returned a non-JSON response' }); }
+      const eventFormat = ((data.event && data.event.formatName) || '').toLowerCase();
+      if (eventFormat && eventFormat !== 'goat') return json(res, 400, { error: 'That event is not a GOAT-format event.' });
+      const capturedEvent = captureEventTopDecks(eventId, data);
+      if (capturedEvent) { try { await saveDB(['events','eventDates']); } catch(e) { console.warn('[fl-import] save after bracket capture failed:', e.message); } }
+      const ev = db.events[eventId];
+      const decks = (ev && ev.decks || []).map(d => {
+        const matchedBatch = findBatchForBuilderName(d.builderName);
+        return {
+          deckId: d.deckId, builderName: d.builderName,
+          placement: d.placement, placeNum: d.placeNum, deckTypeName: d.deckTypeName,
+          matchedBatchId: matchedBatch ? matchedBatch.id : null,
+          matchedPlayerName: matchedBatch ? matchedBatch.player : null,
+        };
+      }).sort((a,b) => { const an=(a.placeNum==null)?Infinity:a.placeNum, bn=(b.placeNum==null)?Infinity:b.placeNum; return an-bn; });
+      return json(res, 200, { ok: true, code: eventId, name: ev?ev.name:'', date: ev?ev.date:'', size: ev?ev.size:decks.length, decks });
+    } catch(e) {
+      return json(res, 502, { error: 'Format Library request failed: ' + e.message });
+    }
+  }
+
+  // ── POST /api/fl-import/pending — store an already-parsed bracket entry
+  // (replays + YDK) for a player with no profile yet. Called once per
+  // unresolved player by the client-side import loop, after it has already
+  // fetched+parsed that player's replays for this event the same way go()
+  // does for a live import. See db.pendingFLImports / attachPendingFLImports
+  // above for how this gets claimed once a matching profile is created.
+  if (parts[0]==='fl-import' && parts[1]==='pending' && !parts[2] && method==='POST') {
+    if (!isMiner(req)) return json(res, 403, { error: 'Miners and above only' });
+    return readBody(req, async data => {
+      const playerName = (data.playerName||'').trim();
+      const eventId = (data.eventId||'').trim().toUpperCase();
+      if (!playerName || !eventId) return json(res, 400, { error: 'playerName and eventId are required.' });
+      const key = playerName.toLowerCase();
+      if (!db.pendingFLImports[key]) db.pendingFLImports[key] = { displayName: playerName, entries: [] };
+      const bucket = db.pendingFLImports[key];
+      const dupIdx = bucket.entries.findIndex(e => e.eventId === eventId);
+      const entry = {
+        eventId, deckId: data.deckId || null, deckTypeName: data.deckTypeName || '',
+        placement: data.placement || null, placeNum: data.placeNum!=null ? data.placeNum : null,
+        ydkData: data.ydkData || null, replays: Array.isArray(data.replays) ? data.replays : [],
+        importedAt: Date.now(),
+      };
+      if (dupIdx >= 0) bucket.entries[dupIdx] = entry; else bucket.entries.push(entry);
+      logChange(req, 'fl_import_pending_stored', { playerName, eventId, replayCount: entry.replays.length, hasYdk: !!entry.ydkData });
+      await saveDB('pendingFLImports');
+      return json(res, 200, { ok: true });
+    });
+  }
+
   // ── GET /api/proxy/replay?id=:replayId ──────────────────────────────────────
   // Solves Cloudflare Turnstile via CapSolver, then POSTs to duelingbook view-replay
   if (parts[0]==='proxy' && parts[1]==='replay' && method==='GET') {
@@ -4147,7 +4464,7 @@ const server = http.createServer(async (req, res) => {
     // can take anywhere from 5 to 90 seconds, and the same replay id often
     // gets fetched more than once (re-analysis, a different user importing
     // the same match, a retry after an unrelated error).
-    const _cachedReplay = db.replayCache[replayId];
+    const _cachedReplay = await getCachedReplay(replayId);
     if (_cachedReplay && (_cachedReplay.plays||[]).length) {
       return json(res, 200, { ok: true, replay: _cachedReplay, cached: true });
     }

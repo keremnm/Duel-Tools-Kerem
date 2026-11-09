@@ -1292,6 +1292,13 @@ select{cursor:pointer}
           </select>
           <button onclick="loadEventsTab(true)" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer">↺ Refresh</button>
           <button id="events-backfill-btn" onclick="eventsRunBackfill()" style="display:none;background:none;border:1px solid var(--purple,#a78bfa);color:var(--purple,#a78bfa);font-family:monospace;font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer" title="Admin: re-fetch placement/builder from Format Library for events imported before this feature existed">⚙ Backfill Placements</button>
+          <!-- Event-ID-driven bracket import: downloads every bracket player's
+               YDK + replays for ONE Format Library event, attaches them to
+               existing profiles (alias-aware) or holds them pending for
+               players with no profile yet. Placed right after Backfill
+               Placements per the original request. Same Miner+ gating as
+               the two buttons below. -->
+          <button id="fl-event-import-btn" onclick="openFLEventImport()" style="display:none;background:none;border:1px solid var(--purple,#a78bfa);color:var(--purple,#a78bfa);font-family:monospace;font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer" title="Import a specific event's YDKs and replays from Format Library">📥 Import Events from Format Library</button>
           <!-- Moved here from the sidebar — these are event-scoped bulk
                imports, so they belong with the rest of the Events tab's
                data tools rather than always-visible in the batch sidebar.
@@ -7385,6 +7392,320 @@ async function flConfirmImport() {
     }
     st('Format Library import complete — '+added+' decklist(s) added.', 'var(--green)');
   }
+}
+
+// ── Import Events from Format Library (event-ID-driven bracket import) ───
+// Different from the per-player panel above: the admin picks ONE event (by
+// ID, or from the "Browse recent GOAT events" list backed by
+// GET /api/fl-import/browse), previews the full bracket via
+// GET /api/fl-import/bracket/:eventId — the server already annotates each
+// deck with matchedBatchId/matchedPlayerName (alias-aware, via
+// findBatchForBuilderName) — then this loop fetches + parses EVERY bracket
+// player's replays for THIS event only, the same way go() fetches+parses
+// a manual batch (loadReplay()+parseMatch(), same trimmed _parsedStore
+// shape, same POST-body shape). For a player who already has a profile,
+// each parsed replay is POSTed straight to their existing batch
+// (POST /api/batches/:id/replay — same route go() uses) and the YDK is
+// PATCHed into eventDecklists (same shape importEventDecks() writes). For
+// a player with no profile yet, everything is POSTed once to
+// POST /api/fl-import/pending, which the server's attachPendingFLImports()
+// auto-claims (replays everything onto the real batch, already parsed) the
+// moment a matching profile is finally created — see the doc comment above
+// db.pendingFLImports on the server for the full lifecycle.
+// Pacing: 300ms between players (matches this file's existing FL-call
+// conventions), 1200ms between individual replay fetches within a player
+// (matches go()'s own convention exactly, line ~6763 above).
+let _flEventImportData = null; // { eventId, name, date, decks } — set by preview, consumed by run
+let _flBrowsePage = 1;
+
+function openFLEventImport() {
+  if (!isMinerRole(_userRole)) { st('Miners and above only', 'var(--red)'); return; }
+  const existing = document.getElementById('fl-event-import-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'fl-event-import-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:560px;width:100%;display:flex;flex-direction:column;gap:12px;max-height:88vh;overflow-y:auto;font-family:monospace';
+  box.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="font-weight:bold;font-size:13px;color:var(--purple,#a78bfa)">📥 Import Events from Format Library</span>
+      <button onclick="document.getElementById('fl-event-import-overlay').remove()" style="margin-left:auto;background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer">✕</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted)">
+      Pulls one GOAT event's full bracket from Format Library: downloads every player's YDK + replays for THIS event, attaches them to existing profiles (alias-aware), and holds data for players with no profile yet — it auto-attaches, fully parsed, the moment that profile is created.
+    </div>
+    <div style="display:flex;flex-direction:column;gap:3px">
+      <span style="color:var(--muted);font-size:10px">Event ID</span>
+      <div style="display:flex;gap:6px">
+        <input id="fl-event-import-id-inp" type="text" placeholder="e.g. FLC41" style="flex:1;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:13px;padding:7px 8px;border-radius:5px;outline:none;text-transform:uppercase"/>
+        <button onclick="flEventImportPreview()" class="btn-go" style="font-size:12px;padding:7px 14px">Preview Bracket</button>
+      </div>
+    </div>
+    <div>
+      <button onclick="flEventImportToggleBrowse()" id="fl-event-import-browse-toggle" style="background:none;border:1px solid var(--border);color:var(--muted);font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer">▾ Browse recent GOAT events</button>
+      <div id="fl-event-import-browse-list" style="display:none;margin-top:8px;max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:8px"></div>
+    </div>
+    <div id="fl-event-import-status" style="font-size:12px;color:var(--muted)"></div>
+    <div id="fl-event-import-preview" style="display:none;flex-direction:column;gap:10px"></div>
+    <div id="fl-event-import-progress" style="display:none;flex-direction:column;gap:3px;max-height:260px;overflow-y:auto;background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:10px"></div>
+  `;
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  const idInp = document.getElementById('fl-event-import-id-inp');
+  idInp.addEventListener('keydown', e => { if (e.key === 'Enter') flEventImportPreview(); });
+  idInp.focus();
+}
+
+async function flEventImportToggleBrowse() {
+  const listEl = document.getElementById('fl-event-import-browse-list');
+  const btn = document.getElementById('fl-event-import-browse-toggle');
+  if (!listEl) return;
+  const isHidden = listEl.style.display === 'none';
+  if (!isHidden) { listEl.style.display = 'none'; btn.textContent = '▾ Browse recent GOAT events'; return; }
+  btn.textContent = '▴ Browse recent GOAT events';
+  listEl.style.display = 'block';
+  _flBrowsePage = 1;
+  await flEventImportLoadBrowsePage();
+}
+
+async function flEventImportLoadBrowsePage() {
+  const listEl = document.getElementById('fl-event-import-browse-list');
+  if (!listEl) return;
+  listEl.innerHTML = '<div style="padding:10px;color:var(--muted);font-size:11px">Loading…</div>';
+  try {
+    const res = await fetch(API+'/fl-import/browse?page='+_flBrowsePage, { headers: authHeaders() });
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok) { listEl.innerHTML = '<div style="padding:10px;color:var(--red);font-size:11px">'+_escapeHtml(data.error||'Failed to load events')+'</div>'; return; }
+    const events = data.events || [];
+    if (!events.length) { listEl.innerHTML = '<div style="padding:10px;color:var(--muted);font-size:11px">No GOAT events found on this page.</div>'; return; }
+    listEl.innerHTML = '';
+    events.forEach(e => {
+      const row = document.createElement('div');
+      row.style.cssText = 'padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer;font-size:11px;display:flex;justify-content:space-between;gap:10px;align-items:center';
+      row.onmouseover = () => row.style.background = 'var(--card2)';
+      row.onmouseout  = () => row.style.background = '';
+      row.innerHTML = '<div><b>'+_escapeHtml(e.code)+'</b> — '+_escapeHtml(e.name)+
+        '<div style="color:var(--muted);margin-top:2px">'+_escapeHtml(e.date||'')+(e.size!=null?' · '+e.size+' players':'')+(e.winner?' · won by '+_escapeHtml(e.winner):'')+'</div></div>'+
+        (e.alreadyInDatabase ? '<span style="color:var(--green);font-size:10px;white-space:nowrap">✓ in database</span>' : '<span style="color:var(--muted);font-size:10px;white-space:nowrap">not imported</span>');
+      row.onclick = () => { document.getElementById('fl-event-import-id-inp').value = e.code; flEventImportPreview(); };
+      listEl.appendChild(row);
+    });
+    const navRow = document.createElement('div');
+    navRow.style.cssText = 'display:flex;justify-content:space-between;padding:6px 10px';
+    const prevBtn = document.createElement('button');
+    prevBtn.textContent = '← Prev'; prevBtn.disabled = _flBrowsePage <= 1;
+    prevBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--muted);font-size:10px;padding:4px 8px;border-radius:4px;cursor:pointer';
+    prevBtn.onclick = () => { if (_flBrowsePage>1) { _flBrowsePage--; flEventImportLoadBrowsePage(); } };
+    const nextBtn = document.createElement('button');
+    nextBtn.textContent = 'Next →'; nextBtn.disabled = !data.hasMore;
+    nextBtn.style.cssText = prevBtn.style.cssText;
+    nextBtn.onclick = () => { if (data.hasMore) { _flBrowsePage++; flEventImportLoadBrowsePage(); } };
+    navRow.appendChild(prevBtn); navRow.appendChild(nextBtn);
+    listEl.appendChild(navRow);
+  } catch(e) {
+    listEl.innerHTML = '<div style="padding:10px;color:var(--red);font-size:11px">Request failed: '+_escapeHtml(e.message)+'</div>';
+  }
+}
+
+async function flEventImportPreview() {
+  const idInp = document.getElementById('fl-event-import-id-inp');
+  const eventId = (idInp.value||'').trim().toUpperCase();
+  const statusEl = document.getElementById('fl-event-import-status');
+  const previewEl = document.getElementById('fl-event-import-preview');
+  if (!eventId) { statusEl.style.color='var(--red)'; statusEl.textContent='Enter an Event ID first.'; return; }
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = 'Fetching bracket from Format Library…';
+  previewEl.style.display = 'none'; previewEl.innerHTML = '';
+  _flEventImportData = null;
+  try {
+    const res = await fetch(API+'/fl-import/bracket/'+encodeURIComponent(eventId), { headers: authHeaders() });
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok) { statusEl.style.color='var(--red)'; statusEl.textContent = data.error || ('Failed (HTTP '+res.status+')'); return; }
+    const decks = data.decks || [];
+    if (!decks.length) { statusEl.style.color='var(--amber)'; statusEl.textContent='No bracket decks found for that event.'; return; }
+    const matched = decks.filter(d=>d.matchedBatchId);
+    const pending = decks.filter(d=>!d.matchedBatchId);
+    _flEventImportData = { eventId, name: data.name||'', date: data.date||'', decks };
+    statusEl.style.color = 'var(--green)';
+    statusEl.textContent = 'Loaded bracket for '+eventId+(data.name?' — '+data.name:'')+'.';
+    previewEl.style.display = 'flex';
+    const summary = document.createElement('div');
+    summary.style.cssText = 'background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:12px;line-height:1.7;color:var(--text)';
+    summary.innerHTML =
+      '<div><b>'+decks.length+'</b> player(s) in bracket</div>'+
+      '<div><b>'+matched.length+'</b> will attach directly to existing profiles'+(matched.length?': <span style="color:var(--muted)">'+matched.slice(0,6).map(d=>_escapeHtml(d.matchedPlayerName)).join(', ')+(matched.length>6?' +'+(matched.length-6)+' more':'')+'</span>':'')+'</div>'+
+      '<div><b>'+pending.length+'</b> will be held pending (no profile yet)'+(pending.length?': <span style="color:var(--amber)">'+pending.slice(0,6).map(d=>_escapeHtml(d.builderName)).join(', ')+(pending.length>6?' +'+(pending.length-6)+' more':'')+'</span>':'')+'</div>';
+    previewEl.appendChild(summary);
+    const confirmBtn = document.createElement('button');
+    confirmBtn.className = 'btn-go';
+    confirmBtn.style.cssText = 'font-size:13px;padding:10px';
+    confirmBtn.textContent = 'Import '+decks.length+' player(s) — YDKs + replays for this event';
+    confirmBtn.onclick = flEventImportRun;
+    previewEl.appendChild(confirmBtn);
+  } catch(e) {
+    statusEl.style.color='var(--red)'; statusEl.textContent='Request failed: '+e.message;
+  }
+}
+
+// Fetch+parse ONE replay exactly the way go() does (loadReplay()+
+// parseMatch(), same trimmed _parsedStore fields), but standalone — no
+// _activeBatch dependency — so it can be reused for any bracket player,
+// matched or pending. Returns `data` in the exact shape go() POSTs to
+// /api/batches/:id/replay, which is also exactly what attachPendingFLImports
+// expects inside a pending entry's replays[] on the server.
+async function flFetchAndParseReplay(replayId, playerName, aliases, eventLabel, round) {
+  const result = await loadReplay(replayId);
+  const _plays = result.allPlays || result.plays || [];
+  const _rpsPlays = _plays.filter(p=>p.play==='RPS').map(p=>({
+    game:p.game||null, player1:p.player1||null, player2:p.player2||null,
+    player1_choice:p.player1_choice||p.p1pick||null,
+    player2_choice:p.player2_choice||p.p2pick||null, pick:p.pick||null
+  }));
+  let _parsed = null, _parsedStore = null, _oppName = '';
+  if (!result.timedOut) {
+    _parsed = parseMatch(result.id, _plays, playerName||'', aliases||[], result.player1, result.player2);
+    _parsedStore = _parsed ? { games:_parsed.games, allMine:_parsed.allMine, allOpp:_parsed.allOpp, oppName:_parsed.oppName, myW:_parsed.myW, oppW:_parsed.oppW, draws:_parsed.draws, score:_parsed.score, result:_parsed.result } : null;
+    _oppName = _parsed ? _parsed.oppName : '';
+  }
+  return {
+    data: { replayId: result.id, plays: _rpsPlays, allPlays: [], timedOut: result.timedOut,
+      oppName: _oppName, player1: result.player1||null, player2: result.player2||null,
+      parsed: _parsedStore, eventLabel: eventLabel||'', round: round||'' },
+    matched: !result.timedOut && !!_parsed,
+    mismatch: !result.timedOut && !_parsed && _plays.length > 0,
+    timedOut: result.timedOut,
+  };
+}
+
+async function flEventImportRun() {
+  if (!_flEventImportData) return;
+  const { eventId, decks } = _flEventImportData;
+  const previewEl = document.getElementById('fl-event-import-preview');
+  const progressEl = document.getElementById('fl-event-import-progress');
+  const statusEl = document.getElementById('fl-event-import-status');
+  if (previewEl) previewEl.style.display = 'none';
+  progressEl.style.display = 'flex'; progressEl.innerHTML = '';
+  const log = (html) => { const d = document.createElement('div'); d.innerHTML = html; progressEl.appendChild(d); progressEl.scrollTop = progressEl.scrollHeight; };
+
+  let attachedDirect = 0, heldPending = 0, errors = 0;
+  const pendingNames = [];
+
+  for (let i = 0; i < decks.length; i++) {
+    const deck = decks[i];
+    const who = deck.matchedPlayerName || deck.builderName;
+    statusEl.textContent = 'Importing '+(i+1)+'/'+decks.length+' — '+who+'…';
+    log('<span style="color:var(--muted)">→ '+_escapeHtml(who)+(deck.matchedPlayerName?' (matched profile)':' (no profile yet — will hold pending)')+'</span>');
+    try {
+      // 1. YDK for this player's bracket deck, if any
+      let ydkData = null;
+      if (deck.deckId) {
+        try {
+          const dres = await fetch(API+'/proxy/fl-deck/'+encodeURIComponent(deck.deckId), { headers: authHeaders() });
+          if (dres.ok) { const ydkText = await dres.text(); try { ydkData = btoa(unescape(encodeURIComponent(ydkText))); } catch(e2) { ydkData = btoa(ydkText); } }
+          else if (dres.status === 401) { log('<span style="color:var(--red)">⚠ Format Library token expired — stopping.</span>'); break; }
+        } catch(e) { log('<span style="color:var(--amber)">⚠ YDK fetch failed for '+_escapeHtml(who)+': '+_escapeHtml(e.message)+'</span>'); }
+      }
+
+      // 2. This player's replay list from Format Library, filtered to THIS event only
+      let replayRows = [];
+      try {
+        const rres = await fetch(API+'/proxy/fl-replays?player='+encodeURIComponent(deck.builderName), { headers: authHeaders() });
+        const rdata = await rres.json().catch(()=>({}));
+        if (rres.status === 401) { log('<span style="color:var(--red)">⚠ Format Library token expired — stopping.</span>'); break; }
+        if (rres.ok) replayRows = (rdata.replays||[]).filter(r => (r.eventId||'').toUpperCase() === eventId);
+      } catch(e) { log('<span style="color:var(--amber)">⚠ Replay list fetch failed for '+_escapeHtml(who)+': '+_escapeHtml(e.message)+'</span>'); }
+
+      // Dedup replay IDs the same way the existing single-player panel does
+      const seen = new Set();
+      const replayIds = [];
+      for (const r of replayRows) {
+        const m = (r.replayLink||'').match(/id=([A-Za-z0-9_-]+)/);
+        const rid = m ? m[1] : null;
+        if (rid && !seen.has(rid)) { seen.add(rid); replayIds.push({ id: rid, round: r.round||'' }); }
+      }
+
+      const regKey = (deck.matchedPlayerName||'').toLowerCase();
+      const regAliases = (window._playerRegistry && window._playerRegistry[regKey]) ? (window._playerRegistry[regKey].aliases||[]) : [];
+      const parseAs = deck.matchedPlayerName || deck.builderName;
+      const aliasesForParse = [...new Set([...regAliases, deck.builderName].filter(Boolean))];
+
+      const parsedReplays = [];
+      for (let j = 0; j < replayIds.length; j++) {
+        const { id: rid, round } = replayIds[j];
+        const r = await flFetchAndParseReplay(rid, parseAs, aliasesForParse, eventId, round);
+        if (r.timedOut) { log('&nbsp;&nbsp;<span style="color:var(--red)">✗ '+rid+': failed to load</span>'); errors++; }
+        else if (r.mismatch) { log('&nbsp;&nbsp;<span style="color:var(--amber)">⚠ '+rid+': player not found in replay — skipped</span>'); }
+        else { parsedReplays.push(r.data); log('&nbsp;&nbsp;<span style="color:var(--green)">✓ '+rid+'</span>'); }
+        if (j < replayIds.length-1) await sleep(1200);
+      }
+
+      if (deck.matchedBatchId) {
+        // Already has a profile — attach directly via the same route go() uses.
+        for (const data of parsedReplays) {
+          try {
+            const saveRes = await fetch(API+'/batches/'+deck.matchedBatchId+'/replay', { method:'POST', headers: authHeaders(), body: JSON.stringify(data) });
+            if (!saveRes.ok) throw new Error('HTTP '+saveRes.status);
+          } catch(e) { log('<span style="color:var(--red)">⚠ Save failed for a replay: '+_escapeHtml(e.message)+'</span>'); errors++; }
+        }
+        if (ydkData) {
+          try {
+            const bres = await fetch(API+'/batches/'+deck.matchedBatchId, { headers: authHeaders() });
+            const batch = await bres.json();
+            const existingDecklists = batch.eventDecklists || [];
+            const dupIdx = existingDecklists.findIndex(d => (d.eventId||'').toUpperCase() === eventId);
+            const entry = { eventId, ydkData, importedAt: Date.now(), filename: who+'-'+eventId+'.ydk' };
+            if (dupIdx >= 0) existingDecklists[dupIdx] = entry; else existingDecklists.push(entry);
+            await fetch(API+'/batches/'+deck.matchedBatchId, { method:'PATCH', headers: authHeaders(), body: JSON.stringify({ eventDecklists: existingDecklists }) });
+          } catch(e) { log('<span style="color:var(--amber)">⚠ YDK save failed for '+_escapeHtml(who)+': '+_escapeHtml(e.message)+'</span>'); }
+        }
+        attachedDirect++;
+        log('<span style="color:var(--green)">✓ '+_escapeHtml(who)+': attached to existing profile ('+parsedReplays.length+' replay(s))</span>');
+      } else {
+        // No profile yet — store once; attachPendingFLImports() on the
+        // server claims this the moment a matching profile is created.
+        try {
+          const pres = await fetch(API+'/fl-import/pending', {
+            method:'POST', headers: authHeaders(),
+            body: JSON.stringify({
+              playerName: deck.builderName, eventId, deckId: deck.deckId||null,
+              deckTypeName: deck.deckTypeName||'', placement: deck.placement||null,
+              placeNum: deck.placeNum!=null?deck.placeNum:null, ydkData, replays: parsedReplays,
+            })
+          });
+          if (!pres.ok) throw new Error('HTTP '+pres.status);
+          heldPending++; pendingNames.push(deck.builderName);
+          log('<span style="color:var(--amber)">⚠ '+_escapeHtml(who)+': no profile yet — held pending ('+parsedReplays.length+' replay(s) + '+(ydkData?'YDK':'no YDK')+'). Will auto-attach once their profile is created.</span>');
+        } catch(e) { log('<span style="color:var(--red)">⚠ Could not store pending data for '+_escapeHtml(who)+': '+_escapeHtml(e.message)+'</span>'); errors++; }
+      }
+    } catch(e) {
+      errors++;
+      log('<span style="color:var(--red)">✗ '+_escapeHtml(who)+': '+_escapeHtml(e.message)+'</span>');
+    }
+    if (i < decks.length-1) await sleep(300);
+  }
+
+  log('<div style="margin-top:8px;font-weight:bold">Done — '+attachedDirect+' attached directly, '+heldPending+' held pending'+(pendingNames.length?' ('+pendingNames.map(_escapeHtml).join(', ')+')':'')+', '+errors+' error(s).</div>');
+  statusEl.style.color = errors ? 'var(--amber)' : 'var(--green)';
+  statusEl.textContent = 'Import complete for '+eventId+'.';
+
+  // Re-verification (explicitly requested): re-fetch this one event's
+  // computed status — the same computeEventStatus() the Events tab Status
+  // column uses — and show it right here, rather than making the admin go
+  // hunt for the row themselves.
+  try {
+    const vres = await fetch(API+'/events', { headers: authHeaders() });
+    const vdata = await vres.json().catch(()=>({}));
+    const vlist = Array.isArray(vdata) ? vdata : (vdata.events||[]);
+    const thisEvent = vlist.find(e => (e.code||'').toUpperCase() === eventId);
+    if (thisEvent) log('<div style="margin-top:4px">Verification: '+eventStatusBadge(thisEvent)+'</div>');
+  } catch(e) {}
+
+  // Refresh the Events tab list so the Status column reflects the import.
+  if (typeof loadEventsTab === 'function') loadEventsTab(true);
 }
 
 // ── Auto-import from DuelingBook save prompt (deep link) ─────────────────────
@@ -20510,6 +20831,7 @@ function applyRoleUI() {
     const _ied = document.getElementById('import-event-data-btn'); if (_ied) _ied.style.display = 'block';
     const _idk = document.getElementById('import-event-decks-btn'); if (_idk) _idk.style.display = 'block';
     const _flb = document.getElementById('fl-import-btn'); if (_flb) _flb.style.display = 'block';
+    const _flei = document.getElementById('fl-event-import-btn'); if (_flei) _flei.style.display = 'block';
   }
   // Admins only: show admin panel buttons
   if (!isAdminRole(_userRole)) {
@@ -20533,7 +20855,7 @@ function applyRoleUI() {
     document.querySelectorAll('[onclick*="openBatchPanel"]').forEach(el => {
       if (el.id !== 'temp-batch-btn') el.style.display = 'none';
     });
-    ['import-event-data-btn','import-event-decks-btn','fl-import-btn','clean-batch-btn',
+    ['import-event-data-btn','import-event-decks-btn','fl-import-btn','fl-event-import-btn','clean-batch-btn',
      'sidebar-export-import-row','sidebar-player-search'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.style.display = 'none';
