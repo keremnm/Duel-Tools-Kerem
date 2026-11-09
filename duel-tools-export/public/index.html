@@ -1329,12 +1329,16 @@ select{cursor:pointer}
       <div id="events-pagination" style="display:flex;gap:6px;align-items:center;justify-content:center;padding:10px 20px;border-top:1px solid var(--border);flex-shrink:0"></div>
     </div>
 
-    <!-- Event detail view: decklist gallery grid for one event -->
+    <!-- Event detail view: player list + metagame sections for one event.
+         Split into tabs (Players / Deck Representation / Top Cards /
+         Match-Up Matrix) rather than stacking everything on one page — see
+         eventsSwitchDetailTab() below. -->
     <div id="events-detail-view" style="flex-direction:column;flex:1;overflow:hidden;min-height:0;display:none">
       <div style="display:flex;align-items:center;gap:10px;padding:14px 20px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap">
         <button onclick="eventsShowList()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer">← Events</button>
         <div id="events-detail-title" style="font-size:14px;font-weight:bold;color:var(--amber);font-family:monospace"></div>
         <div id="events-detail-sub" style="font-size:11px;color:var(--muted)"></div>
+        <div id="events-detail-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-left:auto"></div>
       </div>
       <div id="events-detail-body" style="flex:1;overflow-y:auto;min-height:0;padding:20px"></div>
     </div>
@@ -1698,6 +1702,7 @@ select{cursor:pointer}
       <div id="admin-sessions-section" style="display:none;flex-direction:column;gap:12px"></div>
       <div id="admin-crosslinks-section" style="display:none"></div>
       <div id="admin-decktypes-section" style="display:none"></div>
+      <div id="admin-merge-section" style="display:none"></div>
 
       <!-- Log sub-tab — audit trail of who did what to whose data -->
       <div id="admin-log-section" style="display:none;flex-direction:column;gap:16px">
@@ -1729,6 +1734,7 @@ select{cursor:pointer}
             <option value="edit_player">Player profile edited</option>
             <option value="create_player">Player profile created</option>
             <option value="revert_replay">Replay reverted</option>
+            <option value="merge_batches">Profiles merged</option>
           </select>
           <button onclick="loadEditLog()" style="background:none;border:1px solid var(--green);color:var(--green);font-family:monospace;font-size:11px;padding:6px 12px;border-radius:6px;cursor:pointer">↻ Refresh</button>
           <span id="editlog-count" style="color:var(--muted);font-size:11px;margin-left:auto"></span>
@@ -7600,12 +7606,16 @@ async function flEventImportRun() {
     statusEl.textContent = 'Importing '+(i+1)+'/'+decks.length+' — '+who+'…';
     log('<span style="color:var(--muted)">→ '+_escapeHtml(who)+(deck.matchedPlayerName?' (matched profile)':' (no profile yet — will hold pending)')+'</span>');
     try {
-      // 1. YDK for this player's bracket deck, if any
-      let ydkData = null;
+      // 1. YDK for this player's bracket deck, if any — keep the raw text
+      // around too (not just the base64 copy) so it can be classified below,
+      // the same way the existing single-player FL import classifies a
+      // decklist's own cards (parseYDK/lookupPasscodeNames/
+      // buildCardObjectsFromPasscodes/classifyFromCards).
+      let ydkData = null, ydkText = null;
       if (deck.deckId) {
         try {
           const dres = await fetch(API+'/proxy/fl-deck/'+encodeURIComponent(deck.deckId), { headers: authHeaders() });
-          if (dres.ok) { const ydkText = await dres.text(); try { ydkData = btoa(unescape(encodeURIComponent(ydkText))); } catch(e2) { ydkData = btoa(ydkText); } }
+          if (dres.ok) { ydkText = await dres.text(); try { ydkData = btoa(unescape(encodeURIComponent(ydkText))); } catch(e2) { ydkData = btoa(ydkText); } }
           else if (dres.status === 401) { log('<span style="color:var(--red)">⚠ Format Library token expired — stopping.</span>'); break; }
         } catch(e) { log('<span style="color:var(--amber)">⚠ YDK fetch failed for '+_escapeHtml(who)+': '+_escapeHtml(e.message)+'</span>'); }
       }
@@ -7680,6 +7690,36 @@ async function flEventImportRun() {
           heldPending++; pendingNames.push(deck.builderName);
           log('<span style="color:var(--amber)">⚠ '+_escapeHtml(who)+': no profile yet — held pending ('+parsedReplays.length+' replay(s) + '+(ydkData?'YDK':'no YDK')+'). Will auto-attach once their profile is created.</span>');
         } catch(e) { log('<span style="color:var(--red)">⚠ Could not store pending data for '+_escapeHtml(who)+': '+_escapeHtml(e.message)+'</span>'); errors++; }
+      }
+
+      // 4. Classify the decklist from its own cards (OUR rules, not just
+      // whatever Format Library's deckTypeName says) and feed that
+      // classification back into the event's own bracket data — this is
+      // the "event data" piece: db.events[eventId].decks[i].deckTypeName,
+      // which is what the Events tab bracket gallery and Format Data both
+      // read. Run AFTER the replay POSTs above (not before) so that if this
+      // player already has a profile, upsertEventDeckType's propagation
+      // step finds the replays just saved (matched on eventLabel) and
+      // tags them with the correct myDeckOverride too — exactly the same
+      // "decklist beats whatever Format Library/replay guessing produced"
+      // priority rule the existing single-player FL import already relies on.
+      if (ydkText && deck.deckId) {
+        try {
+          const passcodes = parseYDK(ydkText);
+          if (passcodes.length) {
+            await lookupPasscodeNames(passcodes);
+            const cardObjects = buildCardObjectsFromPasscodes(passcodes);
+            const deckClass = cardObjects.length ? classifyFromCards(cardObjects) : null;
+            if (deckClass && deckClass.dc) {
+              const tres = await fetch(API+'/events/'+encodeURIComponent(eventId)+'/deck/'+encodeURIComponent(deck.deckId)+'/decktype', {
+                method: 'PATCH', headers: authHeaders(),
+                body: JSON.stringify({ deckTypeName: deckClass.dc, source: 'decklist' })
+              });
+              if (tres.ok) log('&nbsp;&nbsp;<span style="color:var(--blue)">🔗 classified as '+_escapeHtml(deckClass.dc)+' — event data updated</span>');
+              else log('<span style="color:var(--amber)">⚠ Could not save deck classification for '+_escapeHtml(who)+' (HTTP '+tres.status+')</span>');
+            }
+          }
+        } catch(e) { log('<span style="color:var(--amber)">⚠ Deck classification failed for '+_escapeHtml(who)+': '+_escapeHtml(e.message)+'</span>'); }
       }
     } catch(e) {
       errors++;
@@ -16269,7 +16309,7 @@ function downloadYDK(deck) {
 // tracked player has a decklist or replay for — not a Format Library
 // mirror. See GET /api/events* on the server.
 // ══════════════════════════════════════════════════════════════════════
-let _eventsState = { list: [], page: 1, pageSize: 10, code: null, detail: null };
+let _eventsState = { list: [], page: 1, pageSize: 10, code: null, detail: null, detailTab: 'players', metagame: null, metagameDeckType: 'All' };
 
 function eventsOrdinal(n) {
   if (n === null || n === undefined || isNaN(n)) return '';
@@ -16437,6 +16477,9 @@ function eventsShowList() {
 
 async function eventsShowDetail(code) {
   _eventsState.code = code;
+  _eventsState.detailTab = 'players'; // always land on the player list, not whichever tab was open for the last event
+  _eventsState.metagame = null;
+  _eventsState.metagameDeckType = 'All';
   const lv = document.getElementById('events-list-view'), dv = document.getElementById('events-detail-view'), kv = document.getElementById('events-deck-view');
   if (lv) lv.style.display = 'none';
   if (dv) dv.style.display = 'flex';
@@ -16447,6 +16490,7 @@ async function eventsShowDetail(code) {
   if (titleEl) titleEl.textContent = '🏆 ' + code;
   if (subEl) subEl.textContent = 'Loading…';
   if (bodyEl) bodyEl.innerHTML = '';
+  eventsRenderDetailTabs();
   try {
     const res = await fetch(API+'/events/'+encodeURIComponent(code), { headers: authHeaders() });
     const data = await res.json().catch(()=>({}));
@@ -16454,96 +16498,190 @@ async function eventsShowDetail(code) {
     _eventsState.detail = data;
     if (titleEl) titleEl.textContent = '🏆 ' + (data.name || data.code) + ' Decks:';
     if (subEl) subEl.textContent = [data.date, data.size?(data.size+' entrants'):null, (data.decks||[]).length+' decklist(s) on record'].filter(Boolean).join(' · ');
-    eventsRenderDeckGrid(data);
-    eventsRenderMetagame(code);
+    eventsRenderDetailBody();
   } catch(e) {
     if (subEl) subEl.textContent = 'Request failed: '+e.message;
   }
 }
 
-// ── Metagame Stats + Matchup Matrix for the event detail page ──────────────
-// Deck Representation / Top Deck Representation come straight from the
-// bracket we captured. The Matchup Matrix is explicitly partial: it's built
-// server-side only from replays already on record for Duel Tools-tracked
-// players in this event, since Format Library's event API doesn't expose
-// full bracket match-by-match pairings — see the note the endpoint returns,
-// which is surfaced to the user below rather than presenting this as the
-// complete bracket result.
-async function eventsRenderMetagame(code) {
+// ── Event detail page tabs ──────────────────────────────────────────────────
+// Four views sharing one event: the player list (default — Placement, Name,
+// Deck Type, Decklist ✓/✗, Replays ✓/✗, one row per bracket entrant) plus
+// three metagame sections that used to all render stacked on the same page
+// (Deck Representation + Top Deck Representation donuts, the Top Main/Side
+// Deck card breakdowns, and the Matchup Matrix) — split into their own tabs
+// so opening an event doesn't mean scrolling past all of it just to see the
+// player list. The metagame data itself (GET /events/:code/metagame) is
+// fetched lazily, the first time any of the three metagame tabs is opened,
+// and cached in _eventsState.metagame so switching between those three tabs
+// doesn't re-fetch; only changing the Top Cards deck-type filter re-fetches
+// (see eventsFetchMetagame).
+const EVENTS_DETAIL_TABS = [
+  { id: 'players', label: '👥 Players' },
+  { id: 'deckrep', label: '📊 Deck Representation' },
+  { id: 'topcards', label: '📇 Top Cards' },
+  { id: 'matrix', label: '⚔ Match-Up Matrix' },
+];
+function eventsRenderDetailTabs() {
+  const tabsEl = document.getElementById('events-detail-tabs');
+  if (!tabsEl) return;
+  tabsEl.innerHTML = '';
+  EVENTS_DETAIL_TABS.forEach(t => {
+    const active = _eventsState.detailTab === t.id;
+    const btn = document.createElement('button');
+    btn.textContent = t.label;
+    btn.style.cssText = `background:${active?'var(--amber)':'none'};color:${active?'#000':'var(--muted)'};border:1px solid ${active?'var(--amber)':'var(--border)'};font-family:monospace;font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer;white-space:nowrap`;
+    btn.onclick = () => eventsSwitchDetailTab(t.id);
+    tabsEl.appendChild(btn);
+  });
+}
+function eventsSwitchDetailTab(tab) {
+  _eventsState.detailTab = tab;
+  eventsRenderDetailTabs();
+  eventsRenderDetailBody();
+}
+function eventsRenderDetailBody() {
   const bodyEl = document.getElementById('events-detail-body');
-  if (!bodyEl) return;
-  const section = document.createElement('div');
-  section.id = 'events-metagame-section';
-  section.style.cssText = 'margin-top:24px;padding-top:20px;border-top:1px solid var(--border)';
-  const hdrHtml = '<div style="font-size:11px;color:var(--muted);letter-spacing:.08em;margin-bottom:10px;font-weight:bold">METAGAME STATS</div>';
-  section.innerHTML = hdrHtml + '<div style="color:var(--muted);font-size:12px">Loading…</div>';
-  bodyEl.appendChild(section);
-
-  let data;
-  try {
-    const res = await fetch(API+'/events/'+encodeURIComponent(code)+'/metagame', { headers: authHeaders() });
-    data = await res.json().catch(()=>({}));
-    if (!res.ok) { section.innerHTML = hdrHtml + '<div style="color:var(--red);font-size:12px">'+_escapeHtml(data.error||'Failed to load metagame stats.')+'</div>'; return; }
-  } catch(e) {
-    section.innerHTML = hdrHtml + '<div style="color:var(--red);font-size:12px">Request failed: '+_escapeHtml(e.message)+'</div>';
-    return;
+  if (!bodyEl || !_eventsState.detail) return;
+  bodyEl.innerHTML = '';
+  if (_eventsState.detailTab === 'players') { eventsRenderPlayerList(_eventsState.detail); return; }
+  // The three metagame tabs all share one fetch — see eventsFetchMetagame.
+  const loading = document.createElement('div');
+  loading.style.cssText = 'color:var(--muted);font-size:12px';
+  loading.textContent = 'Loading…';
+  bodyEl.appendChild(loading);
+  eventsFetchMetagame(_eventsState.code, _eventsState.metagameDeckType).then(data => {
+    if (!data || _eventsState.detailTab === 'players') return; // tab switched away, or fetch failed (error already shown)
+    bodyEl.innerHTML = '';
+    if (_eventsState.detailTab === 'deckrep') eventsRenderDeckRepSection(bodyEl, data);
+    else if (_eventsState.detailTab === 'topcards') eventsRenderTopCardsSection(bodyEl, data);
+    else if (_eventsState.detailTab === 'matrix') eventsRenderMatrixSection(bodyEl, data);
+  });
+}
+// Fetches (or reuses the cached) metagame payload for the current event.
+// Cached per deck-type filter so switching between the three metagame tabs
+// at the SAME filter setting is instant, but changing the Top Cards filter
+// re-fetches (the server only re-scopes cardStats by deckType — see the
+// GET /events/:code/metagame route — so a stale cache under a different
+// filter would show the wrong card breakdown).
+async function eventsFetchMetagame(code, deckType) {
+  if (_eventsState.metagame && _eventsState.metagame._deckType === (deckType||'All') && _eventsState.metagame._code === code) {
+    return _eventsState.metagame;
   }
+  const bodyEl = document.getElementById('events-detail-body');
+  try {
+    const qs = (deckType && deckType !== 'All') ? ('?deckType='+encodeURIComponent(deckType)) : '';
+    const res = await fetch(API+'/events/'+encodeURIComponent(code)+'/metagame'+qs, { headers: authHeaders() });
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok) {
+      if (bodyEl) bodyEl.innerHTML = '<div style="color:var(--red);font-size:12px">'+_escapeHtml(data.error||'Failed to load metagame stats.')+'</div>';
+      return null;
+    }
+    data._deckType = deckType || 'All';
+    data._code = code;
+    _eventsState.metagame = data;
+    return data;
+  } catch(e) {
+    if (bodyEl) bodyEl.innerHTML = '<div style="color:var(--red);font-size:12px">Request failed: '+_escapeHtml(e.message)+'</div>';
+    return null;
+  }
+}
 
-  const cardStats = data.cardStats || {};
-  const coverageNote = cardStats.totalDecks
-    ? `<div style="font-size:10px;color:var(--dim);margin:-8px 0 18px">Card stats based on ${cardStats.decksWithCards||0} of ${cardStats.totalDecks} bracket deck(s) whose cards have been cached so far — opening more decklists above improves coverage.</div>`
-    : '';
-
-  section.innerHTML = hdrHtml + `
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-bottom:18px">
-      <div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:12px">
+// ── Metagame Stats + Matchup Matrix for the event detail page ──────────────
+// Three separate tabs (see EVENTS_DETAIL_TABS / eventsRenderDetailBody
+// above) sharing one GET /events/:code/metagame fetch (cached in
+// _eventsState.metagame). Deck Representation / Top Deck Representation
+// come straight from the bracket we captured. The Matchup Matrix is
+// explicitly partial: it's built server-side only from replays already on
+// record for Duel Tools-tracked players in this event, since Format
+// Library's event API doesn't expose full bracket match-by-match pairings
+// — see the note the endpoint returns, which is surfaced to the user below
+// rather than presenting this as the complete bracket result.
+function eventsRenderDeckRepSection(container, data) {
+  container.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px">
+      <div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:14px">
         <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">DECK REPRESENTATION</div>
-        <canvas id="events-mg-donut-rep" style="width:100%;max-height:180px"></canvas>
+        <canvas id="events-mg-donut-rep" style="width:100%;max-height:260px"></canvas>
         <div id="events-mg-donut-rep-legend" style="margin-top:8px;display:flex;flex-direction:column;gap:3px"></div>
       </div>
-      <div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:12px">
+      <div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:14px">
         <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">TOP DECK REPRESENTATION</div>
         <div style="font-size:9px;color:var(--dim);margin-bottom:8px">Top ${data.topDeckRepresentationN||8} by placement — our own cutoff, not an official Format Library stat</div>
-        <canvas id="events-mg-donut-top" style="width:100%;max-height:180px"></canvas>
+        <canvas id="events-mg-donut-top" style="width:100%;max-height:260px"></canvas>
         <div id="events-mg-donut-top-legend" style="margin-top:8px;display:flex;flex-direction:column;gap:3px"></div>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:8px">
-      <div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:12px">
-        <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">TOP MAIN DECK CARDS</div>
-        <div id="events-mg-maincards"></div>
-      </div>
-      <div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:12px">
-        <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">TOP SIDE DECK CARDS</div>
-        <div id="events-mg-sidecards"></div>
-      </div>
-    </div>
-    ${coverageNote}
-    <div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:12px">
-      <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">MATCHUP MATRIX (match wins)</div>
-      <div id="events-mg-matrix"></div>
-    </div>
   `;
-
   const repEntries = (data.deckRepresentation||[]).map(d=>[d.deckTypeName, d.count]);
   if (repEntries.length) buildDonutChart('events-mg-donut-rep','events-mg-donut-rep-legend', repEntries, 'Deck Representation');
   else {
     const c = document.getElementById('events-mg-donut-rep'); if (c) c.style.display = 'none';
     const l = document.getElementById('events-mg-donut-rep-legend'); if (l) l.textContent = 'No deck data yet.';
   }
-
   const topEntries = (data.topDeckRepresentation||[]).map(d=>[d.deckTypeName, d.count]);
   if (topEntries.length) buildDonutChart('events-mg-donut-top','events-mg-donut-top-legend', topEntries, 'Top Deck Representation');
   else {
     const c = document.getElementById('events-mg-donut-top'); if (c) c.style.display = 'none';
     const l = document.getElementById('events-mg-donut-top-legend'); if (l) l.textContent = 'No placement data yet.';
   }
+}
+
+// Top Main/Side Deck card breakdowns, with a deck-type filter (default
+// "All") — picking a specific deck type re-fetches the metagame payload
+// scoped to just that deck type's cards (see eventsFetchMetagame /
+// GET /events/:code/metagame?deckType=) and re-renders this same section.
+async function eventsRenderTopCardsSection(container, data) {
+  const cardStats = data.cardStats || {};
+  const coverageNote = cardStats.totalDecks
+    ? `<div style="font-size:10px;color:var(--dim);margin-top:10px">Card stats based on ${cardStats.decksWithCards||0} of ${cardStats.totalDecks} matching bracket deck(s) whose cards have been cached so far — opening more decklists improves coverage.</div>`
+    : '';
+  const deckTypeNames = ((_eventsState.detail && _eventsState.detail.decks) || []).map(d => d.deckTypeName || 'Unknown');
+  const uniqueTypes = [...new Set(deckTypeNames)].sort((a,b)=>a.localeCompare(b));
+  const current = _eventsState.metagameDeckType || 'All';
+  const options = ['All', ...uniqueTypes].map(t =>
+    `<option value="${_escapeHtml(t)}" ${t===current?'selected':''}>${_escapeHtml(t)}</option>`
+  ).join('');
+
+  container.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+      <div style="font-size:11px;color:var(--muted);letter-spacing:.08em;font-weight:bold">TOP CARDS</div>
+      <label style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
+        Deck type:
+        <select id="events-topcards-decktype" style="background:var(--card2);color:var(--text);border:1px solid var(--border2);font-family:monospace;font-size:11px;padding:4px 8px;border-radius:5px">${options}</select>
+      </label>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px">
+      <div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:14px">
+        <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">TOP MAIN DECK CARDS</div>
+        <div id="events-mg-maincards"></div>
+      </div>
+      <div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:14px">
+        <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">TOP SIDE DECK CARDS</div>
+        <div id="events-mg-sidecards"></div>
+      </div>
+    </div>
+    ${coverageNote}
+  `;
+  const selectEl = document.getElementById('events-topcards-decktype');
+  if (selectEl) selectEl.onchange = () => {
+    _eventsState.metagameDeckType = selectEl.value;
+    eventsRenderDetailBody(); // re-fetches metagame scoped to the new filter
+  };
 
   const allPasscodes = [...(cardStats.main||[]).map(c=>c.passcode), ...(cardStats.side||[]).map(c=>c.passcode)];
   if (allPasscodes.length) { try { await lookupPasscodeNames(allPasscodes); } catch(e) {} }
   eventsRenderCardBarList(document.getElementById('events-mg-maincards'), cardStats.main||[]);
   eventsRenderCardBarList(document.getElementById('events-mg-sidecards'), cardStats.side||[]);
+}
 
+function eventsRenderMatrixSection(container, data) {
+  container.innerHTML = `
+    <div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:14px">
+      <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;margin-bottom:10px;font-weight:bold">MATCH-UP MATRIX (match wins)</div>
+      <div id="events-mg-matrix"></div>
+    </div>
+  `;
   eventsRenderMatchupMatrix(document.getElementById('events-mg-matrix'), data.matchupMatrix||{});
 }
 
@@ -16612,29 +16750,51 @@ function eventsRenderMatchupMatrix(container, matrix) {
   container.appendChild(note);
 }
 
-function eventsRenderDeckGrid(ev) {
+// Default view for the event detail page's Players tab — a text-columned
+// list (Placement, Name, Deck Type, Decklist ✓/✗, Replays ✓/✗) instead of
+// the old card-tile grid, so the whole bracket is scannable at a glance
+// without hunting through tiles for the one thing you actually need (e.g.
+// "which of these players are missing replays"). hasCards/hasReplays come
+// straight from GET /api/events/:code — see that route's own comment for
+// what each one checks. Clicking a row still opens that deck the same way
+// a tile used to (eventsShowDeck).
+function eventsRenderPlayerList(ev) {
   const bodyEl = document.getElementById('events-detail-body');
   if (!bodyEl) return;
   const decks = ev.decks || [];
   if (!decks.length) { bodyEl.innerHTML = '<div style="color:var(--muted);font-size:13px">No decklists on record for this event yet.</div>'; return; }
-  const grid = document.createElement('div');
-  grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px';
-  decks.forEach(d => {
+  const check = '<span style="color:var(--green);font-weight:bold">✓</span>';
+  const cross = '<span style="color:var(--red);font-weight:bold">✗</span>';
+  const table = document.createElement('table');
+  table.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
+  let thead = '<thead><tr style="border-bottom:1px solid var(--border2);text-align:left">';
+  thead += '<th style="padding:6px 10px;color:var(--muted);font-size:10px;letter-spacing:.06em">PLACEMENT</th>';
+  thead += '<th style="padding:6px 10px;color:var(--muted);font-size:10px;letter-spacing:.06em">NAME</th>';
+  thead += '<th style="padding:6px 10px;color:var(--muted);font-size:10px;letter-spacing:.06em">DECK TYPE</th>';
+  thead += '<th style="padding:6px 10px;color:var(--muted);font-size:10px;letter-spacing:.06em;text-align:center">DECKLIST</th>';
+  thead += '<th style="padding:6px 10px;color:var(--muted);font-size:10px;letter-spacing:.06em;text-align:center">REPLAYS</th>';
+  thead += '</tr></thead>';
+  let tbody = '<tbody>';
+  decks.forEach((d, i) => {
     const place = d.placeNum!=null ? eventsOrdinal(d.placeNum) : (d.placement||'—');
-    const card = document.createElement('div');
-    card.style.cssText = 'background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:12px;cursor:pointer;display:flex;flex-direction:column;gap:4px';
-    card.onmouseover = () => card.style.borderColor = 'var(--amber)';
-    card.onmouseout  = () => card.style.borderColor = 'var(--border2)';
-    card.onclick = () => eventsShowDeck(ev.code, d.deckId);
-    card.innerHTML = `
-      <div style="font-weight:bold;color:var(--text);font-size:13px">${_escapeHtml(d.deckTypeName||'Unknown Deck')}</div>
-      <div style="font-size:12px;color:var(--muted)">${_escapeHtml(d.builderName||'Unknown')}${d.trackedPlayer?' <span style="color:var(--green)">✓ tracked</span>':''}</div>
-      <div style="font-size:11px;color:var(--amber)">${place} place</div>
-    `;
-    grid.appendChild(card);
+    tbody += `<tr class="events-player-row" data-idx="${i}" style="border-bottom:1px solid var(--border2);cursor:pointer">
+      <td style="padding:7px 10px;color:var(--amber);white-space:nowrap">${_escapeHtml(String(place))}</td>
+      <td style="padding:7px 10px;color:var(--text)">${_escapeHtml(d.builderName||'Unknown')}${d.trackedPlayer?' <span style="color:var(--green);font-size:10px">✓ tracked</span>':''}</td>
+      <td style="padding:7px 10px;color:var(--muted)">${_escapeHtml(d.deckTypeName||'Unknown')}</td>
+      <td style="padding:7px 10px;text-align:center">${d.hasCards?check:cross}</td>
+      <td style="padding:7px 10px;text-align:center">${d.hasReplays?check:cross}</td>
+    </tr>`;
   });
+  tbody += '</tbody>';
+  table.innerHTML = thead + tbody;
   bodyEl.innerHTML = '';
-  bodyEl.appendChild(grid);
+  bodyEl.appendChild(table);
+  table.querySelectorAll('.events-player-row').forEach(row => {
+    const d = decks[Number(row.getAttribute('data-idx'))];
+    row.onmouseover = () => row.style.background = 'var(--card2)';
+    row.onmouseout  = () => row.style.background = '';
+    row.onclick = () => eventsShowDeck(ev.code, d.deckId);
+  });
 }
 
 async function eventsShowDeck(code, deckId) {
@@ -16686,7 +16846,8 @@ async function eventsShowDeck(code, deckId) {
   if (openLink) openLink.href = 'https://www.formatlibrary.com/decks/'+deck.deckId;
 
   await eventsRenderDeckCards(cardsEl, deck, code, data.trackedPlayer);
-  eventsRenderReplaysPanel(replaysEl, code, data.trackedPlayer, deck.builderName);
+  const _deckReplays = await eventsRenderReplaysPanel(replaysEl, code, data.trackedPlayer, deck.builderName);
+  if (cardsEl && data.trackedPlayer) eventsRenderMatchupStats(cardsEl, data.trackedPlayer, _deckReplays);
 }
 
 // Renders a normal YDK-style card grid — one tile per physical copy, fixed
@@ -16864,26 +17025,37 @@ async function eventsRenderDeckCards(container, deck, eventCode, trackedPlayer) 
   const MAIN_PER_ROW = 10;
   const CARD_PAD = 40; // container's own left+right padding (16px 20px)
 
+  // The grids render into their own wrapper div, not `container` directly,
+  // because the resize handler below rebuilds them from scratch — if it
+  // cleared `container` itself it would also wipe out the match-stats block
+  // eventsShowDeck() appends after this function returns (see
+  // eventsRenderMatchupStats), every single time the window resizes.
+  const gridsWrap = document.createElement('div');
+  gridsWrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;width:100%';
+  container.appendChild(gridsWrap);
+
   // Tile size scales up to fill the panel's actual available width instead
   // of staying pinned at a fixed small size — on a wide window the cards
   // panel (flex:1 next to the 380px replays rail) is often much wider than
-  // a fixed 685px grid, leaving a big dead gap on both sides. Floors at the
-  // original 64px (never smaller/harder to read than before) and caps at
-  // 108px so a single deck on an ultrawide monitor doesn't blow up into
-  // oversized tiles that just push everything into more vertical scrolling.
+  // a fixed 685px grid, leaving a big dead gap on both sides. Floors at
+  // 64px (never smaller/harder to read than before) and caps at 84px (down
+  // from the original 108px) so a full 40-card main deck plus side deck
+  // fits on screen without scrolling on a typical window, while still
+  // being easy to read — large decks were otherwise forcing a scroll just
+  // to see the whole thing.
   function computeMainTile() {
     const availW = Math.max(320, (container.clientWidth || 685) - CARD_PAD);
-    return Math.max(64, Math.min(108, Math.floor((availW - (MAIN_PER_ROW - 1) * 5) / MAIN_PER_ROW)));
+    return Math.max(64, Math.min(84, Math.floor((availW - (MAIN_PER_ROW - 1) * 5) / MAIN_PER_ROW)));
   }
 
   function layoutGrids() {
-    container.innerHTML = '';
+    gridsWrap.innerHTML = '';
     const MAIN_TILE = computeMainTile(), MAIN_GAP = 5;
     const mainRowWidth = MAIN_PER_ROW * MAIN_TILE + (MAIN_PER_ROW - 1) * MAIN_GAP;
     if (sortedMain.length) {
       const t = document.createElement('div'); t.style.cssText='font-size:11px;color:var(--muted);letter-spacing:.1em;margin-bottom:6px;font-weight:bold'; t.textContent = 'MAIN DECK ('+sortedMain.length+')';
-      container.appendChild(t);
-      container.appendChild(renderGrid(sortedMain, MAIN_TILE, MAIN_PER_ROW, MAIN_GAP));
+      gridsWrap.appendChild(t);
+      gridsWrap.appendChild(renderGrid(sortedMain, MAIN_TILE, MAIN_PER_ROW, MAIN_GAP));
     }
     if (sortedSide.length) {
       // Side deck always fits in a single row, same total width as the main
@@ -16894,8 +17066,8 @@ async function eventsRenderDeckCards(container, deck, eventCode, trackedPlayer) 
       const sideGap = sideCount >= 14 ? 4 : 5;
       const sideTile = Math.max(30, Math.min(MAIN_TILE, Math.floor((mainRowWidth - (sideCount - 1) * sideGap) / sideCount)));
       const t = document.createElement('div'); t.style.cssText='font-size:11px;color:var(--muted);letter-spacing:.1em;margin:10px 0 6px;font-weight:bold'; t.textContent = 'SIDE DECK ('+sortedSide.length+')';
-      container.appendChild(t);
-      container.appendChild(renderGrid(sortedSide, sideTile, sideCount, sideGap));
+      gridsWrap.appendChild(t);
+      gridsWrap.appendChild(renderGrid(sortedSide, sideTile, sideCount, sideGap));
     }
   }
 
@@ -16959,11 +17131,11 @@ function _eventsImportBtn(label, flUsername, dtPlayerName) {
 }
 
 async function eventsRenderReplaysPanel(container, code, trackedPlayer, builderName) {
-  if (!container) return;
+  if (!container) return [];
   if (!trackedPlayer || !trackedPlayer.batchIds || !trackedPlayer.batchIds.length) {
     container.innerHTML = '<div style="font-size:12px;color:var(--muted);letter-spacing:.08em;margin-bottom:10px;font-weight:bold">REPLAYS</div><div style="font-size:13px;color:var(--muted)">This duelist doesn\'t have a Duel Tools profile yet — no replays on record.</div>';
     if (builderName) container.appendChild(_eventsImportBtn('📥 Import Profile from Format Library', builderName));
-    return;
+    return [];
   }
   container.innerHTML = '<div style="font-size:12px;color:var(--muted);letter-spacing:.08em;margin-bottom:10px;font-weight:bold">REPLAYS — '+_escapeHtml(trackedPlayer.name)+'</div><div style="font-size:12px;color:var(--muted)">Loading…</div>';
 
@@ -16991,7 +17163,7 @@ async function eventsRenderReplaysPanel(container, code, trackedPlayer, builderN
     // it by name so the import attaches to the existing profile rather than
     // just reusing the raw Format Library builder spelling.
     container.appendChild(_eventsImportBtn('📥 Import more replays from Format Library', builderName || trackedPlayer.name, trackedPlayer.name));
-    return;
+    return [];
   }
 
   container.innerHTML = '';
@@ -17032,6 +17204,102 @@ async function eventsRenderReplaysPanel(container, code, trackedPlayer, builderN
     `;
     container.appendChild(row);
   });
+  return replays;
+}
+
+// Underneath the deck image grid (appended into the SAME scrollable column,
+// right after MAIN/SIDE DECK) — aggregate stats for this player's replays
+// in THIS event: overall record/win rate, per-opponent matchups (with
+// opponent deck type when known), and a G1-vs-G2+G3 split. The split uses
+// each replay's own parsed games[] (gameNum + winner, from parseMatch — see
+// index.html's parseMatch for how these are derived from the raw replay
+// log) rather than anything new: Game 1 of a Bo3 is always played before
+// any side-decking happens, so it's the "pre-side" read on a matchup, while
+// Games 2 and 3 happen after both players have sided and are pooled
+// together as the "post-side" read. Games with no recorded winner (a
+// timed-out/incomplete game) are excluded from both the numerator and
+// denominator rather than counted as a loss.
+function eventsRenderMatchupStats(container, trackedPlayer, replays) {
+  if (!container || !trackedPlayer || !replays || !replays.length) return;
+
+  let W=0, L=0, g1W=0, g1Total=0, g23W=0, g23Total=0;
+  const byOpp = {}; // oppName -> { w, l, deck }
+
+  replays.forEach(r => {
+    const p = r.parsed || {};
+    const result = r.resultOverride || p.resultOverride || p.result || '';
+    const isWin = /^w/i.test(result), isLoss = /^l/i.test(result);
+    const oppName = r.oppName || p.oppName || 'Unknown';
+    const oppDeck = r.oppDeckOverride || p.oppDeck || _eventsFindBracketDeckType(oppName) || '';
+    if (isWin) W++; else if (isLoss) L++;
+    if (!byOpp[oppName]) byOpp[oppName] = { w:0, l:0, deck: '' };
+    if (isWin) byOpp[oppName].w++; else if (isLoss) byOpp[oppName].l++;
+    if (oppDeck) byOpp[oppName].deck = oppDeck;
+
+    (p.games||[]).forEach(g => {
+      if (!g || !g.winner) return;
+      const won = g.winner === trackedPlayer.name;
+      if (g.gameNum === 1) { g1Total++; if (won) g1W++; }
+      else if (g.gameNum === 2 || g.gameNum === 3) { g23Total++; if (won) g23W++; }
+    });
+  });
+
+  const pct = (w, total) => total ? Math.round(w/total*100) : null;
+  const overallPct = pct(W, W+L), g1Pct = pct(g1W, g1Total), g23Pct = pct(g23W, g23Total);
+  const colFor = p => p==null ? 'var(--muted)' : p>=50 ? 'var(--green)' : 'var(--red)';
+
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'margin-top:18px;padding-top:16px;border-top:1px solid var(--border)';
+
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'font-size:11px;color:var(--muted);letter-spacing:.1em;margin-bottom:10px;font-weight:bold';
+  hdr.textContent = 'MATCH STATS — ' + trackedPlayer.name + ' @ this event';
+  wrap.appendChild(hdr);
+
+  const chips = document.createElement('div');
+  chips.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px';
+  [
+    [W+'-'+L, 'W — L Record', overallPct==null?'var(--muted)':colFor(overallPct)],
+    [overallPct==null?'—':overallPct+'%', 'Win Rate', colFor(overallPct)],
+    [g1Pct==null?'—':g1Pct+'%', 'G1 (Pre-Side) Win Rate', colFor(g1Pct)],
+    [g23Pct==null?'—':g23Pct+'%', 'G2+G3 (Post-Side) Win Rate', colFor(g23Pct)],
+  ].forEach(([v,l,col]) => {
+    const ch = document.createElement('div');
+    ch.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:9px;padding:8px 14px;min-width:88px';
+    ch.innerHTML = '<span style="font-size:17px;font-weight:bold;color:'+col+';display:block;line-height:1.2;margin-bottom:2px">'+_escapeHtml(String(v))+'</span><span style="font-size:10px;color:var(--muted)">'+l+'</span>';
+    chips.appendChild(ch);
+  });
+  wrap.appendChild(chips);
+
+  const oppEntries = Object.entries(byOpp);
+  if (oppEntries.length) {
+    const tblLbl = document.createElement('div');
+    tblLbl.style.cssText = 'font-size:10px;color:var(--muted);letter-spacing:.06em;margin-bottom:4px';
+    tblLbl.textContent = 'MATCHUPS';
+    wrap.appendChild(tblLbl);
+    const tbl = document.createElement('table');
+    tbl.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
+    tbl.innerHTML = '<thead><tr style="border-bottom:1px solid var(--border2);text-align:left">'
+      + '<th style="padding:6px 8px;color:var(--muted);font-size:10px;letter-spacing:.06em">OPPONENT</th>'
+      + '<th style="padding:6px 8px;color:var(--muted);font-size:10px;letter-spacing:.06em">DECK</th>'
+      + '<th style="padding:6px 8px;color:var(--muted);font-size:10px;letter-spacing:.06em">RESULT</th>'
+      + '<th style="padding:6px 8px;color:var(--muted);font-size:10px;letter-spacing:.06em">WIN %</th>'
+      + '</tr></thead><tbody></tbody>';
+    const tbody = tbl.querySelector('tbody');
+    oppEntries.sort((a,b)=>a[0].localeCompare(b[0])).forEach(([name, rec]) => {
+      const p2 = pct(rec.w, rec.w+rec.l);
+      const tr = document.createElement('tr');
+      tr.style.cssText = 'border-bottom:1px solid var(--border)';
+      tr.innerHTML = '<td style="padding:6px 8px;font-weight:bold">'+_escapeHtml(name)+'</td>'
+        + '<td style="padding:6px 8px;color:var(--muted)">'+_escapeHtml(rec.deck||'—')+'</td>'
+        + '<td style="padding:6px 8px;color:'+(rec.w>rec.l?'var(--green)':rec.l>rec.w?'var(--red)':'var(--muted)')+'">'+rec.w+'-'+rec.l+'</td>'
+        + '<td style="padding:6px 8px">'+(p2==null?'—':p2+'%')+'</td>';
+      tbody.appendChild(tr);
+    });
+    wrap.appendChild(tbl);
+  }
+
+  container.appendChild(wrap);
 }
 
 // ── View Player Profile from the Events tab ─────────────────────────────────
@@ -21114,6 +21382,7 @@ async function renderAdminPage() {
   const sessionsSection = document.getElementById('admin-sessions-section');
   const crosslinksSection = document.getElementById('admin-crosslinks-section');
   const decktypesSection = document.getElementById('admin-decktypes-section');
+  const mergeSection = document.getElementById('admin-merge-section');
   const logSection = document.getElementById('admin-log-section');
   if (!tabBar || !usersSection) return;
 
@@ -21137,8 +21406,8 @@ async function renderAdminPage() {
 
   // Tab buttons — bigger, roomier than the old modal's
   tabBar.innerHTML = '';
-  const ADMIN_TAB_KEYS = { 'Users':'users', 'Roles & Permissions':'perms', 'Sessions':'sessions', 'Cross-Links':'crosslinks', 'Deck Types':'decktypes', 'Log':'log' };
-  ['Users','Roles & Permissions','Sessions','Cross-Links','Deck Types','Log'].forEach(tab => {
+  const ADMIN_TAB_KEYS = { 'Users':'users', 'Roles & Permissions':'perms', 'Sessions':'sessions', 'Cross-Links':'crosslinks', 'Deck Types':'decktypes', 'Merge Profiles':'merge', 'Log':'log' };
+  ['Users','Roles & Permissions','Sessions','Cross-Links','Deck Types','Merge Profiles','Log'].forEach(tab => {
     const tb = document.createElement('button');
     tb.textContent = tab;
     tb.style.cssText = 'background:none;border:none;font-family:monospace;font-size:15px;cursor:pointer;padding:9px 18px;border-radius:6px;color:var(--muted)';
@@ -21154,6 +21423,8 @@ async function renderAdminPage() {
       else crosslinksSection.style.display = 'none';
       if (_adminTab === 'decktypes') { decktypesSection.style.display='block'; loadDeckTypesSection(decktypesSection); }
       else if (decktypesSection) decktypesSection.style.display = 'none';
+      if (_adminTab === 'merge') { mergeSection.style.display='block'; loadMergeProfilesSection(mergeSection); }
+      else if (mergeSection) mergeSection.style.display = 'none';
       if (_adminTab === 'log') { logSection.style.display='flex'; loadEditLog(); }
       else if (logSection) logSection.style.display = 'none';
     };
@@ -21368,6 +21639,193 @@ async function loadCrosslinksSection(el) {
       '⬇ Export Bad Aliases (CSV)' +
     '</button>' +
     '<div id="dc-check-details" style="margin-top:14px"></div>';
+}
+
+// ── Admin tool: Merge Profiles ───────────────────────────────────────────
+// For the "two profiles turned out to be the same player" case — a
+// duplicate created by a typo, an unrecognized alias, or two separate
+// Format Library imports that each spawned their own profile. The admin
+// picks a KEEP profile (survives) and a MERGE AWAY profile (its replays,
+// decklists and own name-as-alias get folded into KEEP, then it's
+// permanently deleted) and this calls POST /api/batches/merge, which runs
+// through the exact same mergeBatchesInternal engine the server uses to
+// auto-promote a hidden FL-import placeholder the moment a real profile
+// shows up — see the db.events comment near the top of server.js. Includes
+// hidden batches in both pickers (via ?includeHidden=1) so a stuck hidden
+// placeholder that never auto-matched (e.g. a name variant too different
+// for isSameNameOrAlias to catch) can still be merged in by hand.
+let _mergeState = { all: [] };
+async function loadMergeProfilesSection(el) {
+  el.innerHTML = '<div style="color:var(--muted);font-size:14px;padding:16px">Loading profiles...</div>';
+  try {
+    const res = await fetch(API+'/batches?includeHidden=1', { headers: authHeaders() });
+    const body = await res.json();
+    if (!res.ok || !Array.isArray(body)) {
+      el.innerHTML = '<div style="color:var(--red);font-size:14px;padding:16px">'+_escapeHtml((body&&body.error)||('Failed to load profiles (HTTP '+res.status+')'))+'</div>';
+      return;
+    }
+    _mergeState.all = body.sort((a,b) => (a.player||a.name||'').localeCompare(b.player||b.name||''));
+  } catch(e) {
+    el.innerHTML = '<div style="color:var(--red);font-size:14px;padding:16px">Failed to load profiles: '+_escapeHtml(e.message)+'</div>';
+    return;
+  }
+
+  el.innerHTML =
+    '<div style="font-size:15px;color:var(--text);margin-bottom:14px">' +
+      '<b>Merge Profiles</b>' +
+      '<div style="font-size:13px;color:var(--muted);margin-top:8px;line-height:1.6">' +
+        'Pick two profiles that are actually the same player. The <b>Merge Away</b> profile\'s replays, ' +
+        'decklists and own name (added as an alias) are folded into the <b>Keep</b> profile, and Merge Away ' +
+        'is <b>permanently deleted</b>. This cannot be undone — double-check the preview below before confirming. ' +
+        'Hidden profiles (Format Library imports waiting for a real profile to attach to) are included here too, ' +
+        'in case one needs to be merged in by hand.' +
+      '</div>' +
+    '</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">' +
+      '<div>' +
+        '<div style="font-size:11px;color:var(--green);margin-bottom:6px;font-weight:bold;letter-spacing:.06em">KEEP (survives)</div>' +
+        '<input id="merge-keep-filter" placeholder="Filter by name…" oninput="mergeFilterSelect(\'keep\')" ' +
+          'style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:13px;padding:8px 10px;border-radius:6px;margin-bottom:8px">' +
+        '<select id="merge-keep-select" size="10" onchange="mergeUpdatePreview()" ' +
+          'style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:13px;border-radius:6px;padding:4px"></select>' +
+      '</div>' +
+      '<div>' +
+        '<div style="font-size:11px;color:var(--red);margin-bottom:6px;font-weight:bold;letter-spacing:.06em">MERGE AWAY (deleted)</div>' +
+        '<input id="merge-away-filter" placeholder="Filter by name…" oninput="mergeFilterSelect(\'away\')" ' +
+          'style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:13px;padding:8px 10px;border-radius:6px;margin-bottom:8px">' +
+        '<select id="merge-away-select" size="10" onchange="mergeUpdatePreview()" ' +
+          'style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:13px;border-radius:6px;padding:4px"></select>' +
+      '</div>' +
+    '</div>' +
+    '<div id="merge-preview" style="margin-top:16px"></div>' +
+    '<button id="merge-confirm-btn" disabled onclick="mergeProfilesConfirm()" ' +
+      'style="margin-top:14px;background:var(--red);color:#fff;border:none;font-family:monospace;font-weight:bold;font-size:14px;padding:11px 24px;border-radius:6px;cursor:pointer;opacity:.5">' +
+      '⚠ Merge Profiles (cannot be undone)' +
+    '</button>' +
+    '<div id="merge-status" style="font-size:13.5px;color:var(--muted);min-height:22px;margin-top:12px"></div>';
+
+  mergePopulateSelect('merge-keep-select', '');
+  mergePopulateSelect('merge-away-select', '');
+}
+
+function mergePopulateSelect(selectId, filterText) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  const prevValue = sel.value;
+  const f = (filterText||'').toLowerCase();
+  sel.innerHTML = '';
+  _mergeState.all
+    .filter(b => !f || (b.player||b.name||'').toLowerCase().includes(f))
+    .forEach(b => {
+      const opt = document.createElement('option');
+      opt.value = b.id;
+      opt.textContent = (b.player||b.name||'(unnamed)') + (b.hidden?' [hidden]':'') + '  —  ' + (b.replayCount||0) + ' replay(s)';
+      sel.appendChild(opt);
+    });
+  if ([...sel.options].some(o => o.value === prevValue)) sel.value = prevValue;
+}
+function mergeFilterSelect(which) {
+  const filterEl = document.getElementById('merge-'+which+'-filter');
+  mergePopulateSelect('merge-'+which+'-select', filterEl ? filterEl.value : '');
+  mergeUpdatePreview();
+}
+
+// Fetches each selected profile's full record (replay/decklist counts
+// aren't on the lightweight GET /batches list) and renders a side-by-side
+// preview, so the admin can see exactly what's about to be folded in and
+// deleted before confirming. Disables the Merge button whenever the two
+// selections aren't both set to two DIFFERENT profiles.
+async function mergeUpdatePreview() {
+  const keepId = (document.getElementById('merge-keep-select')||{}).value;
+  const awayId = (document.getElementById('merge-away-select')||{}).value;
+  const previewEl = document.getElementById('merge-preview');
+  const btn = document.getElementById('merge-confirm-btn');
+  if (!previewEl || !btn) return;
+  if (!keepId || !awayId) { previewEl.innerHTML = ''; btn.disabled = true; btn.style.opacity = '.5'; return; }
+  if (keepId === awayId) {
+    previewEl.innerHTML = '<div style="color:var(--amber);font-size:13px">Pick two different profiles — these are the same one.</div>';
+    btn.disabled = true; btn.style.opacity = '.5';
+    return;
+  }
+  previewEl.innerHTML = '<div style="color:var(--muted);font-size:12px">Loading preview…</div>';
+  const fetchOne = async id => {
+    try {
+      const r = await fetch(API+'/batches/'+id, { headers: authHeaders() });
+      return r.ok ? await r.json() : null;
+    } catch(e) { return null; }
+  };
+  const [keepB, awayB] = await Promise.all([fetchOne(keepId), fetchOne(awayId)]);
+  if (!keepB || !awayB) { previewEl.innerHTML = '<div style="color:var(--red);font-size:12px">Could not load one of these profiles.</div>'; btn.disabled = true; btn.style.opacity = '.5'; return; }
+  const card = (b, label, color) => {
+    const events = [...new Set([...(b.replays||[]).map(r=>r.eventLabel).filter(Boolean), ...(b.eventDecklists||[]).map(d=>d.eventId).filter(Boolean)])];
+    return '<div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:12px;flex:1;min-width:0">' +
+      '<div style="font-size:10px;color:'+color+';font-weight:bold;letter-spacing:.06em;margin-bottom:6px">'+label+'</div>' +
+      '<div style="color:var(--text);font-weight:bold;font-size:14px">'+_escapeHtml(b.player||b.name||'(unnamed)')+(b.hidden?' <span style="color:var(--amber);font-size:10px">[hidden]</span>':'')+'</div>' +
+      (b.aliases&&b.aliases.length?'<div style="color:var(--muted);font-size:11px;margin-top:3px">aka '+b.aliases.map(_escapeHtml).join(', ')+'</div>':'') +
+      '<div style="color:var(--muted);font-size:11.5px;margin-top:6px">'+(b.replays||[]).length+' replay(s) · '+(b.eventDecklists||[]).length+' decklist(s)'+(events.length?' · '+events.length+' event(s): '+events.slice(0,5).map(_escapeHtml).join(', ')+(events.length>5?'…':''):'')+'</div>' +
+    '</div>';
+  };
+  previewEl.innerHTML =
+    '<div style="display:flex;gap:14px;align-items:stretch">' +
+      card(keepB, 'KEEP', 'var(--green)') +
+      '<div style="display:flex;align-items:center;color:var(--muted);font-size:18px">→</div>' +
+      card(awayB, 'MERGE AWAY → DELETED', 'var(--red)') +
+    '</div>';
+  btn.disabled = false; btn.style.opacity = '1';
+}
+
+async function mergeProfilesConfirm() {
+  const keepId = (document.getElementById('merge-keep-select')||{}).value;
+  const awayId = (document.getElementById('merge-away-select')||{}).value;
+  const statusEl = document.getElementById('merge-status');
+  const btn = document.getElementById('merge-confirm-btn');
+  if (!keepId || !awayId || keepId === awayId) return;
+  const keepOpt = document.querySelector('#merge-keep-select option[value="'+keepId+'"]');
+  const awayOpt = document.querySelector('#merge-away-select option[value="'+awayId+'"]');
+  const confirmed = confirm(
+    'Merge "'+(awayOpt?awayOpt.textContent:awayId)+'" into "'+(keepOpt?keepOpt.textContent:keepId)+'"?\n\n' +
+    'The Merge Away profile will be PERMANENTLY DELETED. This cannot be undone.'
+  );
+  if (!confirmed) return;
+  btn.disabled = true; btn.style.opacity = '.5'; btn.textContent = '⏳ Merging...';
+  if (statusEl) { statusEl.style.color = 'var(--muted)'; statusEl.textContent = 'Merging…'; }
+  try {
+    const res = await fetch(API+'/batches/merge', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ keepId, mergeId: awayId }),
+    });
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok) {
+      if (statusEl) { statusEl.style.color = 'var(--red)'; statusEl.textContent = '✗ Merge failed: ' + (data.error||'HTTP '+res.status); }
+      btn.disabled = false; btn.style.opacity = '1'; btn.textContent = '⚠ Merge Profiles (cannot be undone)';
+      return;
+    }
+    if (statusEl) { statusEl.style.color = 'var(--green)'; statusEl.textContent = '✓ Merged — ' + (data.mergedReplays||0) + ' replay(s) and ' + (data.mergedDecklists||0) + ' decklist(s) folded in' + ((data.aliasesAdded||[]).length ? ', added alias: '+data.aliasesAdded.map(_escapeHtml).join(', ') : '') + '.'; }
+    // Refresh the underlying profile list (the merged-away profile is gone,
+    // the kept one's counts just changed) by re-fetching and repopulating
+    // just the two <select>s — NOT by calling loadMergeProfilesSection
+    // again, which rebuilds the whole section's innerHTML and would wipe
+    // out the success message we just showed before the admin ever sees it.
+    try {
+      const res2 = await fetch(API+'/batches?includeHidden=1', { headers: authHeaders() });
+      const body2 = await res2.json();
+      if (res2.ok && Array.isArray(body2)) {
+        _mergeState.all = body2.sort((a,b) => (a.player||a.name||'').localeCompare(b.player||b.name||''));
+      }
+    } catch(e2) {}
+    const keepFilterEl = document.getElementById('merge-keep-filter');
+    const awayFilterEl = document.getElementById('merge-away-filter');
+    if (keepFilterEl) keepFilterEl.value = '';
+    if (awayFilterEl) awayFilterEl.value = '';
+    mergePopulateSelect('merge-keep-select', '');
+    mergePopulateSelect('merge-away-select', '');
+    const previewEl2 = document.getElementById('merge-preview');
+    if (previewEl2) previewEl2.innerHTML = '';
+    btn.disabled = true; btn.style.opacity = '.5'; btn.textContent = '⚠ Merge Profiles (cannot be undone)';
+  } catch(e) {
+    if (statusEl) { statusEl.style.color = 'var(--red)'; statusEl.textContent = '✗ Request failed: ' + e.message; }
+    btn.disabled = false; btn.style.opacity = '1'; btn.textContent = '⚠ Merge Profiles (cannot be undone)';
+  }
 }
 
 // ── Admin tool: Check Data Integrity ─────────────────────────────────────

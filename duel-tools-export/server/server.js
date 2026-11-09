@@ -50,26 +50,25 @@ let pgClient = null;
 // accurate winner, not just "whatever we happened to import". 'size' is
 // best-effort (Format Library's own entrant count when we can find one on
 // the response, else the number of decks we know about).
-// db.pendingFLImports: Format Library bracket data (replays + YDK) already
-// downloaded and PARSED for a player who has no profile (batch) in Duel
-// Tools yet — populated by the "Import Events from Format Library" admin
-// flow (importFLEvent* routes below) when a bracket entry's builderName
-// doesn't resolve to an existing batch. Keyed by the player's name as
-// lowercased by the importer (normalized exactly like findBatchForBuilderName
-// does it, so the creation-time lookup below matches the same way). Shape:
-//   { displayName, entries: [ { eventId, deckId, deckTypeName, placement,
-//     placeNum, ydkData, replays: [ <same shape POST /batches/:id/replay
-//     accepts: replayId, plays, allPlays, parsed, timedOut, eventLabel,
-//     round, oppName, player1, player2> ], importedAt } ] }
-// Replays are stored ALREADY PARSED (built client-side via the same
-// loadReplay()+parseMatch() pipeline go() uses) — there is no server-side
-// replay parser to fall back on (parseMatch is client-only), so parsing
-// cannot be deferred to the moment a profile finally gets created; it has
-// to happen once, up front, at import time. The moment a matching batch is
-// created (see POST /api/batches below), every entry here for that name is
-// replayed into the new batch's own replays/eventDecklists via the exact
-// same addReplayToBatchData() used by the live import, then cleared.
-let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {}, replayCache: {}, overrides: {}, _changeLog: [], events: {}, pendingFLImports: {} };
+// Format Library bracket import for a player with no Duel Tools profile
+// yet: rather than stash the data somewhere invisible until an admin
+// manually creates a matching profile later (the original design), the
+// importer creates a REAL batch immediately — flagged `hidden: true` — with
+// that player's parsed replays/YDK already attached, exactly like a normal
+// profile in every other respect. GET /api/batches (the Profiles grid's own
+// list) filters hidden batches out by default so they don't clutter
+// browsing, but everything that reads db.batches directly (Format Data,
+// Check & Fix Data, the Events tab Status column, alias/name matching)
+// still sees them, since the data is real and should count. The moment a
+// REAL profile is created (or edited) with a name/alias that matches a
+// hidden batch, autoMergeHiddenBatches() below folds the hidden batch's
+// data into it and deletes the hidden one — "promoting" it — using the same
+// merge engine (mergeBatchesInternal) the admin-facing Merge Profiles tool
+// uses for the general "two profiles turned out to be the same player"
+// case. See POST /api/fl-import/pending (creates/updates the hidden batch),
+// autoMergeHiddenBatches (auto-promotion), and POST /api/batches/merge
+// (admin-triggered merge) further down.
+let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {}, replayCache: {}, overrides: {}, _changeLog: [], events: {} };
 
 async function connectPostgres() {
   const { Client } = require('pg');
@@ -122,7 +121,7 @@ async function connectPostgres() {
   pgClient = client;
 
   try {
-    const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('players','users','gfwl','eventDates','overrides','_changeLog','events','pendingFLImports')");
+    const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('players','users','gfwl','eventDates','overrides','_changeLog','events')");
     for (const row of res.rows) { db[row.key] = row.value; }
   } catch(e) { console.error('[PG] Failed to load players/users/gfwl/etc — starting with whatever was already in memory:', e.message); }
 
@@ -180,7 +179,6 @@ async function connectPostgres() {
   if (!db.overrides) db.overrides = {};
   if (!db._changeLog) db._changeLog = [];
   if (!db.events) db.events = {};
-  if (!db.pendingFLImports) db.pendingFLImports = {};
   // Handle PG client-level errors (e.g. connection dropped by server)
   // Without this, 'error' events on the pg client crash Node
   client.on('error', (err) => {
@@ -327,7 +325,6 @@ function loadFileDB() {
       if (!db.overrides) db.overrides = {};
       if (!db._changeLog) db._changeLog = [];
       if (!db.events) db.events = {};
-      if (!db.pendingFLImports) db.pendingFLImports = {};
     }
   } catch(e) { console.error('File DB load error:', e.message); }
 }
@@ -344,7 +341,7 @@ function loadFileDB() {
 // change to player aliases/teams was silently never persisted again.
 // Always-save-everything is simpler and can't silently drop data — these
 // four keys are small enough that resaving all of them every time is cheap.
-const _ALWAYS_SAVE_KEYS = ['players','users','gfwl','eventDates','overrides','_changeLog','events','pendingFLImports'];
+const _ALWAYS_SAVE_KEYS = ['players','users','gfwl','eventDates','overrides','_changeLog','events'];
 const _dirtyKeys = new Set(_ALWAYS_SAVE_KEYS);
 
 // Guards POST /api/events/backfill against being kicked off twice at once.
@@ -1209,53 +1206,122 @@ async function addReplayToBatchData(b, data, req) {
   return { duplicate: !!dup, crossLinks };
 }
 
-// Called right after a new batch is created (see POST /api/batches below) —
-// the one true creation point every "new profile" path in the app funnels
-// through (both the client's New Batch flow and findOrPromptPlayer's
-// "Create New Profile" button end here). Checks db.pendingFLImports for any
-// bucket whose stored player name is an alias match for this NEW batch's own
-// player name or aliases, and if found, replays every entry's already-parsed
-// replays into it (via addReplayToBatchData — same dedup/cross-link path a
-// live import uses) and writes its YDK(s) into the batch's eventDecklists,
-// in the exact shape importEventDecks() already produces client-side
-// ({eventId, ydkData, importedAt, filename}) so the Profile UI renders it
-// identically to a manually-imported decklist. Consumed buckets are deleted
-// from db.pendingFLImports so the same data never gets attached twice.
-// Alias-aware matching is checked in BOTH directions (a pending bucket keyed
-// under an old name the new batch lists as an alias, or vice versa) since
-// which name the importer happened to see from Format Library and which
-// name the admin happens to type when finally creating the profile aren't
-// guaranteed to be the same one.
-async function attachPendingFLImports(batch, req) {
-  const batchNames = [batch.player, ...(batch.aliases||[])].filter(Boolean);
-  if (!batchNames.length || !db.pendingFLImports) return { attachedEvents: [] };
-  const matchedKeys = Object.keys(db.pendingFLImports).filter(key =>
-    batchNames.some(n => isSameNameOrAlias(n, db.pendingFLImports[key].displayName || key))
-  );
-  if (!matchedKeys.length) return { attachedEvents: [] };
-
-  const attachedEvents = [];
-  for (const key of matchedKeys) {
-    const bucket = db.pendingFLImports[key];
-    if (!bucket || !Array.isArray(bucket.entries)) { delete db.pendingFLImports[key]; continue; }
-    for (const entry of bucket.entries) {
-      for (const replayData of (entry.replays||[])) {
-        try { await addReplayToBatchData(batch, replayData, req); }
-        catch(e) { console.error('[fl-import] Failed to attach pending replay', replayData.replayId, 'for', batch.player, ':', e.message); }
-      }
-      if (entry.ydkData) {
-        if (!batch.eventDecklists) batch.eventDecklists = [];
-        const dupIdx = batch.eventDecklists.findIndex(d => (d.eventId||'').toUpperCase() === (entry.eventId||'').toUpperCase());
-        const deckEntry = { eventId: entry.eventId, ydkData: entry.ydkData, importedAt: Date.now(), filename: `${batch.player}-${entry.eventId}.ydk` };
-        if (dupIdx >= 0) batch.eventDecklists[dupIdx] = deckEntry; else batch.eventDecklists.push(deckEntry);
-      }
-      attachedEvents.push(entry.eventId);
-    }
-    logChange(req, 'fl_import_pending_attached', { batchId: batch.id, batchPlayer: batch.player, pendingKey: key, events: bucket.entries.map(e=>e.eventId) });
-    delete db.pendingFLImports[key];
+// ── mergeReplaysInto / mergeDecklistsInto ────────────────────────────────────
+// Low-level dedup helpers shared by mergeBatchesInternal below. A replay is
+// identified purely by replayId: if `keep` doesn't have it yet, it's copied
+// over as-is; if both sides have it, a real (non-timed-out) copy always wins
+// over a timed-out placeholder, and otherwise `keep`'s existing copy is left
+// alone (it's already at least as good as `merge`'s). A decklist is
+// identified by eventId the same way, with "has ydkData" standing in for
+// "is the better copy" since a decklist entry with no YDK attached is just a
+// placeholder.
+function mergeReplaysInto(keep, mergeBatch) {
+  if (!keep.replays) keep.replays = [];
+  let merged = 0;
+  for (const r of (mergeBatch.replays || [])) {
+    const dupIdx = keep.replays.findIndex(kr => kr.replayId === r.replayId);
+    if (dupIdx < 0) { keep.replays.push(r); merged++; }
+    else if (keep.replays[dupIdx].timedOut && !r.timedOut) { keep.replays[dupIdx] = r; merged++; }
   }
-  await saveBatchToPostgres(batch.id);
-  await saveDB('pendingFLImports');
+  return merged;
+}
+function mergeDecklistsInto(keep, mergeBatch) {
+  if (!keep.eventDecklists) keep.eventDecklists = [];
+  let merged = 0;
+  for (const d of (mergeBatch.eventDecklists || [])) {
+    const dupIdx = keep.eventDecklists.findIndex(kd => (kd.eventId||'').toUpperCase() === (d.eventId||'').toUpperCase());
+    if (dupIdx < 0) { keep.eventDecklists.push(d); merged++; }
+    else if (!keep.eventDecklists[dupIdx].ydkData && d.ydkData) { keep.eventDecklists[dupIdx] = d; merged++; }
+  }
+  return merged;
+}
+
+// ── mergeBatchesInternal(keep, merge, req, reason) ──────────────────────────
+// Shared merge engine for the two code paths that both reduce to "fold one
+// batch's data into another and delete the loser": autoMergeHiddenBatches
+// below (automatic promotion of a hidden FL-import batch the moment a real
+// matching profile shows up) and POST /api/batches/merge (an admin
+// explicitly merging two profiles that turned out to be the same player —
+// e.g. a duplicate created by a typo or an unrecognized alias). `reason` is
+// just a free-text tag for the audit log ('fl_import_promoted' vs
+// 'admin_merge') — the actual merge logic is identical either way: union
+// aliases (adding the merged-away batch's own name as an alias on the
+// survivor, since anything still referring to that old name — GFWL rosters
+// are matched by name, not batchId, see the db.gfwl comment elsewhere in
+// this file — needs to keep resolving correctly), dedupe replays and
+// eventDecklists via the helpers above, then permanently delete the
+// merged-away batch. Uses flushBatchNow (not the debounced saveBatchToPostgres)
+// so a caller awaiting this knows the merge is actually durable before it
+// deletes the other batch for good — losing a half-saved merge would be
+// worse than the duplicate-profile problem it's meant to fix.
+async function mergeBatchesInternal(keep, merge, req, reason) {
+  if (!keep || !merge || keep.id === merge.id) return { ok: false, error: 'Need two distinct batches to merge.' };
+
+  const existingAliases = new Set((keep.aliases||[]).map(a => a.toLowerCase()));
+  const keepNameLower = (keep.player||'').toLowerCase();
+  const newAliases = [];
+  for (const name of [merge.player, ...(merge.aliases||[])]) {
+    if (!name) continue;
+    const nl = name.toLowerCase();
+    if (nl === keepNameLower || existingAliases.has(nl)) continue;
+    existingAliases.add(nl);
+    newAliases.push(name);
+  }
+  if (newAliases.length) keep.aliases = [...(keep.aliases||[]), ...newAliases];
+
+  const mergedReplays = mergeReplaysInto(keep, merge);
+  const mergedDecklists = mergeDecklistsInto(keep, merge);
+  if (mergedReplays && keep.status !== 'ready') keep.status = 'ready';
+
+  const eventIds = [...new Set([
+    ...(merge.eventDecklists||[]).map(d => d.eventId).filter(Boolean),
+    ...(merge.replays||[]).map(r => r.eventLabel).filter(Boolean),
+  ])];
+
+  delete db.batches[merge.id];
+  await deleteBatchFromPostgres(merge.id);
+  const flush = await flushBatchNow(keep.id);
+
+  logChange(req, 'merge_batches', {
+    keepBatchId: keep.id, keepPlayer: keep.player,
+    mergedBatchId: merge.id, mergedPlayer: merge.player,
+    mergedReplays, mergedDecklists, aliasesAdded: newAliases, reason: reason || 'merge',
+  });
+
+  return { ok: flush.ok, error: flush.ok ? undefined : flush.error, mergedReplays, mergedDecklists, aliasesAdded: newAliases, eventIds };
+}
+
+// ── autoMergeHiddenBatches(newBatch, req) ────────────────────────────────────
+// Called right after a batch is created or edited (see POST /api/batches and
+// PATCH /api/batches/:id below) — the one place every "new/updated profile"
+// path in the app funnels through (both the client's New Batch flow and
+// findOrPromptPlayer's "Create New Profile" button end in a POST here; an
+// admin adding an alias to an existing profile goes through the PATCH).
+// Finds any HIDDEN batch (a placeholder the Format Library bracket importer
+// created for a player who had no real profile yet — see the db.events
+// comment near the top of this file) whose player name is an alias match —
+// checked in BOTH directions, since which name the importer happened to see
+// from Format Library and which name the admin happens to type aren't
+// guaranteed to be the same one — for this batch's own name/aliases, and
+// folds each match in via mergeBatchesInternal. This replaces the old
+// attachPendingFLImports/db.pendingFLImports mechanism: the data was already
+// a real batch with real replays/YDKs the whole time, so "attaching" it is
+// just the normal merge path with a different reason tag.
+async function autoMergeHiddenBatches(newBatch, req) {
+  if (!newBatch || newBatch.hidden) return { attachedEvents: [] };
+  const names = [newBatch.player, ...(newBatch.aliases||[])].filter(Boolean);
+  if (!names.length) return { attachedEvents: [] };
+  const matches = Object.values(db.batches).filter(b =>
+    b.hidden && b.id !== newBatch.id && names.some(n => isSameNameOrAlias(n, b.player))
+  );
+  if (!matches.length) return { attachedEvents: [] };
+  const attachedEvents = [];
+  for (const hidden of matches) {
+    try {
+      const result = await mergeBatchesInternal(newBatch, hidden, req, 'fl_import_promoted');
+      if (result.ok) attachedEvents.push(...result.eventIds);
+    } catch(e) { console.error('[fl-import] autoMergeHiddenBatches failed for', hidden.id, ':', e.message); }
+  }
   return { attachedEvents };
 }
 
@@ -2858,9 +2924,20 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ── GET /api/batches ────────────────────────────────────────────────────────
+  // Hidden batches (Format Library bracket-import placeholders for a player
+  // with no real profile yet — see the db.events comment near the top of
+  // this file) are excluded from this list by default, since this is what
+  // the Profiles grid itself is built from and a hidden batch is explicitly
+  // not meant to show up there until it's promoted into a real profile.
+  // Pass ?includeHidden=1 to see them anyway (used by the admin Merge
+  // Profiles tool, which needs to be able to pick a hidden batch as one side
+  // of a manual merge too).
   if (parts[0]==='batches' && !parts[1] && method==='GET') {
     if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot browse saved batches' });
-    const list = Object.values(db.batches).map(b => ({ id:b.id, name:b.name, player:b.player, replayCount:(b.replays||[]).length, createdAt:b.createdAt }));
+    const includeHidden = url.searchParams.get('includeHidden') === '1';
+    const list = Object.values(db.batches)
+      .filter(b => includeHidden || !b.hidden)
+      .map(b => ({ id:b.id, name:b.name, player:b.player, replayCount:(b.replays||[]).length, createdAt:b.createdAt, hidden: !!b.hidden }));
     return json(res, 200, list.sort((a,b)=>b.createdAt-a.createdAt));
   }
   // ── GET /api/batches/all-full — every saved batch WITH its full replay
@@ -2941,11 +3018,11 @@ const server = http.createServer(async (req, res) => {
       await saveBatchToPostgres(id);
       logChange(req, 'create_batch', { batchId: id, batchPlayer: batch.player, batchName: batch.name });
       // A Format-Library event import run before this profile existed may
-      // have stashed replays/YDKs for this exact player name — see
-      // attachPendingFLImports and the db.pendingFLImports comment above.
+      // have created a hidden placeholder batch for this exact player name
+      // — see autoMergeHiddenBatches and the db.events comment above.
       let flImport = null;
-      try { flImport = await attachPendingFLImports(batch, req); }
-      catch(e) { console.error('[fl-import] attachPendingFLImports failed for new batch', id, ':', e.message); }
+      try { flImport = await autoMergeHiddenBatches(batch, req); }
+      catch(e) { console.error('[fl-import] autoMergeHiddenBatches failed for new batch', id, ':', e.message); }
       return json(res, 200, flImport && flImport.attachedEvents.length ? { ...batch, flImportAttached: flImport.attachedEvents } : batch);
     });
   }
@@ -3128,6 +3205,7 @@ const server = http.createServer(async (req, res) => {
       if (data.name !== undefined || data.player !== undefined || data.aliases !== undefined) {
         logChange(req, 'edit_batch', { batchId: b.id, batchPlayer: data.player!==undefined?data.player:b.player, prevPlayer: b.player, name: data.name, aliases: data.aliases });
       }
+      const _nameOrAliasChanged = data.player !== undefined || data.aliases !== undefined;
       if (data.name           !== undefined) b.name           = data.name;
       if (data.player         !== undefined) b.player         = data.player;
       if (data.aliases        !== undefined) b.aliases        = data.aliases;
@@ -3141,7 +3219,39 @@ const server = http.createServer(async (req, res) => {
         b.eventDecklists = data.eventDecklists;
       }
       await saveBatchToPostgres(b.id);
-      return json(res, 200, b);
+      // A name/alias edit on a real profile may now match a hidden
+      // FL-import placeholder batch that was waiting for exactly this —
+      // see autoMergeHiddenBatches above.
+      let flImport = null;
+      if (_nameOrAliasChanged) {
+        try { flImport = await autoMergeHiddenBatches(b, req); }
+        catch(e) { console.error('[fl-import] autoMergeHiddenBatches failed for edited batch', b.id, ':', e.message); }
+      }
+      return json(res, 200, flImport && flImport.attachedEvents.length ? { ...b, flImportAttached: flImport.attachedEvents } : b);
+    });
+  }
+  // ── POST /api/batches/merge — admin-only "Merge Profiles" tool. Body:
+  // { keepId, mergeId }. Folds `mergeId`'s replays/eventDecklists/aliases
+  // into `keepId` (via mergeBatchesInternal — same engine autoMergeHiddenBatches
+  // uses for automatic hidden-batch promotion) and permanently deletes
+  // `mergeId`. Admin-only (not Miner) because, unlike every other batch
+  // mutation in this file, this one is NOT reversible by re-importing —
+  // the merged-away batch's id, and anything that referenced it directly
+  // (rather than by player name), is gone for good once this returns ok.
+  if (parts[0]==='batches' && parts[1]==='merge' && !parts[2] && method==='POST') {
+    if (!isAdmin(req)) return json(res, 403, { error: 'Admins only' });
+    return readBody(req, async data => {
+      const keepId = (data.keepId || '').trim();
+      const mergeId = (data.mergeId || '').trim();
+      if (!keepId || !mergeId) return json(res, 400, { error: 'keepId and mergeId are required.' });
+      if (keepId === mergeId) return json(res, 400, { error: 'Pick two different profiles to merge.' });
+      const keep = db.batches[keepId];
+      const merge = db.batches[mergeId];
+      if (!keep) return json(res, 404, { error: 'keepId does not match any existing profile.' });
+      if (!merge) return json(res, 404, { error: 'mergeId does not match any existing profile.' });
+      const result = await mergeBatchesInternal(keep, merge, req, 'admin_merge');
+      if (!result.ok) return json(res, 500, { error: 'Merge may not have saved durably: ' + (result.error || 'unknown error') });
+      return json(res, 200, { ok: true, batch: keep, mergedReplays: result.mergedReplays, mergedDecklists: result.mergedDecklists, aliasesAdded: result.aliasesAdded });
     });
   }
   // ── DELETE /api/batches/:id ─────────────────────────────────────────────────
@@ -3604,6 +3714,24 @@ const server = http.createServer(async (req, res) => {
     const fallback = db.eventDates[code] || {};
     const decks = (ev.decks||[]).map(d => {
       const playerEntry = findPlayerByBuilderName(d.builderName);
+      // hasReplays: does this player (alias-aware) have at least one saved
+      // replay tagged with THIS event's code — drives the Replays ✓/✗
+      // column on the event detail page's player list. Separate from
+      // hasCards (the decklist ✓/✗ column, which just checks d.ydkData) —
+      // a player can have one without the other, and the whole point of
+      // this column is to surface exactly that gap (see Charlie MAD/PWCQ93:
+      // decklist on file, but fewer replays saved here than Format Library
+      // itself shows for that event).
+      let hasReplays = false;
+      if (playerEntry) {
+        const names = playerNames(playerEntry);
+        outer: for (const b of Object.values(db.batches)) {
+          if (!names.includes((b.player||'').toLowerCase())) continue;
+          for (const r of (b.replays||[])) {
+            if ((r.eventLabel||r.eventId||'').toUpperCase().trim() === code) { hasReplays = true; break outer; }
+          }
+        }
+      }
       return {
         deckId: d.deckId,
         builderName: d.builderName,
@@ -3611,6 +3739,7 @@ const server = http.createServer(async (req, res) => {
         placeNum: d.placeNum,
         deckTypeName: d.deckTypeName,
         hasCards: !!d.ydkData,
+        hasReplays,
         trackedPlayer: playerEntry ? playerEntry.name : null,
       };
     }).sort((a,b) => {
@@ -3750,9 +3879,19 @@ const server = http.createServer(async (req, res) => {
     // have cached YDK data. Coverage can be partial (a miner+ account has to
     // open a deck once for its cards to get cached) — decksWithCards/
     // totalDecks is returned so the client can disclose that honestly.
+    // Optional ?deckType= narrows this one section down to just decks of a
+    // single deck type (the Top Cards button's own filter, default "All" —
+    // everything else on this endpoint — Deck Representation, Top Deck
+    // Representation, the Matchup Matrix — is intentionally unaffected by
+    // this filter, since it only makes sense for a per-deck-type card
+    // breakdown).
+    const cardDeckTypeFilter = (url.searchParams.get('deckType') || '').trim();
+    const cardDecks = (cardDeckTypeFilter && cardDeckTypeFilter.toLowerCase() !== 'all')
+      ? decks.filter(d => (d.deckTypeName || 'Unknown') === cardDeckTypeFilter)
+      : decks;
     const mainCounts = {}, sideCounts = {};
     let decksWithCards = 0;
-    for (const d of decks) {
+    for (const d of cardDecks) {
       if (!d.ydkData) continue;
       const parsedYdk = parseYdkPasscodes(d.ydkData);
       if (!parsedYdk) continue;
@@ -3821,7 +3960,7 @@ const server = http.createServer(async (req, res) => {
       deckRepresentation,
       topDeckRepresentation,
       topDeckRepresentationN: TOP_N,
-      cardStats: { main: topMainCards, side: topSideCards, decksWithCards, totalDecks: decks.length },
+      cardStats: { main: topMainCards, side: topSideCards, decksWithCards, totalDecks: cardDecks.length, deckTypeFilter: cardDeckTypeFilter || 'All' },
       matchupMatrix: {
         decks: deckAxis,
         cells,
@@ -4333,10 +4472,10 @@ const server = http.createServer(async (req, res) => {
   // ID, or by browsing/searching FL's own public event list below) and this
   // pulls that event's FULL bracket: every player's YDK + their replays for
   // that one event, attached to whichever of those players already have a
-  // profile (alias-aware), with everyone else's data held in
-  // db.pendingFLImports until a matching profile exists (see that comment
-  // and attachPendingFLImports above). Deliberately NOT a "mirror all of
-  // Format Library" feature — same one-event-at-a-time scope the existing
+  // profile (alias-aware), with everyone else getting a real but HIDDEN
+  // batch created immediately (see the db.events comment near the top of
+  // this file and autoMergeHiddenBatches above). Deliberately NOT a "mirror
+  // all of Format Library" feature — same one-event-at-a-time scope the existing
   // single-player FL import already uses, just for every player in the
   // bracket instead of one.
   //
@@ -4423,32 +4562,50 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // ── POST /api/fl-import/pending — store an already-parsed bracket entry
-  // (replays + YDK) for a player with no profile yet. Called once per
-  // unresolved player by the client-side import loop, after it has already
-  // fetched+parsed that player's replays for this event the same way go()
-  // does for a live import. See db.pendingFLImports / attachPendingFLImports
-  // above for how this gets claimed once a matching profile is created.
+  // ── POST /api/fl-import/pending — find-or-create a HIDDEN batch for a
+  // player with no real profile yet, and attach this event's already-parsed
+  // replays/YDK to it directly (via addReplayToBatchData — same dedup/
+  // cross-link path a live import or a normal "add to batch" uses). Called
+  // once per unresolved player by the client-side bracket-import loop, after
+  // it has already fetched+parsed that player's replays for this event the
+  // same way go() does for a live import. A hidden batch is a REAL batch —
+  // it just doesn't show up in GET /api/batches (the Profiles grid) by
+  // default — so this player's data is immediately visible everywhere else
+  // (Format Data, Check & Fix Data, the Events tab) even before anyone
+  // creates their "real" profile. See the db.events comment near the top of
+  // this file and autoMergeHiddenBatches above for how this hidden batch
+  // gets folded into a real profile the moment one is created or edited
+  // with a matching name/alias.
   if (parts[0]==='fl-import' && parts[1]==='pending' && !parts[2] && method==='POST') {
     if (!isMiner(req)) return json(res, 403, { error: 'Miners and above only' });
     return readBody(req, async data => {
       const playerName = (data.playerName||'').trim();
       const eventId = (data.eventId||'').trim().toUpperCase();
       if (!playerName || !eventId) return json(res, 400, { error: 'playerName and eventId are required.' });
-      const key = playerName.toLowerCase();
-      if (!db.pendingFLImports[key]) db.pendingFLImports[key] = { displayName: playerName, entries: [] };
-      const bucket = db.pendingFLImports[key];
-      const dupIdx = bucket.entries.findIndex(e => e.eventId === eventId);
-      const entry = {
-        eventId, deckId: data.deckId || null, deckTypeName: data.deckTypeName || '',
-        placement: data.placement || null, placeNum: data.placeNum!=null ? data.placeNum : null,
-        ydkData: data.ydkData || null, replays: Array.isArray(data.replays) ? data.replays : [],
-        importedAt: Date.now(),
-      };
-      if (dupIdx >= 0) bucket.entries[dupIdx] = entry; else bucket.entries.push(entry);
-      logChange(req, 'fl_import_pending_stored', { playerName, eventId, replayCount: entry.replays.length, hasYdk: !!entry.ydkData });
-      await saveDB('pendingFLImports');
-      return json(res, 200, { ok: true });
+
+      let batch = Object.values(db.batches).find(b => b.hidden && isSameNameOrAlias(b.player, playerName));
+      let created = false;
+      if (!batch) {
+        const id = crypto.randomUUID();
+        batch = { id, name: playerName, player: playerName, aliases: [], replays: [], eventDecklists: [], createdAt: Date.now(), status: 'pending', hidden: true };
+        db.batches[id] = batch;
+        created = true;
+      }
+
+      const replays = Array.isArray(data.replays) ? data.replays : [];
+      for (const replayData of replays) {
+        try { await addReplayToBatchData(batch, replayData, req); }
+        catch(e) { console.error('[fl-import] Failed to attach pending replay', replayData.replayId, 'for', playerName, ':', e.message); }
+      }
+      if (data.ydkData) {
+        if (!batch.eventDecklists) batch.eventDecklists = [];
+        const dupIdx = batch.eventDecklists.findIndex(d => (d.eventId||'').toUpperCase() === eventId);
+        const deckEntry = { eventId, ydkData: data.ydkData, importedAt: Date.now(), filename: `${playerName}-${eventId}.ydk` };
+        if (dupIdx >= 0) batch.eventDecklists[dupIdx] = deckEntry; else batch.eventDecklists.push(deckEntry);
+      }
+      await saveBatchToPostgres(batch.id);
+      logChange(req, created ? 'fl_import_hidden_batch_created' : 'fl_import_hidden_batch_updated', { batchId: batch.id, playerName, eventId, replayCount: replays.length, hasYdk: !!data.ydkData });
+      return json(res, 200, { ok: true, batchId: batch.id, hidden: true });
     });
   }
 
