@@ -749,8 +749,10 @@ select{cursor:pointer}
       <button id="temp-batch-btn" onclick="openBatchPanel('temp')" style="width:100%;background:var(--card);color:var(--amber);border:1px solid var(--amber);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">⚡ Temporary Batch</button>
       <button onclick="openBatchPanel('new')" style="width:100%;background:var(--green);color:#050508;border:none;border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:9px;cursor:pointer;text-align:left">＋ New Batch</button>
       <button id="add-to-batch-btn" onclick="openBatchPanel('add')" style="display:block;width:100%;background:var(--card);color:var(--blue);border:1px solid var(--blue);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">➕ Add to Existing Batch</button>
-      <button onclick="importEventData()" style="display:none;width:100%;background:var(--card);color:var(--purple,#a78bfa);border:1px solid var(--purple,#a78bfa);border-radius:6px;font-family:monospace;font-weight:bold;font-size:11px;padding:7px;cursor:pointer;text-align:left" id="import-event-data-btn">📥 Add Full Event Data</button>
-      <button onclick="importEventDecks()" style="display:none;width:100%;background:var(--card);color:var(--purple,#a78bfa);border:1px solid var(--purple,#a78bfa);border-radius:6px;font-family:monospace;font-weight:bold;font-size:11px;padding:7px;cursor:pointer;text-align:left" id="import-event-decks-btn">📥 Add Full Event Decks</button>
+      <!-- "Add Full Event Data"/"Add Full Event Decks" moved to the Events tab
+           toolbar (as "Add Event Data CSV"/"Add YDK Files (decks)") — they're
+           bulk event-scoped imports, so they belong next to the rest of the
+           Events tab's data tools, not in the always-visible batch sidebar. -->
       <button onclick="openFLImport()" style="display:none;width:100%;background:var(--card);color:var(--purple,#a78bfa);border:1px solid var(--purple,#a78bfa);border-radius:6px;font-family:monospace;font-weight:bold;font-size:11px;padding:7px;cursor:pointer;text-align:left" id="fl-import-btn">📥 Import from Format Library</button>
       <button id="clean-batch-btn" onclick="cleanBatch()" style="display:none;width:100%;background:var(--card);color:var(--red);border:1px solid var(--red);border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:8px;cursor:pointer;text-align:left">🧹 Clean Invalid Replays</button>
       <div id="sidebar-export-import-row" style="display:flex;gap:5px">
@@ -1290,6 +1292,14 @@ select{cursor:pointer}
           </select>
           <button onclick="loadEventsTab(true)" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer">↺ Refresh</button>
           <button id="events-backfill-btn" onclick="eventsRunBackfill()" style="display:none;background:none;border:1px solid var(--purple,#a78bfa);color:var(--purple,#a78bfa);font-family:monospace;font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer" title="Admin: re-fetch placement/builder from Format Library for events imported before this feature existed">⚙ Backfill Placements</button>
+          <!-- Moved here from the sidebar — these are event-scoped bulk
+               imports, so they belong with the rest of the Events tab's
+               data tools rather than always-visible in the batch sidebar.
+               Same ids as before, so the existing Miner+ role-gating in
+               applyRoleUI()/openProfile()'s role sweep/the Limited-role
+               hide-list keeps working unchanged. -->
+          <button onclick="importEventData()" style="display:none;background:none;border:1px solid var(--purple,#a78bfa);color:var(--purple,#a78bfa);font-family:monospace;font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer" id="import-event-data-btn">📥 Add Event Data CSV</button>
+          <button onclick="importEventDecks()" style="display:none;background:none;border:1px solid var(--purple,#a78bfa);color:var(--purple,#a78bfa);font-family:monospace;font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer" id="import-event-decks-btn">📥 Add YDK Files (decks)</button>
         </div>
       </div>
       <div id="events-backfill-status" style="display:none;padding:8px 20px;font-size:11px;color:var(--amber);border-bottom:1px solid var(--border)"></div>
@@ -1303,6 +1313,7 @@ select{cursor:pointer}
               <th style="padding:8px 10px;color:var(--muted);font-size:11px;letter-spacing:.06em">DECKS</th>
               <th style="padding:8px 10px;color:var(--muted);font-size:11px;letter-spacing:.06em">SIZE</th>
               <th style="padding:8px 10px;color:var(--muted);font-size:11px;letter-spacing:.06em">DATE</th>
+              <th style="padding:8px 10px;color:var(--muted);font-size:11px;letter-spacing:.06em">STATUS</th>
             </tr>
           </thead>
           <tbody id="events-table-body"></tbody>
@@ -16000,6 +16011,26 @@ async function loadEventsTab(forceRefresh) {
   eventsCheckBackfillStatus();
 }
 
+// Status column for the Events tab — mirrors the status/missingPlayers
+// fields GET /api/events now computes server-side (computeEventStatus in
+// server.js): green Complete, amber Missing Player Profiles (names listed,
+// truncated so one event with a huge bracket doesn't blow out the row),
+// red Missing Data for an event record with no decks captured at all.
+function eventStatusBadge(ev) {
+  const names = ev.missingPlayers || [];
+  if (ev.status === 'complete') {
+    return '<span style="color:var(--green);font-weight:bold">✓ Complete</span>';
+  }
+  if (ev.status === 'missing_players') {
+    const shown = names.slice(0, 3).map(_escapeHtml).join(', ');
+    const more = names.length > 3 ? ` +${names.length - 3} more` : '';
+    return '<span style="color:var(--amber);font-weight:bold">⚠ Missing Player Profiles</span>'
+      + (names.length ? `<div style="font-weight:normal;color:var(--amber);font-size:11px;margin-top:2px">${shown}${more}</div>` : '');
+  }
+  // 'error' — no decks captured for this event at all.
+  return '<span style="color:var(--red);font-weight:bold">✗ Missing Data</span>';
+}
+
 function eventsRenderList() {
   const tbody = document.getElementById('events-table-body');
   const countRow = document.getElementById('events-count-row');
@@ -16047,6 +16078,7 @@ function eventsRenderList() {
       <td style="padding:9px 10px;color:var(--muted)">${ev.deckCount}</td>
       <td style="padding:9px 10px;color:var(--muted)">${ev.size||ev.deckCount}</td>
       <td style="padding:9px 10px;color:var(--muted)">${ev.date||'—'}</td>
+      <td style="padding:9px 10px">${eventStatusBadge(ev)}</td>
     `;
     tbody.appendChild(tr);
   });

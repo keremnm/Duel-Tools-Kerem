@@ -951,6 +951,80 @@ function isSamePlayerAsBatch(batchA, batchB) {
   return isSameNameOrAlias(batchA.player, batchB.player);
 }
 
+// For the Events tab's Status column: "has a profile" specifically means a
+// BATCH exists for this player — that's what the Profiles tab is actually
+// built from (renderProfileGrid iterates db.batches, not db.players). A bare
+// db.players registry stub (aliases recorded with no batch ever created)
+// must NOT count as "has a profile" here, or the column would wrongly report
+// an event as Complete for a builder who has a known alias on file but no
+// actual profile/replay data yet — exactly the case this column exists to
+// surface.
+//
+// Built as a flat lowercased-name index, computed ONCE per GET /api/events
+// call rather than re-scanning db.batches/db.players per deck per event —
+// with ~100+ events × dozens of decks each, a naive per-deck
+// isSameNameOrAlias/findPlayerByUsername scan (itself O(batches+players))
+// would be O(events × decks × batches × players), the same class of
+// accidentally-quadratic cost that made /batches/all-full block the server
+// for ~2.4s per request before it got cached (see _allFullCache above).
+// This is O(batches + players) to build, then O(1) per deck lookup.
+function buildProfileNameIndex() {
+  const index = new Set();
+  for (const batch of Object.values(db.batches)) {
+    if (!batch.player) continue;
+    const key = batch.player.toLowerCase();
+    index.add(key);
+    (batch.aliases||[]).forEach(a => index.add(a.toLowerCase()));
+    const reg = db.players[key];
+    if (reg) playerNames(reg).forEach(n => index.add(n));
+  }
+  // A players-registry entry's OWN alias list can link two names together
+  // even when neither is a batch's own `aliases` field (e.g. registry key
+  // "oldname" lists alias "newname", and the only batch that exists is under
+  // "newname"). One transitive-closure pass over the (small) registry catches
+  // that without a full graph walk per lookup.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const reg of Object.values(db.players)) {
+      const names = playerNames(reg);
+      if (names.some(n => index.has(n))) {
+        for (const n of names) if (!index.has(n)) { index.add(n); changed = true; }
+      }
+    }
+  }
+  return index;
+}
+
+// Drives the Events tab's Status column. Three states:
+//  - 'error' (red, "Missing Data"): the event record has no decks captured
+//    at all — effectively an empty/broken entry.
+//  - 'missing_players' (yellow): at least one deck's builder has no
+//    matching profile in our system yet. Lists those names so the column
+//    can show exactly who's missing.
+//  - 'complete' (green): every deck's builder already has a profile.
+// A blank/missing builderName on an individual deck slot is skipped rather
+// than counted as a missing player — there's no name to show or match on,
+// and that's a data-quality issue distinct from "we know who it is but
+// don't have their profile yet." Same underscore-as-space fallback
+// convention as findPlayerByBuilderName, since FL builderNames need it too.
+function computeEventStatus(ev, profileIndex) {
+  const decks = ev.decks || [];
+  if (!decks.length) return { status: 'error', missingPlayers: [] };
+  const missingPlayers = [];
+  const seen = new Set();
+  for (const d of decks) {
+    const name = (d.builderName || '').trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (profileIndex.has(key) || profileIndex.has(key.replace(/_/g, ' '))) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    missingPlayers.push(name);
+  }
+  return { status: missingPlayers.length ? 'missing_players' : 'complete', missingPlayers };
+}
+
 function findOrCreateBatchForPlayer(playerEntry) {
   const pBatches = Object.values(db.batches).filter(b =>
     b.player && playerNames(playerEntry).includes(b.player.toLowerCase())
@@ -3289,8 +3363,10 @@ const server = http.createServer(async (req, res) => {
   // ── GET /api/events — list every event we have data for ─────────────────────
   if (parts[0]==='events' && !parts[1] && method==='GET') {
     if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot view events' });
+    const profileIndex = buildProfileNameIndex();
     const list = Object.values(db.events||{}).map(ev => {
       const fallback = db.eventDates[ev.code] || {};
+      const statusInfo = computeEventStatus(ev, profileIndex);
       return {
         code: ev.code,
         name: ev.name || fallback.name || '',
@@ -3298,6 +3374,8 @@ const server = http.createServer(async (req, res) => {
         size: ev.size || (ev.decks||[]).length,
         winner: ev.winner || null,
         deckCount: (ev.decks||[]).length,
+        status: statusInfo.status,
+        missingPlayers: statusInfo.missingPlayers,
       };
     });
     return json(res, 200, { events: list, total: list.length });
