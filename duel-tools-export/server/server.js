@@ -3281,6 +3281,15 @@ const server = http.createServer(async (req, res) => {
       if (data.name           !== undefined) b.name           = data.name;
       if (data.player         !== undefined) b.player         = data.player;
       if (data.aliases        !== undefined) b.aliases        = data.aliases;
+      // Explicit un-hide/re-hide — used by the client's own "find or create
+      // the batch to import into" flow (go()) when it resolves an existing
+      // HIDDEN placeholder batch for a player who is now being explicitly
+      // imported under a named Duel Tools profile: that's exactly what
+      // "promote this to a real profile" means, and it has to be written
+      // here (not just held in the client's in-memory copy) or the batch
+      // stays hidden from the Profiles grid (GET /api/batches) forever,
+      // even though the replays about to be saved into it are real.
+      if (data.hidden !== undefined) b.hidden = !!data.hidden;
       if (data.eventDecklists !== undefined) {
         // Decklists are saved as a whole-array replace, not an incremental
         // add — diff against what was there before so the audit log can say
@@ -3410,7 +3419,12 @@ const server = http.createServer(async (req, res) => {
       const replayId = decodeURIComponent(parts[3]);
       const r = (b.replays||[]).find(r => r.replayId === replayId);
       if (!r) return json(res, 404, { error:'Replay not found in batch' });
-      const fields = ['plays','allPlays','parsed','timedOut','oppName','player1','player2','eventLabel','mergedReplays'];
+      // 'round' added so a backfill pass (editAliases() on the client, for
+      // replays saved before round-capture existed — Format Library tags
+      // every GOAT replay with a round, but that field only started being
+      // read/stored here recently) can actually persist what it finds; it
+      // was silently dropped by this whitelist before.
+      const fields = ['plays','allPlays','parsed','timedOut','oppName','player1','player2','eventLabel','round','mergedReplays'];
       for (const f of fields) { if (data[f] !== undefined) r[f] = data[f]; }
       if (data.parsed) {
         r.allPlays = [];

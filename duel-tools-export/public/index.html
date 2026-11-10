@@ -6593,16 +6593,76 @@ async function go() {
     _activeBatch = _newTempBatch;
     loadBatches(); // refresh list to show temp batch
   } else {
-    // Check if batch(es) for this player already exist — merge into them
+    // Check if batch(es) for this player already exist — merge into them.
+    //
+    // This used to be a strict `(b.player||'').toLowerCase() === player
+    // .toLowerCase()` check against GET /api/batches, which (a) excludes
+    // HIDDEN batches (an earlier Format Library event-import's placeholder
+    // for this exact player is real saved data, not a different person)
+    // and (b) ignores aliases entirely. Either gap means: type the name
+    // with slightly different spacing/case than the existing batch, or
+    // type one of the player's known aliases instead of their primary
+    // name, and this would find ZERO existing batches — then silently
+    // create a brand-new, separate one and save into THAT. The import
+    // would genuinely succeed (the change log really does show "Added
+    // replay"), the data just lands on a batch nobody is looking at, and
+    // the player's real profile never changes. This is the confirmed cause
+    // of replays that the log shows as saved but that never appear on the
+    // player's profile.
+    //
+    // Fixed by matching against /batches/all-full (every batch that has
+    // replay data, hidden or not, WITH its own .aliases — the lightweight
+    // /batches list doesn't return aliases at all) using every name this
+    // player is known by: what was typed, any alias just typed into this
+    // import, and the player registry's own alias list for them.
     try {
-      const existingList = await fetch(API+'/batches').then(r=>r.json()).catch(()=>[]);
-      const existingBatches = existingList.filter(b => (b.player||'').toLowerCase() === player.toLowerCase());
+      const playerNorm = player.trim().toLowerCase();
+      const typedAliasesNorm = aliases.map(a => (a||'').trim().toLowerCase()).filter(Boolean);
+      const regEntry = Object.values(window._playerRegistry || {}).find(p => p && (
+        (p.name||'').trim().toLowerCase() === playerNorm ||
+        (p.aliases||[]).some(a => (a||'').trim().toLowerCase() === playerNorm)
+      ));
+      const regNamesNorm = regEntry ? [regEntry.name, ...(regEntry.aliases||[])].map(a => (a||'').trim().toLowerCase()).filter(Boolean) : [];
+      const wantedNames = new Set([playerNorm, ...typedAliasesNorm, ...regNamesNorm].filter(Boolean));
+      const allFull = await fetch(API+'/batches/all-full').then(r=>r.json()).catch(()=>[]);
+      const existingBatches = allFull.filter(b => {
+        const bNames = [(b.player||'').trim().toLowerCase(), ...((b.aliases||[]).map(a => (a||'').trim().toLowerCase()))];
+        return bNames.some(n => n && wantedNames.has(n));
+      });
       if (existingBatches.length > 0) {
-        // Load full data from all existing batches and merge
-        const fullBatches = await Promise.all(existingBatches.map(b => fetch(API+'/batches/'+b.id).then(r=>r.json()).catch(()=>b)));
+        // Prefer a real (non-hidden) batch as the "primary" whose id/
+        // metadata this merge keeps — a hidden batch is only a placeholder,
+        // and explicitly importing under a named Duel Tools profile like
+        // this IS the act of promoting it into a real one.
+        const nonHidden = existingBatches.filter(b => !b.hidden);
+        const hiddenOnes = existingBatches.filter(b => b.hidden);
+        const orderedBatches = nonHidden.length ? [...nonHidden, ...hiddenOnes] : existingBatches;
+        let primary = orderedBatches[0];
+        const mergedAliases = [...new Set([
+          ...(aliases.length ? aliases : (primary.aliases||[])),
+          ...(primary.player && primary.player.trim().toLowerCase() !== playerNorm ? [primary.player] : [])
+        ])];
+        // Durably promote/sync the primary batch on the SERVER before
+        // reading its replays — a client-side-only `hidden:false` would
+        // only exist in this tab's memory for this one session; the next
+        // profile load (or anyone else's) would be back to square one.
+        // This PATCH also runs the server's own autoMergeHiddenBatches,
+        // which permanently folds in any OTHER hidden batch under this
+        // same name/alias — a real, server-side merge, not just this
+        // session's view of one.
+        if (primary.hidden || mergedAliases.some(a => !(primary.aliases||[]).includes(a)) || (primary.player||'').trim().toLowerCase() !== playerNorm) {
+          try {
+            await fetch(API+'/batches/'+primary.id, {
+              method:'PATCH', headers: authHeaders(),
+              body: JSON.stringify({ player, aliases: mergedAliases, hidden: false })
+            });
+            const refreshed = await fetch(API+'/batches/'+primary.id).then(r=>r.json()).catch(()=>null);
+            if (refreshed) primary = refreshed;
+          } catch(e) { console.warn('[go] Failed to promote/sync existing batch before import:', e.message); }
+        }
         const seenIds = new Set();
         const mergedReplays = [];
-        for (const b of fullBatches) {
+        for (const b of [primary, ...orderedBatches.filter(b => b.id !== primary.id)]) {
           for (const r of (b.replays||[])) {
             if (!seenIds.has(r.replayId)) {
               seenIds.add(r.replayId);
@@ -6616,9 +6676,8 @@ async function go() {
             }
           }
         }
-        const primary = fullBatches[0];
-        _activeBatch = { ...primary, aliases: aliases.length ? aliases : (primary.aliases||[]), replays: mergedReplays, _mergedIds: existingBatches.map(b=>b.id) };
-        _allProfileBatches = fullBatches;
+        _activeBatch = { ...primary, player, hidden: false, aliases: mergedAliases, replays: mergedReplays, _mergedIds: orderedBatches.map(b=>b.id) };
+        _allProfileBatches = orderedBatches;
         st('Adding to existing batch for '+player+' ('+mergedReplays.length+' existing replays)...', 'var(--amber)');
       } else {
         // Create new batch
@@ -7632,6 +7691,7 @@ async function flEventImportRun() {
   let attachedDirect = 0, heldPending = 0, errors = 0, mismatchCount = 0;
   const pendingNames = [];
   const mismatchedNames = []; // { who, p1, p2 } per skipped replay, for the summary line
+  const hardFailedReplays = []; // { who, rid } per replay that never loaded even after retries
 
   for (let i = 0; i < decks.length; i++) {
     const deck = decks[i];
@@ -7719,8 +7779,36 @@ async function flEventImportRun() {
       const parsedReplays = [];
       for (let j = 0; j < replayIds.length; j++) {
         const { id: rid, round } = replayIds[j];
-        const r = await flFetchAndParseReplay(rid, parseAs, aliasesForParse, eventId, round);
-        if (r.timedOut) { log('&nbsp;&nbsp;<span style="color:var(--red)">✗ '+rid+': failed to load</span>'); errors++; }
+        let r = await flFetchAndParseReplay(rid, parseAs, aliasesForParse, eventId, round);
+        // Replay fetching goes through DuelingBook via a CapSolver-solved
+        // Turnstile challenge (see GET /api/proxy/replay on the server) —
+        // documented elsewhere in this app as something that can take up to
+        // 90s and sometimes needs its own internal retry just to solve the
+        // challenge. Across a whole-event import (easily dozens of replays
+        // fetched back to back), hitting a transient failure here and there
+        // is normal network behavior, not a sign anything is actually wrong
+        // — but THIS loop used to treat it exactly like a permanent failure:
+        // one "✗ failed to load" line and the replay was gone for good,
+        // indistinguishable on screen from every other green ✓ line in a
+        // long run and never retried, this run or any future one. That's
+        // the single biggest reason a big event import would "only add
+        // some, not all" EVERY time, consistently, with real matches that
+        // genuinely exist on Format Library: a replay's fetch failing once
+        // is ordinary; this loop just never gave it a second chance before.
+        // Mirrors go()'s own existing retry pass for the same situation
+        // (see its "Pass 2: retry timeouts" comment) instead of inventing a
+        // second, divergent retry scheme.
+        for (let attempt = 1; attempt <= 3 && r.timedOut; attempt++) {
+          const delay = attempt === 1 ? 2000 : attempt === 2 ? 4000 : 6000;
+          log('&nbsp;&nbsp;<span style="color:var(--amber)">⟳ '+rid+': failed to load — retrying ('+attempt+'/3, '+(delay/1000)+'s)…</span>');
+          await sleep(delay);
+          r = await flFetchAndParseReplay(rid, parseAs, aliasesForParse, eventId, round);
+        }
+        if (r.timedOut) {
+          log('&nbsp;&nbsp;<span style="color:var(--red)">✗ '+rid+': failed to load after 3 retries — giving up on this one for now.</span>');
+          errors++;
+          hardFailedReplays.push({ who, rid });
+        }
         else if (r.mismatch) {
           // Show the ACTUAL participant names this replay carries — the one
           // piece of information that tells the admin what alias to add.
@@ -7843,6 +7931,18 @@ async function flEventImportRun() {
       _escapeHtml(who)+' ('+ms.length+' replay'+(ms.length>1?'s':'')+' — found: '+[...new Set(ms.flatMap(m=>[m.p1,m.p2]))].map(_escapeHtml).join(', ')+')'
     ).join('; ');
     log('<div style="margin-top:4px;color:var(--amber)">⚠ '+mismatchCount+' replay(s) saved but without a resolved W/L yet (no known alias matched who\'s actually in them): '+summary+'. They\'re already on the event page and the profile — add one of the found names as an alias on that player\'s profile and it will auto re-parse them, no re-import needed.</div>');
+  }
+  // Called out separately and loudly, same as the mismatch summary above —
+  // these are replays that genuinely failed to load from DuelingBook even
+  // after 3 retries (not a name/alias issue, not an event-code issue — the
+  // fetch itself kept failing), so they were NOT saved anywhere this run.
+  // Re-running the import will simply try these same ids again; it doesn't
+  // remember that these specifically struggled last time.
+  if (hardFailedReplays.length) {
+    const byWho2 = {};
+    hardFailedReplays.forEach(m => { (byWho2[m.who] = byWho2[m.who]||[]).push(m.rid); });
+    const summary2 = Object.entries(byWho2).map(([who, rids]) => _escapeHtml(who)+' ('+rids.join(', ')+')').join('; ');
+    log('<div style="margin-top:4px;color:var(--red)">✗ '+hardFailedReplays.length+' replay(s) failed to load from DuelingBook after 3 retries and were NOT saved: '+summary2+'. Re-run this import to try them again — this is usually a transient CapSolver/DuelingBook hiccup, not missing data.</div>');
   }
   statusEl.style.color = errors ? 'var(--amber)' : (mismatchCount ? 'var(--amber)' : 'var(--green)');
   statusEl.textContent = 'Import complete for '+eventId+'.';
@@ -18713,6 +18813,7 @@ Adding new ones will retroactively scan all saved replays.`,
     // whatever's sitting in memory) since step 2 may have just merged in a
     // hidden batch's replays this profile view doesn't know about yet.
     let upgraded = 0;
+    let roundsBackfilled = 0;
     for (const b of uniqueBatches) {
       let freshBatch;
       try { freshBatch = await (await fetch(`${API}/batches/${b.id}`)).json(); } catch(e) { continue; }
@@ -18721,16 +18822,56 @@ Adding new ones will retroactively scan all saved replays.`,
         const ok = await adminReparseReplay(player, r.replayId, null, true);
         if (ok) upgraded++;
       }
+
+      // 3b. Backfill missing Round info. Format Library tags every GOAT
+      // replay with a round (Round N, Quarter Finals, etc.) and always has —
+      // but this app only started actually reading/storing that field
+      // recently (see go()'s _idRoundMap and flEventImportRun's replayIds),
+      // so any replay saved before that still has round:'' forever, nothing
+      // we already have can derive it after the fact, and it just shows '—'
+      // everywhere (the per-event Replays table, etc.) even for an otherwise
+      // fully-resolved W/L replay. The only source of truth is Format
+      // Library itself, matched back to our own stored replay by the same
+      // replay id every other FL-import path extracts from replayLink.
+      const missingRound = (freshBatch.replays||[]).filter(r => !r.round);
+      if (missingRound.length) {
+        const roundByReplayId = {};
+        const searchNames = [...new Set([freshBatch.player, ...(freshBatch.aliases||[]), ...aliases].filter(Boolean))];
+        for (const name of searchNames) {
+          try {
+            const flRes = await fetch(`${API}/proxy/fl-replays?player=${encodeURIComponent(name)}`, { headers: authHeaders() });
+            const flData = await flRes.json().catch(()=>({}));
+            if (!flRes.ok) continue;
+            for (const row of (flData.replays||[])) {
+              const m = (row.replayLink||'').match(/id=([A-Za-z0-9_-]+)/);
+              if (m && row.round && !roundByReplayId[m[1]]) roundByReplayId[m[1]] = row.round;
+            }
+          } catch(e) { console.warn('[editAliases] Round backfill lookup failed for', name, ':', e.message); }
+        }
+        for (const r of missingRound) {
+          const foundRound = roundByReplayId[r.replayId];
+          if (!foundRound) continue;
+          try {
+            const pres = await fetch(`${API}/batches/${b.id}/replay/${encodeURIComponent(r.replayId)}`, {
+              method:'PATCH', headers: authHeaders(),
+              body: JSON.stringify({ round: foundRound })
+            });
+            if (pres.ok) roundsBackfilled++;
+          } catch(e) { console.warn('[editAliases] Round backfill PATCH failed for', r.replayId, ':', e.message); }
+        }
+      }
     }
 
     // Same staleness hazard as go()/addToBatch()/flEventImportRun — this
     // just changed what's saved for this player's batch(es) (aliases, a
-    // possible hidden-batch merge, and any just-upgraded replay results).
+    // possible hidden-batch merge, any just-upgraded replay results, and any
+    // just-backfilled round info).
     invalidateAllBatchesFullCache();
 
     const parts = [`synced to ${batchesUpdated} batch${batchesUpdated===1?'':'es'}`];
     if (flImportAttached.length) parts.push(`merged a hidden import (${[...new Set(flImportAttached)].join(', ')})`);
     if (upgraded) parts.push(`upgraded ${upgraded} previously-unresolved replay${upgraded===1?'':'s'} with a real result`);
+    if (roundsBackfilled) parts.push(`backfilled Round on ${roundsBackfilled} replay${roundsBackfilled===1?'':'s'}`);
     st(`Aliases saved — ${parts.join(', ')}.`, 'var(--green)');
 
     // Refresh this profile view in place with the fresh data, rather than
