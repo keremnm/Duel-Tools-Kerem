@@ -7653,22 +7653,62 @@ async function flEventImportRun() {
         } catch(e) { log('<span style="color:var(--amber)">⚠ YDK fetch failed for '+_escapeHtml(who)+': '+_escapeHtml(e.message)+'</span>'); }
       }
 
-      // 2. This player's replay list from Format Library, filtered to THIS event only
+      // 2. This player's replay list from Format Library, filtered to THIS
+      // event only. Matched on a NORMALIZED event code (strip anything but
+      // letters/digits, uppercase) instead of a strict string compare —
+      // Format Library's eventAbbreviation field can carry stray
+      // whitespace/punctuation a plain .toUpperCase() wouldn't catch, and a
+      // strict mismatch here silently drops an otherwise-real replay before
+      // it's even attempted — this filtering point is upstream of (and
+      // distinct from) the name/alias mismatch handling further below, so a
+      // replay dropped HERE never shows up as an amber mismatch warning
+      // either; it just vanishes with nothing on screen to explain why.
       let replayRows = [];
+      const normEvId = s => (s||'').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const wantEvId = normEvId(eventId);
       try {
         const rres = await fetch(API+'/proxy/fl-replays?player='+encodeURIComponent(deck.builderName), { headers: authHeaders() });
         const rdata = await rres.json().catch(()=>({}));
         if (rres.status === 401) { log('<span style="color:var(--red)">⚠ Format Library token expired — stopping.</span>'); break; }
-        if (rres.ok) replayRows = (rdata.replays||[]).filter(r => (r.eventId||'').toUpperCase() === eventId);
+        if (rres.ok) {
+          const allFlReplays = rdata.replays || [];
+          replayRows = allFlReplays.filter(r => normEvId(r.eventId) === wantEvId);
+          // Diagnostic: if Format Library has replays on record for this
+          // player but most/all of them didn't match this event's code, show
+          // exactly which other codes DID show up. This is the one thing
+          // that tells the admin whether FL simply has no more replays for
+          // this player at this event (nothing to import — not a bug) or
+          // whether their replays are tagged under a code that doesn't match
+          // what was typed in when starting this import (a real, fixable
+          // mismatch) — "0 shown, 0 errors" looks identical for both causes
+          // without this line.
+          if (allFlReplays.length && replayRows.length < allFlReplays.length) {
+            const otherCodes = [...new Set(allFlReplays.filter(r => normEvId(r.eventId) !== wantEvId).map(r => r.eventId || '(blank)'))];
+            if (otherCodes.length) {
+              log('&nbsp;&nbsp;<span style="color:var(--muted)">ℹ '+_escapeHtml(who)+': Format Library has '+allFlReplays.length+' total GOAT replay(s) on record, '+replayRows.length+' tagged for event '+_escapeHtml(eventId)+'. Other event code(s) seen on their other replays: '+otherCodes.map(_escapeHtml).join(', ')+'.</span>');
+            }
+          }
+        }
       } catch(e) { log('<span style="color:var(--amber)">⚠ Replay list fetch failed for '+_escapeHtml(who)+': '+_escapeHtml(e.message)+'</span>'); }
 
       // Dedup replay IDs the same way the existing single-player panel does
       const seen = new Set();
       const replayIds = [];
+      let unparseableLinks = 0;
       for (const r of replayRows) {
         const m = (r.replayLink||'').match(/id=([A-Za-z0-9_-]+)/);
         const rid = m ? m[1] : null;
         if (rid && !seen.has(rid)) { seen.add(rid); replayIds.push({ id: rid, round: r.round||'' }); }
+        else if (!rid) unparseableLinks++;
+      }
+      // Another silent-drop point, distinct from both the event-code filter
+      // above and the name/alias mismatch handling below: a row that matched
+      // this event but whose replayLink didn't contain a parseable id=...
+      // would otherwise just vanish here with nothing on screen to explain
+      // why a count the admin can see on Format Library doesn't match what
+      // showed up on this side.
+      if (unparseableLinks) {
+        log('&nbsp;&nbsp;<span style="color:var(--amber)">⚠ '+_escapeHtml(who)+': '+unparseableLinks+' replay row(s) for this event had no parseable replay link and were skipped.</span>');
       }
 
       const regKey = (deck.matchedPlayerName||'').toLowerCase();
