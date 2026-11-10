@@ -583,7 +583,7 @@ select{cursor:pointer}
 <div id="auth-gate" style="position:fixed;inset:0;background:#06060c;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;font-family:monospace">
   <div style="background:#0e0e1a;border:1px solid #252538;border-radius:12px;padding:32px 36px;width:340px;max-width:95vw;display:flex;flex-direction:column;gap:14px">
     <div style="text-align:center;margin-bottom:6px">
-      <img src="/logo.png" alt="Kerem's Duel Tools" style="height:64px;width:64px;object-fit:contain;margin-bottom:6px"/>
+      <img src="/logo.gif" alt="Kerem's Duel Tools" style="height:64px;width:64px;object-fit:contain;margin-bottom:6px"/>
       <div style="font-size:24px;font-weight:bold;color:#00e596;letter-spacing:.1em">KEREM'S DUEL TOOLS</div>
       <div style="font-size:12px;color:#8888bb;margin-top:4px">Goat Format Analytics</div>
     </div>
@@ -620,7 +620,7 @@ select{cursor:pointer}
 </div>
 <div class="app">
   <header class="topbar">
-    <div class="logo"><img class="logo-img" src="/logo.png" alt="Kerem's Duel Tools"/>KEREM'S DUEL TOOLS</div>
+    <div class="logo"><img class="logo-img" src="/logo.gif" alt="Kerem's Duel Tools"/>KEREM'S DUEL TOOLS</div>
     <div class="nav-tabs" id="nav-tabs-desktop">
       <button class="ntab on" id="ntab-profiles" onclick="switchTab('profiles',this)">Profiles</button>
       <button class="ntab" id="ntab-deck" onclick="switchTab('deck',this)">Deck Viewer</button>
@@ -16309,7 +16309,7 @@ function downloadYDK(deck) {
 // tracked player has a decklist or replay for — not a Format Library
 // mirror. See GET /api/events* on the server.
 // ══════════════════════════════════════════════════════════════════════
-let _eventsState = { list: [], page: 1, pageSize: 10, code: null, detail: null, detailTab: 'players', metagame: null, metagameDeckType: 'All' };
+let _eventsState = { list: [], page: 1, pageSize: 10, code: null, detail: null, detailTab: 'players', metagame: null, metagameDeckType: 'All', playerSearch: '' };
 
 function eventsOrdinal(n) {
   if (n === null || n === undefined || isNaN(n)) return '';
@@ -16372,13 +16372,21 @@ async function loadEventsTab(forceRefresh) {
   eventsCheckBackfillStatus();
 }
 
-// Status column for the Events tab — mirrors the status/missingPlayers
-// fields GET /api/events now computes server-side (computeEventStatus in
-// server.js): green Complete, amber Missing Player Profiles (names listed,
-// truncated so one event with a huge bracket doesn't blow out the row),
-// red Missing Data for an event record with no decks captured at all.
+// Status column for the Events tab — mirrors the status/missingPlayers/
+// incompleteData fields GET /api/events now computes server-side
+// (computeEventStatus in server.js): green Complete now requires every
+// tracked player to actually HAVE their decklist + a replay on file for
+// this event, not just a profile — see that function's own comment for why
+// "profile exists" stopped being a meaningful bar once hidden auto-created
+// profiles started covering every bracket entrant on import. Amber splits
+// into two distinct messages (no profile at all, vs. profile exists but the
+// data behind it is still missing) so it's obvious which situation an event
+// is in. Red Missing Data is for an event record with no decks captured at
+// all. Name lists are truncated so one event with a huge bracket doesn't
+// blow out the row.
 function eventStatusBadge(ev) {
   const names = ev.missingPlayers || [];
+  const incomplete = ev.incompleteData || [];
   if (ev.status === 'complete') {
     return '<span style="color:var(--green);font-weight:bold">✓ Complete</span>';
   }
@@ -16387,6 +16395,12 @@ function eventStatusBadge(ev) {
     const more = names.length > 3 ? ` +${names.length - 3} more` : '';
     return '<span style="color:var(--amber);font-weight:bold">⚠ Missing Player Profiles</span>'
       + (names.length ? `<div style="font-weight:normal;color:var(--amber);font-size:11px;margin-top:2px">${shown}${more}</div>` : '');
+  }
+  if (ev.status === 'incomplete_data') {
+    const shown = incomplete.slice(0, 3).map(_escapeHtml).join(', ');
+    const more = incomplete.length > 3 ? ` +${incomplete.length - 3} more` : '';
+    return '<span style="color:var(--amber);font-weight:bold">⚠ Missing Replays/Decklists</span>'
+      + (incomplete.length ? `<div style="font-weight:normal;color:var(--amber);font-size:11px;margin-top:2px">${shown}${more}</div>` : '');
   }
   // 'error' — no decks captured for this event at all.
   return '<span style="color:var(--red);font-weight:bold">✗ Missing Data</span>';
@@ -16480,6 +16494,7 @@ async function eventsShowDetail(code) {
   _eventsState.detailTab = 'players'; // always land on the player list, not whichever tab was open for the last event
   _eventsState.metagame = null;
   _eventsState.metagameDeckType = 'All';
+  _eventsState.playerSearch = ''; // fresh event — don't carry over the last event's search text
   const lv = document.getElementById('events-list-view'), dv = document.getElementById('events-detail-view'), kv = document.getElementById('events-deck-view');
   if (lv) lv.style.display = 'none';
   if (dv) dv.style.display = 'flex';
@@ -16627,14 +16642,104 @@ function eventsRenderDeckRepSection(container, data) {
   }
 }
 
-// Top Main/Side Deck card breakdowns, with a deck-type filter (default
-// "All") — picking a specific deck type re-fetches the metagame payload
-// scoped to just that deck type's cards (see eventsFetchMetagame /
-// GET /events/:code/metagame?deckType=) and re-renders this same section.
+// ══════════════════════════════════════════════════════════════════════
+// EVENTS TAB — TOP CARDS, Format-Data-style (card images + real win rates)
+// ══════════════════════════════════════════════════════════════════════
+// Originally this section just showed raw copy-count bars straight from
+// each bracket deck's YDK (see cardStats.main/side from GET
+// /events/:code/metagame) — useful for "what did people actually run" but
+// with no win-rate signal at all. This rebuilds it to match Format Data's
+// Top Cards feature instead: card art tiles, a win%/N badge, a Match Phase
+// toggle (Entire Match / Pre-Side / Post-Side — same 3 modes, same meaning,
+// as Format Data's _tcMatchPhase), and a click-through modal listing
+// exactly which matches a card's numbers came from. Deliberately its OWN,
+// separate state (_evTc* below) rather than reusing Format Data's
+// _tcMatchPhase/_tcLastRows/_tcRenderGen globals — those two Top Cards
+// views can be open in different tabs of the same session, and sharing
+// state would mean switching the phase (or opening a card's match list) on
+// one silently corrupts what the other is showing.
+//
+// The MAIN/SIDE split itself still comes from decklist composition, same
+// as before (a card counts as "Main" if it appears in at least one actual
+// bracket decklist's main section for this deck type in this event, and
+// "Side" the same way for side sections — a card can legitimately land in
+// both if different players built it differently). What's NEW is that each
+// bucket now shows that card's REAL win rate — computed client-side from
+// _globalRecords (every saved replay, already loaded for Format Data; see
+// loadGlobalRecords), filtered down to just this event's replays and the
+// selected deck-type filter — instead of just a copy count. A card seen in
+// a replay but not confirmed in any cached decklist for this deck type
+// falls into a third "Other Cards Seen" bucket rather than being silently
+// dropped or guessed into the wrong section.
+let _evTcMatchPhase = 'full'; // 'full' | 'preside' | 'postside' — local to this tab
+let _evTcLastRows = { main: [], side: [], other: [] }; // for the drill-down modal, keyed by section
+let _evTcRenderGen = 0; // guards against a stale async image-lookup clobbering a newer render
+
+// Same phase semantics as Format Data's _tcCardObservations (see that
+// function's own comment for the full reasoning) — 'full' credits a card
+// once per match it was seen in, scored by that match's overall result;
+// 'preside' looks only at Game 1 (before any side-decking has happened, so
+// everything seen there is definitionally a main-deck card); 'postside'
+// looks at Games 2+3 (after side-decking, so this reflects the actual
+// in-play deck including swapped-in side cards). Always the 'winrate'
+// metric — the Events tab has no separate Usage Rate toggle, unlike Format
+// Data, since that's a finer distinction than anything requested here.
+function eventsTcCardObservations(r, phase) {
+  const obs = [];
+  if (phase === 'full') {
+    if (!r.matchWon && !r.matchLost) return obs;
+    const seen = new Set(r.allMyCards || []);
+    seen.forEach(key => { if (key) obs.push({ key, win: r.matchWon }); });
+    return obs;
+  }
+  const gameNums = phase === 'preside' ? [1] : [2, 3];
+  (r.games||[]).forEach(g => {
+    if (!gameNums.includes(g.gameNum) || !g.winner) return;
+    const seen = new Set(g.myCards || []);
+    seen.forEach(key => { if (key) obs.push({ key, win: !!g.myWon }); });
+  });
+  return obs;
+}
+
+function setEventsTcMatchPhase(phase) {
+  _evTcMatchPhase = phase;
+  _syncModeButtons([
+    ['ev-tc-phase-full-btn', 'full'],
+    ['ev-tc-phase-preside-btn', 'preside'],
+    ['ev-tc-phase-postside-btn', 'postside'],
+  ], phase);
+  eventsRecomputeTopCards(); // pure client-side recompute — no re-fetch needed, the phase doesn't change which passcodes are "main"/"side"
+}
+
+// Builds { lowercasedCardName -> {name, id, w, l, matches[]} } from a set
+// of already-event/deck-type-filtered match records, under the given
+// phase. Mirrors renderTopCardsTable's own stats loop on Format Data.
+function eventsBuildCardStats(records, phase) {
+  const stats = {};
+  records.forEach(r => {
+    eventsTcCardObservations(r, phase).forEach(({ key, win }) => {
+      if (!key || TOP_CARDS_IGNORED_CARDS.has(key)) return;
+      if (!stats[key]) {
+        const card = (r.allMine||[]).find(c => (c.name||'').toLowerCase() === key);
+        stats[key] = { name: card ? card.name : key, id: card ? (card.id||null) : null, w: 0, l: 0, matches: [] };
+      }
+      if (!stats[key].matches.includes(r)) stats[key].matches.push(r);
+      if (win) stats[key].w++; else stats[key].l++;
+    });
+  });
+  return stats;
+}
+
+// Top Main/Side/Other Deck card breakdowns, with a deck-type filter
+// (default "All") and a Match Phase toggle. Picking a deck type re-fetches
+// the metagame payload scoped to that type (see eventsFetchMetagame /
+// GET /events/:code/metagame?deckType=), which is what supplies the
+// main/side passcode classification; changing the Match Phase only
+// recomputes win rates client-side (eventsRecomputeTopCards), no re-fetch.
 async function eventsRenderTopCardsSection(container, data) {
   const cardStats = data.cardStats || {};
   const coverageNote = cardStats.totalDecks
-    ? `<div style="font-size:10px;color:var(--dim);margin-top:10px">Card stats based on ${cardStats.decksWithCards||0} of ${cardStats.totalDecks} matching bracket deck(s) whose cards have been cached so far — opening more decklists improves coverage.</div>`
+    ? `<div style="font-size:10px;color:var(--dim);margin-top:10px">Main/Side classification based on ${cardStats.decksWithCards||0} of ${cardStats.totalDecks} matching bracket deck(s) whose cards have been cached so far — opening more decklists improves coverage. Win rates below are computed from this event's saved replays.</div>`
     : '';
   const deckTypeNames = ((_eventsState.detail && _eventsState.detail.decks) || []).map(d => d.deckTypeName || 'Unknown');
   const uniqueTypes = [...new Set(deckTypeNames)].sort((a,b)=>a.localeCompare(b));
@@ -16643,9 +16748,19 @@ async function eventsRenderTopCardsSection(container, data) {
     `<option value="${_escapeHtml(t)}" ${t===current?'selected':''}>${_escapeHtml(t)}</option>`
   ).join('');
 
+  function phaseBtn(id, phase, label) {
+    const active = _evTcMatchPhase === phase;
+    return `<button id="${id}" onclick="setEventsTcMatchPhase('${phase}')" style="background:${active?'var(--card)':'none'};color:${active?'var(--text)':'var(--muted)'};border:1px solid var(--border2);font-family:monospace;font-size:11px;padding:4px 10px;border-radius:5px;cursor:pointer">${label}</button>`;
+  }
+
   container.innerHTML = `
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
       <div style="font-size:11px;color:var(--muted);letter-spacing:.08em;font-weight:bold">TOP CARDS</div>
+      <div style="display:flex;gap:4px">
+        ${phaseBtn('ev-tc-phase-full-btn','full','Entire Match')}
+        ${phaseBtn('ev-tc-phase-preside-btn','preside','Pre-Side (Main)')}
+        ${phaseBtn('ev-tc-phase-postside-btn','postside','Post-Side (All)')}
+      </div>
       <label style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
         Deck type:
         <select id="events-topcards-decktype" style="background:var(--card2);color:var(--text);border:1px solid var(--border2);font-family:monospace;font-size:11px;padding:4px 8px;border-radius:5px">${options}</select>
@@ -16654,12 +16769,16 @@ async function eventsRenderTopCardsSection(container, data) {
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px">
       <div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:14px">
         <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">TOP MAIN DECK CARDS</div>
-        <div id="events-mg-maincards"></div>
+        <div id="events-mg-maincards" class="dd-empty">Loading…</div>
       </div>
       <div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:14px">
         <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">TOP SIDE DECK CARDS</div>
-        <div id="events-mg-sidecards"></div>
+        <div id="events-mg-sidecards" class="dd-empty">Loading…</div>
       </div>
+    </div>
+    <div id="events-mg-othercards-wrap" style="display:none;margin-top:16px;background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:14px">
+      <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;font-weight:bold">OTHER CARDS SEEN <span style="font-weight:normal;color:var(--dim)">(not confirmed in a cached decklist as Main or Side for this deck type)</span></div>
+      <div id="events-mg-othercards"></div>
     </div>
     ${coverageNote}
   `;
@@ -16669,10 +16788,153 @@ async function eventsRenderTopCardsSection(container, data) {
     eventsRenderDetailBody(); // re-fetches metagame scoped to the new filter
   };
 
-  const allPasscodes = [...(cardStats.main||[]).map(c=>c.passcode), ...(cardStats.side||[]).map(c=>c.passcode)];
+  // Cache this render's cardStats (main/side passcode sets) so the Match
+  // Phase buttons can recompute win rates without re-fetching metagame.
+  _eventsState._tcCardStats = cardStats;
+  await eventsRecomputeTopCards();
+}
+
+// Recomputes and re-renders the three Top Cards buckets for the CURRENT
+// event + deck-type filter + _evTcMatchPhase, from already-loaded
+// _globalRecords — no server round trip. Called on first render and every
+// time the Match Phase toggle changes.
+async function eventsRecomputeTopCards() {
+  const myGen = ++_evTcRenderGen;
+  const mainEl = document.getElementById('events-mg-maincards');
+  const sideEl = document.getElementById('events-mg-sidecards');
+  const otherWrap = document.getElementById('events-mg-othercards-wrap');
+  const otherEl = document.getElementById('events-mg-othercards');
+  if (!mainEl || !sideEl) return;
+
+  if (!_globalRecords.length) { try { await loadGlobalRecords(); } catch(e) {} }
+  if (myGen !== _evTcRenderGen) return;
+
+  const code = (_eventsState.code || '').toUpperCase().trim();
+  const deckType = _eventsState.metagameDeckType || 'All';
+  let records = _globalRecords.filter(r => !r.incomplete && !r.omitted && (r.eventLabel||'').toUpperCase().trim() === code);
+  if (deckType !== 'All') records = records.filter(r => (r.myDeck||'Unknown') === deckType);
+
+  const cardStats = _eventsState._tcCardStats || {};
+  const mainPasscodes = (cardStats.main||[]).map(c=>c.passcode);
+  const sidePasscodes = (cardStats.side||[]).map(c=>c.passcode);
+  const allPasscodes = [...mainPasscodes, ...sidePasscodes];
   if (allPasscodes.length) { try { await lookupPasscodeNames(allPasscodes); } catch(e) {} }
-  eventsRenderCardBarList(document.getElementById('events-mg-maincards'), cardStats.main||[]);
-  eventsRenderCardBarList(document.getElementById('events-mg-sidecards'), cardStats.side||[]);
+  if (myGen !== _evTcRenderGen) return;
+  const mainNames = new Set(mainPasscodes.map(id => (window._passcodeCache[id]||'').toLowerCase()).filter(Boolean));
+  const sideNames = new Set(sidePasscodes.map(id => (window._passcodeCache[id]||'').toLowerCase()).filter(Boolean));
+
+  if (!records.length) {
+    const msg = '<div class="dd-empty">No replays on record for this event' + (deckType!=='All' ? ' / '+_escapeHtml(deckType) : '') + ' yet.</div>';
+    mainEl.innerHTML = msg; sideEl.innerHTML = msg;
+    if (otherWrap) otherWrap.style.display = 'none';
+    _evTcLastRows = { main: [], side: [], other: [] };
+    return;
+  }
+
+  const stats = eventsBuildCardStats(records, _evTcMatchPhase);
+  const toRows = keys => keys
+    .map(k => ({ ...stats[k], n: stats[k].w + stats[k].l }))
+    .sort((a,b) => (pct(b.w,b.n) - pct(a.w,a.n)) || (b.n - a.n));
+
+  const allKeys = Object.keys(stats);
+  const mainRows  = toRows(allKeys.filter(k => mainNames.has(k)));
+  const sideRows  = toRows(allKeys.filter(k => sideNames.has(k) && !mainNames.has(k)));
+  const otherRows = toRows(allKeys.filter(k => !mainNames.has(k) && !sideNames.has(k)));
+  _evTcLastRows = { main: mainRows, side: sideRows, other: otherRows };
+
+  await eventsRenderCardImageGrid(mainEl, mainRows, 'main', myGen);
+  await eventsRenderCardImageGrid(sideEl, sideRows, 'side', myGen);
+  if (myGen !== _evTcRenderGen) return;
+  if (otherWrap) {
+    otherWrap.style.display = otherRows.length ? 'block' : 'none';
+    if (otherRows.length) await eventsRenderCardImageGrid(otherEl, otherRows, 'other', myGen);
+  }
+}
+
+// Card-art tile grid — same visual language as Format Data's
+// renderTopCardsGrid (art + win%/N badge, labeled fallback box on a
+// missing/broken image), but reading from _evTcLastRows and routing clicks
+// to showEventsTopCardsCardModal instead, so this view's state never
+// crosses wires with Format Data's own Top Cards tab.
+async function eventsRenderCardImageGrid(container, rows, section, gen) {
+  if (!container) return;
+  if (!rows.length) { container.innerHTML = '<div class="dd-empty">No cards with a decided result yet.</div>'; return; }
+  const idsToResolve = rows.map(r => r.id).filter(Boolean);
+  if (idsToResolve.length) { try { await lookupPasscodeNames(idsToResolve); } catch(e) {} }
+  if (gen !== _evTcRenderGen) return;
+  const tiles = rows.map((r, idx) => {
+    const imgId = r.id && window._cardDataCache[r.id] ? (window._cardDataCache[r.id].imageId || r.id) : null;
+    const wp = pct(r.w, r.n);
+    const badgeColor = wp>=50 ? 'var(--green)' : 'var(--red)';
+    const img = imgId
+      ? `<img src="https://images.ygoprodeck.com/images/cards/${imgId}.jpg" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"/>`
+      : '';
+    const fallback = `<div style="display:${imgId?'none':'flex'};position:absolute;inset:0;align-items:center;justify-content:center;text-align:center;font-size:9px;line-height:1.3;color:#777;padding:4px;box-sizing:border-box;background:#1a1a1a">${_escapeHtml(r.name)}</div>`;
+    const badge = `<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.78);color:${badgeColor};font-size:11px;font-weight:700;text-align:center;padding:3px 2px;line-height:1.3">${wp}% <span style="color:#9a9aa8;font-weight:400">(${r.n})</span></div>`;
+    return `<div onclick="showEventsTopCardsCardModal('${section}', ${idx})" title="${_escapeHtml(r.name)} — click to see matches" style="position:relative;width:92px;height:134px;border-radius:6px;overflow:hidden;background:#1a1a1a;border:1px solid var(--border);cursor:pointer">${img}${fallback}${badge}</div>`;
+  }).join('');
+  container.removeAttribute('class');
+  container.setAttribute('style', 'display:flex;flex-wrap:wrap;gap:8px');
+  container.innerHTML = tiles;
+}
+
+// Drill-down modal — exactly which of this event's matches contributed a
+// given card's win-rate numbers, mirroring Format Data's
+// showTopCardsCardModal (same layout, same "open in Deck Viewer" button),
+// just reading from this tab's own _evTcLastRows[section] instead.
+function showEventsTopCardsCardModal(section, idx) {
+  const r = (_evTcLastRows[section]||[])[idx];
+  if (!r) return;
+  const existing = document.getElementById('tc-card-modal-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'tc-card-modal-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:560px;width:100%;max-height:80vh;overflow-y:auto;display:flex;flex-direction:column;gap:12px';
+  overlay.appendChild(box);
+
+  const wp = pct(r.w, r.n);
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;gap:10px';
+  hdr.innerHTML = `<span style="font-family:monospace;font-weight:bold;font-size:14px;color:var(--text)">${_escapeHtml(r.name)}</span>` +
+    `<span style="font-family:monospace;font-size:12px;color:var(--muted)">${r.w}-${r.l} (${wp}%)</span>`;
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = 'margin-left:auto;background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer';
+  closeBtn.onclick = () => overlay.remove();
+  hdr.appendChild(closeBtn);
+  box.appendChild(hdr);
+
+  const note = document.createElement('div');
+  note.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace';
+  note.textContent = `${r.matches.length} match(es) this card showed up in for this event, under the current Match Phase + deck-type filter.` +
+    (_evTcMatchPhase !== 'full' ? ` Note: this is ${_evTcMatchPhase==='preside'?'Pre-Side (Game 1)':'Post-Side (Games 2+3)'} mode, so the W/L shown below is each match's OVERALL result — this card's own ${_evTcMatchPhase==='preside'?'Game 1':'Game 2/3'} result may differ from it.` : '');
+  box.appendChild(note);
+
+  const list = document.createElement('div');
+  list.style.cssText = 'display:flex;flex-direction:column;gap:6px';
+  (r.matches||[]).forEach(m => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-family:monospace;font-size:11px;flex-wrap:wrap';
+    const resultColor = m.matchWon ? 'var(--green)' : (m.matchLost ? 'var(--red)' : 'var(--muted)');
+    const resultText = m.matchWon ? 'W' : (m.matchLost ? 'L' : '?');
+    row.innerHTML = `<span style="color:${resultColor};font-weight:bold">${resultText}</span>` +
+      `<span style="color:var(--text)">${_escapeHtml(m.player||'')} vs ${_escapeHtml(m.oppName||'Unknown')}</span>` +
+      `<span style="color:var(--muted)">${_escapeHtml(m.oppDeck||'Unknown')}</span>`;
+    const viewBtn = document.createElement('button');
+    viewBtn.textContent = '🔍 View';
+    viewBtn.style.cssText = 'margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer';
+    viewBtn.onclick = () => { overlay.remove(); gotoDeckViewerForReplay(m.player, m.replayId, viewBtn); };
+    row.appendChild(viewBtn);
+    list.appendChild(row);
+  });
+  box.appendChild(list);
+
+  document.body.appendChild(overlay);
 }
 
 function eventsRenderMatrixSection(container, data) {
@@ -16683,29 +16945,6 @@ function eventsRenderMatrixSection(container, data) {
     </div>
   `;
   eventsRenderMatchupMatrix(document.getElementById('events-mg-matrix'), data.matchupMatrix||{});
-}
-
-// Simple horizontal bar list — card name + copy count, bar width relative to
-// the top card in the list. `cards` is pre-sorted desc by the server.
-function eventsRenderCardBarList(container, cards) {
-  if (!container) return;
-  if (!cards.length) { container.innerHTML = '<div style="color:var(--dim);font-size:11px">No cached card data for this event yet.</div>'; return; }
-  const max = cards[0].count || 1;
-  container.innerHTML = '';
-  cards.forEach(c => {
-    const name = window._passcodeCache[c.passcode] || ('#'+c.passcode);
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:5px;font-size:11px;cursor:pointer';
-    row.onclick = () => { if (window._passcodeCache[c.passcode]) showCardPopup(name); };
-    row.innerHTML = `
-      <span style="flex:1;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_escapeHtml(name)}</span>
-      <div style="width:70px;height:7px;border-radius:3px;background:var(--bg);overflow:hidden;flex-shrink:0">
-        <div style="width:${Math.round(c.count/max*100)}%;height:100%;background:var(--amber)"></div>
-      </div>
-      <span style="width:18px;text-align:right;color:var(--muted);flex-shrink:0">${c.count}</span>
-    `;
-    container.appendChild(row);
-  });
 }
 
 // Full deck-vs-deck grid, honestly scoped to what eventsState.matchupMatrix
@@ -16758,43 +16997,91 @@ function eventsRenderMatchupMatrix(container, matrix) {
 // straight from GET /api/events/:code — see that route's own comment for
 // what each one checks. Clicking a row still opens that deck the same way
 // a tile used to (eventsShowDeck).
+// Search box above the list filters by deck type OR player name/alias —
+// matched against builderName (the literal bracket entry, which is often
+// itself the alias the player used on Format Library), trackedPlayer (the
+// alias-resolved profile name from GET /api/events/:code, so a search for
+// the canonical name still finds a deck filed under a differently-spelled
+// alias), and deckTypeName. All client-side since the full deck list for
+// one event is already in hand — no new endpoint needed.
+function eventsPlayerListMatches(d, qLower) {
+  if (!qLower) return true;
+  return (d.builderName||'').toLowerCase().includes(qLower)
+    || (d.trackedPlayer||'').toLowerCase().includes(qLower)
+    || (d.deckTypeName||'').toLowerCase().includes(qLower);
+}
+
 function eventsRenderPlayerList(ev) {
   const bodyEl = document.getElementById('events-detail-body');
   if (!bodyEl) return;
   const decks = ev.decks || [];
   if (!decks.length) { bodyEl.innerHTML = '<div style="color:var(--muted);font-size:13px">No decklists on record for this event yet.</div>'; return; }
+
+  bodyEl.innerHTML = '';
+  const searchWrap = document.createElement('div');
+  searchWrap.style.cssText = 'margin-bottom:10px;display:flex;align-items:center;gap:8px';
+  searchWrap.innerHTML = `
+    <input id="events-player-search" type="text" placeholder="Search by player name/alias or deck type…"
+      value="${_escapeHtml(_eventsState.playerSearch||'')}"
+      style="flex:1;max-width:340px;background:var(--card2);color:var(--text);border:1px solid var(--border2);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px" />
+    <span id="events-player-search-count" style="font-size:11px;color:var(--muted)"></span>
+  `;
+  bodyEl.appendChild(searchWrap);
+
+  const tableWrap = document.createElement('div');
+  bodyEl.appendChild(tableWrap);
+
   const check = '<span style="color:var(--green);font-weight:bold">✓</span>';
   const cross = '<span style="color:var(--red);font-weight:bold">✗</span>';
-  const table = document.createElement('table');
-  table.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
-  let thead = '<thead><tr style="border-bottom:1px solid var(--border2);text-align:left">';
-  thead += '<th style="padding:6px 10px;color:var(--muted);font-size:10px;letter-spacing:.06em">PLACEMENT</th>';
-  thead += '<th style="padding:6px 10px;color:var(--muted);font-size:10px;letter-spacing:.06em">NAME</th>';
-  thead += '<th style="padding:6px 10px;color:var(--muted);font-size:10px;letter-spacing:.06em">DECK TYPE</th>';
-  thead += '<th style="padding:6px 10px;color:var(--muted);font-size:10px;letter-spacing:.06em;text-align:center">DECKLIST</th>';
-  thead += '<th style="padding:6px 10px;color:var(--muted);font-size:10px;letter-spacing:.06em;text-align:center">REPLAYS</th>';
-  thead += '</tr></thead>';
-  let tbody = '<tbody>';
-  decks.forEach((d, i) => {
-    const place = d.placeNum!=null ? eventsOrdinal(d.placeNum) : (d.placement||'—');
-    tbody += `<tr class="events-player-row" data-idx="${i}" style="border-bottom:1px solid var(--border2);cursor:pointer">
-      <td style="padding:7px 10px;color:var(--amber);white-space:nowrap">${_escapeHtml(String(place))}</td>
-      <td style="padding:7px 10px;color:var(--text)">${_escapeHtml(d.builderName||'Unknown')}${d.trackedPlayer?' <span style="color:var(--green);font-size:10px">✓ tracked</span>':''}</td>
-      <td style="padding:7px 10px;color:var(--muted)">${_escapeHtml(d.deckTypeName||'Unknown')}</td>
-      <td style="padding:7px 10px;text-align:center">${d.hasCards?check:cross}</td>
-      <td style="padding:7px 10px;text-align:center">${d.hasReplays?check:cross}</td>
-    </tr>`;
-  });
-  tbody += '</tbody>';
-  table.innerHTML = thead + tbody;
-  bodyEl.innerHTML = '';
-  bodyEl.appendChild(table);
-  table.querySelectorAll('.events-player-row').forEach(row => {
-    const d = decks[Number(row.getAttribute('data-idx'))];
-    row.onmouseover = () => row.style.background = 'var(--card2)';
-    row.onmouseout  = () => row.style.background = '';
-    row.onclick = () => eventsShowDeck(ev.code, d.deckId);
-  });
+
+  function renderRows() {
+    const qLower = (_eventsState.playerSearch||'').trim().toLowerCase();
+    const filtered = decks.filter(d => eventsPlayerListMatches(d, qLower));
+    const countEl = document.getElementById('events-player-search-count');
+    if (countEl) countEl.textContent = qLower ? `${filtered.length} of ${decks.length} match` : '';
+    if (!filtered.length) {
+      tableWrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:10px 4px">No players match "'+_escapeHtml(qLower)+'".</div>';
+      return;
+    }
+    const table = document.createElement('table');
+    table.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
+    let thead = '<thead><tr style="border-bottom:1px solid var(--border2);text-align:left">';
+    thead += '<th style="padding:6px 10px;color:var(--muted);font-size:10px;letter-spacing:.06em">PLACEMENT</th>';
+    thead += '<th style="padding:6px 10px;color:var(--muted);font-size:10px;letter-spacing:.06em">NAME</th>';
+    thead += '<th style="padding:6px 10px;color:var(--muted);font-size:10px;letter-spacing:.06em">DECK TYPE</th>';
+    thead += '<th style="padding:6px 10px;color:var(--muted);font-size:10px;letter-spacing:.06em;text-align:center">DECKLIST</th>';
+    thead += '<th style="padding:6px 10px;color:var(--muted);font-size:10px;letter-spacing:.06em;text-align:center">REPLAYS</th>';
+    thead += '</tr></thead>';
+    let tbody = '<tbody>';
+    filtered.forEach((d) => {
+      const idx = decks.indexOf(d);
+      const place = d.placeNum!=null ? eventsOrdinal(d.placeNum) : (d.placement||'—');
+      tbody += `<tr class="events-player-row" data-idx="${idx}" style="border-bottom:1px solid var(--border2);cursor:pointer">
+        <td style="padding:7px 10px;color:var(--amber);white-space:nowrap">${_escapeHtml(String(place))}</td>
+        <td style="padding:7px 10px;color:var(--text)">${_escapeHtml(d.builderName||'Unknown')}${d.trackedPlayer?' <span style="color:var(--green);font-size:10px">✓ tracked</span>':''}</td>
+        <td style="padding:7px 10px;color:var(--muted)">${_escapeHtml(d.deckTypeName||'Unknown')}</td>
+        <td style="padding:7px 10px;text-align:center">${d.hasCards?check:cross}</td>
+        <td style="padding:7px 10px;text-align:center">${d.hasReplays?check:cross}</td>
+      </tr>`;
+    });
+    tbody += '</tbody>';
+    table.innerHTML = thead + tbody;
+    tableWrap.innerHTML = '';
+    tableWrap.appendChild(table);
+    table.querySelectorAll('.events-player-row').forEach(row => {
+      const d = decks[Number(row.getAttribute('data-idx'))];
+      row.onmouseover = () => row.style.background = 'var(--card2)';
+      row.onmouseout  = () => row.style.background = '';
+      row.onclick = () => eventsShowDeck(ev.code, d.deckId);
+    });
+  }
+
+  const searchInput = document.getElementById('events-player-search');
+  if (searchInput) searchInput.oninput = () => {
+    _eventsState.playerSearch = searchInput.value;
+    renderRows();
+  };
+  renderRows();
 }
 
 async function eventsShowDeck(code, deckId) {

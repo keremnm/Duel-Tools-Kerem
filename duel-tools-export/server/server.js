@@ -458,12 +458,37 @@ async function _flushBatchSaveQueue() {
     scheduleFlushRetry();
     return;
   }
-  // Write all pending batches in a single transaction
-  try {
-    await pgClient.query('BEGIN');
-    for (const batchId of ids) {
-      const batch = db.batches[batchId];
-      if (!batch) continue;
+  // Each batch is written as its own independent INSERT ... ON CONFLICT —
+  // deliberately NOT wrapped in a single BEGIN/COMMIT transaction anymore.
+  // This app uses ONE raw Postgres connection (pgClient, a plain `Client`,
+  // not a connection Pool) shared across EVERY concurrent request this
+  // Node process handles. A Postgres transaction is a property of the
+  // SESSION/connection, not of "which logical function issued it" — so any
+  // OTHER query any OTHER concurrent request happened to issue on this same
+  // pgClient while a BEGIN...COMMIT block here was still open (e.g. the
+  // plain, non-transactional INSERT in flushBatchNow, or the SELECT in
+  // GET /api/batches/:id's fresh-reread) got swept into THIS transaction —
+  // and a ROLLBACK here, triggered by a failure in just one of THIS flush's
+  // own batches, would then silently undo that completely unrelated write
+  // too, even though its own request handler had already returned
+  // {ok:true} to its own caller with no idea any of this happened. That
+  // exactly matches a real reported bug: the admin log showed "Added
+  // replay" (logChange() writes straight to the in-memory _changeLog,
+  // independent of any of this) for the same replays, days apart, while
+  // the actual batch row never durably landed in Postgres — the in-memory
+  // copy had the replay (so the SAME server process looked fine right
+  // after import), but the next time anything re-read that batch from
+  // Postgres (a restart, a reconnect, another instance) it came back
+  // without it, and the next import run saw nothing to dedupe against and
+  // silently "re-added" it. Writing each row independently, with no shared
+  // transaction state, removes this hazard entirely — one batch's failure
+  // can no longer have any way to affect another's, whether concurrently
+  // issued by this same function or by anything else in the app.
+  let failed = 0;
+  for (const batchId of ids) {
+    const batch = db.batches[batchId];
+    if (!batch) continue;
+    try {
       const serialized = JSON.stringify(batch);
       if (serialized.length > 50*1024*1024) {
         console.error('[saveBatch] Batch', batchId, 'exceeds 50MB — skipped');
@@ -474,20 +499,20 @@ async function _flushBatchSaveQueue() {
         [batchId, serialized]
       );
       _pendingFlushKeys.delete('batches:'+batchId);
+      _dirtyBatches.delete(batchId);
+    } catch(e) {
+      failed++;
+      console.error('[saveBatch] Flush failed for', batchId, ':', e.message);
+      _pendingFlushKeys.add('batches:'+batchId);
+      if (e.message.includes('connect') || e.message.includes('Connection') || e.code === 'ECONNRESET') {
+        pgClient = null;
+        setTimeout(async () => { try { await connectPostgres(); } catch(e2) {} }, 2000);
+        break; // connection is gone — no point trying the rest on it right now
+      }
     }
-    await pgClient.query('COMMIT');
-    ids.forEach(id => _dirtyBatches.delete(id));
-    if (ids.length > 1) console.log('[saveBatch] Flushed', ids.length, 'batches in one transaction');
-  } catch(e) {
-    await pgClient.query('ROLLBACK').catch(()=>{});
-    console.error('[saveBatch] Flush failed:', e.message);
-    ids.forEach(id => _pendingFlushKeys.add('batches:'+id));
-    if (e.message.includes('connect') || e.message.includes('Connection') || e.code === 'ECONNRESET') {
-      pgClient = null;
-      setTimeout(async () => { try { await connectPostgres(); } catch(e2) {} }, 2000);
-    }
-    scheduleFlushRetry();
   }
+  if (ids.length > 1) console.log('[saveBatch] Flushed', ids.length - failed, '/', ids.length, 'batches (independently, no shared transaction)');
+  if (failed) scheduleFlushRetry();
 }
 
 async function saveBatchToPostgres(batchId) {
@@ -898,7 +923,7 @@ function getUser(req) {
 // ── MIME / helpers ────────────────────────────────────────────────────────────
 const MIME = {
   '.html':'text/html','.js':'application/javascript','.css':'text/css',
-  '.json':'application/json','.png':'image/png','.ico':'image/x-icon','.svg':'image/svg+xml'
+  '.json':'application/json','.png':'image/png','.ico':'image/x-icon','.svg':'image/svg+xml','.gif':'image/gif'
 };
 // Response bodies here can run from a few bytes ({ok:true}) up to several
 // MB (a full batch with many un-migrated legacy replays). Gzip cuts JSON
@@ -1098,33 +1123,80 @@ function buildProfileNameIndex() {
   return index;
 }
 
-// Drives the Events tab's Status column. Three states:
+// Index used by both the Events-list Status column (computeEventStatus
+// below) and the per-event Players-tab Replays ✓/✗ column (GET
+// /api/events/:code): for every event code, the set of lowercased
+// player/alias names that have at least one SAVED REPLAY tagged with that
+// event. Built once per request by scanning every batch's replays a single
+// time — O(batches × avg replays per batch) total — rather than, as both
+// call sites used to do independently, rescanning every batch's replays
+// per deck or per event (O(events × decks × batches) for the list, which is
+// exactly the accidentally-quadratic shape that made /batches/all-full slow
+// before it got cached; see the _allFullCache comment above).
+function buildEventReplayCoverageIndex() {
+  const index = {};
+  for (const batch of Object.values(db.batches)) {
+    const names = [(batch.player||'').toLowerCase(), ...(batch.aliases||[]).map(a=>a.toLowerCase())].filter(Boolean);
+    if (!names.length) continue;
+    for (const r of (batch.replays||[])) {
+      const code = (r.eventLabel||r.eventId||'').toUpperCase().trim();
+      if (!code) continue;
+      if (!index[code]) index[code] = new Set();
+      for (const n of names) index[code].add(n);
+    }
+  }
+  return index;
+}
+
+// Drives the Events tab's Status column. Four states:
 //  - 'error' (red, "Missing Data"): the event record has no decks captured
 //    at all — effectively an empty/broken entry.
-//  - 'missing_players' (yellow): at least one deck's builder has no
-//    matching profile in our system yet. Lists those names so the column
-//    can show exactly who's missing.
-//  - 'complete' (green): every deck's builder already has a profile.
+//  - 'missing_players' (amber, "Missing Player Profiles"): at least one
+//    deck's builder has no matching profile/batch in our system at all yet.
+//    Lists those names so the column can show exactly who's missing.
+//  - 'incomplete_data' (amber, "Missing Replays/Decklists"): every builder
+//    has a profile, but at least one of them is still missing their
+//    decklist (d.ydkData) and/or a replay actually tagged with this event —
+//    i.e. the profile exists but the DATA behind it doesn't. This is the
+//    state that used to be reported as 'complete' once hidden auto-created
+//    profiles (see the db.batches `hidden` comment near the top of this
+//    file) started giving literally every bracket entrant a profile the
+//    instant an FL import ran, even when that import failed to actually
+//    find/attach their replays — making the old profile-only check almost
+//    always pass regardless of whether any real data had landed.
+//  - 'complete' (green): every tracked deck's builder has a profile AND has
+//    both a decklist and at least one replay on file for this event.
 // A blank/missing builderName on an individual deck slot is skipped rather
-// than counted as a missing player — there's no name to show or match on,
-// and that's a data-quality issue distinct from "we know who it is but
-// don't have their profile yet." Same underscore-as-space fallback
-// convention as findPlayerByBuilderName, since FL builderNames need it too.
-function computeEventStatus(ev, profileIndex) {
+// than counted as missing — there's no name to show or match on, and that's
+// a data-quality issue distinct from either of the above. Same
+// underscore-as-space fallback convention as findPlayerByBuilderName, since
+// FL builderNames need it too.
+function computeEventStatus(ev, profileIndex, replayCoverageIndex) {
   const decks = ev.decks || [];
-  if (!decks.length) return { status: 'error', missingPlayers: [] };
+  if (!decks.length) return { status: 'error', missingPlayers: [], incompleteData: [] };
   const missingPlayers = [];
-  const seen = new Set();
+  const incompleteData = [];
+  const seenMissing = new Set();
+  const seenIncomplete = new Set();
+  const coverage = (replayCoverageIndex && replayCoverageIndex[ev.code]) || new Set();
   for (const d of decks) {
     const name = (d.builderName || '').trim();
     if (!name) continue;
     const key = name.toLowerCase();
-    if (profileIndex.has(key) || profileIndex.has(key.replace(/_/g, ' '))) continue;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    missingPlayers.push(name);
+    const keyAlt = key.replace(/_/g, ' ');
+    if (!profileIndex.has(key) && !profileIndex.has(keyAlt)) {
+      if (!seenMissing.has(key)) { seenMissing.add(key); missingPlayers.push(name); }
+      continue;
+    }
+    const hasCards = !!d.ydkData;
+    const hasReplay = coverage.has(key) || coverage.has(keyAlt);
+    if (!hasCards || !hasReplay) {
+      if (!seenIncomplete.has(key)) { seenIncomplete.add(key); incompleteData.push(name); }
+    }
   }
-  return { status: missingPlayers.length ? 'missing_players' : 'complete', missingPlayers };
+  if (missingPlayers.length) return { status: 'missing_players', missingPlayers, incompleteData };
+  if (incompleteData.length) return { status: 'incomplete_data', missingPlayers: [], incompleteData };
+  return { status: 'complete', missingPlayers: [], incompleteData: [] };
 }
 
 // Extracted from POST /api/batches/:id/replay (which now just calls this and
@@ -3667,9 +3739,10 @@ const server = http.createServer(async (req, res) => {
   if (parts[0]==='events' && !parts[1] && method==='GET') {
     if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot view events' });
     const profileIndex = buildProfileNameIndex();
+    const replayCoverageIndex = buildEventReplayCoverageIndex();
     const list = Object.values(db.events||{}).map(ev => {
       const fallback = db.eventDates[ev.code] || {};
-      const statusInfo = computeEventStatus(ev, profileIndex);
+      const statusInfo = computeEventStatus(ev, profileIndex, replayCoverageIndex);
       return {
         code: ev.code,
         name: ev.name || fallback.name || '',
@@ -3679,6 +3752,7 @@ const server = http.createServer(async (req, res) => {
         deckCount: (ev.decks||[]).length,
         status: statusInfo.status,
         missingPlayers: statusInfo.missingPlayers,
+        incompleteData: statusInfo.incompleteData,
       };
     });
     return json(res, 200, { events: list, total: list.length });
@@ -3712,6 +3786,12 @@ const server = http.createServer(async (req, res) => {
     const ev = db.events[code];
     if (!ev) return json(res, 404, { error: 'No data for this event yet.' });
     const fallback = db.eventDates[code] || {};
+    // Built once for this one event (not per-deck) — see
+    // buildEventReplayCoverageIndex's own comment for why this replaced the
+    // old per-deck full-batches scan, and why the Events-list Status column
+    // (computeEventStatus) now shares this exact same coverage data instead
+    // of drawing its own separate, looser "does a profile exist" conclusion.
+    const replayCoverage = buildEventReplayCoverageIndex()[code] || new Set();
     const decks = (ev.decks||[]).map(d => {
       const playerEntry = findPlayerByBuilderName(d.builderName);
       // hasReplays: does this player (alias-aware) have at least one saved
@@ -3724,13 +3804,10 @@ const server = http.createServer(async (req, res) => {
       // itself shows for that event).
       let hasReplays = false;
       if (playerEntry) {
-        const names = playerNames(playerEntry);
-        outer: for (const b of Object.values(db.batches)) {
-          if (!names.includes((b.player||'').toLowerCase())) continue;
-          for (const r of (b.replays||[])) {
-            if ((r.eventLabel||r.eventId||'').toUpperCase().trim() === code) { hasReplays = true; break outer; }
-          }
-        }
+        hasReplays = playerNames(playerEntry).some(n => replayCoverage.has(n));
+      } else {
+        const raw = (d.builderName||'').trim().toLowerCase();
+        hasReplays = replayCoverage.has(raw) || replayCoverage.has(raw.replace(/_/g, ' '));
       }
       return {
         deckId: d.deckId,
