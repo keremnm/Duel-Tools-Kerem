@@ -6729,10 +6729,26 @@ async function go() {
       if (_parsed || _activeBatch.dualParse) {
         qi(`<span style="color:var(--green)">✓ ${result.id}: <b>${p1}</b> vs <b>${p2}</b>${_parsed ? ' → '+(_parsed.result==='w'?'W':'L')+' '+(_parsed.score||'') : ''}</span>`);
       } else if (_plays.length > 0) {
-        qi(`<span style="color:var(--red)">✗ ${result.id}: players in replay = <b>[${p1}]</b> vs <b>[${p2}]</b> — no match for batch player <b>[${_activeBatch.player}]</b>. Skipped.</span>`);
-        st('Player mismatch — replay skipped (add alias to fix)', 'var(--red)');
+        // IMPORTANT: this used to `continue` here — skipping both the push
+        // below AND the server save entirely — any time none of the batch
+        // player's known names/aliases matched either side of the replay.
+        // That silently dropped real match data: it never reached this
+        // batch, never showed up on the Events-tab Replays column for this
+        // event, and was gone the moment this import run ended (nothing
+        // kept even a record that the replay existed). Per explicit
+        // instruction, replay data must never be hidden or fail to stick
+        // just because we can't yet tell which side is "mine" — so this now
+        // falls through and saves it anyway (parsed stays null, but the
+        // full raw play log is preserved in allPlays). It'll show on this
+        // player's profile and the event page immediately, just without a
+        // resolved W/L/score, and can be upgraded to a real result the
+        // moment the right alias is added (editAliases() now automatically
+        // re-parses exactly this kind of unresolved replay — see its own
+        // comment — using the allPlays already saved here, no re-fetch
+        // needed).
+        qi(`<span style="color:var(--amber)">⚠ ${result.id}: players in replay = <b>[${p1}]</b> vs <b>[${p2}]</b> — no match for batch player <b>[${_activeBatch.player}]</b>. Saved anyway (no resolved W/L yet) — add one of these as an alias to fill it in.</span>`);
+        st('Player mismatch — saved without a resolved side (add alias to fix)', 'var(--amber)');
         _skippedMismatch.push({ id: result.id, player1: p1, player2: p2 });
-        continue; // skip saving this replay — player not in it
       } else {
         qi(`<span style="color:var(--amber)">⚠ ${result.id}: loaded but empty (0 plays)</span>`);
       }
@@ -6854,7 +6870,7 @@ async function go() {
   clearForm();
   closeBatchPanel();
 
-  // Show persistent summary of skipped (mismatched) replays if any
+  // Show persistent summary of saved-but-unresolved (mismatched) replays if any
   if (_skippedMismatch.length > 0) {
     // Remove any previous mismatch report
     const prev = document.getElementById('import-mismatch-report');
@@ -6862,13 +6878,13 @@ async function go() {
 
     const report = document.createElement('div');
     report.id = 'import-mismatch-report';
-    report.style.cssText = 'margin:14px 0 0 0;padding:12px 14px;background:rgba(255,85,85,.07);border:1px solid rgba(255,85,85,.35);border-radius:8px;font-size:12px;font-family:monospace';
+    report.style.cssText = 'margin:14px 0 0 0;padding:12px 14px;background:rgba(255,191,0,.08);border:1px solid rgba(255,191,0,.35);border-radius:8px;font-size:12px;font-family:monospace';
 
     const hdr = document.createElement('div');
     hdr.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:8px';
     const title = document.createElement('span');
-    title.style.cssText = 'color:var(--red);font-weight:bold;font-size:12px';
-    title.textContent = `⚠ ${_skippedMismatch.length} replay(s) skipped — "${_activeBatch.player}" not found in them`;
+    title.style.cssText = 'color:var(--amber);font-weight:bold;font-size:12px';
+    title.textContent = `⚠ ${_skippedMismatch.length} replay(s) saved without a resolved W/L — "${_activeBatch.player}" not found in them`;
     const copyBtn = document.createElement('button');
     copyBtn.textContent = '⎘ Copy IDs';
     copyBtn.style.cssText = 'margin-left:auto;background:var(--card);border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:2px 9px;border-radius:4px;cursor:pointer;white-space:nowrap';
@@ -6887,7 +6903,7 @@ async function go() {
 
     const sub = document.createElement('div');
     sub.style.cssText = 'color:var(--muted);font-size:10px;margin-bottom:8px';
-    sub.textContent = 'Add the correct username as an alias to the batch to include these replays.';
+    sub.textContent = 'These are already saved and visible on the profile/event page — just without a W/L yet. Add the correct username as an alias (click "aka:" on the profile) and it will auto re-parse these.';
     report.appendChild(sub);
 
     const table = document.createElement('div');
@@ -7666,18 +7682,26 @@ async function flEventImportRun() {
         const r = await flFetchAndParseReplay(rid, parseAs, aliasesForParse, eventId, round);
         if (r.timedOut) { log('&nbsp;&nbsp;<span style="color:var(--red)">✗ '+rid+': failed to load</span>'); errors++; }
         else if (r.mismatch) {
-          // Show the ACTUAL participant names this replay carries, not just
-          // "skipped" — this is the one piece of information that actually
-          // tells the admin what alias to add. Without it, "no replays got
-          // attached" looks identical whether the save failed (a real bug)
-          // or every single replay was correctly, silently skipped because
-          // none of this player's known aliases matched who's actually in
-          // the replay (not a bug — parseMatch() refusing to guess which
-          // side is "my" side rather than risk saving the wrong perspective).
+          // Show the ACTUAL participant names this replay carries — the one
+          // piece of information that tells the admin what alias to add.
+          // IMPORTANT: this used to stop here and never push r.data into
+          // parsedReplays at all, meaning the replay was never saved
+          // anywhere — not to this player's batch (existing or hidden),
+          // not visible on the event page's Replays column, nothing. Per
+          // explicit instruction, replay data must never be hidden or fail
+          // to stick just because none of this player's known aliases
+          // matched who's actually in the replay — it's pushed through
+          // below exactly like a matched one (parseMatch() still refused to
+          // guess a perspective, so r.data.parsed stays null, but the full
+          // raw plays are kept) so it attaches to the batch, counts toward
+          // this event's Replays coverage, and shows up on the profile
+          // right away. Once the right alias is added, editAliases() now
+          // automatically re-parses replays like this one in place.
           const p1 = r.data.player1||'?', p2 = r.data.player2||'?';
-          log('&nbsp;&nbsp;<span style="color:var(--amber)">⚠ '+rid+': players in replay = <b>['+_escapeHtml(p1)+']</b> vs <b>['+_escapeHtml(p2)+']</b> — no match for <b>'+_escapeHtml(who)+'</b>\'s known name/aliases. Skipped — add one of these as an alias and re-run to attach it.</span>');
+          log('&nbsp;&nbsp;<span style="color:var(--amber)">⚠ '+rid+': players in replay = <b>['+_escapeHtml(p1)+']</b> vs <b>['+_escapeHtml(p2)+']</b> — no match for <b>'+_escapeHtml(who)+'</b>\'s known name/aliases. Saved anyway (no resolved W/L yet) — add one of these as an alias and it will auto re-parse.</span>');
           mismatchCount++;
           mismatchedNames.push({ who, p1, p2 });
+          parsedReplays.push(r.data);
         }
         else { parsedReplays.push(r.data); log('&nbsp;&nbsp;<span style="color:var(--green)">✓ '+rid+'</span>'); }
         if (j < replayIds.length-1) await sleep(1200);
@@ -7766,18 +7790,19 @@ async function flEventImportRun() {
   // session, even though the server-side save itself succeeded.
   invalidateAllBatchesFullCache();
 
-  log('<div style="margin-top:8px;font-weight:bold">Done — '+attachedDirect+' attached directly, '+heldPending+' held pending'+(pendingNames.length?' ('+pendingNames.map(_escapeHtml).join(', ')+')':'')+', '+errors+' error(s)'+(mismatchCount?', '+mismatchCount+' replay(s) skipped on a name mismatch':'')+'.</div>');
-  // Called out separately and loudly — this is the #1 reason an import can
-  // "run clean" (0 errors) but still attach nothing for a given player: the
-  // replay(s) simply don't carry any name this player is known under yet.
-  // Scroll up to the per-replay ⚠ lines above for the exact names found.
+  log('<div style="margin-top:8px;font-weight:bold">Done — '+attachedDirect+' attached directly, '+heldPending+' held pending'+(pendingNames.length?' ('+pendingNames.map(_escapeHtml).join(', ')+')':'')+', '+errors+' error(s)'+(mismatchCount?', '+mismatchCount+' replay(s) saved without a resolved W/L':'')+'.</div>');
+  // Called out separately and loudly — these are the replays that still
+  // need an alias before Format Data / match stats can show a real W/L for
+  // them, even though they're already saved and visible on the profile and
+  // the event page. Scroll up to the per-replay ⚠ lines above for the exact
+  // names found.
   if (mismatchCount) {
     const byWho = {};
     mismatchedNames.forEach(m => { (byWho[m.who] = byWho[m.who]||[]).push(m); });
     const summary = Object.entries(byWho).map(([who, ms]) =>
       _escapeHtml(who)+' ('+ms.length+' replay'+(ms.length>1?'s':'')+' — found: '+[...new Set(ms.flatMap(m=>[m.p1,m.p2]))].map(_escapeHtml).join(', ')+')'
     ).join('; ');
-    log('<div style="margin-top:4px;color:var(--amber)">⚠ '+mismatchCount+' replay(s) attached to NO ONE because the player wasn\'t recognized in them: '+summary+'. Add one of the found names as an alias on that player\'s profile, then re-run this import to pick them up.</div>');
+    log('<div style="margin-top:4px;color:var(--amber)">⚠ '+mismatchCount+' replay(s) saved but without a resolved W/L yet (no known alias matched who\'s actually in them): '+summary+'. They\'re already on the event page and the profile — add one of the found names as an alias on that player\'s profile and it will auto re-parse them, no re-import needed.</div>');
   }
   statusEl.style.color = errors ? 'var(--amber)' : (mismatchCount ? 'var(--amber)' : 'var(--green)');
   statusEl.textContent = 'Import complete for '+eventId+'.';
@@ -18578,15 +18603,57 @@ Adding new ones will retroactively scan all saved replays.`,
   );
   if (input === null) return;
   const aliases = input.split(',').map(a=>a.trim()).filter(Boolean);
-  const hadBefore = new Set(current.map(a=>a.toLowerCase()));
-  const hasNew = aliases.some(a => !hadBefore.has(a.toLowerCase()));
 
+  st('Saving aliases…', 'var(--amber)');
   try {
-    const res = await fetch(`${API}/players/${encodeURIComponent(player)}/aliases`, {
+    // 1. Player registry — topPlayer/tags/gfwlTeams live here too, and this
+    // is what parseMatch() on a future import merges in (see go()'s
+    // _aliases closure) regardless of what's on any one batch object.
+    await fetch(`${API}/players/${encodeURIComponent(player)}/aliases`, {
       method:'PATCH', headers:authHeaders(),
-      body: JSON.stringify({ aliases, rescan: hasNew })
+      body: JSON.stringify({ aliases })
     });
-    const data = await res.json();
+
+    // 2. THE ACTUAL FIX: also PATCH every one of this player's own batches
+    // directly (PATCH /api/batches/:id), not just the registry above.
+    // Previously this function ONLY wrote to the registry — but
+    // buildEventReplayCoverageIndex (drives the Events tab's Replays
+    // ✓/✗ column and the "incomplete_data" status check), the cross-link
+    // isPlayer() check inside addReplayToBatchData, and autoMergeHiddenBatches
+    // (which promotes a hidden FL-import batch — see the db.batches
+    // `hidden` comment on the server — into a real profile) all read
+    // batch.aliases directly and never consulted the registry at all. So
+    // adding an alias here LOOKED like it saved (the prompt said so, the
+    // label updated), but every one of those batch-level checks never saw
+    // it — "add an alias to fix it" was a dead end in practice. PATCH
+    // /api/batches/:id already keeps batch.aliases in sync AND already
+    // triggers autoMergeHiddenBatches on a name/alias change (it's the
+    // exact same route the batch-rename UI uses) — this just needed to
+    // actually be called from here too.
+    const targetBatches = [
+      ...((_activeProfile && _activeProfile.player === player) ? (_activeProfile.batches||[]) : []),
+      ...((_allProfileBatches||[]).filter(b => b.player === player)),
+    ];
+    const seenIds = new Set();
+    const uniqueBatches = targetBatches.filter(b => b && b.id && !seenIds.has(b.id) && seenIds.add(b.id));
+
+    let batchesUpdated = 0;
+    const flImportAttached = [];
+    for (const b of uniqueBatches) {
+      try {
+        const bres = await fetch(`${API}/batches/${b.id}`, {
+          method:'PATCH', headers:authHeaders(),
+          body: JSON.stringify({ aliases })
+        });
+        const bdata = await bres.json().catch(()=>({}));
+        if (bres.ok) {
+          batchesUpdated++;
+          b.aliases = aliases; // keep the in-memory copy consistent too
+          if (bdata.flImportAttached && bdata.flImportAttached.length) flImportAttached.push(...bdata.flImportAttached);
+        }
+      } catch(e) { console.warn('[editAliases] Failed to sync alias onto batch', b.id, ':', e.message); }
+    }
+
     aliasEl.dataset.aliases = JSON.stringify(aliases);
     aliasEl.textContent = aliases.length ? `aka: ${aliases.join(', ')} ✎` : '+ add aliases ✎';
     // Update in-memory registry so subsequent profile loads use new aliases
@@ -18594,17 +18661,53 @@ Adding new ones will retroactively scan all saved replays.`,
     const _regKey = player.toLowerCase();
     if (!window._playerRegistry[_regKey]) window._playerRegistry[_regKey] = { name: player };
     window._playerRegistry[_regKey].aliases = aliases;
-    // Also update active batch aliases in memory
     if (_activeBatch && _activeBatch.player === player) _activeBatch.aliases = aliases;
-    if (_allProfileBatches) _allProfileBatches.filter(b => b.player === player).forEach(b => b.aliases = aliases);
-    // A rescan can link replays from OTHER batches onto this one server-side
-    // — see the same staleness note on go()/addToBatch()/flEventImportRun.
-    invalidateAllBatchesFullCache();
-    if (data.rescanned > 0) {
-      st(`Aliases saved — ${data.rescanned} new replay(s) linked retroactively`, 'var(--green)');
-    } else {
-      st('Aliases saved', 'var(--green)');
+
+    // 3. Re-parse any of this player's already-saved replays that were
+    // previously left with parsed:null because none of their OLD known
+    // names/aliases matched who was actually in the replay (see go()'s and
+    // flEventImportRun()'s own comments on why those are saved rather than
+    // dropped now). The full raw plays were kept specifically so this can
+    // run entirely from already-stored data — no re-fetch from DuelingBook
+    // needed. Re-fetch each batch fresh first (rather than trusting
+    // whatever's sitting in memory) since step 2 may have just merged in a
+    // hidden batch's replays this profile view doesn't know about yet.
+    let upgraded = 0;
+    for (const b of uniqueBatches) {
+      let freshBatch;
+      try { freshBatch = await (await fetch(`${API}/batches/${b.id}`)).json(); } catch(e) { continue; }
+      const unresolved = (freshBatch.replays||[]).filter(r => !r.timedOut && !r.parsed);
+      for (const r of unresolved) {
+        const ok = await adminReparseReplay(player, r.replayId, null, true);
+        if (ok) upgraded++;
+      }
     }
+
+    // Same staleness hazard as go()/addToBatch()/flEventImportRun — this
+    // just changed what's saved for this player's batch(es) (aliases, a
+    // possible hidden-batch merge, and any just-upgraded replay results).
+    invalidateAllBatchesFullCache();
+
+    const parts = [`synced to ${batchesUpdated} batch${batchesUpdated===1?'':'es'}`];
+    if (flImportAttached.length) parts.push(`merged a hidden import (${[...new Set(flImportAttached)].join(', ')})`);
+    if (upgraded) parts.push(`upgraded ${upgraded} previously-unresolved replay${upgraded===1?'':'s'} with a real result`);
+    st(`Aliases saved — ${parts.join(', ')}.`, 'var(--green)');
+
+    // Refresh this profile view in place with the fresh data, rather than
+    // leaving the admin staring at pre-upgrade replay rows until they
+    // manually reopen the profile. Force a re-fetch (don't hand openProfile
+    // batch objects that already have .replays — it would just reuse them
+    // as-is) now that the cache above has been dropped. Wrapped in its own
+    // try/catch, separate from the save/sync/reparse work above: a
+    // rendering hiccup here must not make the success message above look
+    // like the alias save itself failed — the data work is already done
+    // and durable by this point regardless of whether the live view redraws.
+    try {
+      if (_activeProfile && _activeProfile.player === player) {
+        const freshStubs = uniqueBatches.map(b => ({ id: b.id }));
+        if (freshStubs.length) await openProfile(player, freshStubs, []);
+      }
+    } catch(e) { console.warn('[editAliases] Profile view refresh failed (data was still saved):', e.message); }
   } catch(e) {
     st('Failed to save aliases — server unavailable', 'var(--red)');
   }
