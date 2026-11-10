@@ -1351,10 +1351,20 @@ select{cursor:pointer}
         <button id="events-deck-dl-btn" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:5px 12px;border-radius:5px;cursor:pointer">⬇ Download</button>
         <a id="events-deck-open-link" href="#" target="_blank" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:5px 12px;border-radius:5px;cursor:pointer;text-decoration:none">Open Deck ↗</a>
       </div>
-      <div style="display:flex;gap:4px 18px;flex-wrap:wrap;padding:10px 20px;border-bottom:1px solid var(--border);font-size:12px;flex-shrink:0" id="events-deck-meta"></div>
+      <div style="display:flex;align-items:center;gap:4px 18px;flex-wrap:wrap;padding:10px 20px;border-bottom:1px solid var(--border);font-size:12px;flex-shrink:0" id="events-deck-meta"></div>
       <div style="flex:1;overflow:hidden;min-height:0;display:flex">
-        <div id="events-deck-cards" style="flex:1;overflow-y:auto;min-height:0;padding:16px 20px"></div>
-        <div id="events-deck-replays" style="width:380px;flex-shrink:0;overflow-y:auto;min-height:0;padding:16px;border-left:1px solid var(--border)"></div>
+        <!-- Deck image grid — pinned to the left (fixed-ish width sized for a
+             10-wide card grid) instead of stretching/centering across the
+             whole page, so the rest of this duelist's stats for the event
+             (REPLAYS, MATCHUPS BY DECK TYPE) can sit beside it on the right
+             without needing to scroll past the deck to see them. -->
+        <div id="events-deck-cards" style="width:740px;flex-shrink:0;overflow-y:auto;min-height:0;padding:16px 20px"></div>
+        <!-- Stats column — the W-L/win-rate chips now live up in
+             events-deck-meta instead of here; this holds REPLAYS and
+             MATCHUPS BY DECK TYPE (see eventsRenderMatchupStats), or the
+             "no profile yet"/"no replays" fallback message when there's
+             nothing to show yet (see eventsRenderReplaysPanel). -->
+        <div id="events-deck-replays" style="flex:1;min-width:300px;overflow-y:auto;min-height:0;padding:16px;border-left:1px solid var(--border)"></div>
       </div>
     </div>
 
@@ -10458,6 +10468,31 @@ function classifyFromCards(cards) {
   // ── Monarch co-occurrence rules ─────────────────────────────────────────────
   const monarchCards = ['soul exchange','thestalos the firestorm monarch','mobius the frost monarch',
     'granmarg the rock monarch','zaborg the thunder monarch'].filter(has);
+
+  // ── Chaos Recruiter: Chaos Sorcerer / Black Luster Soldier - Envoy of the
+  // Beginning (the chaos engine) together with Shining Angel / Mystic
+  // Tomato (the recruiter engine) is THE defining signature of this
+  // archetype — confirmed directly, this is what makes a deck Chaos
+  // Recruiter. Monarch, by contrast, needs an actual Monarch monster
+  // (Zaborg/Mobius/Thestalos/Granmarg) or Soul Exchange to ever hit the
+  // field — without one, Mystic Tomato/Gravekeeper's Spy/Call of the
+  // Haunted were only ever picking up incidental TF-IDF weight toward
+  // Monarch from cards that are just as at home in a non-Monarch recruiter
+  // shell (Mystic Tomato IS a recruiter tech choice here, searching Chaos
+  // Sorcerer/BLS targets, not a Monarch searcher). That's what was
+  // misclassifying real Chaos Recruiter decks as Monarch. Checked and
+  // suppressed before the Monarch block below even runs, so a deck with
+  // zero real Monarch monsters never loses to one on TF-IDF weight alone.
+  const hasChaosEngine = has('chaos sorcerer') || has('black luster soldier - envoy of the beginning');
+  const hasRecruiterEngine = has('shining angel') || has('mystic tomato');
+  if (hasChaosEngine && hasRecruiterEngine && !monarchCards.length && !isChaosReturn) {
+    scores['Chaos Recruiter'] += 1.40;
+    scores['Monarch'] = Math.max(0, scores['Monarch'] * 0.15);
+    // Running BOTH recruiters (not just one) makes it even more definitive
+    if (has('shining angel') && has('mystic tomato')) scores['Chaos Recruiter'] += 0.50;
+    Object.keys(scores).filter(k => k!=='Chaos Recruiter' && k!=='Monarch').forEach(k => scores[k] = Math.max(0, scores[k] * 0.35));
+  }
+
   if (monarchCards.length >= 1 && !isChaosReturn) {
     // Any monarch card is strong evidence (only when not Chaos Return)
     scores['Monarch'] += 0.60 * monarchCards.length;
@@ -17354,16 +17389,13 @@ async function eventsShowDeck(code, deckId) {
 
   await eventsRenderDeckCards(cardsEl, deck, code, data.trackedPlayer);
   const _deckReplays = await eventsRenderReplaysPanel(replaysEl, code, data.trackedPlayer, deck.builderName);
-  // Once there's replay data, it's rendered as a full table inside the
-  // MATCH STATS section below (see eventsRenderMatchupStats) instead of
-  // the old 380px card-list sidebar, so that sidebar's space is freed up
-  // for the REPLAYS and MATCHUPS BY DECK TYPE tables to sit next to
-  // MATCHUPS. Keep the sidebar visible when there's nothing to show there
-  // yet (no profile / no replays on file) — eventsRenderReplaysPanel still
-  // puts its "no replays" message and Import-from-Format-Library button
-  // there in that case.
-  if (replaysEl) replaysEl.style.display = _deckReplays.length ? 'none' : '';
-  if (cardsEl && data.trackedPlayer) eventsRenderMatchupStats(cardsEl, data.trackedPlayer, _deckReplays);
+  // The right-hand column (replaysEl) starts out holding whatever
+  // eventsRenderReplaysPanel put there — either a "no profile"/"no
+  // replays" fallback message, or (once there's real replay data) gets
+  // entirely replaced below with the REPLAYS + MATCHUPS BY DECK TYPE
+  // tables. The W-L/win-rate chips go up into events-deck-meta instead,
+  // next to Builder/Format/Event/Place.
+  if (data.trackedPlayer) eventsRenderMatchupStats(metaEl, replaysEl, data.trackedPlayer, _deckReplays, code, deckId);
 }
 
 // Renders a normal YDK-style card grid — one tile per physical copy, fixed
@@ -17533,9 +17565,14 @@ async function eventsRenderDeckCards(container, deck, eventCode, trackedPlayer) 
     return grid;
   }
 
+  // Clear the "Loading card images…" placeholder — previously left in place
+  // and just appended after (gridsWrap below was added via appendChild, not
+  // a replace), so it kept showing above the finished grid forever instead
+  // of disappearing once images were ready.
+  container.innerHTML = '';
   container.style.display = 'flex';
   container.style.flexDirection = 'column';
-  container.style.alignItems = 'center';
+  container.style.alignItems = 'flex-start'; // left-aligned, not centered — see events-deck-cards's new fixed-left layout
   const sortedMain = sortPasscodesByType(mainPasscodes);
   const sortedSide = sortPasscodesByType(sidePasscodes);
   const MAIN_PER_ROW = 10;
@@ -17547,7 +17584,7 @@ async function eventsRenderDeckCards(container, deck, eventCode, trackedPlayer) 
   // eventsShowDeck() appends after this function returns (see
   // eventsRenderMatchupStats), every single time the window resizes.
   const gridsWrap = document.createElement('div');
-  gridsWrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;width:100%';
+  gridsWrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-start;width:100%';
   container.appendChild(gridsWrap);
 
   // Tile size scales up to fill the panel's actual available width instead
@@ -17682,44 +17719,13 @@ async function eventsRenderReplaysPanel(container, code, trackedPlayer, builderN
     return [];
   }
 
-  container.innerHTML = '';
-  const hdr = document.createElement('div');
-  hdr.style.cssText = 'font-size:12px;color:var(--muted);letter-spacing:.08em;margin-bottom:10px;font-weight:bold';
-  hdr.textContent = 'REPLAYS — '+trackedPlayer.name+' ('+replays.length+')';
-  container.appendChild(hdr);
-
-  replays.forEach(r => {
-    const p = r.parsed || {};
-    const result = r.resultOverride || p.resultOverride || p.result || '';
-    const oppName = r.oppName || p.oppName || 'Unknown';
-    const score = (p.scoreOverride ? (p.scoreOverride.my+'-'+p.scoreOverride.opp) : p.score) || '';
-    const isWin  = /^w/i.test(result);
-    const isLoss = /^l/i.test(result);
-    const myDeck  = r.myDeckOverride  || p.myDeck  || _eventsFindBracketDeckType(trackedPlayer.name) || '—';
-    const oppDeck = r.oppDeckOverride || p.oppDeck || _eventsFindBracketDeckType(oppName) || '—';
-    const round = r.round || '—';
-    const replayUrl = 'https://www.duelingbook.com/replay?id='+encodeURIComponent(r.replayId);
-    const row = document.createElement('div');
-    row.style.cssText = 'padding:12px 14px;margin-bottom:10px;background:var(--card2);border:1px solid var(--border2);border-left:3px solid '+(isWin?'var(--green)':isLoss?'var(--red)':'var(--border2)')+';border-radius:6px;cursor:pointer;font-size:13px';
-    row.onmouseover = () => row.style.borderColor = 'var(--amber)';
-    row.onmouseout  = () => { row.style.borderColor = 'var(--border2)'; row.style.borderLeftColor = isWin?'var(--green)':isLoss?'var(--red)':'var(--border2)'; };
-    row.onclick = (e) => { if (e.target.closest('a')) return; eventsOpenReplayInAnalyzer(r._batchId, r.replayId); };
-    const resColor = isWin ? 'var(--green)' : isLoss ? 'var(--red)' : 'var(--muted)';
-    const resLabel = isWin ? 'WIN' : isLoss ? 'LOSS' : (result || '—');
-    row.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <span style="color:${resColor};font-weight:bold;font-size:14px;letter-spacing:.04em">${_escapeHtml(resLabel)}</span>
-        <span style="color:var(--text);font-weight:bold;font-size:14px">${_escapeHtml(score)}</span>
-      </div>
-      <div style="color:var(--text);font-weight:bold;margin-top:6px;font-size:14px">vs ${_escapeHtml(oppName)}</div>
-      <div style="color:var(--muted);font-size:12px;margin-top:4px">${_escapeHtml(myDeck)} <span style="color:var(--dim)">vs</span> ${_escapeHtml(oppDeck)}</div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
-        <span style="color:var(--muted);font-size:11px">${_escapeHtml(round)}</span>
-        <a href="${replayUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:var(--amber);font-size:12px;font-weight:bold;text-decoration:none">View on DB ↗</a>
-      </div>
-    `;
-    container.appendChild(row);
-  });
+  // There IS replay data — eventsShowDeck immediately calls
+  // eventsRenderMatchupStats right after this, which overwrites `container`
+  // wholesale with the REPLAYS + MATCHUPS BY DECK TYPE tables (Round +
+  // accurate Game Score, same data this used to render here as a card list
+  // before the Match Stats redesign). No need to build that twice — just
+  // hand the data back. Leave the "Loading…" placeholder in place for the
+  // instant before that call lands.
   return replays;
 }
 
@@ -17735,11 +17741,10 @@ async function eventsRenderReplaysPanel(container, code, trackedPlayer, builderN
 // together as the "post-side" read. Games with no recorded winner (a
 // timed-out/incomplete game) are excluded from both the numerator and
 // denominator rather than counted as a loss.
-function eventsRenderMatchupStats(container, trackedPlayer, replays) {
+function eventsRenderMatchupStats(metaEl, container, trackedPlayer, replays, code, deckId) {
   if (!container || !trackedPlayer || !replays || !replays.length) return;
 
   let W=0, L=0, g1W=0, g1Total=0, g23W=0, g23Total=0;
-  const byOpp = {};     // oppName -> { w, l, deck }
   const byOppDeck = {}; // oppDeck (merged across every opponent on that deck) -> { w, l }
 
   replays.forEach(r => {
@@ -17749,9 +17754,6 @@ function eventsRenderMatchupStats(container, trackedPlayer, replays) {
     const oppName = r.oppName || p.oppName || 'Unknown';
     const oppDeck = r.oppDeckOverride || p.oppDeck || _eventsFindBracketDeckType(oppName) || '';
     if (isWin) W++; else if (isLoss) L++;
-    if (!byOpp[oppName]) byOpp[oppName] = { w:0, l:0, deck: '' };
-    if (isWin) byOpp[oppName].w++; else if (isLoss) byOpp[oppName].l++;
-    if (oppDeck) byOpp[oppName].deck = oppDeck;
 
     // Deck-type matchup table: merge every opponent piloting the same deck
     // type into one row, so "beat 3 different Chaos Control players" and
@@ -17772,74 +17774,73 @@ function eventsRenderMatchupStats(container, trackedPlayer, replays) {
   const overallPct = pct(W, W+L), g1Pct = pct(g1W, g1Total), g23Pct = pct(g23W, g23Total);
   const colFor = p => p==null ? 'var(--muted)' : p>=50 ? 'var(--green)' : 'var(--red)';
 
-  const wrap = document.createElement('div');
-  wrap.style.cssText = 'margin-top:18px;padding-top:16px;border-top:1px solid var(--border)';
+  // W-L/win-rate chips live up in the event-meta bar (next to Builder/
+  // Format/Event/Place), not down here — right-aligned via margin-left:auto
+  // so they share the row instead of pushing the page taller. metaEl is
+  // rebuilt fresh by eventsShowDeck every time a deck is opened, so there's
+  // no old copy of these to remove first.
+  if (metaEl) {
+    const chips = document.createElement('div');
+    chips.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-left:auto';
+    [
+      [W+'-'+L, 'W-L', overallPct==null?'var(--muted)':colFor(overallPct)],
+      [overallPct==null?'—':overallPct+'%', 'Win Rate', colFor(overallPct)],
+      [g1Pct==null?'—':g1Pct+'%', 'G1 Win Rate', colFor(g1Pct)],
+      [g23Pct==null?'—':g23Pct+'%', 'G2+G3 Win Rate', colFor(g23Pct)],
+    ].forEach(([v,l,col]) => {
+      const ch = document.createElement('div');
+      ch.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:8px;padding:5px 10px;text-align:center;min-width:72px';
+      ch.innerHTML = '<span style="font-size:14px;font-weight:bold;color:'+col+';display:block;line-height:1.2">'+_escapeHtml(String(v))+'</span><span style="font-size:9px;color:var(--muted)">'+l+'</span>';
+      chips.appendChild(ch);
+    });
+    metaEl.appendChild(chips);
+  }
 
-  const hdr = document.createElement('div');
-  hdr.style.cssText = 'font-size:11px;color:var(--muted);letter-spacing:.1em;margin-bottom:10px;font-weight:bold';
-  hdr.textContent = 'MATCH STATS — ' + trackedPlayer.name + ' @ this event';
-  wrap.appendChild(hdr);
+  container.innerHTML = '';
 
-  const chips = document.createElement('div');
-  chips.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px';
-  [
-    [W+'-'+L, 'W — L Record', overallPct==null?'var(--muted)':colFor(overallPct)],
-    [overallPct==null?'—':overallPct+'%', 'Win Rate', colFor(overallPct)],
-    [g1Pct==null?'—':g1Pct+'%', 'G1 (Pre-Side) Win Rate', colFor(g1Pct)],
-    [g23Pct==null?'—':g23Pct+'%', 'G2+G3 (Post-Side) Win Rate', colFor(g23Pct)],
-  ].forEach(([v,l,col]) => {
-    const ch = document.createElement('div');
-    ch.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:9px;padding:8px 14px;min-width:88px';
-    ch.innerHTML = '<span style="font-size:17px;font-weight:bold;color:'+col+';display:block;line-height:1.2;margin-bottom:2px">'+_escapeHtml(String(v))+'</span><span style="font-size:10px;color:var(--muted)">'+l+'</span>';
-    chips.appendChild(ch);
-  });
-  wrap.appendChild(chips);
+  // Retry Round Data — only shown when at least one of this player's
+  // replays for this event is missing Round (saved before this app started
+  // capturing it at all; see backfillMissingRounds). Re-asks Format Library
+  // for this player's replay list and fills in whatever Round it finds,
+  // then reloads this deck view so the REPLAYS table below reflects it
+  // immediately instead of needing a trip through the profile's alias
+  // editor (the only other place this backfill was reachable from).
+  const missingRoundCount = replays.filter(r => !r.round).length;
+  if (missingRoundCount && trackedPlayer.batchIds && trackedPlayer.batchIds.length) {
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'btn-sec';
+    retryBtn.style.cssText = 'font-size:11px;padding:6px 10px;margin-bottom:12px';
+    retryBtn.textContent = '🔄 Retry Round Data ('+missingRoundCount+' missing)';
+    retryBtn.onclick = async () => {
+      retryBtn.disabled = true;
+      retryBtn.textContent = 'Checking Format Library…';
+      const regKey = trackedPlayer.name.toLowerCase();
+      const regAliases = (window._playerRegistry && window._playerRegistry[regKey]) ? (window._playerRegistry[regKey].aliases||[]) : [];
+      const searchNames = [...new Set([trackedPlayer.name, ...regAliases])];
+      let backfilled = 0;
+      for (const bid of trackedPlayer.batchIds) backfilled += await backfillMissingRounds(bid, searchNames);
+      if (backfilled) { invalidateAllBatchesFullCache(); st('Backfilled Round on '+backfilled+' replay'+(backfilled===1?'':'s')+'.', 'var(--green)'); }
+      else st('Format Library had no Round data for the missing replay(s) — nothing to backfill yet.', 'var(--amber)');
+      eventsShowDeck(code, deckId); // full refresh — simplest way to reflect it everywhere this data shows
+    };
+    container.appendChild(retryBtn);
+  }
 
-  // Three tables side by side, each free to grow to its full content
-  // height (no sidebar-style clipping/scrolling): MATCHUPS (per opponent,
-  // unchanged), REPLAYS (every match, moved here from the old 380px
-  // card-list sidebar — see eventsShowDeck, which now hides that sidebar
-  // once there's data to show here instead) with Round + an accurate Game
-  // Score result, and MATCHUPS BY DECK TYPE (new — merges same deck types).
+  // Both remaining tables stack vertically in this (narrower, right-hand)
+  // column rather than side by side — the per-opponent MATCHUPS table that
+  // used to sit here too has been removed as redundant with these two.
   const cols = document.createElement('div');
-  cols.style.cssText = 'display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start';
-  wrap.appendChild(cols);
+  cols.style.cssText = 'display:flex;flex-direction:column;gap:20px';
+  container.appendChild(cols);
 
   function makeCol(label) {
     const col = document.createElement('div');
-    col.style.cssText = 'flex:1;min-width:230px';
     const lbl = document.createElement('div');
     lbl.style.cssText = 'font-size:10px;color:var(--muted);letter-spacing:.06em;margin-bottom:4px';
     lbl.textContent = label;
     col.appendChild(lbl);
     cols.appendChild(col);
     return col;
-  }
-
-  // ── MATCHUPS (per opponent) ─────────────────────────────────────────
-  const oppEntries = Object.entries(byOpp);
-  if (oppEntries.length) {
-    const col = makeCol('MATCHUPS');
-    const tbl = document.createElement('table');
-    tbl.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
-    tbl.innerHTML = '<thead><tr style="border-bottom:1px solid var(--border2);text-align:left">'
-      + '<th style="padding:6px 8px;color:var(--muted);font-size:10px;letter-spacing:.06em">OPPONENT</th>'
-      + '<th style="padding:6px 8px;color:var(--muted);font-size:10px;letter-spacing:.06em">DECK</th>'
-      + '<th style="padding:6px 8px;color:var(--muted);font-size:10px;letter-spacing:.06em">RESULT</th>'
-      + '<th style="padding:6px 8px;color:var(--muted);font-size:10px;letter-spacing:.06em">WIN %</th>'
-      + '</tr></thead><tbody></tbody>';
-    const tbody = tbl.querySelector('tbody');
-    oppEntries.sort((a,b)=>a[0].localeCompare(b[0])).forEach(([name, rec]) => {
-      const p2 = pct(rec.w, rec.w+rec.l);
-      const tr = document.createElement('tr');
-      tr.style.cssText = 'border-bottom:1px solid var(--border)';
-      tr.innerHTML = '<td style="padding:6px 8px;font-weight:bold">'+_escapeHtml(name)+'</td>'
-        + '<td style="padding:6px 8px;color:var(--muted)">'+_escapeHtml(rec.deck||'—')+'</td>'
-        + '<td style="padding:6px 8px;color:'+(rec.w>rec.l?'var(--green)':rec.l>rec.w?'var(--red)':'var(--muted)')+'">'+rec.w+'-'+rec.l+'</td>'
-        + '<td style="padding:6px 8px">'+(p2==null?'—':p2+'%')+'</td>';
-      tbody.appendChild(tr);
-    });
-    col.appendChild(tbl);
   }
 
   // ── REPLAYS (every match this event, Round + accurate Game Score) ──
@@ -17919,8 +17920,6 @@ function eventsRenderMatchupStats(container, trackedPlayer, replays) {
     });
     col.appendChild(tbl);
   }
-
-  container.appendChild(wrap);
 }
 
 // ── View Player Profile from the Events tab ─────────────────────────────────
@@ -18730,6 +18729,53 @@ async function deleteTeamEntry(player, entry) {
   }
 }
 
+// Re-asks Format Library for a player's full replay list and fills in Round
+// on any of their already-saved replays that are still missing it. Format
+// Library tags every GOAT replay with a round (Round N, Quarter Finals,
+// etc.) — but this app only started actually reading/storing that field
+// recently (see go()'s _idRoundMap and flEventImportRun's replayIds), so a
+// replay saved before that still has round:'' forever; nothing already
+// stored can derive it after the fact, so the only source of truth is
+// Format Library itself, matched back to our own stored replay by the same
+// replay id every other FL-import path extracts from replayLink. Shared by
+// editAliases()'s own sync pass and the Events page's "Retry Round Data"
+// button (eventsRenderMatchupStats). `preloadedBatch`, if given, skips the
+// initial GET (callers that already have a fresh copy of the batch).
+// Returns how many replays got a round filled in.
+async function backfillMissingRounds(batchId, searchNames, preloadedBatch) {
+  let freshBatch = preloadedBatch;
+  if (!freshBatch) {
+    try { freshBatch = await (await fetch(`${API}/batches/${batchId}`)).json(); } catch(e) { return 0; }
+  }
+  const missingRound = (freshBatch.replays||[]).filter(r => !r.round);
+  if (!missingRound.length) return 0;
+  const roundByReplayId = {};
+  for (const name of [...new Set((searchNames||[]).filter(Boolean))]) {
+    try {
+      const flRes = await fetch(`${API}/proxy/fl-replays?player=${encodeURIComponent(name)}`, { headers: authHeaders() });
+      const flData = await flRes.json().catch(()=>({}));
+      if (!flRes.ok) continue;
+      for (const row of (flData.replays||[])) {
+        const m = (row.replayLink||'').match(/id=([A-Za-z0-9_-]+)/);
+        if (m && row.round && !roundByReplayId[m[1]]) roundByReplayId[m[1]] = row.round;
+      }
+    } catch(e) { console.warn('[backfillMissingRounds] FL lookup failed for', name, ':', e.message); }
+  }
+  let backfilled = 0;
+  for (const r of missingRound) {
+    const foundRound = roundByReplayId[r.replayId];
+    if (!foundRound) continue;
+    try {
+      const pres = await fetch(`${API}/batches/${batchId}/replay/${encodeURIComponent(r.replayId)}`, {
+        method:'PATCH', headers: authHeaders(),
+        body: JSON.stringify({ round: foundRound })
+      });
+      if (pres.ok) backfilled++;
+    } catch(e) { console.warn('[backfillMissingRounds] PATCH failed for', r.replayId, ':', e.message); }
+  }
+  return backfilled;
+}
+
 async function editAliases() {
   const aliasEl = document.getElementById('profile-view-aliases');
   if (!aliasEl) return;
@@ -18823,43 +18869,12 @@ Adding new ones will retroactively scan all saved replays.`,
         if (ok) upgraded++;
       }
 
-      // 3b. Backfill missing Round info. Format Library tags every GOAT
-      // replay with a round (Round N, Quarter Finals, etc.) and always has —
-      // but this app only started actually reading/storing that field
-      // recently (see go()'s _idRoundMap and flEventImportRun's replayIds),
-      // so any replay saved before that still has round:'' forever, nothing
-      // we already have can derive it after the fact, and it just shows '—'
-      // everywhere (the per-event Replays table, etc.) even for an otherwise
-      // fully-resolved W/L replay. The only source of truth is Format
-      // Library itself, matched back to our own stored replay by the same
-      // replay id every other FL-import path extracts from replayLink.
-      const missingRound = (freshBatch.replays||[]).filter(r => !r.round);
-      if (missingRound.length) {
-        const roundByReplayId = {};
-        const searchNames = [...new Set([freshBatch.player, ...(freshBatch.aliases||[]), ...aliases].filter(Boolean))];
-        for (const name of searchNames) {
-          try {
-            const flRes = await fetch(`${API}/proxy/fl-replays?player=${encodeURIComponent(name)}`, { headers: authHeaders() });
-            const flData = await flRes.json().catch(()=>({}));
-            if (!flRes.ok) continue;
-            for (const row of (flData.replays||[])) {
-              const m = (row.replayLink||'').match(/id=([A-Za-z0-9_-]+)/);
-              if (m && row.round && !roundByReplayId[m[1]]) roundByReplayId[m[1]] = row.round;
-            }
-          } catch(e) { console.warn('[editAliases] Round backfill lookup failed for', name, ':', e.message); }
-        }
-        for (const r of missingRound) {
-          const foundRound = roundByReplayId[r.replayId];
-          if (!foundRound) continue;
-          try {
-            const pres = await fetch(`${API}/batches/${b.id}/replay/${encodeURIComponent(r.replayId)}`, {
-              method:'PATCH', headers: authHeaders(),
-              body: JSON.stringify({ round: foundRound })
-            });
-            if (pres.ok) roundsBackfilled++;
-          } catch(e) { console.warn('[editAliases] Round backfill PATCH failed for', r.replayId, ':', e.message); }
-        }
-      }
+      // 3b. Backfill missing Round info — see backfillMissingRounds() for
+      // why this is needed (replays saved before this app captured Round at
+      // all) and how it works. Shared with the Events page's own "Retry
+      // Round Data" button (eventsRenderMatchupStats).
+      const searchNames = [...new Set([freshBatch.player, ...(freshBatch.aliases||[]), ...aliases].filter(Boolean))];
+      roundsBackfilled += await backfillMissingRounds(b.id, searchNames, freshBatch);
     }
 
     // Same staleness hazard as go()/addToBatch()/flEventImportRun — this

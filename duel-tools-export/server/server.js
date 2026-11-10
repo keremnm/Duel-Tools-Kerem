@@ -2998,17 +2998,25 @@ const server = http.createServer(async (req, res) => {
   // ── GET /api/batches ────────────────────────────────────────────────────────
   // Hidden batches (Format Library bracket-import placeholders for a player
   // with no real profile yet — see the db.events comment near the top of
-  // this file) are excluded from this list by default, since this is what
-  // the Profiles grid itself is built from and a hidden batch is explicitly
-  // not meant to show up there until it's promoted into a real profile.
-  // Pass ?includeHidden=1 to see them anyway (used by the admin Merge
-  // Profiles tool, which needs to be able to pick a hidden batch as one side
-  // of a manual merge too).
+  // this file) USED TO be excluded from this list by default, on the theory
+  // that an auto-created placeholder shouldn't clutter the Profiles grid
+  // until an admin "promotes" it by creating/editing a matching real
+  // profile. In practice this made real, already-imported replay data
+  // (an entire player's worth, sometimes) invisible on the Profiles grid,
+  // the batch/player search dropdowns, and anywhere else that reads this
+  // list — with no indication anything was missing, since nothing here
+  // ever told you a hidden batch existed unless you went looking for it.
+  // Per explicit instruction, every batch is public now: `hidden` is kept
+  // as an internal flag only (autoMergeHiddenBatches still uses it to find
+  // and fold a placeholder into a real profile the moment one is created or
+  // edited with a matching name/alias — that merge machinery is unaffected
+  // and still the way to consolidate a duplicate), but it no longer hides
+  // anything from this or any other listing. `?includeHidden=1` is now a
+  // no-op (every batch is already included) and kept only so an older
+  // client passing it doesn't break.
   if (parts[0]==='batches' && !parts[1] && method==='GET') {
     if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot browse saved batches' });
-    const includeHidden = url.searchParams.get('includeHidden') === '1';
     const list = Object.values(db.batches)
-      .filter(b => includeHidden || !b.hidden)
       .map(b => ({ id:b.id, name:b.name, player:b.player, replayCount:(b.replays||[]).length, createdAt:b.createdAt, hidden: !!b.hidden }));
     return json(res, 200, list.sort((a,b)=>b.createdAt-a.createdAt));
   }
