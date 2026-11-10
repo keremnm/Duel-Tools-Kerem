@@ -7344,7 +7344,20 @@ async function flFetchPreview() {
   _flPreviewData = null;
 
   try {
-    const res = await fetch(API+'/proxy/fl-replays?player='+encodeURIComponent(flUser), { headers: authHeaders() });
+    // Search Format Library using the registered profile's own aliases too
+    // (the Aliases field — auto-filled from the registry's aliases plus the
+    // FL username itself, editable above), not just the one literal
+    // username typed in. Previously this field only widened the LOCAL
+    // "already saved?" dedup check below — the actual Format Library search
+    // and its exact-name match were never alias-aware, so a player recorded
+    // under more than one FL handle (an old username, a second account, a
+    // TO's slightly different spelling) had replays under those other
+    // spellings invisible here even when this app already knew they were
+    // the same person.
+    const aliasesForSearch = (document.getElementById('fl-aliases-inp')?.value||'').split(',').map(a=>a.trim()).filter(Boolean);
+    const flUrl = API+'/proxy/fl-replays?player='+encodeURIComponent(flUser)
+      + (aliasesForSearch.length ? '&aliases='+encodeURIComponent(aliasesForSearch.join(',')) : '');
+    const res = await fetch(flUrl, { headers: authHeaders() });
     const data = await res.json().catch(()=>({}));
     if (!res.ok) {
       statusEl.style.color = 'var(--red)';
@@ -7473,7 +7486,12 @@ async function flFetchPreview() {
     if (diag && diag.pagesFetched) {
       const pageLine = document.createElement('div');
       pageLine.style.cssText = 'color:var(--muted);font-size:11px;margin-top:6px';
-      pageLine.textContent = 'Format Library pages requested: ' + diag.pagesFetched + ' (raw row counts per page: ' + diag.pageRowCounts.join(', ') + ')';
+      // pageLine is set via .textContent below, not innerHTML, so these
+      // names need no HTML-escaping here.
+      const namesPart = (diag.searchNames && diag.searchNames.length > 1)
+        ? ' — searched as: ' + diag.searchNames.join(', ')
+        : '';
+      pageLine.textContent = 'Format Library pages requested: ' + diag.pagesFetched + ' (raw row counts per page: ' + diag.pageRowCounts.join(', ') + ')' + namesPart;
       previewEl.appendChild(pageLine);
     }
 
@@ -7810,8 +7828,17 @@ async function flEventImportRun() {
       let replayRows = [];
       const normEvId = s => (s||'').toUpperCase().replace(/[^A-Z0-9]/g, '');
       const wantEvId = normEvId(eventId);
+      // Look up this player's known aliases BEFORE the FL fetch (not just
+      // after, for the local replay-parse step below) so the search itself
+      // covers every name they've played under on Format Library, not just
+      // whatever name FL's own bracket happened to list as the builder.
+      const regKey = (deck.matchedPlayerName||'').toLowerCase();
+      const regAliases = (window._playerRegistry && window._playerRegistry[regKey]) ? (window._playerRegistry[regKey].aliases||[]) : [];
+      const aliasesForFetch = [...new Set(regAliases.filter(a => a && a.toLowerCase() !== (deck.builderName||'').toLowerCase()))];
       try {
-        const rres = await fetch(API+'/proxy/fl-replays?player='+encodeURIComponent(deck.builderName), { headers: authHeaders() });
+        const flFetchUrl = API+'/proxy/fl-replays?player='+encodeURIComponent(deck.builderName)
+          + (aliasesForFetch.length ? '&aliases='+encodeURIComponent(aliasesForFetch.join(',')) : '');
+        const rres = await fetch(flFetchUrl, { headers: authHeaders() });
         const rdata = await rres.json().catch(()=>({}));
         if (rres.status === 401) { log('<span style="color:var(--red)">⚠ Format Library token expired — stopping.</span>'); break; }
         if (rres.ok) {
@@ -7855,8 +7882,6 @@ async function flEventImportRun() {
         log('&nbsp;&nbsp;<span style="color:var(--amber)">⚠ '+_escapeHtml(who)+': '+unparseableLinks+' replay row(s) for this event had no parseable replay link and were skipped.</span>');
       }
 
-      const regKey = (deck.matchedPlayerName||'').toLowerCase();
-      const regAliases = (window._playerRegistry && window._playerRegistry[regKey]) ? (window._playerRegistry[regKey].aliases||[]) : [];
       const parseAs = deck.matchedPlayerName || deck.builderName;
       const aliasesForParse = [...new Set([...regAliases, deck.builderName].filter(Boolean))];
 
@@ -17477,15 +17502,51 @@ async function eventsShowDeck(code, deckId) {
 // per-player "View" popup in showDeckViewPopup().
 async function eventsRenderDeckCards(container, deck, eventCode, trackedPlayer) {
   if (!container) return;
+
+  // If this exact player already has an admin-reviewed deck type on THEIR
+  // OWN profile's Event Decklists for this event code (deckTypeOverride —
+  // set either by hand on that profile page or via its own "↺ Types"
+  // reclassify button), treat it as authoritative here instead of
+  // independently reclassifying. These used to be two totally separate deck-
+  // type systems: this one lives on db.events[code].decks[] (what THIS page
+  // reads), the other on the player's own registry eventDecklists (what the
+  // profile page's Decklists list reads/edits) — a correction made on a
+  // player's profile had no effect here, and this page could (and, per a
+  // live report, did) keep re-deriving its own different answer every time a
+  // miner opened it, even after the profile-side one had already been fixed.
+  // 'profile' is the new highest-priority source tier (see
+  // DECK_TYPE_SOURCE_PRIORITY in server.js), so once applied it also can't
+  // be clobbered by a later decklist/replay-card guess below.
+  const regEntry = trackedPlayer && window._playerRegistry ? window._playerRegistry[(trackedPlayer.name||'').toLowerCase()] : null;
+  const profileDeck = regEntry ? (regEntry.eventDecklists||[]).find(d => (d.code||'').toUpperCase() === (eventCode||'').toUpperCase()) : null;
+  const profileOverride = profileDeck && profileDeck.deckTypeOverride ? profileDeck.deckTypeOverride : null;
+  if (profileOverride && isMinerRole(_userRole) && deck.deckId && eventCode &&
+      !(deck.deckTypeName === profileOverride && deck.deckTypeSource === 'profile')) {
+    try {
+      const dtRes = await fetch(API+'/events/'+encodeURIComponent(eventCode)+'/deck/'+encodeURIComponent(deck.deckId)+'/decktype', {
+        method: 'PATCH', headers: authHeaders(),
+        body: JSON.stringify({ deckTypeName: profileOverride, source: 'profile' })
+      });
+      const dtData = await dtRes.json().catch(()=>({}));
+      if (dtRes.ok && dtData.applied) {
+        deck.deckTypeName = profileOverride;
+        deck.deckTypeSource = 'profile';
+        const titleEl = document.getElementById('events-deck-title');
+        if (titleEl) titleEl.textContent = profileOverride;
+      }
+    } catch(e) { console.warn('[events] profile-override deck type sync failed:', e.message); }
+  }
+
   if (!deck.ydkData) {
     container.innerHTML = '<div style="color:var(--muted);font-size:12px">No card data cached for this deck yet — a miner+ account needs to open it once to fetch it from Format Library.</div>';
-    // Fallback (no decklist on file yet): judge the deck type from cards
-    // actually seen across this player's own replays for this event, using
-    // OUR classifier — tagged source:'replay' server-side, so it's a lower
-    // priority than a decklist-derived classification and gets overwritten
-    // automatically the moment a decklist for this deck does get fetched
-    // (see upsertEventDeckType in server.js).
-    if (isMinerRole(_userRole) && deck.deckId && eventCode && trackedPlayer && trackedPlayer.batchIds && trackedPlayer.batchIds.length) {
+    // Fallback (no decklist on file yet, and no profile override above):
+    // judge the deck type from cards actually seen across this player's own
+    // replays for this event, using OUR classifier — tagged source:'replay'
+    // server-side, so it's a lower priority than a decklist- or profile-
+    // derived classification and gets overwritten automatically the moment
+    // either of those becomes available (see upsertEventDeckType in
+    // server.js).
+    if (!profileOverride && isMinerRole(_userRole) && deck.deckId && eventCode && trackedPlayer && trackedPlayer.batchIds && trackedPlayer.batchIds.length) {
       try {
         // Only this one player's own batches — see getBatchesByIds.
         const allFullMap = {};
@@ -17550,8 +17611,10 @@ async function eventsRenderDeckCards(container, deck, eventCode, trackedPlayer) 
   // PATCH /api/events/:code/deck/:deckId/decktype in server.js), so the
   // Events tab, Metagame Stats, Matchup Matrix, and that player's replay
   // rows all end up agreeing on one deck type instead of each showing
-  // whatever source happened to populate them first.
-  if (isMinerRole(_userRole) && deck.deckId && eventCode) {
+  // whatever source happened to populate them first. Skipped when a profile
+  // override (above) already applied — that outranks this anyway, so
+  // running it would just be a wasted classify+PATCH round trip.
+  if (!profileOverride && isMinerRole(_userRole) && deck.deckId && eventCode) {
     try {
       const cardObjects = buildCardObjectsFromPasscodes([...mainPasscodes, ...sidePasscodes]);
       const deckClass = cardObjects.length ? classifyFromCards(cardObjects) : null;
@@ -17930,15 +17993,31 @@ function eventsRenderMatchupStats(metaEl, container, trackedPlayer, replays, cod
       + '<th style="padding:6px 8px;color:var(--muted);font-size:10px;letter-spacing:.06em"></th>'
       + '</tr></thead><tbody></tbody>';
     const tbody = tbl.querySelector('tbody');
-    // Sort by round ascending (numeric, extracted from whatever string the
-    // round is stored as, e.g. "Round 3" / "3" / "Top 8") — rows with no
-    // parseable round number keep their original relative order at the end.
-    const roundNum = round => { const m = String(round==null?'':round).match(/(\d+)/); return m ? parseInt(m[1],10) : null; };
+    // Sort in real bracket-progression order: Round 1, 2, 3… (Swiss rounds,
+    // ascending) THEN the single-elimination playoff stages in the order
+    // they're actually played — Quarter Finals, Semi Finals, Finals (and
+    // Round of 16/32/64 ahead of Quarters, for the larger brackets that have
+    // them — see placementTierBadge's comment on when those exist). Format
+    // Library's own round labels sort alphabetically/by insertion order by
+    // default, which is why this table previously showed Finals before
+    // Semis before Quarters before the Swiss rounds that actually came
+    // first. Anything with no round recorded at all sorts last, not
+    // wherever it happened to land in the original array.
+    function roundSortKey(round) {
+      const s = String(round==null?'':round).trim().toLowerCase();
+      if (!s || s === '—' || s === '-') return 100000; // no round data — unknown position, sort last
+      const swiss = s.match(/^round\s*(\d+)$/) || s.match(/^(\d+)$/);
+      if (swiss) return parseInt(swiss[1], 10); // Swiss rounds: 1, 2, 3…
+      const PLAYOFF_STAGES = [
+        [/round of 64/, 900], [/round of 32/, 910], [/round of 16/, 920],
+        [/quarter.?final/, 930], [/semi.?final/, 940], [/grand.?final/, 960], [/^final/, 950],
+      ];
+      for (const [re, rank] of PLAYOFF_STAGES) if (re.test(s)) return rank;
+      return 99000; // some other recognized-but-unmapped label — after Swiss, before "no round at all"
+    }
     const sortedReplays = replays.map((r,i)=>({r,i})).sort((a,b) => {
-      const ra = roundNum(a.r.round), rb = roundNum(b.r.round);
-      if (ra!=null && rb!=null && ra!==rb) return ra-rb;
-      if (ra!=null && rb==null) return -1;
-      if (ra==null && rb!=null) return 1;
+      const ka = roundSortKey(a.r.round), kb = roundSortKey(b.r.round);
+      if (ka !== kb) return ka - kb;
       return a.i-b.i;
     }).map(x=>x.r);
     sortedReplays.forEach(r => {
@@ -18824,16 +18903,24 @@ async function backfillMissingRounds(batchId, searchNames, preloadedBatch) {
   const missingRound = (freshBatch.replays||[]).filter(r => !r.round);
   if (!missingRound.length) return 0;
   const roundByReplayId = {};
-  for (const name of [...new Set((searchNames||[]).filter(Boolean))]) {
+  // One call covering every searched name (the endpoint itself now searches
+  // the primary name plus every alias and merges/dedupes the results) rather
+  // than one full paginated FL search per name — same result, far fewer
+  // round trips to Format Library for a player with several known aliases.
+  const uniqueNames = [...new Set((searchNames||[]).filter(Boolean))];
+  if (uniqueNames.length) {
     try {
-      const flRes = await fetch(`${API}/proxy/fl-replays?player=${encodeURIComponent(name)}`, { headers: authHeaders() });
+      const [primary, ...rest] = uniqueNames;
+      const qs = '/proxy/fl-replays?player='+encodeURIComponent(primary) + (rest.length ? '&aliases='+encodeURIComponent(rest.join(',')) : '');
+      const flRes = await fetch(`${API}${qs}`, { headers: authHeaders() });
       const flData = await flRes.json().catch(()=>({}));
-      if (!flRes.ok) continue;
-      for (const row of (flData.replays||[])) {
-        const m = (row.replayLink||'').match(/id=([A-Za-z0-9_-]+)/);
-        if (m && row.round && !roundByReplayId[m[1]]) roundByReplayId[m[1]] = row.round;
+      if (flRes.ok) {
+        for (const row of (flData.replays||[])) {
+          const m = (row.replayLink||'').match(/id=([A-Za-z0-9_-]+)/);
+          if (m && row.round && !roundByReplayId[m[1]]) roundByReplayId[m[1]] = row.round;
+        }
       }
-    } catch(e) { console.warn('[backfillMissingRounds] FL lookup failed for', name, ':', e.message); }
+    } catch(e) { console.warn('[backfillMissingRounds] FL lookup failed:', e.message); }
   }
   let backfilled = 0;
   for (const r of missingRound) {

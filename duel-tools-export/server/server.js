@@ -1838,7 +1838,15 @@ function applyGlobalOverrideToAllBatchCopies(replayId) {
 // everywhere overrides already do: profile matchup tables, GFWL
 // Archive/History, Format Data, the events replays panel. No parallel
 // "deck type" mechanism needed.
-const DECK_TYPE_SOURCE_PRIORITY = { fl: 0, replay: 1, decklist: 2 };
+// 'profile' is the highest tier: a deck type already recorded on the
+// player's OWN profile (db.players[x].eventDecklists[].deckTypeOverride —
+// set there either by hand or via that profile's own reclassify button),
+// synced into this event-bracket record by eventsRenderDeckCards above
+// itself rather than independently re-derived here. Outranking 'decklist'
+// means once a profile-side correction has been synced in, this event page
+// re-opening and running its own classifyFromCards pass again can never
+// silently revert it.
+const DECK_TYPE_SOURCE_PRIORITY = { fl: 0, replay: 1, decklist: 2, profile: 3 };
 async function upsertEventDeckType(code, builderName, deckTypeName, source) {
   const c = (code || '').toUpperCase().trim();
   const ev = db.events[c];
@@ -4642,7 +4650,7 @@ const server = http.createServer(async (req, res) => {
   }
   const FL_EXPIRED_MSG = 'Format Library token expired or invalid — log back into formatlibrary.com, grab a fresh Authorization header (F12 → Network → any subscriber request → copy the header value), and update FORMATLIBRARY_TOKEN on Railway.';
 
-  // ── GET /api/proxy/fl-replays?player=:name ──────────────────────────────────
+  // ── GET /api/proxy/fl-replays?player=:name&aliases=:a,:b,:c ─────────────────
   // Paginates FL's own replay-subscriber API exactly like the standalone
   // Python scraper did, filtered down to GOAT-format rows.
   if (parts[0]==='proxy' && parts[1]==='fl-replays' && method==='GET') {
@@ -4650,17 +4658,27 @@ const server = http.createServer(async (req, res) => {
     if (!flToken()) return json(res, 500, { error: 'FORMATLIBRARY_TOKEN not set in environment' });
     const player = url.searchParams.get('player');
     if (!player) return json(res, 400, { error: 'player required' });
+    // Checks the player's own registered name AND Duel Tools aliases on
+    // Format Library itself, not just the one literal username typed in the
+    // import box. A player can be recorded under more than one handle on FL
+    // (an old username before a rename, a second account, a nickname a TO
+    // typed slightly differently) — searching and matching only the single
+    // "Format Library Username" field meant replays under any of those other
+    // spellings were invisible here even when this app already knew they
+    // were aliases of the same person (the aliases field only ever widened
+    // the LOCAL "already saved?" dedup check, never the actual FL search).
+    // `aliases` is optional and comma-separated — the client sends the
+    // registry's known aliases plus whatever's typed in the Aliases field.
+    const aliasesParam = (url.searchParams.get('aliases') || '').split(',').map(s => s.trim()).filter(Boolean);
+    const searchNames = [...new Set([player, ...aliasesParam].filter(Boolean))];
     // Format Library's own 'player:or:' filter matches substrings (and
     // apparently un-word-bounded ones at that — searching "Chen" matches
     // "Grumplestielzchen" because it ends in "...zchen"), so every row FL
-    // hands back has to be re-checked here against the EXACT username before
-    // it's treated as this player's replay. Underscore/space is normalized
-    // the same way the rest of the app treats FL usernames (isSameNameOrAlias
-    // et al.), but this is otherwise a strict, non-fuzzy equality check —
-    // deliberately not alias-aware, since this is the raw FL search step
-    // that feeds the import preview, before the user's own aliases field
-    // comes into play.
-    const playerNorm = player.trim().toLowerCase().replace(/_/g, ' ');
+    // hands back has to be re-checked here against an EXACT username before
+    // it's treated as this player's replay — exact against ANY of
+    // searchNames, not fuzzy. Underscore/space is normalized the same way
+    // the rest of the app treats FL usernames (isSameNameOrAlias et al.).
+    const playerNorms = new Set(searchNames.map(n => n.trim().toLowerCase().replace(/_/g, ' ')));
     // Diagnostics — every row FL's own search returns before any filtering
     // here, and exactly which of the two filters below (format, then exact
     // name) dropped it, with a small sample of what it actually saw. Without
@@ -4675,80 +4693,91 @@ const server = http.createServer(async (req, res) => {
     const formatsSeen = new Set();
     const mismatchSamples = [];
     // pagesFetched / pageRowCounts — how many /api/replays/subscriber pages
-    // we actually requested and how many raw rows each one came back with,
-    // before any local filtering. This is the key signal for telling apart
-    // "FL really only has this many rows for this filter" from "our own
-    // pagination loop stopped asking FL for more pages too soon" — e.g. a
-    // report of "FL shows 46 but we only import 20" with pagesFetched:2 and
-    // pageRowCounts:[10,10] means FL's own API told us page 2 was the last
-    // page (returned exactly a full page, then would need a page 3 request
-    // we never sent because `rows.length < 10` only fires on a SHORT page —
-    // so a run that stops exactly on a page boundary like this is the one
-    // case this loop can't self-detect; pagesFetched/pageRowCounts make it
-    // visible here instead of silently looking like "that's everything").
+    // we actually requested (summed across every name searched) and how many
+    // raw rows each one came back with, before any local filtering. This is
+    // the key signal for telling apart "FL really only has this many rows
+    // for this filter" from "our own pagination loop stopped asking FL for
+    // more pages too soon" — e.g. a report of "FL shows 46 but we only
+    // import 20" with pagesFetched:2 and pageRowCounts:[10,10] means FL's
+    // own API told us page 2 was the last page (returned exactly a full
+    // page, then would need a page 3 request we never sent because
+    // `rows.length < 10` only fires on a SHORT page — so a run that stops
+    // exactly on a page boundary like this is the one case this loop can't
+    // self-detect; pagesFetched/pageRowCounts make it visible here instead
+    // of silently looking like "that's everything").
     let pagesFetched = 0;
     const pageRowCounts = [];
     try {
       const replays = [];
+      const seenUrls = new Set(); // dedupe across multiple per-name searches — the same replay can surface under more than one searched name
       let eventDatesChanged = false;
-      let page = 1;
-      while (true) {
-        const qs = new URLSearchParams({ page: String(page), limit: '10', sort: 'publishDate:desc,display:desc,roundAbs:desc', filter: 'player:or:' + player });
-        const { status, body } = await flApiRequest('/api/replays/subscriber?' + qs.toString());
-        if (status === 401) return json(res, 401, { error: FL_EXPIRED_MSG });
-        if (status !== 200) return json(res, 502, { error: 'Format Library returned status ' + status });
-        let rows;
-        try { rows = JSON.parse(body); } catch(e) { return json(res, 502, { error: 'Format Library returned a non-JSON response' }); }
-        pagesFetched++;
-        pageRowCounts.push(Array.isArray(rows) ? rows.length : -1);
-        if (!Array.isArray(rows) || !rows.length) break;
-        for (const row of rows) {
-          totalRowsSeen++;
-          if ((row.formatName||'').toLowerCase() !== 'goat') {
-            nonGoatCount++;
-            if (row.formatName) formatsSeen.add(row.formatName);
-            continue;
+      // One full paginated search per name (own name, then each alias) — FL's
+      // substring filter is itself scoped to ONE name per request, so an
+      // alias-only replay (neither side spelled exactly like `player`) would
+      // never be found by searching `player` alone, no matter how the
+      // exact-match check below is widened.
+      for (const searchName of searchNames) {
+        let page = 1;
+        while (true) {
+          const qs = new URLSearchParams({ page: String(page), limit: '10', sort: 'publishDate:desc,display:desc,roundAbs:desc', filter: 'player:or:' + searchName });
+          const { status, body } = await flApiRequest('/api/replays/subscriber?' + qs.toString());
+          if (status === 401) return json(res, 401, { error: FL_EXPIRED_MSG });
+          if (status !== 200) return json(res, 502, { error: 'Format Library returned status ' + status });
+          let rows;
+          try { rows = JSON.parse(body); } catch(e) { return json(res, 502, { error: 'Format Library returned a non-JSON response' }); }
+          pagesFetched++;
+          pageRowCounts.push(Array.isArray(rows) ? rows.length : -1);
+          if (!Array.isArray(rows) || !rows.length) break;
+          for (const row of rows) {
+            totalRowsSeen++;
+            if ((row.formatName||'').toLowerCase() !== 'goat') {
+              nonGoatCount++;
+              if (row.formatName) formatsSeen.add(row.formatName);
+              continue;
+            }
+            const winnerNorm = (row.winnerName||'').trim().toLowerCase().replace(/_/g, ' ');
+            const loserNorm  = (row.loserName||'').trim().toLowerCase().replace(/_/g, ' ');
+            if (!playerNorms.has(winnerNorm) && !playerNorms.has(loserNorm)) {
+              // FL substring false-positive — not actually this player (or
+              // any known alias). Sample a few of the actual name pairs seen
+              // (capped so a very noisy substring match, e.g. a short/common
+              // username, doesn't blow up the response) so a REAL near-miss
+              // (a spelling variant that should be added as an alias) is
+              // distinguishable from FL's search just casting a wide net.
+              nameMismatchCount++;
+              if (mismatchSamples.length < 8) mismatchSamples.push({ winner: row.winnerName||'', loser: row.loserName||'' });
+              continue;
+            }
+            if (row.url && seenUrls.has(row.url)) continue; // already captured via a different searched name
+            if (row.url) seenUrls.add(row.url);
+            const eventId = row.eventAbbreviation || '';
+            const replayDate = (row.publishDate||'').slice(0, 10);
+            // Every replay carries its own event code + exact publish date, so
+            // importing a player's replays is also a (free, incidental) way to
+            // learn or correct that event's date in the shared catalog — the
+            // same db.eventDates store that getEventDate()/sortEventKeys() on
+            // the client use for the Year/Season filters and chronological
+            // sorting everywhere else in the app.
+            if (upsertEventDateFromFL(eventId, replayDate)) eventDatesChanged = true;
+            replays.push({
+              eventId,
+              replayLink: row.url || '',
+              round: row.roundName || '',
+              winningPlayer: row.winnerName || '', winningDeck: row.winningDeckTypeName || '',
+              losingPlayer: row.loserName || '', losingDeck: row.losingDeckTypeName || '',
+              date: replayDate,
+            });
           }
-          const winnerNorm = (row.winnerName||'').trim().toLowerCase().replace(/_/g, ' ');
-          const loserNorm  = (row.loserName||'').trim().toLowerCase().replace(/_/g, ' ');
-          if (winnerNorm !== playerNorm && loserNorm !== playerNorm) {
-            // FL substring false-positive — not actually this player. Sample
-            // a few of the actual name pairs seen (capped so a very noisy
-            // substring match, e.g. a short/common username, doesn't blow up
-            // the response) so a REAL near-miss (a spelling variant that
-            // should be added as an alias) is distinguishable from FL's
-            // search just casting a wide net.
-            nameMismatchCount++;
-            if (mismatchSamples.length < 8) mismatchSamples.push({ winner: row.winnerName||'', loser: row.loserName||'' });
-            continue;
-          }
-          const eventId = row.eventAbbreviation || '';
-          const replayDate = (row.publishDate||'').slice(0, 10);
-          // Every replay carries its own event code + exact publish date, so
-          // importing a player's replays is also a (free, incidental) way to
-          // learn or correct that event's date in the shared catalog — the
-          // same db.eventDates store that getEventDate()/sortEventKeys() on
-          // the client use for the Year/Season filters and chronological
-          // sorting everywhere else in the app.
-          if (upsertEventDateFromFL(eventId, replayDate)) eventDatesChanged = true;
-          replays.push({
-            eventId,
-            replayLink: row.url || '',
-            round: row.roundName || '',
-            winningPlayer: row.winnerName || '', winningDeck: row.winningDeckTypeName || '',
-            losingPlayer: row.loserName || '', losingDeck: row.losingDeckTypeName || '',
-            date: replayDate,
-          });
+          if (rows.length < 10) break;
+          page++;
+          await new Promise(r => setTimeout(r, 250));
         }
-        if (rows.length < 10) break;
-        page++;
-        await new Promise(r => setTimeout(r, 250));
       }
       if (eventDatesChanged) { try { await saveDB('eventDates'); } catch(e) { console.warn('[EventDates] Save after FL import failed:', e.message); } }
       return json(res, 200, { ok: true, replays, diagnostics: {
         totalRowsSeen, nonGoatCount, nameMismatchCount,
         formatsSeen: [...formatsSeen], mismatchSamples,
-        pagesFetched, pageRowCounts,
+        pagesFetched, pageRowCounts, searchNames,
       } });
     } catch(e) {
       return json(res, 502, { error: 'Format Library request failed: ' + e.message });
