@@ -6822,6 +6822,22 @@ async function go() {
     alert(`⚠ WARNING: ${_failedServerSaves.length} replay(s) failed to save to the server:\n\n${idList}\n\nThese replays are only in your browser right now and will be LOST if you redeploy or close the tab. Click the 💾 Save button, and if it still fails, re-import this batch once the server connection is stable.`);
   }
 
+  // This import just changed what's saved for _activeBatch.id (new replays
+  // added, or an existing timed-out one updated) — drop the shared
+  // /batches/all-full snapshot (_allBatchesFullCache) NOW, in this same
+  // browser tab, not just on the server. Without this, getBatchesByIds()
+  // (which Profile's openProfile() calls) keeps serving the PRE-import
+  // copy of this exact batch to anything that asks for it for the rest of
+  // the session — the replays are genuinely saved server-side, but this
+  // one tab won't show them until a full page reload resets the cache back
+  // to null. This is the actual explanation for "it finds the replays,
+  // shows progress, then they don't show up on the profile" when the
+  // server-side save itself is working correctly: the import succeeded,
+  // the PROFILE VIEW is just reading a stale snapshot it cached earlier in
+  // the session (the first time Format Data, GFWL, or any other profile
+  // was opened this session).
+  invalidateAllBatchesFullCache();
+
   // Try to reload from server; fall back to in-memory data
   // Skip if user has made local deletions (avoid restoring removed replays)
   if (!_batchLocalEdits) {
@@ -7597,8 +7613,9 @@ async function flEventImportRun() {
   progressEl.style.display = 'flex'; progressEl.innerHTML = '';
   const log = (html) => { const d = document.createElement('div'); d.innerHTML = html; progressEl.appendChild(d); progressEl.scrollTop = progressEl.scrollHeight; };
 
-  let attachedDirect = 0, heldPending = 0, errors = 0;
+  let attachedDirect = 0, heldPending = 0, errors = 0, mismatchCount = 0;
   const pendingNames = [];
+  const mismatchedNames = []; // { who, p1, p2 } per skipped replay, for the summary line
 
   for (let i = 0; i < decks.length; i++) {
     const deck = decks[i];
@@ -7648,7 +7665,20 @@ async function flEventImportRun() {
         const { id: rid, round } = replayIds[j];
         const r = await flFetchAndParseReplay(rid, parseAs, aliasesForParse, eventId, round);
         if (r.timedOut) { log('&nbsp;&nbsp;<span style="color:var(--red)">✗ '+rid+': failed to load</span>'); errors++; }
-        else if (r.mismatch) { log('&nbsp;&nbsp;<span style="color:var(--amber)">⚠ '+rid+': player not found in replay — skipped</span>'); }
+        else if (r.mismatch) {
+          // Show the ACTUAL participant names this replay carries, not just
+          // "skipped" — this is the one piece of information that actually
+          // tells the admin what alias to add. Without it, "no replays got
+          // attached" looks identical whether the save failed (a real bug)
+          // or every single replay was correctly, silently skipped because
+          // none of this player's known aliases matched who's actually in
+          // the replay (not a bug — parseMatch() refusing to guess which
+          // side is "my" side rather than risk saving the wrong perspective).
+          const p1 = r.data.player1||'?', p2 = r.data.player2||'?';
+          log('&nbsp;&nbsp;<span style="color:var(--amber)">⚠ '+rid+': players in replay = <b>['+_escapeHtml(p1)+']</b> vs <b>['+_escapeHtml(p2)+']</b> — no match for <b>'+_escapeHtml(who)+'</b>\'s known name/aliases. Skipped — add one of these as an alias and re-run to attach it.</span>');
+          mismatchCount++;
+          mismatchedNames.push({ who, p1, p2 });
+        }
         else { parsedReplays.push(r.data); log('&nbsp;&nbsp;<span style="color:var(--green)">✓ '+rid+'</span>'); }
         if (j < replayIds.length-1) await sleep(1200);
       }
@@ -7728,8 +7758,28 @@ async function flEventImportRun() {
     if (i < decks.length-1) await sleep(300);
   }
 
-  log('<div style="margin-top:8px;font-weight:bold">Done — '+attachedDirect+' attached directly, '+heldPending+' held pending'+(pendingNames.length?' ('+pendingNames.map(_escapeHtml).join(', ')+')':'')+', '+errors+' error(s).</div>');
-  statusEl.style.color = errors ? 'var(--amber)' : 'var(--green)';
+  // Same staleness hazard as go()/addToBatch() (see their own comments):
+  // this loop just changed what's saved for potentially many players'
+  // batches, in this same browser tab — drop the shared /batches/all-full
+  // snapshot now, or Profile (via openProfile -> getBatchesByIds) keeps
+  // serving whatever it cached before this import ran, for the rest of the
+  // session, even though the server-side save itself succeeded.
+  invalidateAllBatchesFullCache();
+
+  log('<div style="margin-top:8px;font-weight:bold">Done — '+attachedDirect+' attached directly, '+heldPending+' held pending'+(pendingNames.length?' ('+pendingNames.map(_escapeHtml).join(', ')+')':'')+', '+errors+' error(s)'+(mismatchCount?', '+mismatchCount+' replay(s) skipped on a name mismatch':'')+'.</div>');
+  // Called out separately and loudly — this is the #1 reason an import can
+  // "run clean" (0 errors) but still attach nothing for a given player: the
+  // replay(s) simply don't carry any name this player is known under yet.
+  // Scroll up to the per-replay ⚠ lines above for the exact names found.
+  if (mismatchCount) {
+    const byWho = {};
+    mismatchedNames.forEach(m => { (byWho[m.who] = byWho[m.who]||[]).push(m); });
+    const summary = Object.entries(byWho).map(([who, ms]) =>
+      _escapeHtml(who)+' ('+ms.length+' replay'+(ms.length>1?'s':'')+' — found: '+[...new Set(ms.flatMap(m=>[m.p1,m.p2]))].map(_escapeHtml).join(', ')+')'
+    ).join('; ');
+    log('<div style="margin-top:4px;color:var(--amber)">⚠ '+mismatchCount+' replay(s) attached to NO ONE because the player wasn\'t recognized in them: '+summary+'. Add one of the found names as an alias on that player\'s profile, then re-run this import to pick them up.</div>');
+  }
+  statusEl.style.color = errors ? 'var(--amber)' : (mismatchCount ? 'var(--amber)' : 'var(--green)');
   statusEl.textContent = 'Import complete for '+eventId+'.';
 
   // Re-verification (explicitly requested): re-fetch this one event's
@@ -15680,6 +15730,11 @@ async function addToBatch() {
   } else {
     st((_activeBatch.name||_activeBatch.player)+' — '+_activeBatch.replays.length+' replays total', 'var(--green)');
   }
+  // Same staleness hazard as go() above — this "Add to existing batch"
+  // path changed _activeBatch.id's saved replays too, so the shared
+  // /batches/all-full snapshot has to be dropped here as well, or Profile
+  // keeps showing the pre-add state for the rest of this session.
+  invalidateAllBatchesFullCache();
   loadBatches();
   // Temp batches: skip RPS entirely, only show deck viewer for both players
   if (_activeBatch.isTemp) {
@@ -17134,6 +17189,15 @@ async function eventsShowDeck(code, deckId) {
 
   await eventsRenderDeckCards(cardsEl, deck, code, data.trackedPlayer);
   const _deckReplays = await eventsRenderReplaysPanel(replaysEl, code, data.trackedPlayer, deck.builderName);
+  // Once there's replay data, it's rendered as a full table inside the
+  // MATCH STATS section below (see eventsRenderMatchupStats) instead of
+  // the old 380px card-list sidebar, so that sidebar's space is freed up
+  // for the REPLAYS and MATCHUPS BY DECK TYPE tables to sit next to
+  // MATCHUPS. Keep the sidebar visible when there's nothing to show there
+  // yet (no profile / no replays on file) — eventsRenderReplaysPanel still
+  // puts its "no replays" message and Import-from-Format-Library button
+  // there in that case.
+  if (replaysEl) replaysEl.style.display = _deckReplays.length ? 'none' : '';
   if (cardsEl && data.trackedPlayer) eventsRenderMatchupStats(cardsEl, data.trackedPlayer, _deckReplays);
 }
 
@@ -17510,7 +17574,8 @@ function eventsRenderMatchupStats(container, trackedPlayer, replays) {
   if (!container || !trackedPlayer || !replays || !replays.length) return;
 
   let W=0, L=0, g1W=0, g1Total=0, g23W=0, g23Total=0;
-  const byOpp = {}; // oppName -> { w, l, deck }
+  const byOpp = {};     // oppName -> { w, l, deck }
+  const byOppDeck = {}; // oppDeck (merged across every opponent on that deck) -> { w, l }
 
   replays.forEach(r => {
     const p = r.parsed || {};
@@ -17522,6 +17587,13 @@ function eventsRenderMatchupStats(container, trackedPlayer, replays) {
     if (!byOpp[oppName]) byOpp[oppName] = { w:0, l:0, deck: '' };
     if (isWin) byOpp[oppName].w++; else if (isLoss) byOpp[oppName].l++;
     if (oppDeck) byOpp[oppName].deck = oppDeck;
+
+    // Deck-type matchup table: merge every opponent piloting the same deck
+    // type into one row, so "beat 3 different Chaos Control players" and
+    // "beat the same Chaos Control player 3 times" both roll up together.
+    const deckKey = oppDeck || 'Unknown';
+    if (!byOppDeck[deckKey]) byOppDeck[deckKey] = { w:0, l:0 };
+    if (isWin) byOppDeck[deckKey].w++; else if (isLoss) byOppDeck[deckKey].l++;
 
     (p.games||[]).forEach(g => {
       if (!g || !g.winner) return;
@@ -17558,12 +17630,31 @@ function eventsRenderMatchupStats(container, trackedPlayer, replays) {
   });
   wrap.appendChild(chips);
 
+  // Three tables side by side, each free to grow to its full content
+  // height (no sidebar-style clipping/scrolling): MATCHUPS (per opponent,
+  // unchanged), REPLAYS (every match, moved here from the old 380px
+  // card-list sidebar — see eventsShowDeck, which now hides that sidebar
+  // once there's data to show here instead) with Round + an accurate Game
+  // Score result, and MATCHUPS BY DECK TYPE (new — merges same deck types).
+  const cols = document.createElement('div');
+  cols.style.cssText = 'display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start';
+  wrap.appendChild(cols);
+
+  function makeCol(label) {
+    const col = document.createElement('div');
+    col.style.cssText = 'flex:1;min-width:230px';
+    const lbl = document.createElement('div');
+    lbl.style.cssText = 'font-size:10px;color:var(--muted);letter-spacing:.06em;margin-bottom:4px';
+    lbl.textContent = label;
+    col.appendChild(lbl);
+    cols.appendChild(col);
+    return col;
+  }
+
+  // ── MATCHUPS (per opponent) ─────────────────────────────────────────
   const oppEntries = Object.entries(byOpp);
   if (oppEntries.length) {
-    const tblLbl = document.createElement('div');
-    tblLbl.style.cssText = 'font-size:10px;color:var(--muted);letter-spacing:.06em;margin-bottom:4px';
-    tblLbl.textContent = 'MATCHUPS';
-    wrap.appendChild(tblLbl);
+    const col = makeCol('MATCHUPS');
     const tbl = document.createElement('table');
     tbl.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
     tbl.innerHTML = '<thead><tr style="border-bottom:1px solid var(--border2);text-align:left">'
@@ -17583,7 +17674,85 @@ function eventsRenderMatchupStats(container, trackedPlayer, replays) {
         + '<td style="padding:6px 8px">'+(p2==null?'—':p2+'%')+'</td>';
       tbody.appendChild(tr);
     });
-    wrap.appendChild(tbl);
+    col.appendChild(tbl);
+  }
+
+  // ── REPLAYS (every match this event, Round + accurate Game Score) ──
+  {
+    const col = makeCol('REPLAYS ('+replays.length+')');
+    const tbl = document.createElement('table');
+    tbl.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
+    tbl.innerHTML = '<thead><tr style="border-bottom:1px solid var(--border2);text-align:left">'
+      + '<th style="padding:6px 8px;color:var(--muted);font-size:10px;letter-spacing:.06em">ROUND</th>'
+      + '<th style="padding:6px 8px;color:var(--muted);font-size:10px;letter-spacing:.06em">RESULT</th>'
+      + '<th style="padding:6px 8px;color:var(--muted);font-size:10px;letter-spacing:.06em">OPPONENT</th>'
+      + '<th style="padding:6px 8px;color:var(--muted);font-size:10px;letter-spacing:.06em">MATCHUP</th>'
+      + '<th style="padding:6px 8px;color:var(--muted);font-size:10px;letter-spacing:.06em"></th>'
+      + '</tr></thead><tbody></tbody>';
+    const tbody = tbl.querySelector('tbody');
+    // Sort by round ascending (numeric, extracted from whatever string the
+    // round is stored as, e.g. "Round 3" / "3" / "Top 8") — rows with no
+    // parseable round number keep their original relative order at the end.
+    const roundNum = round => { const m = String(round==null?'':round).match(/(\d+)/); return m ? parseInt(m[1],10) : null; };
+    const sortedReplays = replays.map((r,i)=>({r,i})).sort((a,b) => {
+      const ra = roundNum(a.r.round), rb = roundNum(b.r.round);
+      if (ra!=null && rb!=null && ra!==rb) return ra-rb;
+      if (ra!=null && rb==null) return -1;
+      if (ra==null && rb!=null) return 1;
+      return a.i-b.i;
+    }).map(x=>x.r);
+    sortedReplays.forEach(r => {
+      const p = r.parsed || {};
+      const result = r.resultOverride || p.resultOverride || p.result || '';
+      const oppName = r.oppName || p.oppName || 'Unknown';
+      const score = (p.scoreOverride ? (p.scoreOverride.my+'-'+p.scoreOverride.opp) : p.score) || '';
+      const isWin  = /^w/i.test(result);
+      const isLoss = /^l/i.test(result);
+      const myDeck  = r.myDeckOverride  || p.myDeck  || _eventsFindBracketDeckType(trackedPlayer.name) || '—';
+      const oppDeck = r.oppDeckOverride || p.oppDeck || _eventsFindBracketDeckType(oppName) || '—';
+      const round = r.round || '—';
+      const resColor = isWin ? 'var(--green)' : isLoss ? 'var(--red)' : 'var(--muted)';
+      // Result shows the actual game score (e.g. "2-1") rather than a bare
+      // W/L label — only falls back to a W/L/— marker if no score parsed.
+      const resLabel = score || (isWin ? 'WIN' : isLoss ? 'LOSS' : (result || '—'));
+      const replayUrl = 'https://www.duelingbook.com/replay?id='+encodeURIComponent(r.replayId);
+      const tr = document.createElement('tr');
+      tr.style.cssText = 'border-bottom:1px solid var(--border);cursor:pointer';
+      tr.onmouseover = () => tr.style.background = 'var(--card2)';
+      tr.onmouseout  = () => tr.style.background = '';
+      tr.onclick = (e) => { if (e.target.closest('a')) return; eventsOpenReplayInAnalyzer(r._batchId, r.replayId); };
+      tr.innerHTML = '<td style="padding:6px 8px;color:var(--muted)">'+_escapeHtml(String(round))+'</td>'
+        + '<td style="padding:6px 8px;font-weight:bold;color:'+resColor+'">'+_escapeHtml(resLabel)+'</td>'
+        + '<td style="padding:6px 8px">'+_escapeHtml(oppName)+'</td>'
+        + '<td style="padding:6px 8px;color:var(--muted)">'+_escapeHtml(myDeck)+' <span style="color:var(--dim)">vs</span> '+_escapeHtml(oppDeck)+'</td>'
+        + '<td style="padding:6px 8px;text-align:right"><a href="'+replayUrl+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:var(--amber);font-size:11px;font-weight:bold;text-decoration:none">View ↗</a></td>';
+      tbody.appendChild(tr);
+    });
+    col.appendChild(tbl);
+  }
+
+  // ── MATCHUPS BY DECK TYPE (merges same deck types together) ────────
+  const deckEntries = Object.entries(byOppDeck);
+  if (deckEntries.length) {
+    const col = makeCol('MATCHUPS BY DECK TYPE');
+    const tbl = document.createElement('table');
+    tbl.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
+    tbl.innerHTML = '<thead><tr style="border-bottom:1px solid var(--border2);text-align:left">'
+      + '<th style="padding:6px 8px;color:var(--muted);font-size:10px;letter-spacing:.06em">DECK TYPE</th>'
+      + '<th style="padding:6px 8px;color:var(--muted);font-size:10px;letter-spacing:.06em">RESULT</th>'
+      + '<th style="padding:6px 8px;color:var(--muted);font-size:10px;letter-spacing:.06em">WIN %</th>'
+      + '</tr></thead><tbody></tbody>';
+    const tbody = tbl.querySelector('tbody');
+    deckEntries.sort((a,b)=>(b[1].w+b[1].l)-(a[1].w+a[1].l) || a[0].localeCompare(b[0])).forEach(([deckName, rec]) => {
+      const p3 = pct(rec.w, rec.w+rec.l);
+      const tr = document.createElement('tr');
+      tr.style.cssText = 'border-bottom:1px solid var(--border)';
+      tr.innerHTML = '<td style="padding:6px 8px;font-weight:bold">'+_escapeHtml(deckName)+'</td>'
+        + '<td style="padding:6px 8px;color:'+(rec.w>rec.l?'var(--green)':rec.l>rec.w?'var(--red)':'var(--muted)')+'">'+rec.w+'-'+rec.l+'</td>'
+        + '<td style="padding:6px 8px">'+(p3==null?'—':p3+'%')+'</td>';
+      tbody.appendChild(tr);
+    });
+    col.appendChild(tbl);
   }
 
   container.appendChild(wrap);
@@ -18428,6 +18597,9 @@ Adding new ones will retroactively scan all saved replays.`,
     // Also update active batch aliases in memory
     if (_activeBatch && _activeBatch.player === player) _activeBatch.aliases = aliases;
     if (_allProfileBatches) _allProfileBatches.filter(b => b.player === player).forEach(b => b.aliases = aliases);
+    // A rescan can link replays from OTHER batches onto this one server-side
+    // — see the same staleness note on go()/addToBatch()/flEventImportRun.
+    invalidateAllBatchesFullCache();
     if (data.rescanned > 0) {
       st(`Aliases saved — ${data.rescanned} new replay(s) linked retroactively`, 'var(--green)');
     } else {
@@ -22088,6 +22260,13 @@ async function mergeProfilesConfirm() {
       return;
     }
     if (statusEl) { statusEl.style.color = 'var(--green)'; statusEl.textContent = '✓ Merged — ' + (data.mergedReplays||0) + ' replay(s) and ' + (data.mergedDecklists||0) + ' decklist(s) folded in' + ((data.aliasesAdded||[]).length ? ', added alias: '+data.aliasesAdded.map(_escapeHtml).join(', ') : '') + '.'; }
+    // A merge moves replays from the deleted batch onto the kept one and
+    // deletes the old batch id entirely — see the same staleness note on
+    // go()/addToBatch()/flEventImportRun/editAliases above. Without this,
+    // Profile can keep showing the PRE-merge state (or, worse, still try to
+    // resolve the now-deleted batch id from the stale cache) for the rest
+    // of this session.
+    invalidateAllBatchesFullCache();
     // Refresh the underlying profile list (the merged-away profile is gone,
     // the kept one's counts just changed) by re-fetching and repopulating
     // just the two <select>s — NOT by calling loadMergeProfilesSection
