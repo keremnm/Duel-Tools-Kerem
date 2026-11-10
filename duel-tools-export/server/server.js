@@ -20,6 +20,12 @@ const BOOTSTRAP_PASSWORD = process.env.ADMIN_PASSWORD || 'ilovesui';
 
 // ── DB ────────────────────────────────────────────────────────────────────────
 let pgClient = null;
+// True once the full players/users/gfwl/eventDates/overrides/_changeLog/
+// events blob AND every row of duel_tools_batches have been pulled into
+// memory at least once this process's lifetime. See the reconnect-reload
+// comment in connectPostgres() below — this is what lets a RECONNECT (vs.
+// the true first boot) skip re-pulling all of it.
+let _pgEverLoaded = false;
 // db.overrides: a SEPARATE, independent registry of result/score/deck
 // corrections, keyed ONLY by replayId — not by batch, not by player. Every
 // propagation bug chased in this file so far (cross-linked twins, unmerged
@@ -120,55 +126,76 @@ async function connectPostgres() {
   // no longer takes down the ability to write anything at all.
   pgClient = client;
 
-  try {
-    const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('players','users','gfwl','eventDates','overrides','_changeLog','events')");
-    for (const row of res.rows) { db[row.key] = row.value; }
-  } catch(e) { console.error('[PG] Failed to load players/users/gfwl/etc — starting with whatever was already in memory:', e.message); }
+  // ── Full data load: ONLY on true first boot, never on a reconnect ──────
+  // Everything in this block (players/users/gfwl/etc, and especially the
+  // full duel_tools_batches table — potentially tens of thousands of
+  // replays) used to re-run on EVERY reconnect, not just cold start:
+  // connectPostgres() is also what the 'error'/'end' handlers below and the
+  // keep-alive interval (bottom of this file) call after any transient
+  // disconnect. A full-table batch reload blocks the event loop while it
+  // JSON-parses and re-keys every row, and this process is the ONLY writer
+  // to Postgres (a single-instance app — see GET /api/batches/:id's own
+  // comment on why IT still does a live per-request read instead of relying
+  // on this cache), so nothing else could have changed this data out from
+  // under us while disconnected. Skipping the reload on reconnect — keeping
+  // whatever's already in memory, which already reflects every write this
+  // same process has made — removes that entire class of
+  // reconnect-triggered stall with no loss of correctness.
+  if (!_pgEverLoaded) {
+    try {
+      const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('players','users','gfwl','eventDates','overrides','_changeLog','events')");
+      for (const row of res.rows) { db[row.key] = row.value; }
+    } catch(e) { console.error('[PG] Failed to load players/users/gfwl/etc — starting with whatever was already in memory:', e.message); }
 
-  try {
-    const batchRes = await client.query('SELECT id, value FROM duel_tools_batches');
-    db.batches = {};
-    for (const row of batchRes.rows) { db.batches[row.id] = row.value; }
-  } catch(e) { console.error('[PG] Failed to load batches — app may start with incomplete batch data until the next successful reconnect:', e.message); }
+    try {
+      const batchRes = await client.query('SELECT id, value FROM duel_tools_batches');
+      db.batches = {};
+      for (const row of batchRes.rows) { db.batches[row.id] = row.value; }
+    } catch(e) { console.error('[PG] Failed to load batches — app may start with incomplete batch data until the next successful reconnect:', e.message); }
 
-  // ── duel_tools_replay_cache: NOT bulk-loaded anymore ──────────────────
-  // This table is a best-effort cache of full DuelingBook replay
-  // play-by-play JSON (see cacheReplay() below), written for every replay
-  // ANYONE ever fetches, with no size cap or eviction. Once it grew large
-  // enough, pulling the WHOLE table over the wire on every single
-  // connect/reconnect started failing outright — Postgres logs showed
-  // repeated "could not send data to client: Connection reset by peer" /
-  // "FATAL: connection to client lost" on exactly this SELECT, over and
-  // over, for days, almost certainly from this process running out of
-  // memory (or being killed by the platform) while buffering the result.
-  // Each failure threw out of this function (before pgClient was being set
-  // early, as it now is above), which nulled pgClient and triggered ANOTHER
-  // reconnect attempt that retried the exact same oversized load — an
-  // infinite crash/reconnect loop. That is the root cause of the 2026-11
-  // incident where new batches, replay saves, YDKs, and everything else
-  // intermittently hung or silently failed to persist: the app was spending
-  // nearly all its time crash-looping on this one query instead of being
-  // available to serve ordinary requests.
-  // Replay cache entries are only ever looked up ONE AT A TIME by replayId
-  // (see the GET /api/proxy/replay route), so there was never a need to
-  // hold the whole table in memory — getCachedReplay() below does a single
-  // cheap indexed lookup per id instead, falling back to the normal slow
-  // CapSolver fetch path on a miss, exactly like it always has.
-  db.replayCache = {};
+    // ── duel_tools_replay_cache: NOT bulk-loaded anymore ──────────────────
+    // This table is a best-effort cache of full DuelingBook replay
+    // play-by-play JSON (see cacheReplay() below), written for every replay
+    // ANYONE ever fetches, with no size cap or eviction. Once it grew large
+    // enough, pulling the WHOLE table over the wire on every single
+    // connect/reconnect started failing outright — Postgres logs showed
+    // repeated "could not send data to client: Connection reset by peer" /
+    // "FATAL: connection to client lost" on exactly this SELECT, over and
+    // over, for days, almost certainly from this process running out of
+    // memory (or being killed by the platform) while buffering the result.
+    // Each failure threw out of this function (before pgClient was being set
+    // early, as it now is above), which nulled pgClient and triggered ANOTHER
+    // reconnect attempt that retried the exact same oversized load — an
+    // infinite crash/reconnect loop. That is the root cause of the 2026-11
+    // incident where new batches, replay saves, YDKs, and everything else
+    // intermittently hung or silently failed to persist: the app was spending
+    // nearly all its time crash-looping on this one query instead of being
+    // available to serve ordinary requests.
+    // Replay cache entries are only ever looked up ONE AT A TIME by replayId
+    // (see the GET /api/proxy/replay route), so there was never a need to
+    // hold the whole table in memory — getCachedReplay() below does a single
+    // cheap indexed lookup per id instead, falling back to the normal slow
+    // CapSolver fetch path on a miss, exactly like it always has.
+    db.replayCache = {};
 
-  // Migrate any legacy batches still stored under the old single-blob key
-  try {
-    const legacyRes = await client.query("SELECT value FROM duel_tools_data WHERE key='batches'");
-    if (legacyRes.rows.length && legacyRes.rows[0].value && Object.keys(legacyRes.rows[0].value).length) {
-      console.log('[PG] Migrating', Object.keys(legacyRes.rows[0].value).length, 'legacy batches to per-row storage...');
-      for (const [id, batch] of Object.entries(legacyRes.rows[0].value)) {
-        if (!db.batches[id]) db.batches[id] = batch; // don't overwrite if already split
+    // Migrate any legacy batches still stored under the old single-blob key
+    try {
+      const legacyRes = await client.query("SELECT value FROM duel_tools_data WHERE key='batches'");
+      if (legacyRes.rows.length && legacyRes.rows[0].value && Object.keys(legacyRes.rows[0].value).length) {
+        console.log('[PG] Migrating', Object.keys(legacyRes.rows[0].value).length, 'legacy batches to per-row storage...');
+        for (const [id, batch] of Object.entries(legacyRes.rows[0].value)) {
+          if (!db.batches[id]) db.batches[id] = batch; // don't overwrite if already split
+        }
+        await saveAllBatchesToPostgres();
+        await client.query("DELETE FROM duel_tools_data WHERE key='batches'");
+        console.log('[PG] Legacy batch migration complete — old blob removed.');
       }
-      await saveAllBatchesToPostgres();
-      await client.query("DELETE FROM duel_tools_data WHERE key='batches'");
-      console.log('[PG] Legacy batch migration complete — old blob removed.');
-    }
-  } catch(e) { console.error('[PG] Legacy batch migration check failed (non-fatal):', e.message); }
+    } catch(e) { console.error('[PG] Legacy batch migration check failed (non-fatal):', e.message); }
+
+    _pgEverLoaded = true;
+  } else {
+    console.log('[PG] Reconnected — reusing existing in-memory data (not re-pulling the full dataset; see _pgEverLoaded).');
+  }
 
   if (!db.batches) db.batches = {};
   if (!db.players) db.players = {};
@@ -984,6 +1011,43 @@ function readBody(req, cb) {
 function playerNames(entry) {
   return [entry.name, ...(entry.aliases||[])].map(n => n.toLowerCase());
 }
+// Finds the actual db.players registry row (and its object key) backing a
+// given name, or null. Unlike findPlayerByUsername, this NEVER synthesizes a
+// fallback object from batch data — callers that need to mutate or delete
+// the real registry entry (e.g. mergeBatchesInternal's registry reconciliation
+// below) need to know definitively whether one exists.
+// Standard iterative Levenshtein edit distance (single-row DP, O(n*m) time,
+// O(min(n,m)) space) — used only by GET /api/admin/registry-check below to
+// flag likely typo-twin registry entries for manual review. Small inputs
+// (player names), so no need for anything fancier.
+function levenshteinDistance(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  let prevRow = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 0; i < a.length; i++) {
+    const curRow = [i + 1];
+    for (let j = 0; j < b.length; j++) {
+      const cost = a[i] === b[j] ? 0 : 1;
+      curRow.push(Math.min(
+        curRow[j] + 1,        // insertion
+        prevRow[j + 1] + 1,   // deletion
+        prevRow[j] + cost,    // substitution
+      ));
+    }
+    prevRow = curRow;
+  }
+  return prevRow[b.length];
+}
+function findRegistryEntryForName(name) {
+  const nl = (name||'').toLowerCase().trim();
+  if (!nl) return null;
+  for (const key of Object.keys(db.players)) {
+    const entry = db.players[key];
+    if (playerNames(entry).includes(nl)) return { key, entry };
+  }
+  return null;
+}
 // Resolves a Format Library event bracket's builderName to a tracked
 // player. builderName is usually the player's literal username as typed —
 // which can itself legitimately contain an underscore (e.g. "goat_lothy")
@@ -1330,6 +1394,12 @@ async function mergeBatchesInternal(keep, merge, req, reason) {
   if (!keep || !merge || keep.id === merge.id) return { ok: false, error: 'Need two distinct batches to merge.' };
 
   const existingAliases = new Set((keep.aliases||[]).map(a => a.toLowerCase()));
+  // Frozen snapshot of keep's aliases as they stood BEFORE this merge adds
+  // anything to them — `existingAliases` above is mutated in place by the
+  // loop just below, so it can't be reused later for "what did keep already
+  // know about itself, independent of this merge" (see the registry
+  // reconciliation step further down, which needs exactly that).
+  const keepAliasesBeforeMerge = [...existingAliases];
   const keepNameLower = (keep.player||'').toLowerCase();
   const newAliases = [];
   for (const name of [merge.player, ...(merge.aliases||[])]) {
@@ -1349,6 +1419,78 @@ async function mergeBatchesInternal(keep, merge, req, reason) {
     ...(merge.eventDecklists||[]).map(d => d.eventId).filter(Boolean),
     ...(merge.replays||[]).map(r => r.eventLabel).filter(Boolean),
   ])];
+
+  // Reconcile the separate player registry (db.players) too. Merging two
+  // batches used to only ever touch db.batches — if each side also had its
+  // own db.players registry row (e.g. one created by an early alias-add,
+  // the other by a typo'd "Create New Profile"), both rows survived the
+  // merge forever. That's exactly how a duplicate like "Alex Zander" /
+  // "Alez Zander" could show up twice in the sidebar's registry-backed
+  // search (onPlayerSearch reads db.players directly) while the Profiles
+  // grid — grouped by the now-merged batch.player — correctly showed one.
+  // Fold the loser's registry row into the keeper's (or just re-home it
+  // under the keeper's name, if the keeper had none yet) and delete the
+  // loser's row so only one registry entry survives the merge.
+  let playersChanged = false;
+  const mergeNames = [merge.player, ...(merge.aliases||[])].filter(Boolean);
+  // IMPORTANT: look up keepInfo using keepAliasesBeforeMerge (keep's aliases
+  // as they stood BEFORE this merge folded merge's name/aliases into them)
+  // — not the now-mutated keep.aliases, and not `existingAliases` (same
+  // underlying Set, mutated by the loop above). Otherwise, since merge.player
+  // always ends up folded into keep.aliases by this point (unless it was
+  // already there), keepInfo would almost always resolve to the SAME
+  // registry row as mergeInfo (the loser's), making the "keeper has no
+  // registry row of its own yet" re-home branch below unreachable.
+  let keepInfo = findRegistryEntryForName(keep.player) ||
+    keepAliasesBeforeMerge.reduce((found, a) => found || findRegistryEntryForName(a), null);
+  let mergeInfo = null;
+  for (const n of mergeNames) { mergeInfo = findRegistryEntryForName(n); if (mergeInfo) break; }
+  if (mergeInfo && (!keepInfo || keepInfo.key !== mergeInfo.key)) {
+    if (!keepInfo) {
+      // Keeper has no registry row of its own — cheapest correct move is to
+      // re-home the loser's row under the keeper's name/aliases rather than
+      // silently dropping its tags/topPlayer/gfwlTeams/eventDecklists.
+      const entry = mergeInfo.entry;
+      entry.name = keep.player;
+      const aliasSet = new Set((entry.aliases||[]).map(a => a.toLowerCase()));
+      for (const a of (keep.aliases||[])) {
+        if (a && !aliasSet.has(a.toLowerCase())) { entry.aliases = [...(entry.aliases||[]), a]; aliasSet.add(a.toLowerCase()); }
+      }
+      delete db.players[mergeInfo.key];
+      db.players[keep.player.toLowerCase()] = entry;
+    } else {
+      const keepEntry = keepInfo.entry, mergeEntry = mergeInfo.entry;
+      const aliasSet = new Set([keepEntry.name, ...(keepEntry.aliases||[])].map(a => a.toLowerCase()));
+      for (const a of [mergeEntry.name, ...(mergeEntry.aliases||[])]) {
+        if (a && !aliasSet.has(a.toLowerCase())) { keepEntry.aliases = [...(keepEntry.aliases||[]), a]; aliasSet.add(a.toLowerCase()); }
+      }
+      if (mergeEntry.topPlayer) keepEntry.topPlayer = true;
+      if (mergeEntry.tags && mergeEntry.tags.length) {
+        keepEntry.tags = [...new Set([...(keepEntry.tags||[]), ...mergeEntry.tags])];
+      }
+      if (mergeEntry.gfwlTeams && mergeEntry.gfwlTeams.length) {
+        keepEntry.gfwlTeams = keepEntry.gfwlTeams || [];
+        const seasonsHave = new Set(keepEntry.gfwlTeams.map(t => (t.season||'').toUpperCase()).filter(Boolean));
+        for (const t of mergeEntry.gfwlTeams) {
+          if (t.season && seasonsHave.has(t.season.toUpperCase())) continue;
+          keepEntry.gfwlTeams.push(t);
+          if (t.season) seasonsHave.add(t.season.toUpperCase());
+        }
+      }
+      if (mergeEntry.eventDecklists && mergeEntry.eventDecklists.length) {
+        keepEntry.eventDecklists = keepEntry.eventDecklists || [];
+        for (const d of mergeEntry.eventDecklists) {
+          const dKey = (d.code || d.eventId || '').toUpperCase();
+          const dupIdx = keepEntry.eventDecklists.findIndex(kd => (kd.code || kd.eventId || '').toUpperCase() === dKey);
+          if (dupIdx < 0) keepEntry.eventDecklists.push(d);
+          else if (!keepEntry.eventDecklists[dupIdx].ydkData && d.ydkData) keepEntry.eventDecklists[dupIdx] = d;
+        }
+      }
+      delete db.players[mergeInfo.key];
+    }
+    playersChanged = true;
+  }
+  if (playersChanged) await saveDB('players');
 
   delete db.batches[merge.id];
   await deleteBatchFromPostgres(merge.id);
@@ -2480,6 +2622,52 @@ const server = http.createServer(async (req, res) => {
     }
     console.log('[data-check/autofix] Done:', linked, 'linked,', skipped, 'skipped,', errors, 'errors');
     return json(res, 200, { ok: true, linked, skipped, errors, batchesUpdated: batchIds.size, details });
+  }
+
+  // ── GET /api/admin/registry-check — read-only report flagging db.players
+  // registry entries that are likely mess: either orphaned (no batch backs
+  // them at all — a leftover from a profile that was deleted, or a stub that
+  // never got a real batch) or near-duplicates of another entry's name (an
+  // Alex Zander / Alez Zander typo-twin that was never merged, or whose
+  // registry rows a merge happened to miss before mergeBatchesInternal
+  // started reconciling db.players — see that function's comment). This is
+  // deliberately report-only: unlike data-check/autofix, there's no safe
+  // automatic action here (deleting a registry row is destructive, and a
+  // "near-duplicate" by name alone could just be two genuinely different
+  // people), so this just surfaces candidates for an admin to review and
+  // merge (via the existing Merge Profile tool) or delete by hand.
+  if (parts[0]==='admin' && parts[1]==='registry-check' && method==='GET') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    const batchNamesLower = new Set();
+    for (const b of Object.values(db.batches)) {
+      const bn = (b.player||'').toLowerCase().trim();
+      if (bn) batchNamesLower.add(bn);
+      for (const a of (b.aliases||[])) { const al = (a||'').toLowerCase().trim(); if (al) batchNamesLower.add(al); }
+    }
+    const entries = Object.entries(db.players); // [key, entry][]
+    const orphaned = [];
+    for (const [key, entry] of entries) {
+      const names = playerNames(entry);
+      if (!names.some(n => batchNamesLower.has(n))) {
+        orphaned.push({ key, name: entry.name, aliases: entry.aliases||[] });
+      }
+    }
+    const nearDuplicates = [];
+    for (let i = 0; i < entries.length; i++) {
+      for (let j = i + 1; j < entries.length; j++) {
+        const [keyA, entryA] = entries[i], [keyB, entryB] = entries[j];
+        const d = levenshteinDistance(entryA.name.toLowerCase(), entryB.name.toLowerCase());
+        // Short threshold (<=2 edits) and skip exact equality (that's a key
+        // collision, not possible here anyway since db.players is keyed by
+        // lowercased name) — tuned to catch typo-twins like "Alex Zander" /
+        // "Alez Zander" (distance 1) without flooding the report with
+        // genuinely different short names.
+        if (d > 0 && d <= 2 && entryA.name.length > 3) {
+          nearDuplicates.push({ a: { key: keyA, name: entryA.name }, b: { key: keyB, name: entryB.name }, distance: d });
+        }
+      }
+    }
+    return json(res, 200, { ok: true, totalPlayers: entries.length, orphaned, nearDuplicates });
   }
 
   // ── POST /api/crosslink/repair-games — fix already-mirrored replays whose
@@ -4473,6 +4661,33 @@ const server = http.createServer(async (req, res) => {
     // that feeds the import preview, before the user's own aliases field
     // comes into play.
     const playerNorm = player.trim().toLowerCase().replace(/_/g, ' ');
+    // Diagnostics — every row FL's own search returns before any filtering
+    // here, and exactly which of the two filters below (format, then exact
+    // name) dropped it, with a small sample of what it actually saw. Without
+    // this, a gap between what the admin sees on Format Library's own site
+    // and what this endpoint returns (e.g. "FL shows 46, we only get 20")
+    // was invisible — the client only ever saw the final, already-filtered
+    // `replays` array, with no way to tell whether the missing ones were a
+    // different format (correctly excluded — this app is GOAT-only), a name
+    // spelling FL has on file that doesn't exactly match what was searched
+    // (a real, fixable gap), or something else entirely.
+    let totalRowsSeen = 0, nonGoatCount = 0, nameMismatchCount = 0;
+    const formatsSeen = new Set();
+    const mismatchSamples = [];
+    // pagesFetched / pageRowCounts — how many /api/replays/subscriber pages
+    // we actually requested and how many raw rows each one came back with,
+    // before any local filtering. This is the key signal for telling apart
+    // "FL really only has this many rows for this filter" from "our own
+    // pagination loop stopped asking FL for more pages too soon" — e.g. a
+    // report of "FL shows 46 but we only import 20" with pagesFetched:2 and
+    // pageRowCounts:[10,10] means FL's own API told us page 2 was the last
+    // page (returned exactly a full page, then would need a page 3 request
+    // we never sent because `rows.length < 10` only fires on a SHORT page —
+    // so a run that stops exactly on a page boundary like this is the one
+    // case this loop can't self-detect; pagesFetched/pageRowCounts make it
+    // visible here instead of silently looking like "that's everything").
+    let pagesFetched = 0;
+    const pageRowCounts = [];
     try {
       const replays = [];
       let eventDatesChanged = false;
@@ -4484,12 +4699,29 @@ const server = http.createServer(async (req, res) => {
         if (status !== 200) return json(res, 502, { error: 'Format Library returned status ' + status });
         let rows;
         try { rows = JSON.parse(body); } catch(e) { return json(res, 502, { error: 'Format Library returned a non-JSON response' }); }
+        pagesFetched++;
+        pageRowCounts.push(Array.isArray(rows) ? rows.length : -1);
         if (!Array.isArray(rows) || !rows.length) break;
         for (const row of rows) {
-          if ((row.formatName||'').toLowerCase() !== 'goat') continue;
+          totalRowsSeen++;
+          if ((row.formatName||'').toLowerCase() !== 'goat') {
+            nonGoatCount++;
+            if (row.formatName) formatsSeen.add(row.formatName);
+            continue;
+          }
           const winnerNorm = (row.winnerName||'').trim().toLowerCase().replace(/_/g, ' ');
           const loserNorm  = (row.loserName||'').trim().toLowerCase().replace(/_/g, ' ');
-          if (winnerNorm !== playerNorm && loserNorm !== playerNorm) continue; // FL substring false-positive — not actually this player
+          if (winnerNorm !== playerNorm && loserNorm !== playerNorm) {
+            // FL substring false-positive — not actually this player. Sample
+            // a few of the actual name pairs seen (capped so a very noisy
+            // substring match, e.g. a short/common username, doesn't blow up
+            // the response) so a REAL near-miss (a spelling variant that
+            // should be added as an alias) is distinguishable from FL's
+            // search just casting a wide net.
+            nameMismatchCount++;
+            if (mismatchSamples.length < 8) mismatchSamples.push({ winner: row.winnerName||'', loser: row.loserName||'' });
+            continue;
+          }
           const eventId = row.eventAbbreviation || '';
           const replayDate = (row.publishDate||'').slice(0, 10);
           // Every replay carries its own event code + exact publish date, so
@@ -4513,7 +4745,11 @@ const server = http.createServer(async (req, res) => {
         await new Promise(r => setTimeout(r, 250));
       }
       if (eventDatesChanged) { try { await saveDB('eventDates'); } catch(e) { console.warn('[EventDates] Save after FL import failed:', e.message); } }
-      return json(res, 200, { ok: true, replays });
+      return json(res, 200, { ok: true, replays, diagnostics: {
+        totalRowsSeen, nonGoatCount, nameMismatchCount,
+        formatsSeen: [...formatsSeen], mismatchSamples,
+        pagesFetched, pageRowCounts,
+      } });
     } catch(e) {
       return json(res, 502, { error: 'Format Library request failed: ' + e.message });
     }

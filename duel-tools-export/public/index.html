@@ -765,7 +765,7 @@ select{cursor:pointer}
     <div id="sidebar-player-search" style="padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0;position:relative">
       <input id="player-search" type="text" placeholder="🔍 Search players..."
         style="font-size:12px;padding:6px 10px;width:100%"
-        oninput="onPlayerSearch(this.value)" onfocus="showPlayerDropdown()" autocomplete="off"/>
+        oninput="debouncedOnPlayerSearch(this.value)" onfocus="showPlayerDropdown()" autocomplete="off"/>
       <div id="player-search-dropdown" style="display:none;position:absolute;left:12px;right:12px;top:100%;background:var(--card);border:1px solid var(--border2);border-radius:6px;z-index:100;max-height:200px;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,.5)"></div>
     </div>
 
@@ -905,7 +905,7 @@ select{cursor:pointer}
           <button id="tc-custom-clear-btn" onclick="clearCustomFilter('tc')" title="Clear Custom filter" style="display:none;align-items:center;gap:4px;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 10px;border-radius:4px;cursor:pointer;white-space:nowrap">✕ Clear</button>
           <div class="slbl" style="margin:0">MIN MATCHES</div>
           <div style="display:flex;align-items:center">
-            <input id="tc-minmatches-input" type="text" inputmode="decimal" value="5" oninput="renderTopCardsTable()"
+            <input id="tc-minmatches-input" type="text" inputmode="decimal" value="5" oninput="debouncedRenderTopCardsTable()"
               title="Minimum matches a card must appear in to be listed — a % of this deck's total matches by default, or a raw count (click the % / # button to switch)"
               style="width:46px;text-align:right;background:var(--card2);border:1px solid var(--border);border-right:none;color:var(--text);font-family:monospace;font-size:12px;padding:6px 6px;border-radius:6px 0 0 6px;outline:none"/>
             <button id="tc-minmatches-unit-btn" onclick="toggleTopCardsMinMatchesUnit()" title="Switch between % of this deck's matches and a raw match count"
@@ -970,7 +970,7 @@ select{cursor:pointer}
           <button id="lb-custom-edit-btn" onclick="openCustomFilterModal('lb')" title="Edit Custom Year/Season/Event filter" style="display:none;align-items:center;gap:4px;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 10px;border-radius:4px;cursor:pointer;white-space:nowrap">✎ Edit Custom Filter</button>
           <button id="lb-custom-clear-btn" onclick="clearCustomFilter('lb')" title="Clear Custom filter" style="display:none;align-items:center;gap:4px;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 10px;border-radius:4px;cursor:pointer;white-space:nowrap">✕ Clear</button>
           <div class="slbl" style="margin:0">MIN MATCHES</div>
-          <input id="lb-minmatches-input" type="text" inputmode="numeric" value="10" oninput="renderLeaderboard()"
+          <input id="lb-minmatches-input" type="text" inputmode="numeric" value="10" oninput="debouncedRenderLeaderboard()"
             title="Minimum decided matches a player must have to be ranked — keeps a 1-0 record from topping the board"
             style="width:46px;text-align:right;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 8px;border-radius:6px;outline:none"/>
           <button id="lb-recompute-btn" onclick="recomputeLeaderboard()" title="Re-fetches from the server instead of reusing the cached replay data (same cache Matchups/Top Cards use)."
@@ -1009,7 +1009,7 @@ select{cursor:pointer}
           <button id="pr-custom-edit-btn" onclick="openCustomFilterModal('pr')" title="Edit Custom Year/Season/Event filter" style="display:none;align-items:center;gap:4px;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 10px;border-radius:4px;cursor:pointer;white-space:nowrap">✎ Edit Custom Filter</button>
           <button id="pr-custom-clear-btn" onclick="clearCustomFilter('pr')" title="Clear Custom filter" style="display:none;align-items:center;gap:4px;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 10px;border-radius:4px;cursor:pointer;white-space:nowrap">✕ Clear</button>
           <div class="slbl" style="margin:0">MIN MATCHES</div>
-          <input id="pr-minmatches-input" type="text" inputmode="numeric" value="100" oninput="renderPowerRankings()"
+          <input id="pr-minmatches-input" type="text" inputmode="numeric" value="100" oninput="debouncedRenderPowerRankings()"
             title="Minimum decided non-mirror matches a deck type must have to be ranked — keeps a tiny sample from landing in S or D tier on noise"
             style="width:46px;text-align:right;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 8px;border-radius:6px;outline:none"/>
           <div style="display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px">
@@ -6442,10 +6442,19 @@ function pickBetterReplayCopy(a, b) {
 }
 
 async function selectPlayerBatches(ids) {
-  // Fetch all batches for this player and merge replays (deduplicated)
+  // Fetch all batches for this player and merge replays (deduplicated).
+  // Routed through getBatchesByIds (checks the all-full cache first, one
+  // bulk request for whatever's left) instead of firing one live
+  // /batches/:id round trip per id — this runs on every "open a
+  // multi-batch player from the sidebar" click, previously N serialized DB
+  // reads per click against the server's single-connection bottleneck.
   try {
-    const batches = await Promise.all(ids.map(id => fetch(API+'/batches/'+id).then(r=>r.json())));
-    const primary = batches[0];
+    const batches = await getBatchesByIds(ids);
+    // getBatchesByIds doesn't guarantee it preserves `ids`' order (cached
+    // hits and freshly-fetched ones can interleave), so find the primary
+    // explicitly rather than assuming batches[0] === ids[0].
+    const primary = batches.find(b => b.id === ids[0]) || batches[0];
+    if (!primary) { st('Failed to load batches', 'var(--red)'); return; }
     const seenIds = new Set();
     const mergedReplays = [];
     for (const b of batches) {
@@ -6634,7 +6643,11 @@ async function go() {
       ));
       const regNamesNorm = regEntry ? [regEntry.name, ...(regEntry.aliases||[])].map(a => (a||'').trim().toLowerCase()).filter(Boolean) : [];
       const wantedNames = new Set([playerNorm, ...typedAliasesNorm, ...regNamesNorm].filter(Boolean));
-      const allFull = await fetch(API+'/batches/all-full').then(r=>r.json()).catch(()=>[]);
+      // getAllBatchesFull() instead of a raw fetch — same payload, but reuses
+      // the shared cache (invalidated on every actual batch write) instead
+      // of re-downloading and re-parsing the whole system's batch+replay
+      // dataset every time this existing-batch lookup runs.
+      const allFull = await getAllBatchesFull().catch(() => []);
       const existingBatches = allFull.filter(b => {
         const bNames = [(b.player||'').trim().toLowerCase(), ...((b.aliases||[]).map(a => (a||'').trim().toLowerCase()))];
         return bNames.some(n => n && wantedNames.has(n));
@@ -7345,15 +7358,38 @@ async function flFetchPreview() {
       fetchBtn.disabled = false; return;
     }
 
-    // Collect replayIds already saved for the Duel Tools player so we can skip duplicates
+    // Collect replayIds already saved for the Duel Tools player so we can
+    // skip duplicates — alias-aware, matched against every batch (not just
+    // an exact lowercase string match on dtPlayer). This was the same bug
+    // class as go()'s own "find existing batch" lookup (now fixed there):
+    // a strict exact-name match here meant a batch saved under a slightly
+    // different spelling, or under one of this player's known aliases
+    // instead of their primary name, was invisible to this check — its
+    // replays were never recognized as "already have this", so on one hand
+    // they'd re-show as "new" every time (harmless re-import), but on the
+    // other, if THAT mismatched batch actually held some of this player's
+    // real saved replays while this check kept missing it, nothing here
+    // ever told the admin those replays existed at all — which is exactly
+    // what "the tool isn't grabbing all of this player's replays" looks
+    // like from the outside, even though Format Library genuinely has them
+    // and an earlier import genuinely saved them (just under a batch this
+    // lookup couldn't find). Uses /batches/all-full (has every batch's own
+    // .aliases — the lightweight /batches list doesn't) instead of a
+    // separate getBatchesByIds round trip.
     const existingIds = new Set();
     try {
-      // Lightweight list (cheap, no replay data) filtered to this one
-      // player, then only THIS player's full batch data — not the whole
-      // system's, which getAllBatchesFull() would be here.
-      const lightList = await fetch(API+'/batches').then(r=>r.json()).catch(()=>[]);
-      const mineIds = lightList.filter(b => (b.player||'').toLowerCase() === dtPlayer.toLowerCase()).map(b=>b.id);
-      const mine = await getBatchesByIds(mineIds);
+      const playerNorm = dtPlayer.trim().toLowerCase();
+      const regEntry = window._playerRegistry && window._playerRegistry[playerNorm];
+      const regAliasesNorm = regEntry ? (regEntry.aliases||[]).map(a => (a||'').trim().toLowerCase()) : [];
+      const typedAliasesNorm = (document.getElementById('fl-aliases-inp')?.value||'').split(',').map(a=>a.trim().toLowerCase()).filter(Boolean);
+      const wantedNames = new Set([playerNorm, ...regAliasesNorm, ...typedAliasesNorm].filter(Boolean));
+      // getAllBatchesFull() instead of a raw fetch — see the matching
+      // comment in go()'s existing-batch lookup above; same reasoning here.
+      const allFull = await getAllBatchesFull().catch(() => []);
+      const mine = allFull.filter(b => {
+        const bNames = [(b.player||'').trim().toLowerCase(), ...((b.aliases||[]).map(a => (a||'').trim().toLowerCase()))];
+        return bNames.some(n => n && wantedNames.has(n));
+      });
       for (const b of mine) for (const r of (b.replays||[])) existingIds.add(r.replayId);
     } catch(e) {}
 
@@ -7402,6 +7438,44 @@ async function flFetchPreview() {
       '<div><b>'+deckCandidates.length+'</b> new decklist(s) found on Format Library</div>'+
       '<div style="color:var(--muted);margin-top:4px">Will be saved under Duel Tools player: <b>'+dtPlayer+'</b></div>';
     previewEl.appendChild(summary);
+
+    // Diagnostics — explains any gap between what Format Library's own
+    // search returned in total and the flReplays.length this app ended up
+    // with (e.g. "FL shows 46 for this player, this tool only found 20"):
+    // breaks it down into non-GOAT rows (correctly excluded — this app is
+    // GOAT-only) vs. rows that matched the FL search but not the exact
+    // name check (a real, fixable gap — shows the actual name spellings
+    // seen so the right one can be added as an alias and re-fetched).
+    const diag = data.diagnostics;
+    if (diag && diag.totalRowsSeen > flReplays.length) {
+      const diagBox = document.createElement('div');
+      diagBox.style.cssText = 'background:var(--card2);border:1px solid var(--amber);border-radius:8px;padding:12px;font-size:12px;line-height:1.7;color:var(--text);margin-top:10px';
+      let html = '<div style="color:var(--amber);font-weight:bold">ℹ Format Library returned '+diag.totalRowsSeen+' total row(s) for "'+_escapeHtml(flUser)+'" — only '+flReplays.length+' ended up usable:</div>';
+      if (diag.nonGoatCount) html += '<div>&nbsp;&nbsp;• '+diag.nonGoatCount+' row(s) were not GOAT format'+(diag.formatsSeen.length?' ('+diag.formatsSeen.map(_escapeHtml).join(', ')+')':'')+' — correctly excluded, this app is GOAT-only.</div>';
+      if (diag.nameMismatchCount) {
+        html += '<div>&nbsp;&nbsp;• '+diag.nameMismatchCount+' GOAT row(s) matched Format Library\'s search but neither side\'s name exactly matched "'+_escapeHtml(flUser)+'" — these are the ones likely missing. Sample of the actual names seen:</div>';
+        diag.mismatchSamples.forEach(s => {
+          html += '<div style="color:var(--muted);margin-left:14px">— '+_escapeHtml(s.winner)+' vs '+_escapeHtml(s.loser)+'</div>';
+        });
+        html += '<div style="color:var(--muted);margin-top:4px">If one of these is really the same player under a different spelling, add it in the Format Library Username field above (or as an alias) and fetch again.</div>';
+      }
+      diagBox.innerHTML = html;
+      previewEl.appendChild(diagBox);
+    }
+    // Technical line — always shown (regardless of whether the counts above
+    // explain the full gap), so a case like "Format Library's own site shows
+    // 46 for this exact username, all GOAT, but this tool only ever asked
+    // for N pages / M raw rows" is visible even when nonGoatCount and
+    // nameMismatchCount are both 0 — i.e. when the gap isn't a filtering
+    // problem at all but this tool's own pagination loop stopping its
+    // requests to Format Library before reaching the true end of this
+    // player's results.
+    if (diag && diag.pagesFetched) {
+      const pageLine = document.createElement('div');
+      pageLine.style.cssText = 'color:var(--muted);font-size:11px;margin-top:6px';
+      pageLine.textContent = 'Format Library pages requested: ' + diag.pagesFetched + ' (raw row counts per page: ' + diag.pageRowCounts.join(', ') + ')';
+      previewEl.appendChild(pageLine);
+    }
 
     const confirmBtn = document.createElement('button');
     confirmBtn.className = 'btn-go';
@@ -21979,6 +22053,34 @@ function editLogDebouncedLoad() {
   _editLogDebounce = setTimeout(loadEditLog, 300);
 }
 
+// Generic debounce — wraps a function so rapid-fire calls (e.g. every
+// keystroke in a text input) collapse into one call `ms` after the last
+// one, instead of running the wrapped function on every single keystroke.
+// Each distinct `key` gets its own independent timer, so the same debounce()
+// can be reused by several different inputs without them canceling each
+// other's pending calls.
+const _debounceTimers = {};
+function debounce(key, fn, ms) {
+  return function(...args) {
+    clearTimeout(_debounceTimers[key]);
+    _debounceTimers[key] = setTimeout(() => fn.apply(this, args), ms);
+  };
+}
+// Top Cards / Leaderboard / Power Rankings' min-matches inputs each
+// recompute by scanning the ENTIRE saved replay history on every change —
+// fine on an explicit submit, wasteful on every keystroke while typing a
+// number (e.g. backspacing "5" then typing "15" re-ran the full scan twice).
+// 250ms is short enough that a deliberate typing pause still feels instant,
+// long enough to collapse a multi-keystroke edit into one recompute.
+const debouncedRenderTopCardsTable = debounce('tc-minmatches', () => renderTopCardsTable(), 250);
+const debouncedRenderLeaderboard = debounce('lb-minmatches', () => renderLeaderboard(), 250);
+const debouncedRenderPowerRankings = debounce('pr-minmatches', () => renderPowerRankings(), 250);
+// Player search's sidebar dropdown rebuilds every batch-list row from
+// scratch on each call — 150ms (shorter than the 250ms above, since this is
+// a smaller rebuild and feels the most "live" of the four) still collapses
+// fast typing into far fewer rebuilds without feeling laggy.
+const debouncedOnPlayerSearch = debounce('player-search', (val) => onPlayerSearch(val), 150);
+
 // Builds the one-line, action-specific detail string for a log entry — the
 // part that actually answers "what was added/changed," e.g. the event id
 // for a replay or decklist, the score for an override, the merged replay
@@ -22439,6 +22541,13 @@ async function loadMergeProfilesSection(el) {
         'in case one needs to be merged in by hand.' +
       '</div>' +
     '</div>' +
+    '<div style="margin-bottom:16px">' +
+      '<button id="registry-check-btn" onclick="loadRegistryCheck()" ' +
+        'style="background:var(--card2);border:1px solid var(--border2);color:var(--text);font-family:monospace;font-size:12.5px;padding:8px 14px;border-radius:6px;cursor:pointer">' +
+        '🔍 Find Duplicate / Orphaned Profiles' +
+      '</button>' +
+      '<div id="registry-check-results" style="margin-top:10px"></div>' +
+    '</div>' +
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">' +
       '<div>' +
         '<div style="font-size:11px;color:var(--green);margin-bottom:6px;font-weight:bold;letter-spacing:.06em">KEEP (survives)</div>' +
@@ -22466,6 +22575,74 @@ async function loadMergeProfilesSection(el) {
   mergePopulateSelect('merge-away-select', '');
 }
 
+// ── Registry Check — read-only scan for likely player-registry mess:
+// entries with no batch backing them at all (orphaned), and pairs of names
+// close enough to be typo-twins of each other (e.g. "Alex Zander" / "Alez
+// Zander") that were never merged, or whose registry rows a merge happened
+// to miss before mergeBatchesInternal started reconciling db.players too.
+// Report-only server side (GET /admin/registry-check) — this just renders
+// it and, for a near-duplicate pair where BOTH names have a real batch,
+// offers a one-click "Select for Merge" that pre-fills the pickers above
+// rather than taking any destructive action itself.
+async function loadRegistryCheck() {
+  const btn = document.getElementById('registry-check-btn');
+  const out = document.getElementById('registry-check-results');
+  if (!out) return;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Checking...'; }
+  out.innerHTML = '<div style="color:var(--muted);font-size:12.5px">Scanning player registry…</div>';
+  try {
+    const res = await fetch(API+'/admin/registry-check', { headers: authHeaders() });
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok) { out.innerHTML = '<div style="color:var(--red);font-size:12.5px">'+_escapeHtml(data.error||('HTTP '+res.status))+'</div>'; return; }
+    if (!data.orphaned.length && !data.nearDuplicates.length) {
+      out.innerHTML = '<div style="color:var(--green);font-size:12.5px">✓ No orphaned or likely-duplicate registry entries found ('+data.totalPlayers+' total).</div>';
+      return;
+    }
+    let html = '<div style="background:var(--card2);border:1px solid var(--amber);border-radius:8px;padding:12px;font-size:12.5px;line-height:1.7">';
+    if (data.nearDuplicates.length) {
+      html += '<div style="color:var(--amber);font-weight:bold;margin-bottom:4px">Likely duplicate pairs ('+data.nearDuplicates.length+')</div>';
+      data.nearDuplicates.forEach((d, i) => {
+        html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">' +
+          '<span>'+_escapeHtml(d.a.name)+' ↔ '+_escapeHtml(d.b.name)+' <span style="color:var(--muted)">(edit distance '+d.distance+')</span></span>' +
+          '<button onclick="registryCheckSelectForMerge('+i+')" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:3px 8px;border-radius:5px;cursor:pointer">Select for Merge</button>' +
+          '</div>';
+      });
+    }
+    if (data.orphaned.length) {
+      html += '<div style="color:var(--amber);font-weight:bold;margin:'+(data.nearDuplicates.length?'10px':'0')+' 0 4px">Orphaned entries — no batch backs these ('+data.orphaned.length+')</div>';
+      data.orphaned.forEach(o => {
+        html += '<div style="color:var(--muted)">'+_escapeHtml(o.name)+(o.aliases.length?' (aka '+o.aliases.map(_escapeHtml).join(', ')+')':'')+'</div>';
+      });
+      html += '<div style="color:var(--muted);margin-top:4px">These have no replays to merge — if one is really stale, an admin can remove it directly (DELETE /api/players/:name is destructive and not wired to a button here on purpose).</div>';
+    }
+    html += '</div>';
+    out.innerHTML = html;
+    window._registryCheckData = data;
+  } catch(e) {
+    out.innerHTML = '<div style="color:var(--red);font-size:12.5px">Failed: '+_escapeHtml(e.message)+'</div>';
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔍 Find Duplicate / Orphaned Profiles'; }
+  }
+}
+function registryCheckSelectForMerge(idx) {
+  const d = window._registryCheckData && window._registryCheckData.nearDuplicates[idx];
+  if (!d) return;
+  const findBatch = name => _mergeState.all.find(b => (b.player||b.name||'').toLowerCase() === name.toLowerCase());
+  const keepBatch = findBatch(d.a.name), awayBatch = findBatch(d.b.name);
+  if (!keepBatch || !awayBatch) {
+    const missing = !keepBatch ? d.a.name : d.b.name;
+    alert('"'+missing+'" has no batch of its own to select here (it\'s an orphaned registry entry with no replays) — nothing to merge. If it\'s genuinely stale, it can only be removed directly, not merged.');
+    return;
+  }
+  document.getElementById('merge-keep-filter').value = '';
+  document.getElementById('merge-away-filter').value = '';
+  mergePopulateSelect('merge-keep-select', '');
+  mergePopulateSelect('merge-away-select', '');
+  document.getElementById('merge-keep-select').value = keepBatch.id;
+  document.getElementById('merge-away-select').value = awayBatch.id;
+  mergeUpdatePreview();
+  document.getElementById('merge-keep-select').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
 function mergePopulateSelect(selectId, filterText) {
   const sel = document.getElementById(selectId);
   if (!sel) return;
@@ -23232,9 +23409,20 @@ function exportBadAliasesCsv() {
 // reached from the Admin tab where nothing player-specific is loaded yet, so
 // both look the right batch up fresh by player name + replayId first.
 
+// Routed through getAllBatchesFull() (shared cache, invalidated on real
+// batch writes) instead of a raw fetch — this is called once per row by
+// adminReparseAll/adminOmitAll below, which run over however many rows
+// Check & Fix Data flagged (comment there says "a few hundred"). A raw
+// fetch here meant each of those rows re-downloaded and re-parsed the
+// ENTIRE system's batch+replay dataset, serially, just to look up one
+// already-known player's one already-known batch — by far the single most
+// wasteful call site found in this app's 2026-11 efficiency audit. Neither
+// adminReparseReplay nor adminOmitReplay invalidate this cache mid-loop (the
+// server-side PATCHes they make don't touch which batches/replays EXIST,
+// just fields on one replay each), so the whole bulk run now shares one
+// fetched payload instead of one per row.
 async function _findBatchForReplay(playerName, replayId) {
-  const res = await fetch(API + '/batches/all-full');
-  const list = await res.json();
+  const list = await getAllBatchesFull();
   return (Array.isArray(list) ? list : []).find(b =>
     (b.player || '').toLowerCase() === String(playerName || '').toLowerCase() &&
     (b.replays || []).some(r => r.replayId === replayId)
