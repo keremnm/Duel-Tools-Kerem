@@ -1203,6 +1203,7 @@ select{cursor:pointer}
                 <div class="slbl" style="margin:0">EVENT DECKLISTS</div>
                 <div style="display:flex;gap:4px;margin-left:auto">
                   <button onclick="triggerYDKImport()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:4px;cursor:pointer" title="Import YDK files">⬆ YDK</button>
+                  <button onclick="flImportYdkForProfile()" style="background:none;border:1px solid var(--purple,#a78bfa);color:var(--purple,#a78bfa);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:4px;cursor:pointer" title="Fetch this player's decklist for an event straight from Format Library">📥 FL YDK</button>
                   <button onclick="reclassifyAllDecklists()" style="background:none;border:1px solid var(--border);color:var(--amber);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:4px;cursor:pointer" title="Re-classify all YDK decklists">↺ Types</button>
                   <button onclick="showAddEventDecklist()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:4px;cursor:pointer">+ Add</button>
                   <input type="file" id="ydk-import-input" accept=".ydk" multiple style="display:none" onchange="handleYDKImport(this)"/>
@@ -7397,16 +7398,41 @@ async function flFetchPreview() {
     // TO's slightly different spelling) had replays under those other
     // spellings invisible here even when this app already knew they were
     // the same person.
-    const aliasesForSearch = (document.getElementById('fl-aliases-inp')?.value||'').split(',').map(a=>a.trim()).filter(Boolean);
-    const flUrl = API+'/proxy/fl-replays?player='+encodeURIComponent(flUser)
-      + (aliasesForSearch.length ? '&aliases='+encodeURIComponent(aliasesForSearch.join(',')) : '');
-    const res = await fetch(flUrl, { headers: authHeaders() });
-    const data = await res.json().catch(()=>({}));
-    if (!res.ok) {
+    let aliasesForSearch = (document.getElementById('fl-aliases-inp')?.value||'').split(',').map(a=>a.trim()).filter(Boolean);
+    const flFetchOnce = async (names) => {
+      const u = API+'/proxy/fl-replays?player='+encodeURIComponent(flUser)
+        + (names.length ? '&aliases='+encodeURIComponent(names.join(',')) : '');
+      const r = await fetch(u, { headers: authHeaders() });
+      const d = await r.json().catch(()=>({}));
+      return { ok: r.ok, status: r.status, data: d };
+    };
+    let { ok, status, data } = await flFetchOnce(aliasesForSearch);
+    if (!ok) {
       statusEl.style.color = 'var(--red)';
-      statusEl.textContent = data.error || ('Format Library request failed (HTTP '+res.status+')');
+      statusEl.textContent = data.error || ('Format Library request failed (HTTP '+status+')');
       fetchBtn.disabled = false; return;
     }
+
+    // Check for a "close name" Format Library also has on file (e.g. typed
+    // in as "Flosel", FL actually has "Flosel74") among the rows its own
+    // substring search surfaced but didn't exactly match — see
+    // flExtractCloseNameCandidates. Skip anything that already resolves to
+    // a DIFFERENT existing Duel Tools profile (that name genuinely belongs
+    // to someone else already tracked — never silently merge it here); for
+    // anything left, widen the search once more and fold the extra hits in,
+    // updating the visible Aliases field so it's obvious what was added
+    // (and still editable/removable before anything is actually imported).
+    const searchedNames = [flUser, ...aliasesForSearch];
+    const closeCandidates = flExtractCloseNameCandidates(data.diagnostics && data.diagnostics.mismatchSamples, searchedNames)
+      .filter(c => !flFindMatchingProfileKeys(c, dtPlayer.trim().toLowerCase()).length);
+    if (closeCandidates.length) {
+      aliasesForSearch = [...new Set([...aliasesForSearch, ...closeCandidates])];
+      document.getElementById('fl-aliases-inp').value = aliasesForSearch.join(', ');
+      statusEl.textContent = 'Found close match'+(closeCandidates.length>1?'es':'')+' on Format Library: '+closeCandidates.join(', ')+' — re-searching with '+(closeCandidates.length>1?'them':'it')+' included…';
+      const widened = await flFetchOnce(aliasesForSearch);
+      if (widened.ok) { ok = widened.ok; status = widened.status; data = widened.data; }
+    }
+
     const flReplays = data.replays || [];
     if (!flReplays.length) {
       statusEl.style.color = 'var(--amber)';
@@ -7492,7 +7518,8 @@ async function flFetchPreview() {
     summary.innerHTML =
       '<div><b>'+newReplays.length+'</b> new replay(s) to import'+(skippedExisting?' <span style="color:var(--muted)">('+skippedExisting+' already in '+dtPlayer+'’s batch, skipped)</span>':'')+'</div>'+
       '<div><b>'+deckCandidates.length+'</b> new decklist(s) found on Format Library</div>'+
-      '<div style="color:var(--muted);margin-top:4px">Will be saved under Duel Tools player: <b>'+dtPlayer+'</b></div>';
+      '<div style="color:var(--muted);margin-top:4px">Will be saved under Duel Tools player: <b>'+dtPlayer+'</b></div>'+
+      (closeCandidates.length ? '<div style="color:var(--green);margin-top:4px">🔎 Found close name match'+(closeCandidates.length>1?'es':'')+' on Format Library not already in the Aliases field: <b>'+closeCandidates.map(_escapeHtml).join(', ')+'</b> — automatically added above and included in this search.</div>' : '');
     previewEl.appendChild(summary);
 
     // Diagnostics — explains any gap between what Format Library's own
@@ -7659,6 +7686,80 @@ async function flConfirmImport() {
 // (matches go()'s own convention exactly, line ~6763 above).
 let _flEventImportData = null; // { eventId, name, date, decks } — set by preview, consumed by run
 let _flBrowsePage = 1;
+// Keeps the full diagnostic log of the most recently run event import in
+// memory — plain-text lines alongside the rendered HTML ones — so it can
+// still be reviewed (and downloaded as a .txt, independent of this browser
+// tab/session) after the admin closes the import modal, instead of the log
+// vanishing with the overlay the instant it's dismissed. Survives until the
+// next import run overwrites it, or the page is reloaded.
+let _flEventImportLastLog = null; // { eventId, startedAt, finishedAt, lines:[{html,text}] }
+
+// ── Shared "close name" matching for Format Library imports ──────────────
+// Format Library's own search is substring-based (see /proxy/fl-replays'
+// own comment: searching "Chen" can surface "Grumplestielzchen"), and the
+// exact-name filter downstream of that correctly throws those false
+// positives away — but it throws away REAL near-misses the exact same way:
+// a player typed in as "Flosel" whose actual Format Library handle is
+// "Flosel74" never gets picked up, because "Flosel74" !== "Flosel", even
+// though it's obviously the same person under a slightly different handle.
+// This is deliberately conservative — ONE name being a PREFIX of the other
+// (e.g. "Flosel" / "Flosel74", "Flosel" / "FloselFL") — not any substring
+// match anywhere in the name, and not a fuzzy/edit-distance match. A plain
+// substring check would flag this app's own stock example of a Format
+// Library false positive ("Chen" is a substring of "Grumplestielzchen",
+// right at the end of it) as a "close match" too, which is exactly the
+// noise this is meant to filter OUT, not reproduce — prefix-only avoids
+// that case while still catching the common real pattern (a base handle
+// plus a numeric suffix, an extra tag, a rename that only appended
+// characters). The cost of a wrong auto-match here is silently attaching
+// one real player's replays to a different real player's profile, so this
+// stays narrow on purpose.
+function flIsCloseNameMatch(a, b) {
+  const na = (a||'').trim().toLowerCase().replace(/_/g, ' ');
+  const nb = (b||'').trim().toLowerCase().replace(/_/g, ' ');
+  if (!na || !nb || na === nb) return false;
+  if (na.length < 4 || nb.length < 4) return false;
+  return nb.startsWith(na) || na.startsWith(nb);
+}
+
+// Given a name, finds every OTHER already-registered Duel Tools profile
+// (window._playerRegistry) whose own name or one of its known aliases is a
+// close match to it (flIsCloseNameMatch) — used both to auto-attach an
+// unmatched Format Library bracket builder to an existing profile (same
+// person, new handle) and, just as importantly, to recognize when a
+// near-match name actually already belongs to someone ELSE entirely, so
+// that name is never silently folded into the wrong player's data.
+// `excludeKey` (lowercased registry key) skips a profile that's already
+// known to be the right one (e.g. the player currently being processed),
+// so an exact-or-close match against its OWN name/aliases doesn't count as
+// an "other candidate".
+function flFindMatchingProfileKeys(name, excludeKey) {
+  const out = [];
+  if (!name || !window._playerRegistry) return out;
+  for (const key of Object.keys(window._playerRegistry)) {
+    if (excludeKey && key === excludeKey) continue;
+    const reg = window._playerRegistry[key];
+    if (!reg) continue;
+    const names = [reg.name || key, ...((reg.aliases)||[])];
+    if (names.some(n => flIsCloseNameMatch(name, n))) out.push(key);
+  }
+  return out;
+}
+
+// Pulls candidate "close name" strings out of a /proxy/fl-replays
+// diagnostics payload's mismatchSamples (the winner/loser name pairs FL's
+// own substring search surfaced but the exact-name filter rejected) that
+// are a close match to any of the names actually searched — i.e. the
+// "Flosel"/"Flosel74" signal, extracted from data the server was already
+// computing and returning, just not acted on until now.
+function flExtractCloseNameCandidates(mismatchSamples, searchNames) {
+  const candidates = new Set();
+  const rawNames = (mismatchSamples||[]).flatMap(s => [s && s.winner, s && s.loser]).filter(Boolean);
+  for (const n of rawNames) {
+    if ((searchNames||[]).some(sn => flIsCloseNameMatch(sn, n))) candidates.add(n);
+  }
+  return [...candidates];
+}
 
 function openFLEventImport() {
   if (!isMinerRole(_userRole)) { st('Miners and above only', 'var(--red)'); return; }
@@ -7691,8 +7792,10 @@ function openFLEventImport() {
       <button onclick="flEventImportToggleBrowse()" id="fl-event-import-browse-toggle" style="background:none;border:1px solid var(--border);color:var(--muted);font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer">▾ Browse recent GOAT events</button>
       <div id="fl-event-import-browse-list" style="display:none;margin-top:8px;max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:8px"></div>
     </div>
+    <div id="fl-event-import-last-log-banner"></div>
     <div id="fl-event-import-status" style="font-size:12px;color:var(--muted)"></div>
     <div id="fl-event-import-preview" style="display:none;flex-direction:column;gap:10px"></div>
+    <div id="fl-event-import-log-toolbar" style="display:none;gap:6px;align-items:center"></div>
     <div id="fl-event-import-progress" style="display:none;flex-direction:column;gap:3px;max-height:260px;overflow-y:auto;background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:10px"></div>
   `;
   overlay.appendChild(box);
@@ -7700,6 +7803,106 @@ function openFLEventImport() {
   const idInp = document.getElementById('fl-event-import-id-inp');
   idInp.addEventListener('keydown', e => { if (e.key === 'Enter') flEventImportPreview(); });
   idInp.focus();
+
+  // If a previous import run's log is still in memory (this run, or an
+  // earlier one this session), offer it right away — this is what lets the
+  // diagnostic log actually be "looked at after completion": closing this
+  // modal doesn't lose it, only the next import run (or a page reload) does.
+  flRenderLastImportLogBanner();
+}
+
+// Small banner offering the most recently run import's log, shown every
+// time this modal opens (including right after closing it mid-review) —
+// see _flEventImportLastLog above for what it holds and how long it lasts.
+function flRenderLastImportLogBanner() {
+  const banner = document.getElementById('fl-event-import-last-log-banner');
+  if (!banner) return;
+  if (!_flEventImportLastLog) { banner.innerHTML = ''; return; }
+  const L = _flEventImportLastLog;
+  const ago = flRelativeTime(L.finishedAt || L.startedAt);
+  const statusWord = L.finishedAt ? 'Finished' : 'Started (did not finish)';
+  banner.innerHTML = '';
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;gap:8px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:11px;color:var(--muted)';
+  const lbl = document.createElement('span');
+  lbl.style.flex = '1';
+  lbl.textContent = statusWord+' import of '+L.eventId+' — '+ago;
+  row.appendChild(lbl);
+  const viewBtn = document.createElement('button');
+  viewBtn.textContent = '👁 View Log';
+  viewBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer;white-space:nowrap';
+  viewBtn.onclick = () => flShowImportLog(_flEventImportLastLog);
+  row.appendChild(viewBtn);
+  banner.appendChild(row);
+}
+
+// "Just now" / "3m ago" / "2h ago" / "5d ago" — good enough resolution for
+// "how stale is this log I'm looking at", nothing fancier needed here.
+function flRelativeTime(ts) {
+  if (!ts) return '';
+  const sec = Math.max(0, Math.floor((Date.now()-ts)/1000));
+  if (sec < 60) return 'just now';
+  const min = Math.floor(sec/60);
+  if (min < 60) return min+'m ago';
+  const hr = Math.floor(min/60);
+  if (hr < 24) return hr+'h ago';
+  return Math.floor(hr/24)+'d ago';
+}
+
+// Renders a past (or still-running) import log's lines into the progress
+// panel without re-running anything — used both by the "👁 View Log" banner
+// button above and, at the end of a live run, to leave the just-finished
+// log in exactly this same reviewable state.
+function flShowImportLog(logEntry) {
+  const previewEl = document.getElementById('fl-event-import-preview');
+  const progressEl = document.getElementById('fl-event-import-progress');
+  const toolbarEl = document.getElementById('fl-event-import-log-toolbar');
+  const statusEl = document.getElementById('fl-event-import-status');
+  if (!progressEl || !logEntry) return;
+  if (previewEl) previewEl.style.display = 'none';
+  progressEl.style.display = 'flex';
+  progressEl.innerHTML = '';
+  logEntry.lines.forEach(ln => { const d = document.createElement('div'); d.innerHTML = ln.html; progressEl.appendChild(d); });
+  if (statusEl) {
+    statusEl.style.color = 'var(--muted)';
+    statusEl.textContent = (logEntry.finishedAt ? 'Import log for ' : 'Partial import log (did not finish) for ')+logEntry.eventId+' — '+flRelativeTime(logEntry.finishedAt||logEntry.startedAt)+'.';
+  }
+  flMountLogToolbar(toolbarEl, logEntry);
+}
+
+// Download/Copy buttons for a log entry — plain text only (the HTML
+// formatting is just color-coding for on-screen reading). This is the part
+// that makes the log genuinely reviewable "after completion": a .txt file
+// saved to disk outlives this browser tab entirely, not just this modal.
+function flMountLogToolbar(toolbarEl, logEntry) {
+  if (!toolbarEl) return;
+  toolbarEl.style.display = 'flex';
+  toolbarEl.innerHTML = '';
+  const plainText = () => 'Format Library event import log — '+logEntry.eventId+'\nStarted: '+new Date(logEntry.startedAt).toLocaleString()+
+    (logEntry.finishedAt ? ('\nFinished: '+new Date(logEntry.finishedAt).toLocaleString()) : '\n(did not finish)')+'\n\n'+
+    logEntry.lines.map(ln => ln.text).filter(Boolean).join('\n');
+  const dlBtn = document.createElement('button');
+  dlBtn.textContent = '⬇ Download Log';
+  dlBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer;white-space:nowrap';
+  dlBtn.onclick = () => {
+    const blob = new Blob([plainText()], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'fl-import-'+logEntry.eventId+'-'+new Date(logEntry.startedAt).toISOString().slice(0,19).replace(/[:T]/g,'-')+'.txt';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
+  const copyBtn = document.createElement('button');
+  const copyDefault = '📋 Copy Log';
+  copyBtn.textContent = copyDefault;
+  copyBtn.style.cssText = dlBtn.style.cssText;
+  copyBtn.onclick = () => {
+    navigator.clipboard.writeText(plainText()).then(() => {
+      copyBtn.textContent = '✓ Copied'; setTimeout(()=>copyBtn.textContent=copyDefault, 1500);
+    }).catch(() => { copyBtn.textContent = 'Copy failed'; setTimeout(()=>copyBtn.textContent=copyDefault, 1500); });
+  };
+  toolbarEl.appendChild(dlBtn);
+  toolbarEl.appendChild(copyBtn);
 }
 
 async function flEventImportToggleBrowse() {
@@ -7823,15 +8026,88 @@ async function flFetchAndParseReplay(replayId, playerName, aliases, eventLabel, 
   };
 }
 
+// Renders the end-of-run "which profile, if any, does this close-matching
+// builder name belong to?" review list — one row per ambiguous name found
+// during flEventImportRun, a dropdown of its candidate existing profiles
+// (plus "don't attach"), and a single Apply button that saves the chosen
+// alias(es) all at once. Saving here only persists the alias — it does NOT
+// retroactively pull in that player's replays for this run; the admin
+// re-runs the import afterward (same event ID) and the normal matched-
+// profile path picks them up, now that the name resolves exactly.
+function flRenderUnsureMatches(progressEl, log, unsureMatches) {
+  if (!unsureMatches.length) return;
+  const box = document.createElement('div');
+  box.style.cssText = 'margin-top:10px;background:var(--card2);border:1px solid var(--amber);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:8px';
+  const title = document.createElement('div');
+  title.style.cssText = 'color:var(--amber);font-weight:bold;font-size:12px';
+  title.textContent = '❓ '+unsureMatches.length+' bracket name(s) need a decision — close match to more than one existing profile:';
+  box.appendChild(title);
+  const rows = [];
+  unsureMatches.forEach(um => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:11px';
+    const lbl = document.createElement('span');
+    lbl.style.cssText = 'flex:1;color:var(--text);font-family:monospace';
+    lbl.textContent = um.builderName;
+    const sel = document.createElement('select');
+    sel.style.cssText = 'background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:3px 6px;border-radius:4px';
+    const noneOpt = document.createElement('option'); noneOpt.value = ''; noneOpt.textContent = "Don't attach — leave as new/pending";
+    sel.appendChild(noneOpt);
+    um.candidates.forEach(c => { const o = document.createElement('option'); o.value = c.key; o.textContent = 'Attach to: '+c.name; sel.appendChild(o); });
+    row.appendChild(lbl); row.appendChild(sel);
+    box.appendChild(row);
+    rows.push({ um, sel });
+  });
+  const applyBtn = document.createElement('button');
+  applyBtn.textContent = 'Apply Selected';
+  applyBtn.className = 'btn-go';
+  applyBtn.style.cssText = 'font-size:11px;padding:6px';
+  applyBtn.onclick = async () => {
+    applyBtn.disabled = true; applyBtn.textContent = 'Applying…';
+    let applied = 0;
+    for (const { um, sel } of rows) {
+      if (!sel.value) continue;
+      const chosen = um.candidates.find(c => c.key === sel.value);
+      if (!chosen) continue;
+      try {
+        const reg = (window._playerRegistry && window._playerRegistry[chosen.key]) || { name: chosen.name, aliases: [] };
+        const mergedAliases = [...new Set([...(reg.aliases||[]), um.builderName])];
+        await fetch(API+'/players/'+encodeURIComponent(chosen.name)+'/aliases', { method:'PATCH', headers: authHeaders(), body: JSON.stringify({ aliases: mergedAliases }) });
+        if (chosen.batchId) await fetch(API+'/batches/'+chosen.batchId, { method:'PATCH', headers: authHeaders(), body: JSON.stringify({ aliases: mergedAliases }) });
+        if (!window._playerRegistry) window._playerRegistry = {};
+        window._playerRegistry[chosen.key] = { ...reg, name: chosen.name, aliases: mergedAliases };
+        applied++;
+      } catch(e) {}
+    }
+    applyBtn.textContent = 'Applied '+applied+' — re-run this import to pull in their replays';
+    log('<div style="margin-top:4px;color:var(--green)">✓ '+applied+' alias(es) saved from the review above. Re-run this import (same event ID) to pull in their replays under the right profile.</div>');
+    progressEl.scrollTop = progressEl.scrollHeight;
+  };
+  box.appendChild(applyBtn);
+  progressEl.appendChild(box);
+  progressEl.scrollTop = progressEl.scrollHeight;
+}
+
 async function flEventImportRun() {
   if (!_flEventImportData) return;
   const { eventId, decks } = _flEventImportData;
   const previewEl = document.getElementById('fl-event-import-preview');
   const progressEl = document.getElementById('fl-event-import-progress');
+  const toolbarEl = document.getElementById('fl-event-import-log-toolbar');
   const statusEl = document.getElementById('fl-event-import-status');
   if (previewEl) previewEl.style.display = 'none';
   progressEl.style.display = 'flex'; progressEl.innerHTML = '';
-  const log = (html) => { const d = document.createElement('div'); d.innerHTML = html; progressEl.appendChild(d); progressEl.scrollTop = progressEl.scrollHeight; };
+  // Fresh log entry for THIS run — overwrites whatever the last run left
+  // behind. Mounted into the toolbar immediately (not just at the end) so
+  // Download/Copy still work on a partial log if the run is interrupted
+  // (tab closed, network drop) before reaching the summary lines below.
+  _flEventImportLastLog = { eventId, startedAt: Date.now(), finishedAt: null, lines: [] };
+  flMountLogToolbar(toolbarEl, _flEventImportLastLog);
+  const log = (html) => {
+    const d = document.createElement('div'); d.innerHTML = html; progressEl.appendChild(d); progressEl.scrollTop = progressEl.scrollHeight;
+    const text = html.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+    _flEventImportLastLog.lines.push({ html, text });
+  };
 
   let attachedDirect = 0, heldPending = 0, errors = 0, mismatchCount = 0;
   const pendingNames = [];
@@ -7850,8 +8126,66 @@ async function flEventImportRun() {
   // scrolling log.
   const zeroReplayPlayers = [];
 
+  // Resolve every existing profile's batch id up front (one round trip) —
+  // used below to auto-attach an unmatched bracket builder to an existing
+  // profile via a close name match (see flFindMatchingProfileKeys), the
+  // same getAllBatchesFull() helper flFetchPreview/go() already use for
+  // their own alias-aware batch lookups.
+  const allBatchesForMatch = await getAllBatchesFull().catch(() => []);
+  const batchIdByRegKey = {};
+  allBatchesForMatch.forEach(b => {
+    const names = [(b.player||'').trim().toLowerCase(), ...((b.aliases||[]).map(a=>(a||'').trim().toLowerCase()))];
+    names.forEach(n => { if (n && !batchIdByRegKey[n]) batchIdByRegKey[n] = b.id; });
+  });
+  // Close name matches found this run that are too ambiguous to decide on
+  // the spot — the candidate builder name is a close match to MORE THAN ONE
+  // existing profile, so there's no single confident answer. Collected here
+  // and presented to the admin as one batch prompt after the whole run
+  // finishes (flPromptUnsureMatches) instead of stopping mid-run to ask.
+  const unsureMatches = []; // { builderName, candidates:[{key,name,batchId}] }
+
   for (let i = 0; i < decks.length; i++) {
     const deck = decks[i];
+
+    // An unmatched bracket builder (no EXACT alias/name match server-side —
+    // see findBatchForBuilderName, run before this modal even opened) might
+    // still be an existing tracked player under a close-but-not-exact
+    // handle — the exact "Flosel" typed in / "Flosel74" is the real FL
+    // handle gap the single-player Import panel's own widening (above)
+    // handles for a single profile. A SINGLE confident candidate profile
+    // gets attached right here (as if the server had matched it) and the
+    // new alias is persisted so future imports match it exactly, with no
+    // special-casing needed; more than one candidate is genuinely
+    // ambiguous, so it's queued for the end-of-run prompt instead of
+    // guessing which (if either) is right.
+    if (!deck.matchedBatchId && deck.builderName) {
+      const closeKeys = flFindMatchingProfileKeys(deck.builderName);
+      if (closeKeys.length === 1) {
+        const key = closeKeys[0];
+        const reg = (window._playerRegistry && window._playerRegistry[key]) || { name: key, aliases: [] };
+        const profileName = reg.name || key;
+        const batchId = batchIdByRegKey[key] || batchIdByRegKey[profileName.toLowerCase()];
+        if (batchId) {
+          const mergedAliases = [...new Set([...(reg.aliases||[]), deck.builderName])];
+          try {
+            await fetch(API+'/players/'+encodeURIComponent(profileName)+'/aliases', { method:'PATCH', headers: authHeaders(), body: JSON.stringify({ aliases: mergedAliases }) });
+            await fetch(API+'/batches/'+batchId, { method:'PATCH', headers: authHeaders(), body: JSON.stringify({ aliases: mergedAliases }) });
+            if (!window._playerRegistry) window._playerRegistry = {};
+            window._playerRegistry[key] = { ...reg, name: profileName, aliases: mergedAliases };
+            deck.matchedBatchId = batchId;
+            deck.matchedPlayerName = profileName;
+            log('<span style="color:var(--blue)">🔗 '+_escapeHtml(deck.builderName)+' looks like existing profile <b>'+_escapeHtml(profileName)+'</b> (close name match) — attaching here and saving "'+_escapeHtml(deck.builderName)+'" as a new alias on that profile.</span>');
+          } catch(e) {
+            log('<span style="color:var(--amber)">⚠ Found a close name match for '+_escapeHtml(deck.builderName)+' ('+_escapeHtml(profileName)+') but failed to save the alias: '+_escapeHtml(e.message)+'. Treating as pending for now.</span>');
+          }
+        }
+      } else if (closeKeys.length > 1) {
+        const candidates = closeKeys.map(k => ({ key:k, name:(window._playerRegistry[k]||{}).name||k, batchId: batchIdByRegKey[k] }));
+        unsureMatches.push({ builderName: deck.builderName, candidates });
+        log('<span style="color:var(--amber)">❓ '+_escapeHtml(deck.builderName)+' is a close name match to '+candidates.length+' existing profiles ('+candidates.map(c=>_escapeHtml(c.name)).join(', ')+') — not sure which, if any. Will ask at the end of this run.</span>');
+      }
+    }
+
     const who = deck.matchedPlayerName || deck.builderName;
     statusEl.textContent = 'Importing '+(i+1)+'/'+decks.length+' — '+who+'…';
     log('<span style="color:var(--muted)">→ '+_escapeHtml(who)+(deck.matchedPlayerName?' (matched profile)':' (no profile yet — will hold pending)')+'</span>');
@@ -7940,6 +8274,44 @@ async function flEventImportRun() {
           flFetchFailed = true;
         }
       } catch(e) { flFetchFailed = true; log('<span style="color:var(--amber)">⚠ Replay list fetch failed for '+_escapeHtml(who)+': '+_escapeHtml(e.message)+'</span>'); }
+
+      // Same "close name" widening as the single-player Import panel
+      // (flFetchPreview) — this player already HAS a matched profile, but
+      // Format Library may also have replays filed under a near-handle
+      // that's never been added as an alias (e.g. this profile is "Flosel",
+      // Format Library's search surfaced "Flosel74" as a mismatch — same
+      // person, unregistered handle). Only acts when NO other existing
+      // profile already owns that close name (flFindMatchingProfileKeys
+      // excluding this one) — if it does, that name genuinely belongs to
+      // someone else already tracked, so it's left alone rather than risk
+      // merging two different players' data.
+      if (deck.matchedBatchId && flDiagnostics && flDiagnostics.mismatchSamples && flDiagnostics.mismatchSamples.length) {
+        const searchedNames = [deck.builderName, ...aliasesForFetch];
+        const closeCandidates = flExtractCloseNameCandidates(flDiagnostics.mismatchSamples, searchedNames)
+          .filter(c => !flFindMatchingProfileKeys(c, regKey).length);
+        if (closeCandidates.length) {
+          const reg = window._playerRegistry[regKey] || { name: deck.matchedPlayerName, aliases: [] };
+          const mergedAliases = [...new Set([...(reg.aliases||[]), ...closeCandidates])];
+          try {
+            await fetch(API+'/players/'+encodeURIComponent(deck.matchedPlayerName)+'/aliases', { method:'PATCH', headers: authHeaders(), body: JSON.stringify({ aliases: mergedAliases }) });
+            await fetch(API+'/batches/'+deck.matchedBatchId, { method:'PATCH', headers: authHeaders(), body: JSON.stringify({ aliases: mergedAliases }) });
+            window._playerRegistry[regKey] = { ...reg, name: deck.matchedPlayerName, aliases: mergedAliases };
+            log('&nbsp;&nbsp;<span style="color:var(--blue)">🔗 '+_escapeHtml(who)+': found close name match on Format Library not already an alias: <b>'+closeCandidates.map(_escapeHtml).join(', ')+'</b> — added as alias(es) and re-searching with '+(closeCandidates.length>1?'them':'it')+' included.</span>');
+            aliasesForFetch.push(...closeCandidates);
+            const reFetchUrl = API+'/proxy/fl-replays?player='+encodeURIComponent(deck.builderName)
+              + '&aliases='+encodeURIComponent([...new Set(aliasesForFetch)].join(','));
+            const rres2 = await fetch(reFetchUrl, { headers: authHeaders() });
+            const rdata2 = await rres2.json().catch(()=>({}));
+            if (rres2.ok) {
+              allFlReplays = rdata2.replays || [];
+              flDiagnostics = rdata2.diagnostics || flDiagnostics;
+              replayRows = allFlReplays.filter(r => normEvId(r.eventId) === wantEvId);
+            }
+          } catch(e) {
+            log('&nbsp;&nbsp;<span style="color:var(--amber)">⚠ Found a close name match ('+closeCandidates.map(_escapeHtml).join(', ')+') for '+_escapeHtml(who)+' but failed to save the alias: '+_escapeHtml(e.message)+'.</span>');
+          }
+        }
+      }
 
       // Dedup replay IDs the same way the existing single-player panel does
       const seen = new Set();
@@ -8157,6 +8529,11 @@ async function flEventImportRun() {
     ).join('; ');
     log('<div style="margin-top:4px;color:var(--amber)">⚠ '+zeroReplayPlayers.length+' tracked player(s) ended this run with 0 replays saved for this event and no visible error — worth double-checking against Format Library directly: '+summary3+'.</div>');
   }
+  // Bracket builder names that were a close match to MORE THAN ONE existing
+  // profile (see the per-deck resolution near the top of this loop) — ask
+  // the admin to pick, all together, rather than guessing or silently
+  // leaving every one of them unresolved.
+  if (unsureMatches.length) flRenderUnsureMatches(progressEl, log, unsureMatches);
   statusEl.style.color = errors ? 'var(--amber)' : (mismatchCount ? 'var(--amber)' : 'var(--green)');
   statusEl.textContent = 'Import complete for '+eventId+'.';
 
@@ -8174,6 +8551,12 @@ async function flEventImportRun() {
 
   // Refresh the Events tab list so the Status column reflects the import.
   if (typeof loadEventsTab === 'function') loadEventsTab(true);
+
+  // Mark the log as complete — the "👁 View Log" banner (flRenderLastImportLogBanner)
+  // and the Download/Copy buttons above now reflect a finished run, and this
+  // log stays reviewable (reopen the modal, or just use the toolbar that's
+  // already on screen) until the next import run replaces it.
+  _flEventImportLastLog.finishedAt = Date.now();
 }
 
 // ── Auto-import from DuelingBook save prompt (deep link) ─────────────────────
@@ -9140,7 +9523,7 @@ function buildDeck() {
         oppName: p.oppName || r.oppName || '',
         games: [], allMine: [], allOpp: [],
         myW: p.myW, oppW: p.oppW, draws: p.draws || 0, score: p.score, result: p.result,
-        eventLabel: r.eventLabel || '',
+        eventLabel: r.eventLabel || '', round: r.round || '',
         myDeck: p.myDeck || 'Unknown', oppDeck: p.oppDeck || 'Unknown',
         myDeckOverride: null, oppDeckOverride: null,
         mergedReplays: [],
@@ -9162,6 +9545,7 @@ function buildDeck() {
     }
     if (m) {
       m.eventLabel       = r.eventLabel       || '';
+      m.round            = r.round            || '';
       m.myDeckOverride   = r.myDeckOverride   || null;
       m.oppDeckOverride  = r.oppDeckOverride  || null;
       // Which continuation replay(s) have been stitched into this match
@@ -10971,6 +11355,29 @@ function renderMatchSidebar(query) {
       }
     }
     hdr.appendChild(wl);
+
+    // Compact copy-all-replays button for this group — "just a copy
+    // button" (icon-only, no text label, unlike the full "📋 Copy Replays"
+    // button on the profile's old Event Decklists panel or the event-deck
+    // REPLAYS column), using the same ⎘ → ✓ feedback as every other
+    // per-row copy-link button in this app. Builds its lines via
+    // buildSidebarReplayLine, sorted into real bracket order for FL groups
+    // (GFWL groups are already in week order from the groups[key].sort above).
+    const copyGroupBtn = document.createElement('button');
+    copyGroupBtn.textContent = '⎘';
+    copyGroupBtn.title = 'Copy every replay link in this group';
+    copyGroupBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:1px 6px;border-radius:3px;cursor:pointer;flex-shrink:0;margin-left:4px';
+    copyGroupBtn.onclick = e => {
+      e.stopPropagation();
+      const sortedItems = _isGS ? items : [...items].sort((a,b) => roundSortKey(a.m.round) - roundSortKey(b.m.round));
+      const lines = sortedItems.map(({m}) => buildSidebarReplayLine(m, key, _isGS)).filter(Boolean);
+      if (!lines.length) { copyGroupBtn.textContent = '✗'; setTimeout(()=>copyGroupBtn.textContent='⎘', 1200); return; }
+      navigator.clipboard.writeText(lines.join('\n')).then(() => {
+        copyGroupBtn.textContent = '✓';
+        setTimeout(() => { copyGroupBtn.textContent = '⎘'; }, 1200);
+      }).catch(() => { copyGroupBtn.textContent = '✗'; setTimeout(()=>copyGroupBtn.textContent='⎘', 1200); });
+    };
+    hdr.appendChild(copyGroupBtn);
 
     // Build Event YDK button — for real event IDs (including GFWL season
     // groups, e.g. "S9") with no saved decklist, and ALSO for the "Untagged"
@@ -16318,6 +16725,81 @@ function triggerYDKImport() {
   if (inp) inp.click();
 }
 
+// "📥 FL YDK" button on the profile's EVENT DECKLISTS panel — fetches ONE
+// event's decklist straight from Format Library for whichever profile is
+// currently open, instead of requiring a local .ydk file (⬆ YDK above) or a
+// full bracket import. Tries the profile's own name first, then each known
+// alias (same /proxy/fl-event/:eventId?player=:name lookup the single-
+// player Import panel and the bulk Event import already use), classifies
+// the deck from its own cards exactly like those two do, and saves/replaces
+// the decklist entry for that event code.
+async function flImportYdkForProfile() {
+  const player = _activeProfile && _activeProfile.player;
+  if (!player) { st('Open a player profile first', 'var(--red)'); return; }
+  const eventId = (window.prompt('Event ID to fetch '+player+'\'s decklist from Format Library (e.g. PWCQ93):', '')||'').trim().toUpperCase();
+  if (!eventId) return;
+
+  const reg = window._playerRegistry && window._playerRegistry[player.toLowerCase()];
+  const candidateNames = [...new Set([player, ...((reg && reg.aliases) || [])].filter(Boolean))];
+
+  st('Checking Format Library for '+player+'\'s deck at '+eventId+'…', 'var(--amber)');
+  let found = null;
+  try {
+    for (const name of candidateNames) {
+      const dres = await fetch(API+'/proxy/fl-event/'+encodeURIComponent(eventId)+'?player='+encodeURIComponent(name), { headers: authHeaders() });
+      const ddata = await dres.json().catch(()=>({}));
+      if (dres.status === 401) { st(ddata.error || 'Format Library token expired.', 'var(--red)'); return; }
+      if (dres.ok && ddata.deck) { found = ddata.deck; break; }
+    }
+  } catch(e) { st('Request failed: '+e.message, 'var(--red)'); return; }
+
+  if (!found) { st('No decklist found on Format Library for '+player+' at '+eventId+' (searched: '+candidateNames.join(', ')+').', 'var(--amber)'); return; }
+
+  // Same entry shape + classification pipeline as flConfirmImport's own
+  // decklist step above — deckId/deckUrl/place/builder from Format
+  // Library, deckTypeOverride from OUR card-based classifier (falling back
+  // to Format Library's own deckTypeName only if a YDK couldn't be parsed).
+  const entry = { code: eventId, year: null, deckId: found.deckId, deckUrl: 'https://www.formatlibrary.com/decks/'+found.deckId, addedAt: Date.now(), place: found.placement!=null?found.placement:undefined, builder: found.builderName||undefined };
+  try {
+    const dres2 = await fetch(API+'/proxy/fl-deck/'+encodeURIComponent(found.deckId), { headers: authHeaders() });
+    if (dres2.ok) {
+      const ydkText = await dres2.text();
+      const passcodes = parseYDK(ydkText);
+      if (passcodes.length) {
+        await lookupPasscodeNames(passcodes);
+        const cardObjects = buildCardObjectsFromPasscodes(passcodes);
+        const deckClass = cardObjects.length ? classifyFromCards(cardObjects) : null;
+        entry.deckTypeOverride = (deckClass && deckClass.dc) || found.deckTypeName || undefined;
+        if (deckClass && deckClass.dc) {
+          fetch(API+'/events/'+encodeURIComponent(eventId)+'/deck/'+encodeURIComponent(found.deckId)+'/decktype', {
+            method: 'PATCH', headers: authHeaders(),
+            body: JSON.stringify({ deckTypeName: deckClass.dc, source: 'decklist' })
+          }).catch(()=>{});
+        }
+        try { entry.ydkData = btoa(unescape(encodeURIComponent(ydkText))); } catch(e) { entry.ydkData = btoa(ydkText); }
+        entry.ydkFileName = player+'-'+eventId+'.ydk';
+      } else if (found.deckTypeName) {
+        entry.deckTypeOverride = found.deckTypeName;
+      }
+    }
+  } catch(e) { console.warn('Could not fetch FL deck', found.deckId, e.message); }
+
+  // Save — replacing any existing decklist for this event code. Also drops
+  // any decklist entry left over from a past bug with no real event code —
+  // a missing/undefined `code` field renders here as a literal "undefined"
+  // label (string concatenation coerces it the same way either way — see
+  // the 🏆 title lines in renderEventDecks/openEventDeckModal) and can
+  // never be matched against a real event, so it's just dead weight in the
+  // list. Explicitly requested cleanup, scoped to run here rather than as a
+  // separate sweep.
+  let decks = getEventDecks(player).filter(d => d.code && d.code !== 'undefined');
+  const dupIdx = decks.findIndex(d => (d.code||'').toUpperCase() === eventId);
+  if (dupIdx >= 0) decks[dupIdx] = entry; else decks.push(entry);
+  saveEventDecks(player, decks);
+  renderEventDecks(player, (_activeProfile && _activeProfile.batches)||[], (_activeProfile && _activeProfile.records)||[]);
+  st('Imported '+player+'\'s decklist for '+eventId+' from Format Library'+(entry.ydkData?'':' (type only — no YDK on file for this deck)')+'.', 'var(--green)');
+}
+
 // Global passcode→name cache
 window._passcodeCache = window._passcodeCache || {};
 
@@ -17522,38 +18004,6 @@ function eventsRenderMatrixSection(container, data) {
   eventsRenderMatchupMatrix(document.getElementById('events-mg-matrix'), data.matchupMatrix||{}, data.deckRepresentation||[]);
 }
 
-// Abbreviations for this app's own deck-type universe (DECK_CATEGORY keys)
-// so the matrix's repeated column-header strip stays short regardless of
-// how many archetypes an event has — this, together with the OTHER-folding
-// below, is what keeps the table from needing to be scrolled sideways to
-// read. Row labels stay full names (no ambiguity reading down the left
-// edge, where each name only appears once); only the column headers get
-// abbreviated. Anything missing from this map (an "Unknown" classification,
-// or a deck type added after this map was last updated) falls back to an
-// auto-generated short form instead of silently breaking.
-const DECK_ABBREV = {
-  'Goat Control':'GC', 'Chaos Control':'CC', 'Chaos Relinquished':'CRel',
-  'Last Turn':'LT', 'Final Countdown':'FC', 'Pacman':'Pac',
-  'Warrior':'War', 'Chaos Warrior':'CW', 'Gearfried Warriors':'GFW',
-  'Thunder Clap':'TClap', 'Earth Aggro':'Earth', 'Aggro Lockdown':'AggL',
-  'Gumo':'Gumo', 'Ben Kai OTK':'BK', 'Chaos Recruiter':'Recr',
-  'Chaos Turbo':'CT', 'Reasoning Gate Turbo':'RGT', 'Reasoning Gate Machine':'RGM',
-  'Chaos Return':'CRet', 'Bazoo Return':'Bazoo', 'Monarch':'Mon',
-  'Zombie':'Z', 'Strike Ninja Return':'SNR', 'Stein OTK':'Stein',
-  'SWAG':'SWAG', 'Rescue Cat OTK':'RCOTK', 'Library FTK':'Lib',
-  'Empty Jar':'Jar', 'Panda Burn':'PBurn', 'Drain Burn':'DBurn',
-  'Speed Burn':'SBurn', 'Rescue Cat Burn':'RCBurn', 'Chaos Fairy':'CFairy',
-  'Rescue Cat Earth Aggro':'RCEarth', 'Gravekeeper':'GK', 'Unknown':'Unk',
-  'Other':'Other',
-};
-function deckAbbrev(name) {
-  const n = name || 'Unknown';
-  if (DECK_ABBREV[n] !== undefined) return DECK_ABBREV[n];
-  const words = n.split(/\s+/).filter(Boolean);
-  const abbr = words.length <= 1 ? n.slice(0,5) : words.map(w=>w[0]).join('').toUpperCase();
-  return abbr.slice(0, 6);
-}
-
 // Full deck-vs-deck grid, honestly scoped to what eventsState.matchupMatrix
 // actually contains (see server-side note). Diagonal/self cells are shown
 // like any other — a tracked player who played a mirror match populates it
@@ -17604,7 +18054,7 @@ function eventsRenderMatchupMatrix(container, matrix, deckRepresentation) {
   const table = document.createElement('table');
   table.style.cssText = 'border-collapse:collapse;font-size:10px;width:100%';
   let thead = '<thead><tr><th style="padding:4px 6px;text-align:left;color:var(--muted);border-bottom:1px solid var(--border)">Deck ↓ \\ Opp →</th>';
-  finalAxis.forEach(d => { thead += `<th style="padding:4px 6px;color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap" title="${_escapeHtml(d)}">${_escapeHtml(d==='OTHER'?'OTHER':deckAbbrev(d))}</th>`; });
+  finalAxis.forEach(d => { thead += `<th style="padding:4px 6px;color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap">${_escapeHtml(d)}</th>`; });
   thead += '</tr></thead>';
   let tbody = '<tbody>';
   finalAxis.forEach(row => {
@@ -18225,6 +18675,29 @@ function makeCopyReplaysButton(eventCode, getReplayList) {
     }).catch(() => { btn.textContent = 'Copy failed'; setTimeout(()=>btn.textContent=defaultLabel, 1500); });
   };
   return btn;
+}
+// Builds one clipboard line for a Deck Viewer sidebar match record (see
+// renderMatchSidebar's per-group "⎘" button) — the same two line shapes
+// used everywhere else in the app: for a GFWL season group, eventLabel
+// already carries the season/week (or playoff stage), so there's no
+// separate round to splice in ("the format you know" = reuse eventLabel
+// as-is, matching gfwlBuildReplayLine in the GFWL Mini Deck Viewer); for
+// an FL event group, the group key (event code) and this match's own
+// .round (added at the _matches.push() sites — buildMatchRecord itself
+// doesn't carry one) are spliced together like buildFlReplaysCopyText does.
+// Returns null for a match with no real or manual replay link to copy.
+function buildSidebarReplayLine(m, groupKey, isGFWLGroup) {
+  let link = null;
+  if (m.isManual) { if (m.manualReplayUrl) link = m.manualReplayUrl; }
+  else if (m.replayId) link = 'https://www.duelingbook.com/replay?id='+encodeURIComponent(m.replayId);
+  if (!link) return null;
+  if (isGFWLGroup) {
+    const label = (m.eventLabel||'').trim();
+    return (label ? label+' ' : '') + link;
+  }
+  const code = groupKey && groupKey !== 'Untagged' ? groupKey : '';
+  const rLabel = formatRoundShort(m.round);
+  return [code, rLabel, link].filter(Boolean).join(' ');
 }
 
 // Underneath the deck image grid (appended into the SAME scrollable column,
@@ -20587,16 +21060,6 @@ function renderEventDecks(player, batches, records) {
     rcSpan.style.cssText = 'font-size:10px;color:var(--dim);margin-left:auto;white-space:nowrap';
     rcSpan.textContent = taggedReplays.length+' replay'+(taggedReplays.length!==1?'s':'');
     row.appendChild(rcSpan);
-
-    // Copy Replays — every replay tagged to THIS event, as "EventID Round
-    // Link" lines (see buildFlReplaysCopyText/makeCopyReplaysButton, shared
-    // with the event-deck page's own REPLAYS table so both copy the exact
-    // same line shape and bracket-order sort).
-    if (taggedReplays.length) {
-      const copyReplaysBtn = makeCopyReplaysButton(deck.code, () => taggedReplays);
-      copyReplaysBtn.style.marginLeft = '0'; // row already has margin-left:auto on rcSpan above
-      row.appendChild(copyReplaysBtn);
-    }
 
     // Edit deck type button
     const editDtBtn = document.createElement('button');
