@@ -1197,6 +1197,19 @@ function buildProfileNameIndex() {
 // per deck or per event (O(events × decks × batches) for the list, which is
 // exactly the accidentally-quadratic shape that made /batches/all-full slow
 // before it got cached; see the _allFullCache comment above).
+// Each code maps to { hasReplay: Set, needsReview: Set } — hasReplay is the
+// original "at least one saved replay" set; needsReview is a second set,
+// built in this same pass, of names that have at least one replay tagged to
+// that event which was saved WITHOUT a resolved winner/loser because none of
+// this player's known aliases matched either side's actual DuelingBook name
+// in it (the same `!r.timedOut && !r.parsed` shape editAliases()'s own
+// re-parse sweep already uses to find these). Per the explicit instruction
+// this was built for: Format Library's own participant names are usually
+// the correct ones, so a gap like this is "flag it for a human to check the
+// alias/profile", never a silent guess — this is what lets the Events tab's
+// Replays column distinguish "no replay found at all" from "a replay IS
+// here, but it doesn't match this profile's aliases" instead of only ever
+// showing those two very different situations as the same ✓.
 function buildEventReplayCoverageIndex() {
   const index = {};
   for (const batch of Object.values(db.batches)) {
@@ -1205,8 +1218,12 @@ function buildEventReplayCoverageIndex() {
     for (const r of (batch.replays||[])) {
       const code = (r.eventLabel||r.eventId||'').toUpperCase().trim();
       if (!code) continue;
-      if (!index[code]) index[code] = new Set();
-      for (const n of names) index[code].add(n);
+      if (!index[code]) index[code] = { hasReplay: new Set(), needsReview: new Set() };
+      const needsReview = !r.timedOut && !r.parsed;
+      for (const n of names) {
+        index[code].hasReplay.add(n);
+        if (needsReview) index[code].needsReview.add(n);
+      }
     }
   }
   return index;
@@ -1242,7 +1259,7 @@ function computeEventStatus(ev, profileIndex, replayCoverageIndex) {
   const incompleteData = [];
   const seenMissing = new Set();
   const seenIncomplete = new Set();
-  const coverage = (replayCoverageIndex && replayCoverageIndex[ev.code]) || new Set();
+  const coverage = (replayCoverageIndex && replayCoverageIndex[ev.code]) || { hasReplay: new Set(), needsReview: new Set() };
   for (const d of decks) {
     const name = (d.builderName || '').trim();
     if (!name) continue;
@@ -1253,7 +1270,7 @@ function computeEventStatus(ev, profileIndex, replayCoverageIndex) {
       continue;
     }
     const hasCards = !!d.ydkData;
-    const hasReplay = coverage.has(key) || coverage.has(keyAlt);
+    const hasReplay = coverage.hasReplay.has(key) || coverage.hasReplay.has(keyAlt);
     if (!hasCards || !hasReplay) {
       if (!seenIncomplete.has(key)) { seenIncomplete.add(key); incompleteData.push(name); }
     }
@@ -4009,7 +4026,7 @@ const server = http.createServer(async (req, res) => {
     // old per-deck full-batches scan, and why the Events-list Status column
     // (computeEventStatus) now shares this exact same coverage data instead
     // of drawing its own separate, looser "does a profile exist" conclusion.
-    const replayCoverage = buildEventReplayCoverageIndex()[code] || new Set();
+    const replayCoverage = buildEventReplayCoverageIndex()[code] || { hasReplay: new Set(), needsReview: new Set() };
     const decks = (ev.decks||[]).map(d => {
       const playerEntry = findPlayerByBuilderName(d.builderName);
       // hasReplays: does this player (alias-aware) have at least one saved
@@ -4020,12 +4037,24 @@ const server = http.createServer(async (req, res) => {
       // this column is to surface exactly that gap (see Charlie MAD/PWCQ93:
       // decklist on file, but fewer replays saved here than Format Library
       // itself shows for that event).
-      let hasReplays = false;
+      // needsReview: at least one replay IS tagged to this event for this
+      // player, but it was saved without a resolved winner/loser because
+      // none of their known aliases matched either side's actual
+      // DuelingBook name in it — see buildEventReplayCoverageIndex's own
+      // comment. Distinct from hasReplays itself: this player can be
+      // hasReplays:true and needsReview:true at the same time (some
+      // replays resolved fine, at least one didn't).
+      let hasReplays = false, needsReview = false;
+      const coverageHas = replayCoverage.hasReplay || new Set();
+      const coverageNeedsReview = replayCoverage.needsReview || new Set();
       if (playerEntry) {
-        hasReplays = playerNames(playerEntry).some(n => replayCoverage.has(n));
+        hasReplays = playerNames(playerEntry).some(n => coverageHas.has(n));
+        needsReview = playerNames(playerEntry).some(n => coverageNeedsReview.has(n));
       } else {
         const raw = (d.builderName||'').trim().toLowerCase();
-        hasReplays = replayCoverage.has(raw) || replayCoverage.has(raw.replace(/_/g, ' '));
+        const rawAlt = raw.replace(/_/g, ' ');
+        hasReplays = coverageHas.has(raw) || coverageHas.has(rawAlt);
+        needsReview = coverageNeedsReview.has(raw) || coverageNeedsReview.has(rawAlt);
       }
       return {
         deckId: d.deckId,
@@ -4035,6 +4064,7 @@ const server = http.createServer(async (req, res) => {
         deckTypeName: d.deckTypeName,
         hasCards: !!d.ydkData,
         hasReplays,
+        needsReview,
         trackedPlayer: playerEntry ? playerEntry.name : null,
       };
     }).sort((a,b) => {
