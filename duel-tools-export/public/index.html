@@ -1203,7 +1203,7 @@ select{cursor:pointer}
                 <div class="slbl" style="margin:0">EVENT DECKLISTS</div>
                 <div style="display:flex;gap:4px;margin-left:auto">
                   <button onclick="triggerYDKImport()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:4px;cursor:pointer" title="Import YDK files">⬆ YDK</button>
-                  <button onclick="flImportYdkForProfile()" style="background:none;border:1px solid var(--purple,#a78bfa);color:var(--purple,#a78bfa);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:4px;cursor:pointer" title="Fetch this player's decklist for an event straight from Format Library">📥 FL YDK</button>
+                  <button onclick="flImportYdkForProfile()" style="background:none;border:1px solid var(--purple,#a78bfa);color:var(--purple,#a78bfa);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:4px;cursor:pointer" title="Scans Format Library for every GOAT event this player has played and fetches a decklist for any of them not already listed below — no event ID needed.">📥 FL YDK</button>
                   <button onclick="reclassifyAllDecklists()" style="background:none;border:1px solid var(--border);color:var(--amber);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:4px;cursor:pointer" title="Re-classify all YDK decklists">↺ Types</button>
                   <button onclick="showAddEventDecklist()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:4px;cursor:pointer">+ Add</button>
                   <input type="file" id="ydk-import-input" accept=".ydk" multiple style="display:none" onchange="handleYDKImport(this)"/>
@@ -7487,22 +7487,35 @@ async function flFetchPreview() {
       newReplays.push({ ...r, replayId: rid });
     }
 
-    // Look up decklists for events among the NEW replays, skipping events we already have a deck for
-    const eventIds = [...new Set(newReplays.map(r=>r.eventId).filter(Boolean))];
+    // Look up decklists for events among this player's ENTIRE Format
+    // Library history (flReplays — every row this search returned), not
+    // just newReplays — the events behind an "already in batch" replay
+    // (skippedExisting above) are exactly as likely to be missing a
+    // decklist as a brand-new one is, and previously never got checked at
+    // all once their replays had already been imported once, no matter how
+    // many times this import ran afterward. Tries flUser, then each known
+    // alias, for each event — a bracket entry filed under an alias spelling
+    // rather than flUser itself would otherwise silently never match.
+    const eventIds = [...new Set(flReplays.map(r=>r.eventId).filter(Boolean))];
     const existingDeckCodes = new Set(getEventDecks(dtPlayer).map(d => (d.code||'').toUpperCase()));
+    const deckCandidateNames = [...new Set([flUser, ...aliasesForSearch].filter(Boolean))];
     const deckCandidates = [];
-    if (eventIds.length) statusEl.textContent = 'Checking '+eventIds.length+' event(s) for decklists…';
-    for (const evId of eventIds) {
-      if (existingDeckCodes.has(evId.toUpperCase())) continue;
+    const missingDecklistEvents = eventIds.filter(evId => !existingDeckCodes.has(evId.toUpperCase()));
+    if (missingDecklistEvents.length) statusEl.textContent = 'Checking '+missingDecklistEvents.length+' event(s) for decklists…';
+    for (const evId of missingDecklistEvents) {
       try {
-        const dres = await fetch(API+'/proxy/fl-event/'+encodeURIComponent(evId)+'?player='+encodeURIComponent(flUser), { headers: authHeaders() });
-        const ddata = await dres.json().catch(()=>({}));
-        if (dres.status === 401) {
-          statusEl.style.color = 'var(--red)';
-          statusEl.textContent = ddata.error || 'Format Library token expired.';
-          fetchBtn.disabled = false; return;
+        let found = null;
+        for (const name of deckCandidateNames) {
+          const dres = await fetch(API+'/proxy/fl-event/'+encodeURIComponent(evId)+'?player='+encodeURIComponent(name), { headers: authHeaders() });
+          const ddata = await dres.json().catch(()=>({}));
+          if (dres.status === 401) {
+            statusEl.style.color = 'var(--red)';
+            statusEl.textContent = ddata.error || 'Format Library token expired.';
+            fetchBtn.disabled = false; return;
+          }
+          if (dres.ok && ddata.deck) { found = ddata.deck; break; }
         }
-        if (dres.ok && ddata.deck) deckCandidates.push({ eventId: evId, deckId: ddata.deck.deckId, deckTypeName: ddata.deck.deckTypeName, place: ddata.deck.placement, builder: ddata.deck.builderName });
+        if (found) deckCandidates.push({ eventId: evId, deckId: found.deckId, deckTypeName: found.deckTypeName, place: found.placement, builder: found.builderName });
       } catch(e) {}
       await new Promise(r => setTimeout(r, 200));
     }
@@ -16792,79 +16805,118 @@ function triggerYDKImport() {
   if (inp) inp.click();
 }
 
-// "📥 FL YDK" button on the profile's EVENT DECKLISTS panel — fetches ONE
-// event's decklist straight from Format Library for whichever profile is
-// currently open, instead of requiring a local .ydk file (⬆ YDK above) or a
-// full bracket import. Tries the profile's own name first, then each known
-// alias (same /proxy/fl-event/:eventId?player=:name lookup the single-
-// player Import panel and the bulk Event import already use), classifies
-// the deck from its own cards exactly like those two do, and saves/replaces
-// the decklist entry for that event code.
+// "📥 FL YDK" button on the profile's EVENT DECKLISTS panel — NOT a
+// one-event tool (it used to prompt for an event ID; it doesn't anymore).
+// Discovers every GOAT event Format Library has this player down as having
+// played at all — the same /proxy/fl-replays search the replay-import
+// tools use, read here purely for the distinct eventId values on its rows,
+// not the replays themselves — skips any event code already listed below
+// (this is a "fill in what's missing" sweep, never a re-fetch of something
+// already on the profile), and fetches+saves a decklist for every
+// remaining one straight from Format Library. Tries the profile's own name
+// first, then each known alias for each event (same
+// /proxy/fl-event/:eventId?player=:name lookup the single-player Import
+// panel and the bulk Event import already use), classifies each deck from
+// its own cards exactly like those two do. Per explicit instruction, any
+// decklist entry stuck with a literal "undefined" event code (dead weight
+// left over from a past bug — see the comment this replaced) is dropped
+// unconditionally, every time this runs, even on a run that finds nothing
+// new to add.
 async function flImportYdkForProfile() {
   const player = _activeProfile && _activeProfile.player;
   if (!player) { st('Open a player profile first', 'var(--red)'); return; }
-  const eventId = (window.prompt('Event ID to fetch '+player+'\'s decklist from Format Library (e.g. PWCQ93):', '')||'').trim().toUpperCase();
-  if (!eventId) return;
 
   const reg = window._playerRegistry && window._playerRegistry[player.toLowerCase()];
   const candidateNames = [...new Set([player, ...((reg && reg.aliases) || [])].filter(Boolean))];
 
-  st('Checking Format Library for '+player+'\'s deck at '+eventId+'…', 'var(--amber)');
-  let found = null;
+  let decks = getEventDecks(player).filter(d => d.code && d.code !== 'undefined');
+  const existingCodes = new Set(decks.map(d => (d.code||'').toUpperCase().trim()));
+  const refresh = () => renderEventDecks(player, (_activeProfile && _activeProfile.batches)||[], (_activeProfile && _activeProfile.records)||[]);
+
+  st('Checking Format Library for every GOAT event '+player+' has played…', 'var(--amber)');
+  let flReplays = [];
   try {
-    for (const name of candidateNames) {
-      const dres = await fetch(API+'/proxy/fl-event/'+encodeURIComponent(eventId)+'?player='+encodeURIComponent(name), { headers: authHeaders() });
-      const ddata = await dres.json().catch(()=>({}));
-      if (dres.status === 401) { st(ddata.error || 'Format Library token expired.', 'var(--red)'); return; }
-      if (dres.ok && ddata.deck) { found = ddata.deck; break; }
-    }
+    const [primary, ...rest] = candidateNames;
+    const qs = '/proxy/fl-replays?player='+encodeURIComponent(primary) + (rest.length ? '&aliases='+encodeURIComponent(rest.join(',')) : '');
+    const r = await fetch(API+qs, { headers: authHeaders() });
+    const d = await r.json().catch(()=>({}));
+    if (r.status === 401) { st(d.error || 'Format Library token expired.', 'var(--red)'); return; }
+    if (!r.ok) { st(d.error || ('Format Library request failed (HTTP '+r.status+')'), 'var(--red)'); return; }
+    flReplays = d.replays || [];
   } catch(e) { st('Request failed: '+e.message, 'var(--red)'); return; }
 
-  if (!found) { st('No decklist found on Format Library for '+player+' at '+eventId+' (searched: '+candidateNames.join(', ')+').', 'var(--amber)'); return; }
+  const eventIds = [...new Set(flReplays.map(r => (r.eventId||'').toUpperCase().trim()).filter(Boolean))];
+  const missingEventIds = eventIds.filter(id => !existingCodes.has(id));
 
-  // Same entry shape + classification pipeline as flConfirmImport's own
-  // decklist step above — deckId/deckUrl/place/builder from Format
-  // Library, deckTypeOverride from OUR card-based classifier (falling back
-  // to Format Library's own deckTypeName only if a YDK couldn't be parsed).
-  const entry = { code: eventId, year: null, deckId: found.deckId, deckUrl: 'https://www.formatlibrary.com/decks/'+found.deckId, addedAt: Date.now(), place: found.placement!=null?found.placement:undefined, builder: found.builderName||undefined };
-  try {
-    const dres2 = await fetch(API+'/proxy/fl-deck/'+encodeURIComponent(found.deckId), { headers: authHeaders() });
-    if (dres2.ok) {
-      const ydkText = await dres2.text();
-      const passcodes = parseYDK(ydkText);
-      if (passcodes.length) {
-        await lookupPasscodeNames(passcodes);
-        const cardObjects = buildCardObjectsFromPasscodes(passcodes);
-        const deckClass = cardObjects.length ? classifyFromCards(cardObjects) : null;
-        entry.deckTypeOverride = (deckClass && deckClass.dc) || found.deckTypeName || undefined;
-        if (deckClass && deckClass.dc) {
-          fetch(API+'/events/'+encodeURIComponent(eventId)+'/deck/'+encodeURIComponent(found.deckId)+'/decktype', {
-            method: 'PATCH', headers: authHeaders(),
-            body: JSON.stringify({ deckTypeName: deckClass.dc, source: 'decklist' })
-          }).catch(()=>{});
+  if (!missingEventIds.length) {
+    saveEventDecks(player, decks); // still persists the undefined-cleanup above even when nothing new is found
+    refresh();
+    st(eventIds.length
+      ? 'Format Library has no GOAT event for '+player+' that isn\'t already listed below.'
+      : 'Format Library has no GOAT replays on record for '+player+' at all.', 'var(--amber)');
+    return;
+  }
+
+  let added = 0, notFound = 0;
+  for (let i = 0; i < missingEventIds.length; i++) {
+    const eventId = missingEventIds[i];
+    st('Fetching decklist '+(i+1)+'/'+missingEventIds.length+' — '+eventId+'…', 'var(--amber)');
+    let found = null;
+    try {
+      for (const name of candidateNames) {
+        const dres = await fetch(API+'/proxy/fl-event/'+encodeURIComponent(eventId)+'?player='+encodeURIComponent(name), { headers: authHeaders() });
+        const ddata = await dres.json().catch(()=>({}));
+        if (dres.status === 401) {
+          st(ddata.error || 'Format Library token expired — stopped partway through ('+added+' added so far).', 'var(--red)');
+          saveEventDecks(player, decks); refresh(); return;
         }
-        try { entry.ydkData = btoa(unescape(encodeURIComponent(ydkText))); } catch(e) { entry.ydkData = btoa(ydkText); }
-        entry.ydkFileName = player+'-'+eventId+'.ydk';
-      } else if (found.deckTypeName) {
-        entry.deckTypeOverride = found.deckTypeName;
+        if (dres.ok && ddata.deck) { found = ddata.deck; break; }
       }
-    }
-  } catch(e) { console.warn('Could not fetch FL deck', found.deckId, e.message); }
+    } catch(e) { console.warn('[flImportYdkForProfile] event lookup failed for', eventId, ':', e.message); }
 
-  // Save — replacing any existing decklist for this event code. Also drops
-  // any decklist entry left over from a past bug with no real event code —
-  // a missing/undefined `code` field renders here as a literal "undefined"
-  // label (string concatenation coerces it the same way either way — see
-  // the 🏆 title lines in renderEventDecks/openEventDeckModal) and can
-  // never be matched against a real event, so it's just dead weight in the
-  // list. Explicitly requested cleanup, scoped to run here rather than as a
-  // separate sweep.
-  let decks = getEventDecks(player).filter(d => d.code && d.code !== 'undefined');
-  const dupIdx = decks.findIndex(d => (d.code||'').toUpperCase() === eventId);
-  if (dupIdx >= 0) decks[dupIdx] = entry; else decks.push(entry);
+    if (!found) { notFound++; continue; }
+
+    // Same entry shape + classification pipeline as flConfirmImport's own
+    // decklist step — deckId/deckUrl/place/builder from Format Library,
+    // deckTypeOverride from OUR card-based classifier (falling back to
+    // Format Library's own deckTypeName only if a YDK couldn't be parsed).
+    const entry = { code: eventId, year: null, deckId: found.deckId, deckUrl: 'https://www.formatlibrary.com/decks/'+found.deckId, addedAt: Date.now(), place: found.placement!=null?found.placement:undefined, builder: found.builderName||undefined };
+    try {
+      const dres2 = await fetch(API+'/proxy/fl-deck/'+encodeURIComponent(found.deckId), { headers: authHeaders() });
+      if (dres2.ok) {
+        const ydkText = await dres2.text();
+        const passcodes = parseYDK(ydkText);
+        if (passcodes.length) {
+          await lookupPasscodeNames(passcodes);
+          const cardObjects = buildCardObjectsFromPasscodes(passcodes);
+          const deckClass = cardObjects.length ? classifyFromCards(cardObjects) : null;
+          entry.deckTypeOverride = (deckClass && deckClass.dc) || found.deckTypeName || undefined;
+          if (deckClass && deckClass.dc) {
+            fetch(API+'/events/'+encodeURIComponent(eventId)+'/deck/'+encodeURIComponent(found.deckId)+'/decktype', {
+              method: 'PATCH', headers: authHeaders(),
+              body: JSON.stringify({ deckTypeName: deckClass.dc, source: 'decklist' })
+            }).catch(()=>{});
+          }
+          try { entry.ydkData = btoa(unescape(encodeURIComponent(ydkText))); } catch(e) { entry.ydkData = btoa(ydkText); }
+          entry.ydkFileName = player+'-'+eventId+'.ydk';
+        } else if (found.deckTypeName) {
+          entry.deckTypeOverride = found.deckTypeName;
+        }
+      }
+    } catch(e) { console.warn('Could not fetch FL deck', found.deckId, e.message); }
+
+    const dupIdx = decks.findIndex(d => (d.code||'').toUpperCase() === eventId);
+    if (dupIdx >= 0) decks[dupIdx] = entry; else decks.push(entry);
+    added++;
+    await new Promise(r => setTimeout(r, 200)); // pace, matches this file's other FL-driven loops
+  }
+
   saveEventDecks(player, decks);
-  renderEventDecks(player, (_activeProfile && _activeProfile.batches)||[], (_activeProfile && _activeProfile.records)||[]);
-  st('Imported '+player+'\'s decklist for '+eventId+' from Format Library'+(entry.ydkData?'':' (type only — no YDK on file for this deck)')+'.', 'var(--green)');
+  refresh();
+  const parts = [];
+  if (added) parts.push(added+' decklist(s) added');
+  if (notFound) parts.push(notFound+' event(s) had no deck on Format Library for '+player+' (searched: '+candidateNames.join(', ')+')');
+  st('Format Library YDK sweep complete — '+(parts.length?parts.join(', '):'nothing new found')+'.', added?'var(--green)':'var(--amber)');
 }
 
 // Global passcode→name cache
@@ -18174,6 +18226,74 @@ function eventsPlayerListMatches(d, qLower) {
     || (d.deckTypeName||'').toLowerCase().includes(qLower);
 }
 
+// Runs the per-player Format Library fixes — the lazy decklist YDK fetch
+// (the same one GET /api/events/:code/deck/:deckId already does the first
+// time a miner opens that one player's page) and the replay event/round
+// reconciliation (eventsBackfillEventReplays) — across EVERY row in one
+// event's bracket, instead of requiring an admin to click into each
+// DECKLIST-✗ or REPLAYS-✗/partial row one at a time. Runs on every tracked
+// player regardless of whether their row currently shows ✓ or ✗: a ✓ on
+// REPLAYS only means "at least one resolved replay is on file for this
+// event", which hides a partial set exactly like the Goolahz/Diplocaulus
+// case this was built for — a quiet ✓ can still be sitting on 1 of 10
+// rounds, so "all of them" means all of them, not just the visibly broken
+// ones.
+async function eventsSyncAllPlayersFromFL(code, decks, statusEl) {
+  const result = { decklistsFixed: 0, replaysFixed: 0, replaysAdded: 0, skipped: 0, failed: 0, total: decks.length };
+
+  // One name->batchIds lookup built up front (one /batches/all-full read,
+  // reused via getAllBatchesFull's own cache) instead of a separate lookup
+  // per player — same alias-aware matching convention as
+  // findBatchIdsForPlayer, inlined here since every row needs it against
+  // the same shared map rather than its own independent fetch.
+  const allFull = await getAllBatchesFull().catch(() => []);
+  const batchIdsByName = {};
+  allFull.forEach(b => {
+    const bNames = [(b.player||'').trim().toLowerCase(), ...((b.aliases||[]).map(a => (a||'').trim().toLowerCase()))];
+    bNames.forEach(n => { if (n) (batchIdsByName[n] = batchIdsByName[n] || []).push(b.id); });
+  });
+
+  for (let i = 0; i < decks.length; i++) {
+    const d = decks[i];
+    const who = d.trackedPlayer || d.builderName || '?';
+    if (statusEl) statusEl.textContent = 'Syncing '+(i+1)+'/'+decks.length+' — '+who+'…';
+
+    // 1. Decklist — trigger the server's own lazy YDK fetch for this deck
+    // if it doesn't have one cached yet (mirrors simply opening the page).
+    if (!d.hasCards && d.deckId) {
+      try {
+        const r = await fetch(API+'/events/'+encodeURIComponent(code)+'/deck/'+encodeURIComponent(d.deckId), { headers: authHeaders() });
+        const dd = await r.json().catch(()=>({}));
+        if (r.ok && dd.deck && dd.deck.ydkData) result.decklistsFixed++;
+      } catch(e) {}
+    }
+
+    // 2. Replays — only meaningful for a row that already resolves to a
+    // tracked Duel Tools profile (an untracked bracket entry has no batch
+    // to reconcile against yet; that's what the single-player/bulk event
+    // import tools are for).
+    if (d.trackedPlayer) {
+      const key = d.trackedPlayer.trim().toLowerCase();
+      const batchIds = [...new Set(batchIdsByName[key] || [])];
+      if (batchIds.length) {
+        try {
+          const sync = await eventsBackfillEventReplays(code, { name: d.trackedPlayer, batchIds });
+          result.replaysFixed += sync.fixed || 0;
+          result.replaysAdded += sync.added || 0;
+          result.failed += sync.failed || 0;
+          if (sync.error) result.failed++;
+        } catch(e) { result.failed++; }
+      } else {
+        result.skipped++;
+      }
+    } else {
+      result.skipped++;
+    }
+    await new Promise(r => setTimeout(r, 150)); // pace, same as every other FL-driven loop in this file
+  }
+  return result;
+}
+
 function eventsRenderPlayerList(ev) {
   const bodyEl = document.getElementById('events-detail-body');
   if (!bodyEl) return;
@@ -18182,13 +18302,40 @@ function eventsRenderPlayerList(ev) {
 
   bodyEl.innerHTML = '';
   const searchWrap = document.createElement('div');
-  searchWrap.style.cssText = 'margin-bottom:10px;display:flex;align-items:center;gap:8px';
+  searchWrap.style.cssText = 'margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap';
   searchWrap.innerHTML = `
     <input id="events-player-search" type="text" placeholder="Search by player name/alias or deck type…"
       value="${_escapeHtml(_eventsState.playerSearch||'')}"
       style="flex:1;max-width:340px;background:var(--card2);color:var(--text);border:1px solid var(--border2);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px" />
     <span id="events-player-search-count" style="font-size:11px;color:var(--muted)"></span>
   `;
+  const syncAllBtn = document.createElement('button');
+  syncAllBtn.className = 'btn-sec';
+  syncAllBtn.style.cssText = 'font-size:11px;padding:6px 10px;white-space:nowrap';
+  const syncAllDefaultLabel = '🔄 Sync All Players from Format Library';
+  syncAllBtn.textContent = syncAllDefaultLabel;
+  syncAllBtn.title = 'Runs the decklist + replay Format Library fix for every player in this bracket, one click instead of opening each one individually.';
+  const syncAllStatus = document.createElement('span');
+  syncAllStatus.id = 'events-sync-all-status';
+  syncAllStatus.style.cssText = 'font-size:11px;color:var(--muted)';
+  syncAllBtn.onclick = async () => {
+    syncAllBtn.disabled = true;
+    syncAllStatus.textContent = 'Starting…';
+    const result = await eventsSyncAllPlayersFromFL(ev.code, decks, syncAllStatus);
+    const parts = [];
+    if (result.decklistsFixed) parts.push(result.decklistsFixed+' decklist(s) fetched');
+    if (result.replaysFixed) parts.push(result.replaysFixed+' replay(s) fixed');
+    if (result.replaysAdded) parts.push(result.replaysAdded+' replay(s) added');
+    if (result.failed) parts.push(result.failed+' failed');
+    syncAllStatus.textContent = parts.length
+      ? 'Done — '+parts.join(', ')+' (checked '+result.total+' player(s)).'
+      : 'Done — checked '+result.total+' player(s), everything was already correct.';
+    syncAllBtn.disabled = false;
+    syncAllBtn.textContent = syncAllDefaultLabel;
+    if (result.decklistsFixed || result.replaysFixed || result.replaysAdded) eventsShowDetail(ev.code); // full refresh so the table reflects it
+  };
+  searchWrap.appendChild(syncAllBtn);
+  searchWrap.appendChild(syncAllStatus);
   bodyEl.appendChild(searchWrap);
 
   const tableWrap = document.createElement('div');
