@@ -1774,6 +1774,7 @@ const DECK_CATEGORY = {
   'Chaos Control':          'Control',
   'Chaos Relinquished':     'Control',
   'Last Turn':              'Control',
+  'Final Countdown':        'Control',
   'Pacman':                 'Control',
   'Warrior':                'Aggro',
   'Chaos Warrior':          'Aggro',
@@ -5597,6 +5598,48 @@ async function gfwlOpenPlayerProfile(season, teamName, playerName, seasonReplays
     return a.localeCompare(b);
   });
 
+  // "📋 Copy All Replays" — every replay across every week (and playoff
+  // round) shown in this mini deck viewer, one per line, in the SAME order
+  // already displayed below. Format is just each replay's own eventLabel
+  // ("S9: WK 3", or whatever this season's playoff weeks are already
+  // labeled — e.g. "S9: Top 8") followed by its Duelingbook link — GFWL
+  // replays already carry the season/week (or playoff stage) baked into
+  // eventLabel, so unlike the Format-Library "EventID R# Link" format there
+  // is no separate round number to splice in; reusing eventLabel as-is IS
+  // "the format you know" for GFWL. A manual entry with no real
+  // Duelingbook replay behind it is skipped unless it has an attached
+  // manualReplayUrl, mirroring the single-row ⎘ copy button's own
+  // isManual handling just below.
+  function gfwlBuildReplayLine(r) {
+    const label = (r.eventLabel||'').trim();
+    let link = null;
+    if (r.isManual) { if (r.manualReplayUrl) link = r.manualReplayUrl; }
+    else if (r.replayId) link = 'https://www.duelingbook.com/replay?id='+encodeURIComponent(r.replayId);
+    if (!link) return null;
+    return (label ? label+' ' : '') + link;
+  }
+  const deckSecLbl = deckSec.firstChild;
+  if (deckSecLbl) {
+    deckSecLbl.style.display = 'flex';
+    deckSecLbl.style.alignItems = 'center';
+    deckSecLbl.style.gap = '8px';
+    const copyAllBtn = document.createElement('button');
+    const copyAllDefaultLabel = '📋 Copy All Replays';
+    copyAllBtn.textContent = copyAllDefaultLabel;
+    copyAllBtn.title = 'Copy every replay link for this season as "EventLabel Link", one per line';
+    copyAllBtn.style.cssText = 'margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;font-weight:normal;letter-spacing:0;text-transform:none;padding:3px 8px;border-radius:4px;cursor:pointer;white-space:nowrap';
+    copyAllBtn.onclick = () => {
+      const lines = [];
+      sortedWks.forEach(wk => { wkGroups[wk].replays.forEach(r => { const line = gfwlBuildReplayLine(r); if (line) lines.push(line); }); });
+      if (!lines.length) { copyAllBtn.textContent = 'Nothing to copy'; setTimeout(()=>copyAllBtn.textContent=copyAllDefaultLabel, 1500); return; }
+      navigator.clipboard.writeText(lines.join('\n')).then(() => {
+        copyAllBtn.textContent = '✓ Copied '+lines.length;
+        setTimeout(() => { copyAllBtn.textContent = copyAllDefaultLabel; }, 1500);
+      }).catch(() => { copyAllBtn.textContent = 'Copy failed'; setTimeout(()=>copyAllBtn.textContent=copyAllDefaultLabel, 1500); });
+    };
+    deckSecLbl.appendChild(copyAllBtn);
+  }
+
   // Mini deck viewer selected state
   let _miniSelected = null;
   const miniViewArea = document.createElement('div');
@@ -7794,6 +7837,18 @@ async function flEventImportRun() {
   const pendingNames = [];
   const mismatchedNames = []; // { who, p1, p2 } per skipped replay, for the summary line
   const hardFailedReplays = []; // { who, rid } per replay that never loaded even after retries
+  // { who, flTotal, matched } per player who ends this run with literally
+  // zero replays saved and no error/mismatch/hard-failure explaining why —
+  // the exact "0 shown, 0 errors" silent-failure shape the comment below
+  // already called out for the wrong-event-code case, but which previously
+  // had NO visibility at all when Format Library's own search came back
+  // with zero rows for this player in the first place (as opposed to
+  // finding rows tagged under a different code). A green "attached (0
+  // replay(s))" line looks identical to a legitimate "this player really
+  // has nothing more to import" case, so this is surfaced loudly at the
+  // end instead of relying on anyone noticing a "(0 replay(s))" in a long
+  // scrolling log.
+  const zeroReplayPlayers = [];
 
   for (let i = 0; i < decks.length; i++) {
     const deck = decks[i];
@@ -7826,6 +7881,9 @@ async function flEventImportRun() {
       // replay dropped HERE never shows up as an amber mismatch warning
       // either; it just vanishes with nothing on screen to explain why.
       let replayRows = [];
+      let allFlReplays = [];
+      let flDiagnostics = null;
+      let flFetchFailed = false;
       const normEvId = s => (s||'').toUpperCase().replace(/[^A-Z0-9]/g, '');
       const wantEvId = normEvId(eventId);
       // Look up this player's known aliases BEFORE the FL fetch (not just
@@ -7842,7 +7900,8 @@ async function flEventImportRun() {
         const rdata = await rres.json().catch(()=>({}));
         if (rres.status === 401) { log('<span style="color:var(--red)">⚠ Format Library token expired — stopping.</span>'); break; }
         if (rres.ok) {
-          const allFlReplays = rdata.replays || [];
+          allFlReplays = rdata.replays || [];
+          flDiagnostics = rdata.diagnostics || null;
           replayRows = allFlReplays.filter(r => normEvId(r.eventId) === wantEvId);
           // Diagnostic: if Format Library has replays on record for this
           // player but most/all of them didn't match this event's code, show
@@ -7859,8 +7918,28 @@ async function flEventImportRun() {
               log('&nbsp;&nbsp;<span style="color:var(--muted)">ℹ '+_escapeHtml(who)+': Format Library has '+allFlReplays.length+' total GOAT replay(s) on record, '+replayRows.length+' tagged for event '+_escapeHtml(eventId)+'. Other event code(s) seen on their other replays: '+otherCodes.map(_escapeHtml).join(', ')+'.</span>');
             }
           }
+          // The other half of the SAME "0 shown, 0 errors look identical"
+          // problem: FL's own search came back with literally nothing at
+          // all for this name (+ aliases) — not "found some, wrong code",
+          // just zero. That's indistinguishable on screen from "this
+          // player's data is fully imported already, nothing new to add"
+          // unless the raw search diagnostics (how many pages were walked,
+          // how many rows Format Library actually returned per page, which
+          // names were searched) are shown right here, player by player.
+          if (!allFlReplays.length) {
+            const d = flDiagnostics || {};
+            const pageInfo = Array.isArray(d.pageRowCounts) && d.pageRowCounts.length
+              ? ' (pages fetched: '+(d.pagesFetched!=null?d.pagesFetched:d.pageRowCounts.length)+', rows/page: '+d.pageRowCounts.join(',')+')'
+              : (d.pagesFetched!=null ? ' (pages fetched: '+d.pagesFetched+')' : '');
+            const namesInfo = Array.isArray(d.searchNames) && d.searchNames.length > 1
+              ? ' Searched as: '+d.searchNames.map(_escapeHtml).join(', ')+'.'
+              : '';
+            log('&nbsp;&nbsp;<span style="color:var(--muted)">ℹ '+_escapeHtml(who)+': Format Library search returned 0 GOAT replays total for this name'+(aliasesForFetch.length?' + '+aliasesForFetch.length+' alias(es)':'')+'.'+namesInfo+pageInfo+' If this player definitely played in this event, this is worth double-checking on Format Library directly rather than assuming it\'s correct.</span>');
+          }
+        } else {
+          flFetchFailed = true;
         }
-      } catch(e) { log('<span style="color:var(--amber)">⚠ Replay list fetch failed for '+_escapeHtml(who)+': '+_escapeHtml(e.message)+'</span>'); }
+      } catch(e) { flFetchFailed = true; log('<span style="color:var(--amber)">⚠ Replay list fetch failed for '+_escapeHtml(who)+': '+_escapeHtml(e.message)+'</span>'); }
 
       // Dedup replay IDs the same way the existing single-player panel does
       const seen = new Set();
@@ -7983,6 +8062,17 @@ async function flEventImportRun() {
         } catch(e) { log('<span style="color:var(--red)">⚠ Could not store pending data for '+_escapeHtml(who)+': '+_escapeHtml(e.message)+'</span>'); errors++; }
       }
 
+      // Flag this player for the end-of-run summary when they finish this
+      // whole pass with ZERO replays actually saved and nothing else already
+      // explains why (no fetch failure logged above, no replay that hard-
+      // failed after 3 retries, no mismatch that still got saved anyway) —
+      // this is the specific "green success line, (0 replay(s)), nothing
+      // looks wrong" shape that's easy to scroll right past in a 40+ player
+      // bracket import.
+      if (!parsedReplays.length && !flFetchFailed && !replayIds.some(ri => hardFailedReplays.some(h => h.who === who && h.rid === ri.id))) {
+        zeroReplayPlayers.push({ who, flTotal: allFlReplays.length, matched: replayRows.length });
+      }
+
       // 4. Classify the decklist from its own cards (OUR rules, not just
       // whatever Format Library's deckTypeName says) and feed that
       // classification back into the event's own bracket data — this is
@@ -8052,6 +8142,20 @@ async function flEventImportRun() {
     hardFailedReplays.forEach(m => { (byWho2[m.who] = byWho2[m.who]||[]).push(m.rid); });
     const summary2 = Object.entries(byWho2).map(([who, rids]) => _escapeHtml(who)+' ('+rids.join(', ')+')').join('; ');
     log('<div style="margin-top:4px;color:var(--red)">✗ '+hardFailedReplays.length+' replay(s) failed to load from DuelingBook after 3 retries and were NOT saved: '+summary2+'. Re-run this import to try them again — this is usually a transient CapSolver/DuelingBook hiccup, not missing data.</div>');
+  }
+  // Called out separately and loudly, same pattern as the two summaries
+  // above — these are players who ended this run with ZERO replays saved
+  // and no error, hard-failure, or mismatch anywhere in the log to explain
+  // why. Scroll up to this player's own ℹ line (search their name) to see
+  // exactly what Format Library's search returned (0 total vs. some-but-
+  // wrong-event-code) and the raw pagination diagnostics behind it — this
+  // list exists specifically so that case isn't indistinguishable from "this
+  // player simply has nothing more to import" without reading the whole log.
+  if (zeroReplayPlayers.length) {
+    const summary3 = zeroReplayPlayers.map(z =>
+      _escapeHtml(z.who)+(z.flTotal ? ' ('+z.flTotal+' FL replay(s) found, 0 matched event '+_escapeHtml(eventId)+')' : ' (0 FL replays found at all)')
+    ).join('; ');
+    log('<div style="margin-top:4px;color:var(--amber)">⚠ '+zeroReplayPlayers.length+' tracked player(s) ended this run with 0 replays saved for this event and no visible error — worth double-checking against Format Library directly: '+summary3+'.</div>');
   }
   statusEl.style.color = errors ? 'var(--amber)' : (mismatchCount ? 'var(--amber)' : 'var(--green)');
   statusEl.textContent = 'Import complete for '+eventId+'.';
@@ -10450,6 +10554,11 @@ function classifyFromCards(cards) {
     scores['Gravekeeper'] = 0;
   }
   if (has('last turn')) { scores['Last Turn']+=1.50; Object.keys(scores).filter(k=>k!=='Last Turn').forEach(k=>scores[k]*=0.1); }
+  // Final Countdown: the card IS the archetype — a deck running it has
+  // committed to winning off its own 20-turn effect (or 10 with Timeater),
+  // same single-defining-card logic as Last Turn just above. Per explicit
+  // instruction: any decklist that contains it auto-qualifies as this type.
+  if (has('final countdown')) { scores['Final Countdown']+=1.50; Object.keys(scores).filter(k=>k!=='Final Countdown').forEach(k=>scores[k]*=0.1); }
   if (has('royal magical library')) { scores['Library FTK']+=1.50; Object.keys(scores).filter(k=>k!=='Library FTK').forEach(k=>scores[k]*=0.1); }
   const pacmanCards = ['des lacooda','golem sentry','swarm of locusts','swarm of scarabs'].filter(has);
   if (pacmanCards.length>=2) { scores['Pacman']+=1.50; Object.keys(scores).filter(k=>k!=='Pacman').forEach(k=>scores[k]*=0.1); }
@@ -11119,7 +11228,7 @@ const DECK_TYPE_LIST = [
   'Goat Control','Chaos Control','Chaos Warrior','Warrior','Monarch','Earth Aggro',
   'Aggro Lockdown','Chaos Turbo','Reasoning Gate Turbo','Reasoning Gate Machine',
   'Chaos Return','Chaos Recruiter','Gravekeeper','Burn','Panda Burn','Drain Burn',
-  'Last Turn','Pacman','Ben Kai OTK','Relinquished','Chaos Relinquished',
+  'Last Turn','Final Countdown','Pacman','Ben Kai OTK','Relinquished','Chaos Relinquished',
   'Library FTK','Gumo','Rescue Cat Earth Aggro','Rescue Cat OTK','Rescue Cat OTK',
   'Rescue Cat Burn','Gearfried Warriors','Thunder Clap','Zombie','Stein OTK','Unknown'
 ].sort();
@@ -16130,6 +16239,7 @@ const DECK_COLORS = {
   'Stein OTK':            '#aaaaff',
   'SWAG':                 '#ffaa00',
   'Last Turn':            '#cc44cc',
+  'Final Countdown':      '#66ccff',
   'Library FTK':          '#44ffcc',
   'Empty Jar':            '#888888',
   'Zombie':               '#66ff66',
@@ -16843,6 +16953,103 @@ function eventsShowList() {
   loadEventsTab();
 }
 
+// ── Export Event Replays (XLSX) ─────────────────────────────────────────────
+// One workbook, one sheet per tracked player in this event's bracket, each
+// sheet listing every replay that player has on record for THIS event:
+// Event ID | Replay Link | Round | Deck Type | Opponent | Opponent Deck Type.
+// A literal .csv can't hold more than one sheet/tab, so this reuses the same
+// SheetJS workbook writer exportPlayerXLSX (above) already uses — a true
+// multi-tab Excel file, tab name = player's name, rather than a zip of
+// separate .csv files or one flat sheet with an extra Player column.
+async function exportEventReplaysXLSX(code) {
+  const btn = document.getElementById('events-export-btn');
+  const setLabel = t => { if (btn) btn.textContent = t; };
+  const detail = _eventsState.detail;
+  if (!detail || _eventsState.code !== code) { st('Event data not loaded yet.', 'var(--red)'); return; }
+  if (typeof XLSX === 'undefined') { st('SheetJS not loaded — try again in a moment', 'var(--red)'); return; }
+
+  setLabel('Exporting…');
+  if (btn) btn.disabled = true;
+  try {
+    const decks = detail.decks || [];
+    const trackedDecks = decks.filter(d => d.trackedPlayer);
+    if (!trackedDecks.length) { st('No tracked players (with Duel Tools profiles) for this event.', 'var(--amber)'); return; }
+
+    // One fetch of every batch (alias data included) — same cached
+    // /batches/all-full path the bulk admin tools already use, instead of
+    // one request per tracked player (a 54-entrant event would otherwise
+    // mean 54 separate fetches just to build this one file).
+    const allFull = await getAllBatchesFull().catch(() => []);
+
+    const wb = XLSX.utils.book_new();
+    const usedNames = new Set();
+    const skipped = [];
+
+    for (const deck of trackedDecks) {
+      const tp = deck.trackedPlayer;
+      const reg = window._playerRegistry && window._playerRegistry[tp.toLowerCase()];
+      const names = new Set([tp.toLowerCase(), ...((reg&&reg.aliases)||[]).map(a=>(a||'').toLowerCase())].filter(Boolean));
+      const myBatches = allFull.filter(b => names.has((b.player||'').toLowerCase()) || (b.aliases||[]).some(a => names.has((a||'').toLowerCase())));
+
+      // Same match-to-this-event test eventsRenderReplaysPanel uses (strict
+      // equality on the uppercased label) — keeps this export consistent
+      // with what the event-deck page's own REPLAYS table already shows.
+      const eventReplays = [];
+      for (const b of myBatches) {
+        for (const r of (b.replays||[])) {
+          const evId = (r.eventLabel||r.eventId||'').toUpperCase();
+          if (evId === code) eventReplays.push(r);
+        }
+      }
+      if (!eventReplays.length) { skipped.push(tp); continue; }
+
+      eventReplays.sort((a,b) => roundSortKey(a.round) - roundSortKey(b.round));
+
+      const myDeckType = deck.deckTypeName || '';
+      const rows = [['Event ID','Replay Link','Round','Deck Type','Opponent','Opponent Deck Type']];
+      for (const r of eventReplays) {
+        const p = r.parsed || {};
+        const oppName = r.oppName || p.oppName || 'Unknown';
+        const oppDeck = r.oppDeckOverride || p.oppDeck || _eventsFindBracketDeckType(oppName) || '';
+        const myDeck = r.myDeckOverride || p.myDeck || myDeckType || '';
+        rows.push([
+          code,
+          'https://www.duelingbook.com/replay?id='+r.replayId,
+          r.round || '',
+          myDeck,
+          oppName,
+          oppDeck,
+        ]);
+      }
+
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      ws['!cols'] = [12, 42, 14, 18, 20, 18].map(w => ({ wch: w }));
+      // Excel sheet names: max 31 chars, can't contain : \ / ? * [ ], and
+      // must be unique within the workbook — two players differing only
+      // past char 31, or colliding after the character strip, would
+      // otherwise throw from book_append_sheet instead of just exporting.
+      let sheetName = tp.replace(/[:\\\/?*\[\]]/g, '').slice(0, 31) || 'Player';
+      if (usedNames.has(sheetName.toLowerCase())) {
+        let n = 2;
+        while (usedNames.has((sheetName.slice(0,28)+' ('+n+')').toLowerCase())) n++;
+        sheetName = sheetName.slice(0,28)+' ('+n+')';
+      }
+      usedNames.add(sheetName.toLowerCase());
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    }
+
+    if (!wb.SheetNames.length) { st('No replays on record for any tracked player in this event.', 'var(--amber)'); return; }
+
+    XLSX.writeFile(wb, code+'-replays.xlsx');
+    st('Exported '+wb.SheetNames.length+' player sheet(s) for '+code+(skipped.length?' — '+skipped.length+' tracked player(s) had no replays on record and were skipped':''), 'var(--green)');
+  } catch(e) {
+    st('Export failed: '+e.message, 'var(--red)');
+  } finally {
+    setLabel('⬇ Export');
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function eventsShowDetail(code) {
   _eventsState.code = code;
   _eventsState.detailTab = 'players'; // always land on the player list, not whichever tab was open for the last event
@@ -16903,6 +17110,20 @@ function eventsRenderDetailTabs() {
     btn.onclick = () => eventsSwitchDetailTab(t.id);
     tabsEl.appendChild(btn);
   });
+  // ⬇ Export — a separate action, not a tab (doesn't touch
+  // _eventsState.detailTab), so it's visually set apart from the four
+  // view-switching buttons above via its own border color + a left margin.
+  // Lives here (rebuilt on every eventsRenderDetailTabs call, same as the
+  // tabs) rather than in the static HTML scaffold so it only ever appears
+  // once an event is actually open — _eventsState.code is always set by
+  // the time this renders.
+  const exportBtn = document.createElement('button');
+  exportBtn.id = 'events-export-btn';
+  exportBtn.textContent = '⬇ Export';
+  exportBtn.title = 'Export every tracked player\'s replays for this event to an Excel file, one sheet per player';
+  exportBtn.style.cssText = 'background:none;color:var(--muted);border:1px solid var(--blue);font-family:monospace;font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer;white-space:nowrap;margin-left:8px';
+  exportBtn.onclick = () => exportEventReplaysXLSX(_eventsState.code);
+  tabsEl.appendChild(exportBtn);
 }
 function eventsSwitchDetailTab(tab) {
   _eventsState.detailTab = tab;
@@ -17293,19 +17514,62 @@ function showEventsTopCardsCardModal(section, idx) {
 
 function eventsRenderMatrixSection(container, data) {
   container.innerHTML = `
-    <div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:14px">
+    <div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:14px;overflow-x:auto">
       <div style="font-size:10px;color:var(--muted);letter-spacing:.08em;margin-bottom:10px;font-weight:bold">MATCH-UP MATRIX (match wins)</div>
       <div id="events-mg-matrix"></div>
     </div>
   `;
-  eventsRenderMatchupMatrix(document.getElementById('events-mg-matrix'), data.matchupMatrix||{});
+  eventsRenderMatchupMatrix(document.getElementById('events-mg-matrix'), data.matchupMatrix||{}, data.deckRepresentation||[]);
+}
+
+// Abbreviations for this app's own deck-type universe (DECK_CATEGORY keys)
+// so the matrix's repeated column-header strip stays short regardless of
+// how many archetypes an event has — this, together with the OTHER-folding
+// below, is what keeps the table from needing to be scrolled sideways to
+// read. Row labels stay full names (no ambiguity reading down the left
+// edge, where each name only appears once); only the column headers get
+// abbreviated. Anything missing from this map (an "Unknown" classification,
+// or a deck type added after this map was last updated) falls back to an
+// auto-generated short form instead of silently breaking.
+const DECK_ABBREV = {
+  'Goat Control':'GC', 'Chaos Control':'CC', 'Chaos Relinquished':'CRel',
+  'Last Turn':'LT', 'Final Countdown':'FC', 'Pacman':'Pac',
+  'Warrior':'War', 'Chaos Warrior':'CW', 'Gearfried Warriors':'GFW',
+  'Thunder Clap':'TClap', 'Earth Aggro':'Earth', 'Aggro Lockdown':'AggL',
+  'Gumo':'Gumo', 'Ben Kai OTK':'BK', 'Chaos Recruiter':'Recr',
+  'Chaos Turbo':'CT', 'Reasoning Gate Turbo':'RGT', 'Reasoning Gate Machine':'RGM',
+  'Chaos Return':'CRet', 'Bazoo Return':'Bazoo', 'Monarch':'Mon',
+  'Zombie':'Z', 'Strike Ninja Return':'SNR', 'Stein OTK':'Stein',
+  'SWAG':'SWAG', 'Rescue Cat OTK':'RCOTK', 'Library FTK':'Lib',
+  'Empty Jar':'Jar', 'Panda Burn':'PBurn', 'Drain Burn':'DBurn',
+  'Speed Burn':'SBurn', 'Rescue Cat Burn':'RCBurn', 'Chaos Fairy':'CFairy',
+  'Rescue Cat Earth Aggro':'RCEarth', 'Gravekeeper':'GK', 'Unknown':'Unk',
+  'Other':'Other',
+};
+function deckAbbrev(name) {
+  const n = name || 'Unknown';
+  if (DECK_ABBREV[n] !== undefined) return DECK_ABBREV[n];
+  const words = n.split(/\s+/).filter(Boolean);
+  const abbr = words.length <= 1 ? n.slice(0,5) : words.map(w=>w[0]).join('').toUpperCase();
+  return abbr.slice(0, 6);
 }
 
 // Full deck-vs-deck grid, honestly scoped to what eventsState.matchupMatrix
 // actually contains (see server-side note). Diagonal/self cells are shown
 // like any other — a tracked player who played a mirror match populates it
 // the same way as any other matchup.
-function eventsRenderMatchupMatrix(container, matrix) {
+//
+// deckRepresentation (the full bracket's per-deck-type entrant counts, from
+// the SAME /metagame payload matrix came from) decides which deck types get
+// their own row/column at all: anything with 1 entrant in the whole event or
+// fewer is folded into a single "OTHER" row/column instead — one person's
+// rogue one-off build doesn't need its own column, and a bracket with a
+// long tail of 1-entrant archetypes is exactly what used to make this table
+// wide enough to need horizontal scrolling. Folding sums wins/losses across
+// every merged deck type for BOTH axes, so an (otherwise rare) deck's match
+// still counts exactly once in the OTHER row/column, whichever side of the
+// matchup it was on.
+function eventsRenderMatchupMatrix(container, matrix, deckRepresentation) {
   if (!container) return;
   const decks = matrix.decks || [];
   const cells = matrix.cells || {};
@@ -17313,22 +17577,46 @@ function eventsRenderMatchupMatrix(container, matrix) {
     container.innerHTML = '<div style="color:var(--dim);font-size:11px">No replays on record yet for a Duel Tools-tracked player in this event — the matrix fills in as replays get tagged with this event code.</div>';
     return;
   }
+
+  const repCount = {};
+  (deckRepresentation||[]).forEach(d => { repCount[d.deckTypeName] = d.count; });
+  const isRare = d => (repCount[d] || 0) <= 1;
+  const rareDecks = decks.filter(isRare);
+  const keptDecks = decks.filter(d => !isRare(d));
+  // If EVERY deck type in this event happens to be "rare" (a tiny bracket
+  // where nobody has 2+ decks of anything), folding would leave nothing but
+  // a single OTHER cell — fall back to the original full axis instead,
+  // since that would make the whole matrix useless rather than compact.
+  const hasOther = rareDecks.length > 0 && keptDecks.length > 0;
+  const finalAxis = hasOther ? [...keptDecks, 'OTHER'] : decks;
+  const mapDeck = d => (hasOther && isRare(d)) ? 'OTHER' : d;
+
+  const mergedCells = {};
+  Object.entries(cells).forEach(([key, rec]) => {
+    const sep = key.lastIndexOf('|');
+    const row = key.slice(0, sep), col = key.slice(sep+1);
+    const mKey = mapDeck(row) + '|' + mapDeck(col);
+    if (!mergedCells[mKey]) mergedCells[mKey] = { wins:0, losses:0 };
+    mergedCells[mKey].wins += rec.wins;
+    mergedCells[mKey].losses += rec.losses;
+  });
+
   const table = document.createElement('table');
   table.style.cssText = 'border-collapse:collapse;font-size:10px;width:100%';
-  let thead = '<thead><tr><th style="padding:5px 8px;text-align:left;color:var(--muted);border-bottom:1px solid var(--border)">Deck ↓ \\ Opp →</th>';
-  decks.forEach(d => { thead += `<th style="padding:5px 8px;color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap">${_escapeHtml(d)}</th>`; });
+  let thead = '<thead><tr><th style="padding:4px 6px;text-align:left;color:var(--muted);border-bottom:1px solid var(--border)">Deck ↓ \\ Opp →</th>';
+  finalAxis.forEach(d => { thead += `<th style="padding:4px 6px;color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap" title="${_escapeHtml(d)}">${_escapeHtml(d==='OTHER'?'OTHER':deckAbbrev(d))}</th>`; });
   thead += '</tr></thead>';
   let tbody = '<tbody>';
-  decks.forEach(row => {
-    tbody += `<tr><td style="padding:5px 8px;font-weight:bold;color:var(--text);white-space:nowrap;border-bottom:1px solid var(--border2)">${_escapeHtml(row)}</td>`;
-    decks.forEach(col => {
-      const rec = cells[row+'|'+col];
+  finalAxis.forEach(row => {
+    tbody += `<tr><td style="padding:4px 6px;font-weight:bold;color:var(--text);white-space:nowrap;border-bottom:1px solid var(--border2)" title="${_escapeHtml(row)}">${_escapeHtml(row)}</td>`;
+    finalAxis.forEach(col => {
+      const rec = mergedCells[row+'|'+col];
       if (!rec || (rec.wins+rec.losses)===0) {
-        tbody += '<td style="padding:5px 8px;text-align:center;color:var(--dim);border-bottom:1px solid var(--border2)">—</td>';
+        tbody += '<td style="padding:4px 6px;text-align:center;color:var(--dim);border-bottom:1px solid var(--border2)">—</td>';
       } else {
         const tot = rec.wins+rec.losses, wp = Math.round(rec.wins/tot*100);
         const color = wp>=50 ? 'var(--green)' : 'var(--red)';
-        tbody += `<td style="padding:5px 8px;text-align:center;border-bottom:1px solid var(--border2)" title="${rec.wins}-${rec.losses}"><span style="color:${color};font-weight:bold">${wp}%</span><span style="color:var(--dim)"> (${rec.wins}-${rec.losses})</span></td>`;
+        tbody += `<td style="padding:4px 6px;text-align:center;border-bottom:1px solid var(--border2);white-space:nowrap" title="${rec.wins}-${rec.losses}"><span style="color:${color};font-weight:bold">${wp}%</span> <span style="color:var(--dim)">${rec.wins}-${rec.losses}</span></td>`;
       }
     });
     tbody += '</tr>';
@@ -17339,7 +17627,11 @@ function eventsRenderMatchupMatrix(container, matrix) {
   container.appendChild(table);
   const note = document.createElement('div');
   note.style.cssText = 'font-size:10px;color:var(--dim);margin-top:8px';
-  note.textContent = (matrix.matchesCounted||0) + ' match(es) on record. ' + (matrix.note||'');
+  // Plain .textContent (not .innerHTML) below — these deck-type names need
+  // no HTML-escaping here, unlike the table cells above which are built via
+  // innerHTML and do need it.
+  note.textContent = (matrix.matchesCounted||0) + ' match(es) on record. ' + (matrix.note||'')
+    + (hasOther ? ' Deck type(s) with 1 or fewer entrants in this event ('+rareDecks.join(', ')+') are grouped into OTHER.' : '');
   container.appendChild(note);
 }
 
@@ -17866,6 +18158,75 @@ async function eventsRenderReplaysPanel(container, code, trackedPlayer, builderN
   return replays;
 }
 
+// Shared bracket-progression round ordering — Swiss rounds ascending, THEN
+// single-elimination playoff stages in the order they're actually played
+// (Round of 64/32/16, Quarter/Semi/Grand Finals). Hoisted to top level (used
+// to live only inside eventsRenderMatchupStats) so the "Copy Replays"
+// buttons on BOTH the event-deck REPLAYS table AND the player profile's
+// per-event row (renderEventDecks, a completely different part of this
+// file) sort their copied lines in the same real bracket order instead of
+// each needing — and risking drifting from — its own copy of this logic.
+function roundSortKey(round) {
+  const s = String(round==null?'':round).trim().toLowerCase();
+  if (!s || s === '—' || s === '-') return 100000; // no round data — unknown position, sort last
+  const swiss = s.match(/^round\s*(\d+)$/) || s.match(/^(\d+)$/);
+  if (swiss) return parseInt(swiss[1], 10); // Swiss rounds: 1, 2, 3…
+  const PLAYOFF_STAGES = [
+    [/round of 64/, 900], [/round of 32/, 910], [/round of 16/, 920],
+    [/quarter.?final/, 930], [/semi.?final/, 940], [/grand.?final/, 960], [/^final/, 950],
+  ];
+  for (const [re, rank] of PLAYOFF_STAGES) if (re.test(s)) return rank;
+  return 99000; // some other recognized-but-unmapped label — after Swiss, before "no round at all"
+}
+// A plain numbered Swiss round ("Round 1") shortens to "R1" for the Copy
+// Replays text (matching the requested "EventID R# Replay Link" format);
+// anything else — a playoff stage label like "Quarterfinals", or an
+// unrecognized FL label — is passed through exactly as stored rather than
+// forced into a fake "R#", which is what "also does playoffs with the
+// format you know" means: reuse the label this app already shows, don't
+// invent a new one for playoff rounds.
+function formatRoundShort(round) {
+  const s = String(round==null?'':round).trim();
+  if (!s || s === '—' || s === '-') return '';
+  const m = s.match(/^round\s*(\d+)$/i);
+  return m ? 'R'+m[1] : s;
+}
+// Builds the "Copy Replays" clipboard text for a Format Library event's
+// replay rows: one line per replay, "{eventCode} {round} {replayLink}",
+// sorted into real bracket order first. Shared by the event-deck page's
+// REPLAYS table and the player profile's per-event row so both copy the
+// exact same line shape.
+function buildFlReplaysCopyText(eventCode, replayList) {
+  const sorted = [...(replayList||[])].sort((a,b) => roundSortKey(a.round) - roundSortKey(b.round));
+  return sorted.filter(r => r && r.replayId).map(r => {
+    const rLabel = formatRoundShort(r.round);
+    const link = 'https://www.duelingbook.com/replay?id='+encodeURIComponent(r.replayId);
+    return [eventCode, rLabel, link].filter(Boolean).join(' ');
+  }).join('\n');
+}
+// Wires a small "📋 Copy Replays" button that writes buildFlReplaysCopyText's
+// output to the clipboard, with the same click-to-✓-then-revert feedback
+// used by every other copy-link button in this app (see the per-replay ⎘
+// buttons elsewhere). Returns the button so the caller can place it.
+function makeCopyReplaysButton(eventCode, getReplayList) {
+  const btn = document.createElement('button');
+  const defaultLabel = '📋 Copy Replays';
+  btn.textContent = defaultLabel;
+  btn.title = 'Copy every replay link for this event as "EventID Round Link", one per line';
+  btn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;white-space:nowrap';
+  btn.onclick = e => {
+    e.stopPropagation();
+    const list = getReplayList() || [];
+    const text = buildFlReplaysCopyText(eventCode, list);
+    if (!text) { btn.textContent = 'Nothing to copy'; setTimeout(()=>btn.textContent=defaultLabel, 1500); return; }
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = '✓ Copied '+list.filter(r=>r&&r.replayId).length;
+      setTimeout(() => { btn.textContent = defaultLabel; }, 1500);
+    }).catch(() => { btn.textContent = 'Copy failed'; setTimeout(()=>btn.textContent=defaultLabel, 1500); });
+  };
+  return btn;
+}
+
 // Underneath the deck image grid (appended into the SAME scrollable column,
 // right after MAIN/SIDE DECK) — aggregate stats for this player's replays
 // in THIS event: overall record/win rate, per-opponent matchups (with
@@ -17983,6 +18344,17 @@ function eventsRenderMatchupStats(metaEl, container, trackedPlayer, replays, cod
   // ── REPLAYS (every match this event, Round + accurate Game Score) ──
   {
     const col = makeCol('REPLAYS ('+replays.length+')');
+    // "📋 Copy Replays" — lives in this column's own label row (col's first
+    // child, same div makeCol built), right-aligned next to the count.
+    const replaysLbl = col.firstChild;
+    if (replaysLbl) {
+      replaysLbl.style.display = 'flex';
+      replaysLbl.style.alignItems = 'center';
+      replaysLbl.style.gap = '8px';
+      const copyBtn = makeCopyReplaysButton(code, () => replays);
+      copyBtn.style.marginLeft = 'auto';
+      replaysLbl.appendChild(copyBtn);
+    }
     const tbl = document.createElement('table');
     tbl.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
     tbl.innerHTML = '<thead><tr style="border-bottom:1px solid var(--border2);text-align:left">'
@@ -18002,19 +18374,9 @@ function eventsRenderMatchupStats(metaEl, container, trackedPlayer, replays, cod
     // default, which is why this table previously showed Finals before
     // Semis before Quarters before the Swiss rounds that actually came
     // first. Anything with no round recorded at all sorts last, not
-    // wherever it happened to land in the original array.
-    function roundSortKey(round) {
-      const s = String(round==null?'':round).trim().toLowerCase();
-      if (!s || s === '—' || s === '-') return 100000; // no round data — unknown position, sort last
-      const swiss = s.match(/^round\s*(\d+)$/) || s.match(/^(\d+)$/);
-      if (swiss) return parseInt(swiss[1], 10); // Swiss rounds: 1, 2, 3…
-      const PLAYOFF_STAGES = [
-        [/round of 64/, 900], [/round of 32/, 910], [/round of 16/, 920],
-        [/quarter.?final/, 930], [/semi.?final/, 940], [/grand.?final/, 960], [/^final/, 950],
-      ];
-      for (const [re, rank] of PLAYOFF_STAGES) if (re.test(s)) return rank;
-      return 99000; // some other recognized-but-unmapped label — after Swiss, before "no round at all"
-    }
+    // wherever it happened to land in the original array. roundSortKey is
+    // now a top-level function (see above eventsRenderMatchupStats) so the
+    // Copy Replays button's own sort uses this exact same ordering.
     const sortedReplays = replays.map((r,i)=>({r,i})).sort((a,b) => {
       const ka = roundSortKey(a.r.round), kb = roundSortKey(b.r.round);
       if (ka !== kb) return ka - kb;
@@ -20225,6 +20587,16 @@ function renderEventDecks(player, batches, records) {
     rcSpan.style.cssText = 'font-size:10px;color:var(--dim);margin-left:auto;white-space:nowrap';
     rcSpan.textContent = taggedReplays.length+' replay'+(taggedReplays.length!==1?'s':'');
     row.appendChild(rcSpan);
+
+    // Copy Replays — every replay tagged to THIS event, as "EventID Round
+    // Link" lines (see buildFlReplaysCopyText/makeCopyReplaysButton, shared
+    // with the event-deck page's own REPLAYS table so both copy the exact
+    // same line shape and bracket-order sort).
+    if (taggedReplays.length) {
+      const copyReplaysBtn = makeCopyReplaysButton(deck.code, () => taggedReplays);
+      copyReplaysBtn.style.marginLeft = '0'; // row already has margin-left:auto on rcSpan above
+      row.appendChild(copyReplaysBtn);
+    }
 
     // Edit deck type button
     const editDtBtn = document.createElement('button');
