@@ -7507,7 +7507,13 @@ async function flFetchPreview() {
       await new Promise(r => setTimeout(r, 200));
     }
 
-    _flPreviewData = { flUser, dtPlayer, newReplays, deckCandidates };
+    // flReplays (the FULL list, not just newReplays) carried through so
+    // flConfirmImport can run eventsBackfillEventReplays afterward without
+    // asking Format Library a second time — see that function's own
+    // comment for why "already in batch" (skippedExisting above) is never
+    // enough on its own to guarantee those already-saved replays are
+    // actually tagged to the right event.
+    _flPreviewData = { flUser, dtPlayer, aliasesForSearch, newReplays, flReplays, deckCandidates };
 
     statusEl.style.color = 'var(--green)';
     statusEl.textContent = 'Found '+flReplays.length+' replay(s) on Format Library for "'+flUser+'".';
@@ -7585,7 +7591,7 @@ async function flFetchPreview() {
 
 async function flConfirmImport() {
   if (!_flPreviewData) return;
-  const { dtPlayer, newReplays, deckCandidates } = _flPreviewData;
+  const { dtPlayer, newReplays, flReplays, aliasesForSearch, deckCandidates } = _flPreviewData;
   const aliasRaw = (document.getElementById('fl-aliases-inp').value||'').trim();
   _flPreviewData = null;
   closeFLImport();
@@ -7660,6 +7666,30 @@ async function flConfirmImport() {
       if (_activeProfile && _activeProfile.player === dtPlayer) renderEventDecks(dtPlayer, _activeProfile.batches||[], _activeProfile.records||[]);
     }
     st('Format Library import complete — '+added+' decklist(s) added.', 'var(--green)');
+  }
+
+  // Reconcile EVERY event this player's Format Library history touches, not
+  // just the newReplays that were just imported — the already-saved
+  // replays that "skippedExisting" above counted as "already have it" are
+  // exactly the ones that can be sitting there with a blank/wrong event tag
+  // and never otherwise get fixed (see eventsBackfillEventReplays' own
+  // comment). Reuses the flReplays this run already fetched rather than
+  // asking Format Library again. batchIds resolved fresh (not from before
+  // this import) since a brand-new player's batch didn't exist until go()
+  // just created it above.
+  if (flReplays && flReplays.length) {
+    try {
+      const regKey = dtPlayer.trim().toLowerCase();
+      const regAliases = (window._playerRegistry && window._playerRegistry[regKey]) ? (window._playerRegistry[regKey].aliases||[]) : [];
+      const typedAliases = aliasRaw ? aliasRaw.split(',').map(a=>a.trim()).filter(Boolean) : [];
+      const batchIds = await findBatchIdsForPlayer([dtPlayer, ...regAliases, ...typedAliases, ...(aliasesForSearch||[])]);
+      if (batchIds.length) {
+        const sync = await eventsBackfillEventReplays(null, { name: dtPlayer, batchIds }, flReplays);
+        if (sync.fixed || sync.added) {
+          st('Format Library import complete — also fixed '+sync.fixed+' mistagged and added '+sync.added+' never-saved replay(s) found across '+dtPlayer+'\'s full Format Library history.', 'var(--green)');
+        }
+      }
+    } catch(e) { console.warn('[flConfirmImport] event-tag reconciliation failed:', e.message); }
   }
 }
 
@@ -8416,6 +8446,25 @@ async function flEventImportRun() {
         }
         attachedDirect++;
         log('<span style="color:var(--green)">✓ '+_escapeHtml(who)+': attached to existing profile ('+parsedReplays.length+' replay(s))</span>');
+
+        // Catch replays this player ALREADY had saved (from an earlier
+        // import, possibly long before this app tracked event/round data at
+        // all) that are sitting in their batch mistagged to a blank or
+        // wrong event — the parsedReplays loop above only ever fetches+
+        // saves replayIds this run newly decided to pull, so it can never
+        // touch one of those on its own (same reasoning as the "already in
+        // batch, skipped" gap the single-player panel has — see
+        // eventsBackfillEventReplays' own comment). Reuses allFlReplays
+        // already fetched for this player above instead of asking Format
+        // Library a second time, scoped to just this one event (consistent
+        // with this tool's one-event-at-a-time design) rather than this
+        // player's whole history.
+        try {
+          const syncResult = await eventsBackfillEventReplays(eventId, { name: deck.matchedPlayerName, batchIds: [deck.matchedBatchId] }, allFlReplays);
+          if (syncResult.fixed || syncResult.added) {
+            log('&nbsp;&nbsp;<span style="color:var(--blue)">🔗 '+_escapeHtml(who)+': found '+(syncResult.fixed?syncResult.fixed+' already-saved replay(s) mistagged to this event':'')+(syncResult.fixed&&syncResult.added?' and ':'')+(syncResult.added?syncResult.added+' replay(s) never saved at all':'')+' — fixed.</span>');
+          }
+        } catch(e) { console.warn('[flEventImportRun] event-tag reconciliation failed for', who, ':', e.message); }
       } else {
         // No profile yet — store once; attachPendingFLImports() on the
         // server claims this the moment a matching profile is created.
@@ -14139,6 +14188,24 @@ async function getAllBatchesFull(force) {
 // Cheap and safe to call liberally; it doesn't fetch anything itself.
 function invalidateAllBatchesFullCache() { _allBatchesFullCache = null; }
 
+// Resolves every batch id belonging to a player, matched alias-aware
+// against ANY of the given names (primary name + aliases) — same
+// name-matching convention as go()'s own existing-batch lookup and
+// flFetchPreview's existingIds check (bNames = [player, ...aliases], all
+// lowercased/trimmed), pulled out here as a shared helper instead of a
+// third inline copy of that same logic for eventsBackfillEventReplays'
+// callers, which need a player's batchIds without already holding a
+// trackedPlayer object from a server endpoint that computed it for them.
+async function findBatchIdsForPlayer(names) {
+  const wanted = new Set((names||[]).map(n => (n||'').trim().toLowerCase()).filter(Boolean));
+  if (!wanted.size) return [];
+  const allFull = await getAllBatchesFull().catch(() => []);
+  return allFull.filter(b => {
+    const bNames = [(b.player||'').trim().toLowerCase(), ...((b.aliases||[]).map(a => (a||'').trim().toLowerCase()))];
+    return bNames.some(n => n && wanted.has(n));
+  }).map(b => b.id);
+}
+
 // Full replay data for a SPECIFIC, SMALL set of batch ids — e.g. exactly
 // the batches one Player Profile owns — via POST /api/batches/bulk,
 // instead of getAllBatchesFull() above. getAllBatchesFull() is the right
@@ -19842,55 +19909,72 @@ async function backfillMissingRounds(batchId, searchNames, preloadedBatch) {
 }
 
 // Reconciles a tracked player's batch data against Format Library's own
-// replay list for ONE specific event — the fix for "Format Library's own
-// site shows 10 replays for this player in this event, but the Events tab
-// only shows 1 (or 0)". backfillMissingRounds above only ever looks at
-// replays THIS APP already knows are tagged to the event (replays.filter(r
-// => !r.round)) — it can backfill a missing Round, but it can never find a
-// replay that's missing (or wrong on) eventLabel ITSELF, because that
-// replay was never in the `replays` list to begin with (eventsShowDeck's
-// REPLAYS panel filters by r.eventLabel === code — a replay with a blank or
-// stale eventLabel just silently vanishes from every per-event view, while
-// still correctly counting as "already have this" the next time a
-// per-player Format Library import runs, since that dedup only checks
+// replay list — the fix for "Format Library's own site shows 10 replays for
+// this player in this event, but the Events tab only shows 1 (or 0)".
+// backfillMissingRounds above only ever looks at replays THIS APP already
+// knows are tagged to the event (replays.filter(r => !r.round)) — it can
+// backfill a missing Round, but it can never find a replay that's missing
+// (or wrong on) eventLabel ITSELF, because that replay was never in the
+// `replays` list to begin with (eventsShowDeck's REPLAYS panel filters by
+// r.eventLabel === code — a replay with a blank or stale eventLabel just
+// silently vanishes from every per-event view, while still correctly
+// counting as "already have this" the next time a Format Library import
+// runs, since every dedup check in this app — the single-player panel's
+// existingIds, and the server's own addReplayToBatchData, which only ever
+// updates an existing replay when it was previously timedOut — only checks
 // whether the replayId exists ANYWHERE in the batch, never whether it's
-// tagged to the right event — see flFetchPreview's existingIds check).
-// This is near-guaranteed on any replay saved before this app started
-// capturing event/round data on every row at all, and on anything saved
-// through an import path that never had an event code to attach (a bare
-// replay link pasted with no event column).
+// tagged to the right event. This is near-guaranteed on any replay saved
+// before this app started capturing event/round data on every row at all,
+// and on anything saved through an import path that never had an event
+// code to attach (a bare replay link pasted with no event column) — which
+// is exactly why re-running either import tool never fixes it on its own,
+// no matter how many times.
 //
-// Starts from Format Library's own answer instead: fetch this player's full
-// replay list (aliases included), keep only the rows for THIS event code,
-// then for each one — look it up by replayId across every one of this
-// player's own batches regardless of what (if anything) it's currently
-// tagged with. Already present but mistagged → PATCH eventLabel/round in
-// place (no re-fetch/re-parse needed, the match data itself is fine).
-// Genuinely never saved at all (rare — would mean the original import
-// dropped it outright) → fetch + parse it fresh, same as go() does for a
-// brand-new replay, and attach it to the player's primary batch.
-async function eventsBackfillEventReplays(code, trackedPlayer) {
+// Starts from Format Library's own answer instead: this player's full
+// replay list (aliases included — pass `preloadedFlRows` when the caller
+// already fetched it this run, e.g. flEventImportRun's allFlReplays, rather
+// than asking Format Library a second time), optionally narrowed to ONE
+// event code (pass `code`; omit/pass falsy for a full reconciliation across
+// every event this player has ever played, used by the single-player
+// import panel since its own Format Library search already isn't scoped to
+// one event). For each surviving row — look it up by replayId across every
+// one of this player's own batches regardless of what (if anything) it's
+// currently tagged with. Already present but mistagged → PATCH
+// eventLabel/round in place (no re-fetch/re-parse needed, the match data
+// itself is fine). Genuinely never saved at all (rare — would mean the
+// original import dropped it outright) → fetch + parse it fresh, same as
+// go() does for a brand-new replay, and attach it to the player's primary
+// batch.
+async function eventsBackfillEventReplays(code, trackedPlayer, preloadedFlRows) {
   const result = { checked: 0, fixed: 0, added: 0, failed: 0 };
   if (!trackedPlayer || !trackedPlayer.batchIds || !trackedPlayer.batchIds.length) return result;
   const codeNorm = (code||'').toUpperCase().trim();
-  if (!codeNorm) return result;
 
   const regKey = (trackedPlayer.name||'').toLowerCase();
   const regAliases = (window._playerRegistry && window._playerRegistry[regKey]) ? (window._playerRegistry[regKey].aliases||[]) : [];
   const searchNames = [...new Set([trackedPlayer.name, ...regAliases].filter(Boolean))];
-  if (!searchNames.length) return result;
 
-  let flRows = [];
-  try {
-    const [primary, ...rest] = searchNames;
-    const qs = '/proxy/fl-replays?player='+encodeURIComponent(primary) + (rest.length ? '&aliases='+encodeURIComponent(rest.join(',')) : '');
-    const flRes = await fetch(`${API}${qs}`, { headers: authHeaders() });
-    const flData = await flRes.json().catch(()=>({}));
-    if (flRes.ok) flRows = flData.replays || [];
-    else { result.error = flData.error || ('Format Library request failed (HTTP '+flRes.status+')'); return result; }
-  } catch(e) { result.error = e.message; return result; }
+  let flRows = preloadedFlRows;
+  if (!flRows) {
+    if (!searchNames.length) return result;
+    try {
+      const [primary, ...rest] = searchNames;
+      const qs = '/proxy/fl-replays?player='+encodeURIComponent(primary) + (rest.length ? '&aliases='+encodeURIComponent(rest.join(',')) : '');
+      const flRes = await fetch(`${API}${qs}`, { headers: authHeaders() });
+      const flData = await flRes.json().catch(()=>({}));
+      if (flRes.ok) flRows = flData.replays || [];
+      else { result.error = flData.error || ('Format Library request failed (HTTP '+flRes.status+')'); return result; }
+    } catch(e) { result.error = e.message; return result; }
+  }
 
-  const eventRows = flRows.filter(row => (row.eventId||'').toUpperCase().trim() === codeNorm);
+  // With a code: only that event's rows, and every fix targets that one
+  // code. Without one: every row FL returned for this player, each fixed
+  // toward ITS OWN eventId (there's no single target code to compare
+  // against) — rows with no eventId at all are skipped (nothing to tag
+  // them with) rather than guessed at.
+  const eventRows = codeNorm
+    ? (flRows||[]).filter(row => (row.eventId||'').toUpperCase().trim() === codeNorm)
+    : (flRows||[]).filter(row => (row.eventId||'').toUpperCase().trim());
   if (!eventRows.length) return result;
   result.checked = eventRows.length;
 
@@ -19907,9 +19991,10 @@ async function eventsBackfillEventReplays(code, trackedPlayer) {
     const m = (row.replayLink||'').match(/id=([A-Za-z0-9_-]+)/);
     const rid = m ? m[1] : null;
     if (!rid) continue;
+    const targetLabel = codeNorm || (row.eventId||'').toUpperCase().trim();
     const existing = byReplayId.get(rid);
     if (existing) {
-      const needsEventFix = (existing.r.eventLabel||'').toUpperCase().trim() !== codeNorm;
+      const needsEventFix = (existing.r.eventLabel||'').toUpperCase().trim() !== targetLabel;
       const needsRoundFix = !existing.r.round && row.round;
       if (!needsEventFix && !needsRoundFix) continue;
       const patch = {};
