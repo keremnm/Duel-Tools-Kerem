@@ -11354,6 +11354,12 @@ function renderMatchSidebar(query) {
     return;
   }
 
+  // Every per-row ↺ button built below triggers the SAME bulk action (see
+  // its onclick) rather than just refreshing its own row — collected here so
+  // a click can disable every row's button for the duration of that run,
+  // instead of leaving the other rows' buttons clickable mid-bulk-retry.
+  const _allRetryIconBtns = [];
+
   // Placement badges below need _eventPlacements — kick off a background
   // load the first time this sidebar renders without it (never blocks this
   // render; badges just aren't there yet) and re-render once it's in, so
@@ -11533,22 +11539,38 @@ function renderMatchSidebar(query) {
       // person scanning matches is often the first one to notice something
       // looks off (a card missing, a deck that doesn't match, etc.), and
       // shouldn't have to open the match first just to find a way to fix it.
+      // Deliberately refreshes EVERY replay in this player's batch, not just
+      // the one row it's clicked from: the usual reason to reach for this is
+      // "I just fixed/added an alias", and an alias change can affect how
+      // any of this player's replays parse (who's recognized as them, which
+      // side is theirs, etc.) — not only the one replay someone happened to
+      // notice looked wrong. Re-fetching only that one would still leave
+      // every other mis-tagged replay broken.
       const retryIconBtn = document.createElement('button');
       retryIconBtn.textContent = '↺';
-      retryIconBtn.title = 'Retry: re-fetch this replay from DuelingBook and re-parse it';
+      retryIconBtn.title = 'Refresh ALL replays for this player: re-fetch and re-parse every replay in this batch from DuelingBook using the current aliases — not just this one. Use this right after fixing/adding an alias, since that can change how any of these replays parse.';
       retryIconBtn.style.cssText = 'background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px;padding:0 2px;font-family:monospace;flex-shrink:0;opacity:0;transition:opacity .15s';
+      _allRetryIconBtns.push(retryIconBtn);
       retryIconBtn.onclick = async e => {
         e.stopPropagation();
         if (!_activeBatch) return;
-        retryIconBtn.disabled = true; retryIconBtn.textContent = '…';
-        const res = await retryOneReplay(m);
-        if (!res.ok) {
-          retryIconBtn.disabled = false; retryIconBtn.textContent = '↺';
-          st('Retry failed: '+res.error, 'var(--red)');
-          return;
+        const targets = [...(_activeBatch.replays||[])];
+        if (!targets.length) return;
+        _allRetryIconBtns.forEach(b => { b.disabled = true; });
+        retryIconBtn.textContent = '…';
+        const DELAY = 2000; // same pacing as "↺ Retry All" above — server queues concurrent CapSolver calls
+        let succeeded = 0, failed = 0;
+        for (let i = 0; i < targets.length; i++) {
+          if (_stopping) break;
+          retryIconBtn.textContent = `…${i+1}/${targets.length}`;
+          st(`Refreshing ${i+1}/${targets.length} — ${targets[i].replayId}`, 'var(--amber)');
+          if (i > 0) await sleep(DELAY);
+          const res = await retryOneReplay(targets[i]);
+          if (res.ok) succeeded++; else failed++;
         }
-        st('Retry successful: '+m.replayId, 'var(--green)');
-        buildDeck();
+        st(`Refreshed all replays for ${_activeBatch.player||'this player'}: ${succeeded} OK${failed ? ', '+failed+' failed' : ''}.`, failed ? 'var(--amber)' : 'var(--green)');
+        _batchLocalEdits = true;
+        buildDeck(); // full re-render — rebuilds the sidebar (and these buttons) from the refreshed data
       };
       titleRow.appendChild(titleEl);
       if (m.resultOverride) {
@@ -18416,6 +18438,15 @@ function eventsRenderPlayerList(ev) {
   // participant name is usually the correct one, so this is a flag to go
   // fix the alias, not something to silently guess past.
   const needsReviewMark = '<span style="color:var(--amber);font-weight:bold;cursor:help" title="Has a replay for this event, but it was saved without a resolved winner/loser — none of this player\'s known aliases matched the actual DuelingBook name(s) in it. Format Library is usually correct here; add the real name as an alias to fix this.">⚠</span>';
+  // Shown next to the player's name (not in the REPLAYS column — this isn't
+  // "missing" anything, it's a replay that IS resolved but almost certainly
+  // wrong) when d.aliasError is set: at least one of this player's replays
+  // for this event has an impossible best-of-3 score — a 3 on either side
+  // (3-0, 0-3, 3-1, 1-3, 3-2, 2-3). GOAT bracket matches are always best of
+  // 3, so that can only mean two separate matches' games got folded into
+  // one replay record, which is what an alias collision does to the parser.
+  // See buildEventReplayCoverageIndex's aliasError comment (server.js).
+  const aliasErrorMark = '<span style="color:var(--red);font-size:10px;font-weight:bold;cursor:help;margin-left:6px" title="At least one replay for this event has an impossible best-of-3 score (a 3 on either side) — almost always two different matches merged together by an alias collision. Requires manual alias adjustment.">⚠ Check Alias</span>';
 
   function renderRows() {
     const qLower = (_eventsState.playerSearch||'').trim().toLowerCase();
@@ -18441,7 +18472,7 @@ function eventsRenderPlayerList(ev) {
       const place = d.placeNum!=null ? eventsOrdinal(d.placeNum) : (d.placement||'—');
       tbody += `<tr class="events-player-row" data-idx="${idx}" style="border-bottom:1px solid var(--border2);cursor:pointer">
         <td style="padding:7px 10px;color:var(--amber);white-space:nowrap">${_escapeHtml(String(place))}</td>
-        <td style="padding:7px 10px;color:var(--text)">${_escapeHtml(d.builderName||'Unknown')}${d.trackedPlayer?' <span style="color:var(--green);font-size:10px">✓ tracked</span>':''}</td>
+        <td style="padding:7px 10px;color:var(--text)">${_escapeHtml(d.builderName||'Unknown')}${d.trackedPlayer?' <span style="color:var(--green);font-size:10px">✓ tracked</span>':''}${d.aliasError?aliasErrorMark:''}</td>
         <td style="padding:7px 10px;color:var(--muted)">${_escapeHtml(d.deckTypeName||'Unknown')}</td>
         <td style="padding:7px 10px;text-align:center">${d.hasCards?check:cross}</td>
         <td style="padding:7px 10px;text-align:center">${d.hasReplays ? (d.needsReview ? needsReviewMark : check) : cross}</td>

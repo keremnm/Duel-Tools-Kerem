@@ -1197,19 +1197,32 @@ function buildProfileNameIndex() {
 // per deck or per event (O(events × decks × batches) for the list, which is
 // exactly the accidentally-quadratic shape that made /batches/all-full slow
 // before it got cached; see the _allFullCache comment above).
-// Each code maps to { hasReplay: Set, needsReview: Set } — hasReplay is the
-// original "at least one saved replay" set; needsReview is a second set,
-// built in this same pass, of names that have at least one replay tagged to
-// that event which was saved WITHOUT a resolved winner/loser because none of
-// this player's known aliases matched either side's actual DuelingBook name
-// in it (the same `!r.timedOut && !r.parsed` shape editAliases()'s own
-// re-parse sweep already uses to find these). Per the explicit instruction
-// this was built for: Format Library's own participant names are usually
-// the correct ones, so a gap like this is "flag it for a human to check the
-// alias/profile", never a silent guess — this is what lets the Events tab's
-// Replays column distinguish "no replay found at all" from "a replay IS
-// here, but it doesn't match this profile's aliases" instead of only ever
-// showing those two very different situations as the same ✓.
+// Each code maps to { hasReplay: Set, needsReview: Set, aliasError: Set } —
+// hasReplay is the original "at least one saved replay" set; needsReview is
+// a second set, built in this same pass, of names that have at least one
+// replay tagged to that event which was saved WITHOUT a resolved
+// winner/loser because none of this player's known aliases matched either
+// side's actual DuelingBook name in it (the same `!r.timedOut && !r.parsed`
+// shape editAliases()'s own re-parse sweep already uses to find these). Per
+// the explicit instruction this was built for: Format Library's own
+// participant names are usually the correct ones, so a gap like this is
+// "flag it for a human to check the alias/profile", never a silent guess —
+// this is what lets the Events tab's Replays column distinguish "no replay
+// found at all" from "a replay IS here, but it doesn't match this profile's
+// aliases" instead of only ever showing those two very different situations
+// as the same ✓.
+// aliasError is a third set, built the same way: names with at least one
+// replay tagged to that event whose resolved game score has either side
+// reaching 3 or more games won. GOAT bracket matches here are always best
+// of 3 (2 games needed to win), so a "3-0", "0-3", "3-1", "1-3", "3-2" or
+// "2-3" score is never a real result — it means two separate matches' games
+// got folded into one replay record, which is exactly what happens when an
+// alias collision makes the parser attribute a different round's games to
+// this player. Same philosophy as needsReview: this is surfaced as "go fix
+// the alias", not silently guessed past. A manually corrected scoreOverride
+// takes precedence over the raw parsed score, so fixing the alias (which
+// triggers a re-parse) or applying a correct manual override both clear
+// this flag.
 function buildEventReplayCoverageIndex() {
   const index = {};
   for (const batch of Object.values(db.batches)) {
@@ -1218,11 +1231,15 @@ function buildEventReplayCoverageIndex() {
     for (const r of (batch.replays||[])) {
       const code = (r.eventLabel||r.eventId||'').toUpperCase().trim();
       if (!code) continue;
-      if (!index[code]) index[code] = { hasReplay: new Set(), needsReview: new Set() };
+      if (!index[code]) index[code] = { hasReplay: new Set(), needsReview: new Set(), aliasError: new Set() };
       const needsReview = !r.timedOut && !r.parsed;
+      const effMyW  = r.scoreOverride ? r.scoreOverride.my  : (r.parsed && typeof r.parsed.myW  === 'number' ? r.parsed.myW  : null);
+      const effOppW = r.scoreOverride ? r.scoreOverride.opp : (r.parsed && typeof r.parsed.oppW === 'number' ? r.parsed.oppW : null);
+      const aliasError = (typeof effMyW === 'number' && effMyW >= 3) || (typeof effOppW === 'number' && effOppW >= 3);
       for (const n of names) {
         index[code].hasReplay.add(n);
         if (needsReview) index[code].needsReview.add(n);
+        if (aliasError) index[code].aliasError.add(n);
       }
     }
   }
@@ -1259,7 +1276,7 @@ function computeEventStatus(ev, profileIndex, replayCoverageIndex) {
   const incompleteData = [];
   const seenMissing = new Set();
   const seenIncomplete = new Set();
-  const coverage = (replayCoverageIndex && replayCoverageIndex[ev.code]) || { hasReplay: new Set(), needsReview: new Set() };
+  const coverage = (replayCoverageIndex && replayCoverageIndex[ev.code]) || { hasReplay: new Set(), needsReview: new Set(), aliasError: new Set() };
   for (const d of decks) {
     const name = (d.builderName || '').trim();
     if (!name) continue;
@@ -4040,7 +4057,7 @@ const server = http.createServer(async (req, res) => {
     // old per-deck full-batches scan, and why the Events-list Status column
     // (computeEventStatus) now shares this exact same coverage data instead
     // of drawing its own separate, looser "does a profile exist" conclusion.
-    const replayCoverage = buildEventReplayCoverageIndex()[code] || { hasReplay: new Set(), needsReview: new Set() };
+    const replayCoverage = buildEventReplayCoverageIndex()[code] || { hasReplay: new Set(), needsReview: new Set(), aliasError: new Set() };
     const decks = (ev.decks||[]).map(d => {
       const playerEntry = findPlayerByBuilderName(d.builderName);
       // hasReplays: does this player (alias-aware) have at least one saved
@@ -4058,17 +4075,24 @@ const server = http.createServer(async (req, res) => {
       // comment. Distinct from hasReplays itself: this player can be
       // hasReplays:true and needsReview:true at the same time (some
       // replays resolved fine, at least one didn't).
-      let hasReplays = false, needsReview = false;
+      // aliasError: at least one replay tagged to this event for this player
+      // has an impossible best-of-3 score (a 3 on either side) — see
+      // buildEventReplayCoverageIndex's own comment. Drives the "⚠ Check
+      // Alias" flag next to the player's name.
+      let hasReplays = false, needsReview = false, aliasError = false;
       const coverageHas = replayCoverage.hasReplay || new Set();
       const coverageNeedsReview = replayCoverage.needsReview || new Set();
+      const coverageAliasError = replayCoverage.aliasError || new Set();
       if (playerEntry) {
         hasReplays = playerNames(playerEntry).some(n => coverageHas.has(n));
         needsReview = playerNames(playerEntry).some(n => coverageNeedsReview.has(n));
+        aliasError = playerNames(playerEntry).some(n => coverageAliasError.has(n));
       } else {
         const raw = (d.builderName||'').trim().toLowerCase();
         const rawAlt = raw.replace(/_/g, ' ');
         hasReplays = coverageHas.has(raw) || coverageHas.has(rawAlt);
         needsReview = coverageNeedsReview.has(raw) || coverageNeedsReview.has(rawAlt);
+        aliasError = coverageAliasError.has(raw) || coverageAliasError.has(rawAlt);
       }
       return {
         deckId: d.deckId,
@@ -4079,6 +4103,7 @@ const server = http.createServer(async (req, res) => {
         hasCards: !!d.ydkData,
         hasReplays,
         needsReview,
+        aliasError,
         trackedPlayer: playerEntry ? playerEntry.name : null,
       };
     }).sort((a,b) => {
