@@ -7059,6 +7059,21 @@ async function go() {
       const sidebar = document.querySelector('.sidebar');
       if (sidebar) sidebar.insertBefore(report, sidebar.firstChild.nextSibling);
     }
+
+    // This run itself produced at least one of the "saved but unresolved"
+    // replays above — see if a pattern has now emerged across them (or
+    // alongside earlier ones already on file) strong enough to auto-resolve.
+    // See detectAndApplyLikelyAlias's own comment for the confidence bar.
+    if (!_activeBatch.isTemp && _activeBatch.player) {
+      try {
+        const batchIds = [_activeBatch.id, ...((_activeBatch._mergedIds||[]).filter(id => id !== _activeBatch.id))];
+        const discoveries = await detectAndApplyLikelyAlias(_activeBatch.player, batchIds);
+        for (const d of discoveries) {
+          qi(`<span style="color:var(--blue)">🔗 Discovered "<b>${_escapeHtml(d.aliasAdded)}</b>" is likely ${_escapeHtml(_activeBatch.player)}'s own DuelingBook handle (seen in ${d.seenIn}/${d.totalUnresolved} otherwise-unresolved ${_escapeHtml(d.eventLabel)} replay(s)) — added as an alias and re-parsed ${d.reparsed} replay(s).</span>`);
+        }
+        if (discoveries.length) { invalidateAllBatchesFullCache(); buildDeck(); }
+      } catch(e) { console.warn('[go] alias auto-discovery failed:', e.message); }
+    }
   }
 
   renderRPS();
@@ -7701,6 +7716,17 @@ async function flConfirmImport() {
         if (sync.fixed || sync.added) {
           st('Format Library import complete — also fixed '+sync.fixed+' mistagged and added '+sync.added+' never-saved replay(s) found across '+dtPlayer+'\'s full Format Library history.', 'var(--green)');
         }
+
+        // See if a replay saved earlier in this run (or a previous one) with
+        // parsed:null has now built up a strong enough recurring-name
+        // pattern to auto-resolve. See detectAndApplyLikelyAlias's own
+        // comment for the confidence bar.
+        try {
+          const discoveries = await detectAndApplyLikelyAlias(dtPlayer, batchIds);
+          for (const d of discoveries) {
+            st('🔗 Discovered "'+d.aliasAdded+'" is likely '+dtPlayer+'\'s own DuelingBook handle (seen in '+d.seenIn+'/'+d.totalUnresolved+' otherwise-unresolved '+d.eventLabel+' replay(s)) — added as an alias and re-parsed '+d.reparsed+' replay(s).', 'var(--blue)');
+          }
+        } catch(e) { console.warn('[flConfirmImport] alias auto-discovery failed:', e.message); }
       }
     } catch(e) { console.warn('[flConfirmImport] event-tag reconciliation failed:', e.message); }
   }
@@ -8492,6 +8518,19 @@ async function flEventImportRun() {
             log('&nbsp;&nbsp;<span style="color:var(--blue)">🔗 '+_escapeHtml(who)+': found '+(syncResult.fixed?syncResult.fixed+' already-saved replay(s) mistagged to this event':'')+(syncResult.fixed&&syncResult.added?' and ':'')+(syncResult.added?syncResult.added+' replay(s) never saved at all':'')+' — fixed.</span>');
           }
         } catch(e) { console.warn('[flEventImportRun] event-tag reconciliation failed for', who, ':', e.message); }
+
+        // Some of what was just saved for this player (this run, or an
+        // earlier one) may have gone in with parsed:null because the real
+        // DuelingBook name didn't match their known name/aliases — see if a
+        // recurring-name pattern across this event is now strong enough to
+        // auto-resolve it. See detectAndApplyLikelyAlias's own comment for
+        // the confidence bar.
+        try {
+          const aliasDiscoveries = await detectAndApplyLikelyAlias(deck.matchedPlayerName, [deck.matchedBatchId]);
+          for (const d of aliasDiscoveries) {
+            log('&nbsp;&nbsp;<span style="color:var(--blue)">🔗 '+_escapeHtml(who)+': discovered "<b>'+_escapeHtml(d.aliasAdded)+'</b>" is likely their own DuelingBook handle (seen in '+d.seenIn+'/'+d.totalUnresolved+' otherwise-unresolved '+_escapeHtml(d.eventLabel)+' replay(s)) — added as an alias and re-parsed '+d.reparsed+' replay(s).</span>');
+          }
+        } catch(e) { console.warn('[flEventImportRun] alias auto-discovery failed for', who, ':', e.message); }
       } else {
         // No profile yet — store once; attachPendingFLImports() on the
         // server claims this the moment a matching profile is created.
@@ -14258,6 +14297,138 @@ async function findBatchIdsForPlayer(names) {
   }).map(b => b.id);
 }
 
+// ── Auto-discover a likely new alias from saved-but-unresolved replays ─────
+// Shared by every "replays got added to a profile" path: manual Go / Add to
+// Batch, the single-player Import from Format Library panel, and the bulk
+// Import Events from Format Library tool — call this once each one finishes
+// saving, passing the player's canonical name and every batch id they own.
+//
+// Any of those paths can save a replay with parsed:null — not dropped, just
+// unresolved — when neither side's DuelingBook username matched this
+// player's known name/aliases (see go()'s, addToBatch()'s, flConfirmImport's
+// and flEventImportRun's own comments on exactly why those are saved rather
+// than discarded; the raw player1/player2 names are kept specifically so a
+// later alias fix can resolve them without re-fetching). Most of the time
+// that's a one-off — a genuine opponent whose exact spelling nobody's typed
+// in yet. But when the SAME unmatched name shows up across SEVERAL of these
+// for the SAME event, that's a much stronger signal: a real opponent
+// essentially never recurs that many times across one bracket's rounds, so
+// a name that does almost always means it's this player's OWN DuelingBook
+// handle under a spelling Duel Tools didn't know about yet — discovered
+// from the replay data itself, not from any prior alias or name similarity
+// (a similar-looking name only adds confidence AFTER this signal already
+// points there; it's never the deciding factor on its own).
+//
+// Per explicit instruction, this only acts when that signal is actually
+// strong — the name clearly dominates its event group, with no close
+// runner-up. Anything weaker is left exactly as it already was: flagged
+// amber/unresolved for a human to look at, same as before this existed.
+//
+// On a confident match, it:
+//   1. Saves the discovered name as an alias — the registry AND every one
+//      of this player's own batches (the same two-sided, union-preserving
+//      write editAliases() does by hand).
+//   2. Re-parses every affected replay in place (adminReparseReplay) — the
+//      exact "add alias → auto re-parse" mechanism editAliases() already
+//      runs, now firing automatically right after the import that first
+//      surfaced the pattern instead of waiting for someone to notice it.
+// Returns an array of { aliasAdded, reparsed, eventLabel } — one entry per
+// event group a confident alias was found and applied for (usually zero or
+// one), never throws.
+async function detectAndApplyLikelyAlias(playerName, batchIds) {
+  const applied = [];
+  if (!playerName || !batchIds || !batchIds.length) return applied;
+  let owned;
+  try { owned = await getBatchesByIds(batchIds); } catch(e) { return applied; }
+  if (!owned || !owned.length) return applied;
+
+  const normName = s => (s||'').trim().toLowerCase().replace(/_/g, ' ');
+  const regKey = playerName.toLowerCase();
+  const reg = window._playerRegistry && window._playerRegistry[regKey];
+  const knownNorm = new Set([
+    playerName,
+    ...((reg && reg.aliases) || []),
+    ...owned.flatMap(b => b.aliases||[]),
+  ].map(normName).filter(Boolean));
+
+  const mismatched = owned.flatMap(b => (b.replays||[])
+    .filter(r => !r.timedOut && !r.parsed && r.player1 && r.player2)
+    .map(r => ({ replayId: r.replayId, player1: r.player1, player2: r.player2, eventLabel: r.eventLabel||'' })));
+  if (mismatched.length < 2) return applied;
+
+  // Group by event — "recurs across many DIFFERENT rounds of ONE event" is
+  // the actual signal; mixing events together would just be noise, and a
+  // replay with no event tag at all has nothing to scope the signal to.
+  const byEvent = {};
+  for (const r of mismatched) {
+    const ev = (r.eventLabel||'').toUpperCase().trim();
+    if (!ev) continue;
+    (byEvent[ev] = byEvent[ev] || []).push(r);
+  }
+
+  for (const [eventLabel, rows] of Object.entries(byEvent)) {
+    if (rows.length < 2) continue;
+    const counts = new Map(); // normalized name -> { count, original }
+    for (const r of rows) {
+      for (const raw of [r.player1, r.player2]) {
+        if (!raw) continue;
+        const norm = normName(raw);
+        if (!norm || norm === 'system' || knownNorm.has(norm)) continue;
+        const cur = counts.get(norm) || { count: 0, original: raw };
+        cur.count++;
+        counts.set(norm, cur);
+      }
+    }
+    if (!counts.size) continue;
+    const sorted = [...counts.values()].sort((a, b) => b.count - a.count);
+    const top = sorted[0];
+    const secondCount = sorted.length > 1 ? sorted[1].count : 0;
+    // Confidence bar: has to actually recur (>=2), and has to clearly
+    // dominate with no tie for first place. A genuine opponent essentially
+    // never shows up this often across one event's rounds; that's what
+    // separates "this is their own handle" from "ran into the same
+    // opponent twice, coincidentally."
+    if (top.count < 2 || top.count <= secondCount) continue;
+
+    // Never silently annex a name that's already someone ELSE's tracked
+    // identity — same guard the "close name" auto-aliasing elsewhere in
+    // this file (flFetchPreview, flEventImportRun) already uses.
+    if (flFindMatchingProfileKeys(top.original, regKey).length) continue;
+
+    const casedAliases = [];
+    const seenNorm = new Set();
+    for (const a of [...((reg && reg.aliases) || []), ...owned.flatMap(b => b.aliases||[]), top.original]) {
+      const norm = normName(a);
+      if (!norm || seenNorm.has(norm)) continue;
+      seenNorm.add(norm);
+      casedAliases.push(a);
+    }
+
+    try {
+      await fetch(API+'/players/'+encodeURIComponent(playerName)+'/aliases', {
+        method:'PATCH', headers: authHeaders(), body: JSON.stringify({ aliases: casedAliases })
+      });
+      if (!window._playerRegistry) window._playerRegistry = {};
+      window._playerRegistry[regKey] = { ...(reg||{name:playerName}), name: playerName, aliases: casedAliases };
+      for (const bid of batchIds) {
+        try { await fetch(API+'/batches/'+bid, { method:'PATCH', headers: authHeaders(), body: JSON.stringify({ aliases: casedAliases }) }); } catch(e) {}
+      }
+
+      let reparsed = 0;
+      for (const r of rows) {
+        const ok = await adminReparseReplay(playerName, r.replayId, null, true);
+        if (ok) reparsed++;
+        await new Promise(res => setTimeout(res, 150));
+      }
+      invalidateAllBatchesFullCache();
+      applied.push({ aliasAdded: top.original, reparsed, eventLabel, seenIn: top.count, totalUnresolved: rows.length });
+    } catch(e) {
+      console.warn('[detectAndApplyLikelyAlias] failed to apply discovered alias', top.original, ':', e.message);
+    }
+  }
+  return applied;
+}
+
 // Full replay data for a SPECIFIC, SMALL set of batch ids — e.g. exactly
 // the batches one Player Profile owns — via POST /api/batches/bulk,
 // instead of getAllBatchesFull() above. getAllBatchesFull() is the right
@@ -16609,6 +16780,10 @@ async function addToBatch() {
   // up until a refresh re-fetched the batch from the server and it was
   // simply gone, with nothing in the UI ever having said it didn't save.
   const _failedSaves = [];
+  // Counts replays saved this run with parsed:null (neither side matched
+  // this batch's known player/aliases) — gates the alias auto-discovery
+  // call below so a normal add (nothing unresolved) skips it entirely.
+  let _mismatchCountAdd = 0;
 
   for (let i=0; i<newIds.length; i++) {
     st('Loading '+(i+1)+'/'+newIds.length+' — '+newIds[i], 'var(--muted)');
@@ -16620,6 +16795,7 @@ async function addToBatch() {
     const _rpsA = (result.allPlays||result.plays||[]).filter(p=>p.play==='RPS').map(p=>({game:p.game||null,player1:p.player1||null,player2:p.player2||null,player1_choice:p.player1_choice||p.p1pick||null,player2_choice:p.player2_choice||p.p2pick||null,pick:p.pick||null}));
     const _ppA = parseMatch(result.id, result.allPlays||result.plays||[], _activeBatch.player||'', _activeBatch.aliases||[], result.player1, result.player2);
     const _psA = _ppA ? { games:_ppA.games, allMine:_ppA.allMine, allOpp:_ppA.allOpp, oppName:_ppA.oppName, myW:_ppA.myW, oppW:_ppA.oppW, draws:_ppA.draws, score:_ppA.score, result:_ppA.result } : null;
+    if (!_psA && !result.timedOut && (result.player1 || result.player2)) _mismatchCountAdd++;
     const _replayEventLabelA = (_idEventMapA && _idEventMapA[result.id]) || _batchEventLabel || '';
     const _replayRoundA = (_idRoundMapA && _idRoundMapA[result.id]) || '';
     const replayEntry = { replayId:result.id, plays:_rpsA, allPlays:[], timedOut:result.timedOut, player1:result.player1||null, player2:result.player2||null, oppName:_oppName, parsed:_psA, eventLabel:_replayEventLabelA, round:_replayRoundA };
@@ -16669,6 +16845,22 @@ async function addToBatch() {
   // /batches/all-full snapshot has to be dropped here as well, or Profile
   // keeps showing the pre-add state for the rest of this session.
   invalidateAllBatchesFullCache();
+
+  // This run itself saved at least one "parsed:null" replay — see if a
+  // pattern has now emerged strong enough to auto-resolve it. See
+  // detectAndApplyLikelyAlias's own comment for the confidence bar.
+  if (_mismatchCountAdd && !_activeBatch.isTemp && _activeBatch.player) {
+    try {
+      const batchIds = [_activeBatch.id, ...((_activeBatch._mergedIds||[]).filter(id => id !== _activeBatch.id))];
+      const discoveries = await detectAndApplyLikelyAlias(_activeBatch.player, batchIds);
+      if (discoveries.length) {
+        const parts = discoveries.map(d => `"${d.aliasAdded}" (seen in ${d.seenIn}/${d.totalUnresolved} unresolved ${d.eventLabel} replays, ${d.reparsed} re-parsed)`);
+        st((_activeBatch.name||_activeBatch.player)+' — discovered and added alias: '+parts.join('; '), 'var(--blue)');
+        invalidateAllBatchesFullCache();
+      }
+    } catch(e) { console.warn('[addToBatch] alias auto-discovery failed:', e.message); }
+  }
+
   loadBatches();
   // Temp batches: skip RPS entirely, only show deck viewer for both players
   if (_activeBatch.isTemp) {
@@ -17510,6 +17702,207 @@ function eventStatusBadge(ev) {
   return '<span style="color:var(--red);font-weight:bold">✗ Missing Data</span>';
 }
 
+// Add/view/edit a free-text admin note on one event — for annotating known
+// Format Library data problems (a player submitted the wrong replay link
+// for a round, a mangled/duplicate bracket name, a whole event missing from
+// FL's own site, etc.) that have nowhere else to live on this page. Purely
+// informational: nothing reads ev.note to drive status/sync behavior (see
+// PATCH /api/events/:code/note's own comment on the server), so leaving one
+// can never change what Complete/Missing Data/etc. shows. One modal handles
+// both "add a note" and "edit the existing one" — the textarea just starts
+// pre-filled with whatever's already there, same as every other inline
+// editor in this file (aliases, round, deck type). Saving with an empty
+// textarea clears the note.
+function showEventNoteModal(ev) {
+  const existing = document.getElementById('event-note-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'event-note-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:420px;width:100%;display:flex;flex-direction:column;gap:10px';
+
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;gap:8px';
+  hdr.innerHTML = '<span style="font-family:monospace;font-weight:bold;font-size:13px;color:var(--amber)">🗒 Event Note — '+_escapeHtml(ev.code)+'</span>';
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = 'margin-left:auto;background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer';
+  closeBtn.onclick = () => overlay.remove();
+  hdr.appendChild(closeBtn);
+  box.appendChild(hdr);
+
+  const desc = document.createElement('div');
+  desc.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace';
+  desc.textContent = 'Annotate any Format Library data issues for this event (wrong replay submitted for a round, a mangled bracket name, missing rounds, etc.) — purely a note to yourself/other admins, never read by any sync or status check.';
+  box.appendChild(desc);
+
+  const noteInput = document.createElement('textarea');
+  noteInput.value = ev.note || '';
+  noteInput.placeholder = 'e.g. "flosel74 submitted the wrong replay for Round 4 — round is manually set on his profile until FL fixes it."';
+  noteInput.style.cssText = 'width:100%;min-height:110px;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:8px;border-radius:6px;outline:none;resize:vertical;box-sizing:border-box';
+  box.appendChild(noteInput);
+
+  const errEl = document.createElement('div');
+  errEl.style.cssText = 'font-size:11px;color:var(--red);min-height:14px;font-family:monospace';
+  box.appendChild(errEl);
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px';
+  const saveBtn = document.createElement('button');
+  saveBtn.textContent = 'Save Note';
+  saveBtn.style.cssText = 'flex:1;background:var(--amber);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:13px;padding:10px;border-radius:6px;cursor:pointer';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:13px;padding:10px 16px;border-radius:6px;cursor:pointer';
+  cancelBtn.onclick = () => overlay.remove();
+  btnRow.appendChild(saveBtn); btnRow.appendChild(cancelBtn);
+  box.appendChild(btnRow);
+
+  saveBtn.onclick = async () => {
+    const note = noteInput.value.trim();
+    errEl.textContent = '';
+    saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
+    try {
+      const res = await fetch(`${API}/events/${encodeURIComponent(ev.code)}/note`, {
+        method: 'PATCH', headers: authHeaders(), body: JSON.stringify({ note })
+      });
+      const d = await res.json().catch(()=>({}));
+      if (!res.ok) { errEl.textContent = d.error || 'Failed to save note.'; saveBtn.disabled = false; saveBtn.textContent = 'Save Note'; return; }
+      ev.note = d.note != null ? d.note : note; // mutate the same object eventsRenderList() iterates, so the row's badge reflects this immediately
+      overlay.remove();
+      eventsRenderList();
+      st(note ? 'Note saved for '+ev.code+'.' : 'Note cleared for '+ev.code+'.', 'var(--green)');
+    } catch(e) {
+      errEl.textContent = 'Request failed: '+e.message;
+      saveBtn.disabled = false; saveBtn.textContent = 'Save Note';
+    }
+  };
+
+  overlay.appendChild(box);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+  setTimeout(() => noteInput.focus(), 50);
+}
+
+// Clicking the STATUS badge on a non-complete event row pops this up
+// instead of navigating straight to the event detail page — a focused list
+// of just the players who actually have a problem, what the problem is,
+// and a one-click way to go inspect/fix each one, rather than making an
+// admin open the full event, switch to the Players tab, and eyeball which
+// rows have a ⚠ among what can be 100+ entrants (see the screenshot this
+// was built from — the Status column's own truncated "+N more" name list
+// has no way to tell WHICH kind of issue each of those names has, or to act
+// on one directly).
+//
+// Reuses GET /api/events/:code (the same per-deck hasCards/hasReplays/
+// needsReview/aliasError/trackedPlayer data eventsShowDeck's Players tab
+// already computes server-side — see computeEventStatus's own comment) so
+// no new endpoint is needed, and widens the picture beyond whatever single
+// status category this row's badge collapsed down to: computeEventStatus
+// only ever reports ONE status for the whole event (missing_players wins
+// over incomplete_data even when both exist — see its own comment), so a
+// row reading "Missing Player Profiles" can still be hiding other already-
+// profiled players who are separately missing a decklist/replay or need an
+// alias review. This modal lists every one of those, not just the category
+// the row happened to show.
+async function showEventIssuesModal(ev) {
+  const existing = document.getElementById('event-issues-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'event-issues-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:620px;width:100%;max-height:80vh;display:flex;flex-direction:column;gap:10px';
+
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;gap:8px;flex-shrink:0';
+  hdr.innerHTML = '<span style="font-family:monospace;font-weight:bold;font-size:13px;color:var(--amber)">⚠ Player Issues — '+_escapeHtml(ev.code)+'</span>';
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = 'margin-left:auto;background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer';
+  closeBtn.onclick = () => overlay.remove();
+  hdr.appendChild(closeBtn);
+  box.appendChild(hdr);
+
+  const bodyEl = document.createElement('div');
+  bodyEl.style.cssText = 'overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:6px';
+  bodyEl.innerHTML = '<div style="font-size:12px;color:var(--muted);font-family:monospace">Loading…</div>';
+  box.appendChild(bodyEl);
+
+  overlay.appendChild(box);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+
+  let data;
+  try {
+    const res = await fetch(API+'/events/'+encodeURIComponent(ev.code), { headers: authHeaders() });
+    data = await res.json().catch(()=>({}));
+    if (!res.ok) { bodyEl.innerHTML = '<div style="color:var(--red);font-size:12px;font-family:monospace">'+_escapeHtml(data.error||'Failed to load event.')+'</div>'; return; }
+  } catch(e) {
+    bodyEl.innerHTML = '<div style="color:var(--red);font-size:12px;font-family:monospace">Request failed: '+_escapeHtml(e.message)+'</div>';
+    return;
+  }
+
+  // One row per deck with at least one real issue — see the function-level
+  // comment for why this is computed fresh from the full per-deck list
+  // instead of trusting ev.status/missingPlayers/incompleteData alone.
+  const issueRows = [];
+  for (const d of (data.decks||[])) {
+    const issues = [];
+    if (!d.trackedPlayer) {
+      issues.push({ label: 'No Duel Tools profile', color: 'var(--red)' });
+    } else {
+      if (!d.hasCards)   issues.push({ label: 'Missing decklist', color: 'var(--amber)' });
+      if (!d.hasReplays) issues.push({ label: 'Missing replay(s)', color: 'var(--amber)' });
+      if (d.needsReview) issues.push({ label: 'Replay needs alias review', color: 'var(--amber)' });
+      if (d.aliasError)  issues.push({ label: 'Impossible score (3-anywhere) — alias collision', color: 'var(--red)' });
+    }
+    if (issues.length) issueRows.push({ deck: d, issues });
+  }
+
+  if (!issueRows.length) {
+    bodyEl.innerHTML = '<div style="font-size:12px;color:var(--green);font-family:monospace">No outstanding player issues found for this event.</div>';
+    return;
+  }
+
+  const countEl = document.createElement('div');
+  countEl.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace;flex-shrink:0';
+  countEl.textContent = issueRows.length+' player'+(issueRows.length!==1?'s':'')+' with an issue:';
+  bodyEl.innerHTML = '';
+  bodyEl.appendChild(countEl);
+
+  issueRows.forEach(({ deck: d, issues }) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:10px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:8px 10px';
+
+    const info = document.createElement('div');
+    info.style.cssText = 'flex:1;min-width:0';
+    const nameEl = document.createElement('div');
+    nameEl.style.cssText = 'font-family:monospace;font-weight:bold;font-size:12px;color:var(--text)';
+    nameEl.textContent = d.trackedPlayer || d.builderName || 'Unknown';
+    info.appendChild(nameEl);
+    const issuesEl = document.createElement('div');
+    issuesEl.style.cssText = 'font-size:11px;margin-top:2px';
+    issuesEl.innerHTML = issues.map(i => '<span style="color:'+i.color+'">⚠ '+_escapeHtml(i.label)+'</span>').join('<br>');
+    info.appendChild(issuesEl);
+    row.appendChild(info);
+
+    const checkBtn = document.createElement('button');
+    checkBtn.textContent = 'Check →';
+    checkBtn.title = d.trackedPlayer ? 'Open this player\'s deck/replays for this event' : 'Open this bracket entry — no profile exists yet, so this is also where you\'d import one from Format Library';
+    checkBtn.style.cssText = 'background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-size:11px;font-weight:bold;padding:6px 10px;border-radius:5px;cursor:pointer;flex-shrink:0;white-space:nowrap';
+    checkBtn.onclick = () => { overlay.remove(); eventsShowDeck(ev.code, d.deckId); };
+    row.appendChild(checkBtn);
+
+    bodyEl.appendChild(row);
+  });
+}
+
 function eventsRenderList() {
   const tbody = document.getElementById('events-table-body');
   const countRow = document.getElementById('events-count-row');
@@ -17550,15 +17943,37 @@ function eventsRenderList() {
     tr.style.cssText = 'border-bottom:1px solid var(--border);cursor:pointer';
     tr.onmouseover = () => tr.style.background = 'var(--card2)';
     tr.onmouseout  = () => tr.style.background = '';
-    tr.onclick = () => eventsShowDetail(ev.code);
+    tr.onclick = (e) => { if (e.target.closest('.event-note-btn') || e.target.closest('.event-status-click')) return; eventsShowDetail(ev.code); };
+    const hasNote = !!(ev.note && ev.note.trim());
+    // A status of 'missing_players' or 'incomplete_data' is the only case
+    // with actual per-player issues to drill into (see
+    // showEventIssuesModal) — 'complete' has nothing to show and 'error'
+    // means no decks were captured at all, so neither gets the clickable
+    // treatment/pointer cursor.
+    const hasIssues = ev.status === 'missing_players' || ev.status === 'incomplete_data';
+    // Note button — a free-text admin annotation for known Format Library
+    // data problems on this event (wrong replay submitted for a round, a
+    // mangled bracket name, etc. — see showEventNoteModal / PATCH
+    // /api/events/:code/note). Pinned to the right of the STATUS cell via
+    // the flex wrapper below so it sits in the same spot on every row
+    // regardless of how long that row's status text/name list runs.
     tr.innerHTML = `
       <td style="padding:9px 10px;font-weight:bold;color:var(--amber);font-family:monospace">${_escapeHtml(ev.code)}${ev.name?`<div style="font-weight:normal;color:var(--muted);font-size:11px">${_escapeHtml(ev.name)}</div>`:''}</td>
       <td style="padding:9px 10px">${ev.winner ? _escapeHtml(ev.winner) : '<span style="color:var(--dim)">N/A</span>'}</td>
       <td style="padding:9px 10px;color:var(--muted)">${ev.deckCount}</td>
       <td style="padding:9px 10px;color:var(--muted)">${ev.size||ev.deckCount}</td>
       <td style="padding:9px 10px;color:var(--muted)">${ev.date||'—'}</td>
-      <td style="padding:9px 10px">${eventStatusBadge(ev)}</td>
+      <td style="padding:9px 10px">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+          <div class="${hasIssues?'event-status-click':''}" ${hasIssues?'title="Click to see each player with an issue and check it individually"':''} style="${hasIssues?'cursor:pointer':''}">${eventStatusBadge(ev)}</div>
+          <button class="event-note-btn" title="${hasNote ? 'View/edit note (click)' : 'Add a note about Format Library data issues for this event'}" style="background:none;border:1px solid ${hasNote?'var(--amber)':'var(--border)'};color:${hasNote?'var(--amber)':'var(--dim)'};font-family:monospace;font-size:11px;padding:2px 6px;border-radius:4px;cursor:pointer;flex-shrink:0;white-space:nowrap">🗒</button>
+        </div>
+      </td>
     `;
+    const noteBtn = tr.querySelector('.event-note-btn');
+    if (noteBtn) noteBtn.onclick = e => { e.stopPropagation(); showEventNoteModal(ev); };
+    const statusClick = tr.querySelector('.event-status-click');
+    if (statusClick) statusClick.onclick = e => { e.stopPropagation(); showEventIssuesModal(ev); };
     tbody.appendChild(tr);
   });
 
@@ -19256,6 +19671,7 @@ function eventsRenderMatchupStats(metaEl, container, trackedPlayer, replays, cod
       const myDeck  = r.myDeckOverride  || p.myDeck  || _eventsFindBracketDeckType(trackedPlayer.name) || '—';
       const oppDeck = r.oppDeckOverride || p.oppDeck || _eventsFindBracketDeckType(oppName) || '—';
       const round = r.round || '—';
+      const roundManual = !!r.roundManual;
       const resColor = isWin ? 'var(--green)' : isLoss ? 'var(--red)' : 'var(--muted)';
       // Result shows the actual game score (e.g. "2-1") rather than a bare
       // W/L label — only falls back to a W/L/— marker if no score parsed.
@@ -19265,12 +19681,23 @@ function eventsRenderMatchupStats(metaEl, container, trackedPlayer, replays, cod
       tr.style.cssText = 'border-bottom:1px solid var(--border);cursor:pointer';
       tr.onmouseover = () => tr.style.background = 'var(--card2)';
       tr.onmouseout  = () => tr.style.background = '';
-      tr.onclick = (e) => { if (e.target.closest('a')) return; eventsOpenReplayInAnalyzer(r._batchId, r.replayId); };
-      tr.innerHTML = '<td style="padding:6px 8px;color:var(--muted)">'+_escapeHtml(String(round))+'</td>'
+      tr.onclick = (e) => { if (e.target.closest('a') || e.target.closest('.round-edit-btn')) return; eventsOpenReplayInAnalyzer(r._batchId, r.replayId); };
+      // Round cell: plain text plus a small "✎" to manually set/correct it —
+      // for the case Format Library itself got it wrong (e.g. a player
+      // submitted the wrong replay link and FL couldn't tag a round at all,
+      // as "— " blank round above shows). A manually-set round is held
+      // amber (matching the deck-type-override badge convention elsewhere
+      // in this file) and is protected from Retry Round Data / Sync
+      // Replays from Format Library ever overwriting it — see
+      // eventsEditReplayRound and the roundManual checks in
+      // backfillMissingRounds / eventsBackfillEventReplays.
+      tr.innerHTML = '<td style="padding:6px 8px;color:'+(roundManual?'var(--amber)':'var(--muted)')+'">'+_escapeHtml(String(round))+' <button class="round-edit-btn" title="'+(roundManual?'Manually set round (click to change or clear)':'Set round manually — protected from future Format Library syncs')+'" style="background:none;border:none;color:'+(roundManual?'var(--amber)':'var(--dim)')+';cursor:pointer;font-size:10px;padding:0;font-family:monospace">✎</button></td>'
         + '<td style="padding:6px 8px;font-weight:bold;color:'+resColor+'">'+_escapeHtml(resLabel)+'</td>'
         + '<td style="padding:6px 8px">'+_escapeHtml(oppName)+'</td>'
         + '<td style="padding:6px 8px;color:var(--muted)">'+_escapeHtml(myDeck)+' <span style="color:var(--dim)">vs</span> '+_escapeHtml(oppDeck)+'</td>'
         + '<td style="padding:6px 8px;text-align:right"><a href="'+replayUrl+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:var(--amber);font-size:11px;font-weight:bold;text-decoration:none">View ↗</a></td>';
+      const roundEditBtn = tr.querySelector('.round-edit-btn');
+      if (roundEditBtn) roundEditBtn.onclick = e => { e.stopPropagation(); eventsEditReplayRound(r, code, deckId); };
       tbody.appendChild(tr);
     });
     col.appendChild(tbl);
@@ -19298,6 +19725,44 @@ function eventsRenderMatchupStats(metaEl, container, trackedPlayer, replays, cod
       tbody.appendChild(tr);
     });
     col.appendChild(tbl);
+  }
+}
+
+// Manually sets (or clears) one replay's Round — the fix for a Format
+// Library data error upstream of this app: a player submits the wrong
+// replay link for a round, FL can't tag it, and the round comes back blank
+// (or, less often, just wrong) with nothing this app can derive it from on
+// its own (see backfillMissingRounds' own comment — Format Library is the
+// only source of truth for Round). Saves `roundManual: true` alongside the
+// value so Retry Round Data (backfillMissingRounds) and Sync Replays from
+// Format Library (eventsBackfillEventReplays) both skip this replay's Round
+// forever after, instead of re-blanking or re-guessing it on the next sync.
+// Leaving the prompt blank clears both fields, handing Round back to those
+// two sync tools to fill in normally.
+async function eventsEditReplayRound(r, code, deckId) {
+  const current = r.round || '';
+  const input = prompt(
+    'Round for this replay (e.g. "Round 4", "Quarterfinals"):\n\n'
+    + 'Use this when Format Library has the wrong (or no) round for a replay — e.g. a player submitted the wrong replay link and FL couldn\'t tag it.\n'
+    + 'A manually-set round is protected: Retry Round Data and Sync Replays from Format Library will never overwrite it.\n\n'
+    + 'Leave blank to clear the manual round and let Format Library fill it in again.',
+    current
+  );
+  if (input === null) return; // cancelled
+  const newRound = input.trim();
+  const isManual = !!newRound;
+  st('Saving round…', 'var(--amber)');
+  try {
+    const res = await fetch(`${API}/batches/${r._batchId}/replay/${encodeURIComponent(r.replayId)}`, {
+      method: 'PATCH', headers: authHeaders(),
+      body: JSON.stringify({ round: newRound, roundManual: isManual })
+    });
+    if (!res.ok) { st('Failed to save round.', 'var(--red)'); return; }
+    invalidateAllBatchesFullCache();
+    st(isManual ? 'Round set to "'+newRound+'" — protected from future syncs.' : 'Round cleared — Format Library can fill it in again.', 'var(--green)');
+    eventsShowDeck(code, deckId); // full refresh — same pattern as Retry Round Data
+  } catch(e) {
+    st('Error saving round: '+e.message, 'var(--red)');
   }
 }
 
@@ -20126,7 +20591,12 @@ async function backfillMissingRounds(batchId, searchNames, preloadedBatch) {
   if (!freshBatch) {
     try { freshBatch = await (await fetch(`${API}/batches/${batchId}`)).json(); } catch(e) { return 0; }
   }
-  const missingRound = (freshBatch.replays||[]).filter(r => !r.round);
+  // r.roundManual replays are deliberately excluded even though a manually-
+  // set round is never actually blank (so !r.round would already skip it in
+  // practice) — explicit on purpose, so this stays correct even if a manual
+  // round is ever cleared back toward "blank" through some future path
+  // instead of only through eventsEditReplayRound's own clear-to-auto flow.
+  const missingRound = (freshBatch.replays||[]).filter(r => !r.round && !r.roundManual);
   if (!missingRound.length) return 0;
   const roundByReplayId = {};
   // One call covering every searched name (the endpoint itself now searches
@@ -20250,7 +20720,7 @@ async function eventsBackfillEventReplays(code, trackedPlayer, preloadedFlRows) 
     const existing = byReplayId.get(rid);
     if (existing) {
       const needsEventFix = (existing.r.eventLabel||'').toUpperCase().trim() !== targetLabel;
-      const needsRoundFix = !existing.r.round && row.round;
+      const needsRoundFix = !existing.r.round && row.round && !existing.r.roundManual;
       if (!needsEventFix && !needsRoundFix) continue;
       const patch = {};
       if (needsEventFix) patch.eventLabel = row.eventId || code;

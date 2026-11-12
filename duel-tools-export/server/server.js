@@ -1368,7 +1368,14 @@ async function addReplayToBatchData(b, data, req) {
     b.replays[dupIdx] = { replayId:data.replayId, plays:data.plays||[], allPlays:parsedData2?[]:(minPlays||[]).map(stripPlay), parsed:parsedData2, timedOut:false, eventLabel:dup.eventLabel||data.eventLabel||'', round:dup.round||data.round||'', oppName:data.oppName||dup.oppName||'', player1:data.player1||dup.player1||null, player2:data.player2||dup.player2||null, savedAt:Date.now(),
       resultOverride: preservedResultOverride, scoreOverride: preservedScoreOverride,
       myDeckOverride: preservedMyDeckOverride, oppDeckOverride: preservedOppDeckOverride,
-      overrideNote: preservedOverrideNote, crossLinked: dup.crossLinked||false };
+      overrideNote: preservedOverrideNote, crossLinked: dup.crossLinked||false,
+      // A Round manually set while this replay was still timedOut (rare,
+      // but possible — nothing stops an admin from fixing Round before the
+      // real data loads) must survive this wholesale rebuild the same way
+      // the overrides above do, or the very next Retry Round Data run would
+      // just overwrite it right back since the flag that protects it would
+      // otherwise have been silently dropped here.
+      roundManual: dup.roundManual||false };
     b.status = 'ready';
     console.log(`[replay] Updated timed-out replay ${data.replayId} with real data`);
     await saveBatchToPostgres(b.id);
@@ -3676,7 +3683,15 @@ const server = http.createServer(async (req, res) => {
       // every GOAT replay with a round, but that field only started being
       // read/stored here recently) can actually persist what it finds; it
       // was silently dropped by this whitelist before.
-      const fields = ['plays','allPlays','parsed','timedOut','oppName','player1','player2','eventLabel','round','mergedReplays'];
+      // 'roundManual' — set by eventsEditReplayRound when an admin manually
+      // corrects/fills in a replay's Round (e.g. a Format Library data error
+      // where a player submitted the wrong replay link and FL never tagged
+      // a round for it at all). backfillMissingRounds and
+      // eventsBackfillEventReplays both check this flag and skip Round on
+      // any replay that has it set, so a manual correction sticks through
+      // every future "Retry Round Data" / "Sync Replays from Format
+      // Library" run instead of being silently re-blanked or re-guessed.
+      const fields = ['plays','allPlays','parsed','timedOut','oppName','player1','player2','eventLabel','round','roundManual','mergedReplays'];
       for (const f of fields) { if (data[f] !== undefined) r[f] = data[f]; }
       if (data.parsed) {
         r.allPlays = [];
@@ -4019,6 +4034,12 @@ const server = http.createServer(async (req, res) => {
         status: statusInfo.status,
         missingPlayers: statusInfo.missingPlayers,
         incompleteData: statusInfo.incompleteData,
+        // Free-text admin annotation for known Format Library data problems
+        // on this event (wrong replay submitted for a round, a bracket name
+        // FL mangled, etc.) — see PATCH /api/events/:code/note. Surfaced on
+        // the Events list row itself so this doesn't need opening the event
+        // detail page to notice; kept short here, full text lives client-side.
+        note: ev.note || '',
       };
     });
     return json(res, 200, { events: list, total: list.length });
@@ -4116,7 +4137,30 @@ const server = http.createServer(async (req, res) => {
       date: ev.date || fallback.date || '',
       size: ev.size || decks.length,
       winner: ev.winner || null,
+      note: ev.note || '',
       decks,
+    });
+  }
+
+  // ── PATCH /api/events/:code/note — set/edit a free-text admin note on this
+  // event, annotating known Format Library data problems (a player submitted
+  // the wrong replay link, a bracket name FL mangled, missing rounds, etc.)
+  // that aren't otherwise capturable anywhere else on this event. Purely
+  // informational — never read by computeEventStatus or any sync/import
+  // tool, so leaving one doesn't change this event's status or behavior.
+  // Empty string clears it (shown as "no note" client-side, same convention
+  // as every other optional override field in this file). ─────────────────
+  if (parts[0]==='events' && parts[1] && parts[2]==='note' && !parts[3] && method==='PATCH') {
+    if (!isMiner(req)) return json(res, 403, { error: 'Miners and above only' });
+    const code = decodeURIComponent(parts[1]).toUpperCase();
+    const ev = db.events[code];
+    if (!ev) return json(res, 404, { error: 'No data for this event yet.' });
+    return readBody(req, async data => {
+      const note = String(data.note == null ? '' : data.note).trim();
+      ev.note = note;
+      await saveDB('events');
+      logChange(req, 'set_event_note', { code, note });
+      return json(res, 200, { ok: true, note: ev.note });
     });
   }
 
