@@ -1382,7 +1382,16 @@ function mergeDecklistsInto(keep, mergeBatch) {
   if (!keep.eventDecklists) keep.eventDecklists = [];
   let merged = 0;
   for (const d of (mergeBatch.eventDecklists || [])) {
-    const dupIdx = keep.eventDecklists.findIndex(kd => (kd.eventId||'').toUpperCase() === (d.eventId||'').toUpperCase());
+    // `.code` is the real schema (see POST /api/fl-import/pending's own
+    // comment) — `.eventId` only ever shows up on a legacy entry written by
+    // a since-fixed bug in that same route or in flEventImportRun. Falling
+    // back to it here (both for the dedup key AND to repair the copied
+    // entry itself) means a hidden batch carrying one of those old broken
+    // entries gets it SELF-HEALED the moment it's promoted into a real
+    // profile, instead of permanently baking the "undefined" in.
+    if (!d.code && d.eventId) d.code = d.eventId;
+    const dKey = (d.code||'').toUpperCase();
+    const dupIdx = keep.eventDecklists.findIndex(kd => (kd.code||kd.eventId||'').toUpperCase() === dKey);
     if (dupIdx < 0) { keep.eventDecklists.push(d); merged++; }
     else if (!keep.eventDecklists[dupIdx].ydkData && d.ydkData) { keep.eventDecklists[dupIdx] = d; merged++; }
   }
@@ -1433,7 +1442,7 @@ async function mergeBatchesInternal(keep, merge, req, reason) {
   if (mergedReplays && keep.status !== 'ready') keep.status = 'ready';
 
   const eventIds = [...new Set([
-    ...(merge.eventDecklists||[]).map(d => d.eventId).filter(Boolean),
+    ...(merge.eventDecklists||[]).map(d => d.code || d.eventId).filter(Boolean),
     ...(merge.replays||[]).map(r => r.eventLabel).filter(Boolean),
   ])];
 
@@ -1497,7 +1506,12 @@ async function mergeBatchesInternal(keep, merge, req, reason) {
       if (mergeEntry.eventDecklists && mergeEntry.eventDecklists.length) {
         keepEntry.eventDecklists = keepEntry.eventDecklists || [];
         for (const d of mergeEntry.eventDecklists) {
-          const dKey = (d.code || d.eventId || '').toUpperCase();
+          // Same self-heal as mergeDecklistsInto above — repair a legacy
+          // `.eventId`-only entry's `.code` in place before it's copied, not
+          // just when comparing keys, so what survives the merge is
+          // actually readable by getEventDecks et al. afterward.
+          if (!d.code && d.eventId) d.code = d.eventId;
+          const dKey = (d.code || '').toUpperCase();
           const dupIdx = keepEntry.eventDecklists.findIndex(kd => (kd.code || kd.eventId || '').toUpperCase() === dKey);
           if (dupIdx < 0) keepEntry.eventDecklists.push(d);
           else if (!keepEntry.eventDecklists[dupIdx].ydkData && d.ydkData) keepEntry.eventDecklists[dupIdx] = d;
@@ -4993,8 +5007,17 @@ const server = http.createServer(async (req, res) => {
       }
       if (data.ydkData) {
         if (!batch.eventDecklists) batch.eventDecklists = [];
-        const dupIdx = batch.eventDecklists.findIndex(d => (d.eventId||'').toUpperCase() === eventId);
-        const deckEntry = { eventId, ydkData: data.ydkData, importedAt: Date.now(), filename: `${playerName}-${eventId}.ydk` };
+        // `code`, not `eventId` — every reader of an eventDecklists entry
+        // (the client's getEventDecks/renderEventDecks, this file's own
+        // computeEventStatus-adjacent code) keys off `.code`; an entry
+        // stored under `.eventId` instead renders as a literal "undefined"
+        // event on the player's profile once this hidden batch gets
+        // promoted into a real one (see autoMergeHiddenBatches below). The
+        // dupIdx check falls back to `.eventId` too, so an already-broken
+        // legacy entry on this same hidden batch gets corrected in place
+        // instead of duplicated.
+        const dupIdx = batch.eventDecklists.findIndex(d => (d.code||d.eventId||'').toUpperCase() === eventId);
+        const deckEntry = { code: eventId, ydkData: data.ydkData, importedAt: Date.now(), filename: `${playerName}-${eventId}.ydk` };
         if (dupIdx >= 0) batch.eventDecklists[dupIdx] = deckEntry; else batch.eventDecklists.push(deckEntry);
       }
       await saveBatchToPostgres(batch.id);

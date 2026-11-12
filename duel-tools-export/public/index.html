@@ -8450,9 +8450,23 @@ async function flEventImportRun() {
           try {
             const bres = await fetch(API+'/batches/'+deck.matchedBatchId, { headers: authHeaders() });
             const batch = await bres.json();
+            // Every OTHER decklist-writing path in this app (flConfirmImport,
+            // flImportYdkForProfile) keys an eventDecklists entry by `code`,
+            // which is what getEventDecks/renderEventDecks/the profile's own
+            // Event Decklists panel all read — this one wrote `eventId`
+            // instead, which those all treat as absent, rendering the whole
+            // entry as a literal "undefined" event on the player's profile
+            // (and, since the dedup check below only ever compared `.eventId`,
+            // never `.code`, a player who already had a correctly-keyed entry
+            // for this event from one of those other tools would end up with
+            // BOTH a good one and a broken duplicate instead of one being
+            // replaced). Fixed to match the rest of the app's schema, with a
+            // `d.code||d.eventId` fallback on the dedup check so an
+            // already-broken legacy entry gets REPLACED (and thereby
+            // corrected) here instead of duplicated going forward.
             const existingDecklists = batch.eventDecklists || [];
-            const dupIdx = existingDecklists.findIndex(d => (d.eventId||'').toUpperCase() === eventId);
-            const entry = { eventId, ydkData, importedAt: Date.now(), filename: who+'-'+eventId+'.ydk' };
+            const dupIdx = existingDecklists.findIndex(d => (d.code||d.eventId||'').toUpperCase() === eventId);
+            const entry = { code: eventId, ydkData, importedAt: Date.now(), filename: who+'-'+eventId+'.ydk' };
             if (dupIdx >= 0) existingDecklists[dupIdx] = entry; else existingDecklists.push(entry);
             await fetch(API+'/batches/'+deck.matchedBatchId, { method:'PATCH', headers: authHeaders(), body: JSON.stringify({ eventDecklists: existingDecklists }) });
           } catch(e) { log('<span style="color:var(--amber)">⚠ YDK save failed for '+_escapeHtml(who)+': '+_escapeHtml(e.message)+'</span>'); }
@@ -18239,7 +18253,8 @@ function eventsPlayerListMatches(d, qLower) {
 // rounds, so "all of them" means all of them, not just the visibly broken
 // ones.
 async function eventsSyncAllPlayersFromFL(code, decks, statusEl) {
-  const result = { decklistsFixed: 0, replaysFixed: 0, replaysAdded: 0, skipped: 0, failed: 0, total: decks.length };
+  const result = { decklistsFixed: 0, replaysFixed: 0, replaysAdded: 0, profileDecklistsFixed: 0, profileDecklistsCleaned: 0, skipped: 0, failed: 0, total: decks.length };
+  const codeNorm = (code||'').toUpperCase().trim();
 
   // One name->batchIds lookup built up front (one /batches/all-full read,
   // reused via getAllBatchesFull's own cache) instead of a separate lookup
@@ -18258,21 +18273,28 @@ async function eventsSyncAllPlayersFromFL(code, decks, statusEl) {
     const who = d.trackedPlayer || d.builderName || '?';
     if (statusEl) statusEl.textContent = 'Syncing '+(i+1)+'/'+decks.length+' — '+who+'…';
 
-    // 1. Decklist — trigger the server's own lazy YDK fetch for this deck
-    // if it doesn't have one cached yet (mirrors simply opening the page).
-    if (!d.hasCards && d.deckId) {
+    // 1. Decklist (bracket-level — db.events[code].decks[i].ydkData, what
+    // the DECKLIST column actually checks) — trigger the server's own lazy
+    // YDK fetch for this deck if it doesn't have one cached yet (mirrors
+    // simply opening the page). Kept around as bracketDeck so step 3 below
+    // can reuse it instead of asking Format Library a second time.
+    let bracketDeck = null;
+    if (d.deckId) {
       try {
         const r = await fetch(API+'/events/'+encodeURIComponent(code)+'/deck/'+encodeURIComponent(d.deckId), { headers: authHeaders() });
         const dd = await r.json().catch(()=>({}));
-        if (r.ok && dd.deck && dd.deck.ydkData) result.decklistsFixed++;
+        if (r.ok && dd.deck) {
+          bracketDeck = dd.deck;
+          if (!d.hasCards && dd.deck.ydkData) result.decklistsFixed++;
+        }
       } catch(e) {}
     }
 
-    // 2. Replays — only meaningful for a row that already resolves to a
-    // tracked Duel Tools profile (an untracked bracket entry has no batch
-    // to reconcile against yet; that's what the single-player/bulk event
-    // import tools are for).
     if (d.trackedPlayer) {
+      // 2. Replays — only meaningful for a row that already resolves to a
+      // tracked Duel Tools profile (an untracked bracket entry has no batch
+      // to reconcile against yet; that's what the single-player/bulk event
+      // import tools are for).
       const key = d.trackedPlayer.trim().toLowerCase();
       const batchIds = [...new Set(batchIdsByName[key] || [])];
       if (batchIds.length) {
@@ -18286,6 +18308,44 @@ async function eventsSyncAllPlayersFromFL(code, decks, statusEl) {
       } else {
         result.skipped++;
       }
+
+      // 3. PROFILE-level Event Decklists — a completely separate store from
+      // the bracket-level deck in step 1 (this is what the profile's own
+      // EVENT DECKLISTS panel reads via getEventDecks). Two bugs used to
+      // land entries here keyed by `.eventId` instead of `.code`
+      // (flEventImportRun's own YDK-save step, and the hidden-batch
+      // pending-import path that promotes into a real profile the moment
+      // one gets created) — every reader of this list keys off `.code`, so
+      // those entries render as a literal "undefined" event on the profile.
+      // Both write paths are fixed now, but a profile that already got one
+      // of these baked in before the fix won't be touched by anything else
+      // (there's no future merge left to self-heal it once it's resident in
+      // a real, non-hidden batch) — so this drops any such codeless entry
+      // outright and, if that leaves this event missing from the list,
+      // re-adds it correctly using the bracketDeck data already fetched in
+      // step 1 above (no extra Format Library round trip).
+      try {
+        const before = getEventDecks(d.trackedPlayer);
+        const cleaned = before.filter(pd => pd.code && pd.code !== 'undefined');
+        if (cleaned.length !== before.length) result.profileDecklistsCleaned += (before.length - cleaned.length);
+        const alreadyHasThisEvent = cleaned.some(pd => (pd.code||'').toUpperCase().trim() === codeNorm);
+        let changed = cleaned.length !== before.length;
+        if (!alreadyHasThisEvent && bracketDeck) {
+          cleaned.push({
+            code: codeNorm, year: null, deckId: bracketDeck.deckId,
+            deckUrl: 'https://www.formatlibrary.com/decks/'+bracketDeck.deckId,
+            addedAt: Date.now(),
+            place: bracketDeck.placeNum!=null ? bracketDeck.placeNum : (bracketDeck.placement!=null ? bracketDeck.placement : undefined),
+            builder: bracketDeck.builderName || d.builderName || undefined,
+            deckTypeOverride: bracketDeck.deckTypeName || undefined,
+            ydkData: bracketDeck.ydkData || undefined,
+            ydkFileName: bracketDeck.ydkData ? (d.trackedPlayer+'-'+codeNorm+'.ydk') : undefined,
+          });
+          changed = true;
+          result.profileDecklistsFixed++;
+        }
+        if (changed) saveEventDecks(d.trackedPlayer, cleaned);
+      } catch(e) { console.warn('[eventsSyncAllPlayersFromFL] profile decklist fix failed for', who, ':', e.message); }
     } else {
       result.skipped++;
     }
@@ -18326,13 +18386,15 @@ function eventsRenderPlayerList(ev) {
     if (result.decklistsFixed) parts.push(result.decklistsFixed+' decklist(s) fetched');
     if (result.replaysFixed) parts.push(result.replaysFixed+' replay(s) fixed');
     if (result.replaysAdded) parts.push(result.replaysAdded+' replay(s) added');
+    if (result.profileDecklistsFixed) parts.push(result.profileDecklistsFixed+' profile decklist(s) added');
+    if (result.profileDecklistsCleaned) parts.push(result.profileDecklistsCleaned+' broken "undefined" profile decklist(s) removed');
     if (result.failed) parts.push(result.failed+' failed');
     syncAllStatus.textContent = parts.length
       ? 'Done — '+parts.join(', ')+' (checked '+result.total+' player(s)).'
       : 'Done — checked '+result.total+' player(s), everything was already correct.';
     syncAllBtn.disabled = false;
     syncAllBtn.textContent = syncAllDefaultLabel;
-    if (result.decklistsFixed || result.replaysFixed || result.replaysAdded) eventsShowDetail(ev.code); // full refresh so the table reflects it
+    if (result.decklistsFixed || result.replaysFixed || result.replaysAdded || result.profileDecklistsFixed || result.profileDecklistsCleaned) eventsShowDetail(ev.code); // full refresh so the table reflects it
   };
   searchWrap.appendChild(syncAllBtn);
   searchWrap.appendChild(syncAllStatus);
