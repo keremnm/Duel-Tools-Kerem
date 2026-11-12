@@ -1287,7 +1287,23 @@ function computeEventStatus(ev, profileIndex, replayCoverageIndex) {
       continue;
     }
     const hasCards = !!d.ydkData;
-    const hasReplay = coverage.hasReplay.has(key) || coverage.hasReplay.has(keyAlt);
+    // Expand through this player's FULL alias network (registry aliases
+    // included, not just whatever's mirrored onto the batch's own .aliases
+    // array — those two lists can legitimately diverge; see openProfile's
+    // own alias-union fix) before checking replay coverage, exactly like
+    // GET /api/events/:code already does via findPlayerByBuilderName +
+    // playerNames. Checking only the raw/exact builderName string here (as
+    // this used to) under-reported "Missing Replays/Decklists" for any
+    // player whose FL bracket spelling differs from their tracked batch
+    // name and is linked ONLY through a registry alias — their replays are
+    // really on file under the matching alias, this just wasn't looking
+    // for it, so the Status column disagreed with (was more pessimistic
+    // than) the event detail page and the Player Issues modal for the
+    // exact same player.
+    const playerEntry = findPlayerByBuilderName(name);
+    const hasReplay = playerEntry
+      ? playerNames(playerEntry).some(n => coverage.hasReplay.has(n))
+      : (coverage.hasReplay.has(key) || coverage.hasReplay.has(keyAlt));
     if (!hasCards || !hasReplay) {
       if (!seenIncomplete.has(key)) { seenIncomplete.add(key); incompleteData.push(name); }
     }
@@ -4820,6 +4836,23 @@ const server = http.createServer(async (req, res) => {
     // of silently looking like "that's everything").
     let pagesFetched = 0;
     const pageRowCounts = [];
+    // Hard cap on total pages fetched across EVERY searched name combined
+    // (own name + every alias) for this one request. FL's 'player:or:'
+    // filter is an un-word-bounded substring match (see the comment above —
+    // "Chen" matches "Grumplestielzchen"), so a short/common handle, or a
+    // player who's accumulated a long alias list over time, can make FL
+    // hand back page after page of mostly false-positive rows that still
+    // each cost a real round trip + the 250ms pacing below to page through.
+    // Before this cap, that meant a single player's sync could legitimately
+    // run for minutes without ever actually failing or timing out — exactly
+    // the "still syncing the very first player for several minutes" symptom
+    // reported live, which left a caller like eventsSyncAllPlayersFromFL's
+    // bulk "Sync All Players" loop stuck on item 1/38 with no way forward.
+    // 150 pages (1500 raw rows) is already far beyond what any real GOAT
+    // player's match history should produce; hitting it is a sign FL's
+    // search went broad, not that there's genuinely more to page through.
+    const MAX_TOTAL_PAGES = 150;
+    let truncated = false;
     try {
       const replays = [];
       const seenUrls = new Set(); // dedupe across multiple per-name searches — the same replay can surface under more than one searched name
@@ -4829,9 +4862,11 @@ const server = http.createServer(async (req, res) => {
       // alias-only replay (neither side spelled exactly like `player`) would
       // never be found by searching `player` alone, no matter how the
       // exact-match check below is widened.
+      outer:
       for (const searchName of searchNames) {
         let page = 1;
         while (true) {
+          if (pagesFetched >= MAX_TOTAL_PAGES) { truncated = true; break outer; }
           const qs = new URLSearchParams({ page: String(page), limit: '10', sort: 'publishDate:desc,display:desc,roundAbs:desc', filter: 'player:or:' + searchName });
           const { status, body } = await flApiRequest('/api/replays/subscriber?' + qs.toString());
           if (status === 401) return json(res, 401, { error: FL_EXPIRED_MSG });
@@ -4887,10 +4922,11 @@ const server = http.createServer(async (req, res) => {
         }
       }
       if (eventDatesChanged) { try { await saveDB('eventDates'); } catch(e) { console.warn('[EventDates] Save after FL import failed:', e.message); } }
-      return json(res, 200, { ok: true, replays, diagnostics: {
+      if (truncated) console.warn(`[fl-replays] Hit the ${MAX_TOTAL_PAGES}-page cap searching for ${JSON.stringify(searchNames)} — results may be incomplete. This almost always means one of the searched names is short/common enough that Format Library's substring search is casting a very wide net, not that this player genuinely has that many matches.`);
+      return json(res, 200, { ok: true, replays, truncated, diagnostics: {
         totalRowsSeen, nonGoatCount, nameMismatchCount,
         formatsSeen: [...formatsSeen], mismatchSamples,
-        pagesFetched, pageRowCounts, searchNames,
+        pagesFetched, pageRowCounts, searchNames, truncated,
       } });
     } catch(e) {
       return json(res, 502, { error: 'Format Library request failed: ' + e.message });

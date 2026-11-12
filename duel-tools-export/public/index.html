@@ -2892,6 +2892,27 @@ async function loadReplay(id) {
 }
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
+// A plain fetch() never times out on its own — if the server (or something
+// it's waiting on, like a Format Library request) hangs, the Promise just
+// sits pending forever with no error and no feedback. That's invisible on a
+// one-off click, but it's exactly what turns a bulk per-player loop (Sync
+// All Players from Format Library, single-player import, the alias auto-
+// discovery wiring, etc.) into a silent, indefinite stall on whichever
+// player happens to hit it — "still syncing player 1/38 after several
+// minutes" with nothing to click to recover. Wraps any fetch() call with an
+// AbortController-based timeout so a hung request becomes a normal,
+// catchable error (DOMException name 'AbortError') instead of a stall,
+// letting the caller's own try/catch move on to the next item. Defaults to
+// 45s — generous enough for a legitimate multi-page Format Library search
+// (see GET /api/proxy/fl-replays' own MAX_TOTAL_PAGES cap on the server
+// side, which bounds how long a well-behaved search can even take), short
+// enough that a genuinely stuck request doesn't block a bulk run for long.
+function fetchWithTimeout(url, opts, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs || 45000);
+  return fetch(url, { ...(opts||{}), signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // BATCH MANAGEMENT
 // ══════════════════════════════════════════════════════════════════════
@@ -7745,11 +7766,18 @@ async function flConfirmImport() {
 // each parsed replay is POSTed straight to their existing batch
 // (POST /api/batches/:id/replay — same route go() uses) and the YDK is
 // PATCHed into eventDecklists (same shape importEventDecks() writes). For
-// a player with no profile yet, everything is POSTed once to
-// POST /api/fl-import/pending, which the server's attachPendingFLImports()
-// auto-claims (replays everything onto the real batch, already parsed) the
-// moment a matching profile is finally created — see the doc comment above
-// db.pendingFLImports on the server for the full lifecycle.
+// a player with no existing profile and no confident close-name match, a
+// brand-new PUBLIC profile is created right here (POST /api/batches, same
+// as a manual "Create new batch" import) and then treated exactly like an
+// existing match for every step below — no separate pending/promotion path
+// to go through. A replay whose real DuelingBook participants don't match
+// that new profile's name still saves (parsed:null) and is flagged via the
+// event page's existing "Check Alias" review, same as any other profile.
+// POST /api/fl-import/pending (and the server's attachPendingFLImports()
+// auto-claim-on-profile-creation mechanism — see db.pendingFLImports on the
+// server) is kept only as a fallback for the rare case profile creation
+// itself fails, and for a close-name match that's ambiguous between more
+// than one existing profile (queued for an end-of-run prompt instead).
 // Pacing: 300ms between players (matches this file's existing FL-call
 // conventions), 1200ms between individual replay fetches within a player
 // (matches go()'s own convention exactly, line ~6763 above).
@@ -8052,7 +8080,7 @@ async function flEventImportPreview() {
     summary.innerHTML =
       '<div><b>'+decks.length+'</b> player(s) in bracket</div>'+
       '<div><b>'+matched.length+'</b> will attach directly to existing profiles'+(matched.length?': <span style="color:var(--muted)">'+matched.slice(0,6).map(d=>_escapeHtml(d.matchedPlayerName)).join(', ')+(matched.length>6?' +'+(matched.length-6)+' more':'')+'</span>':'')+'</div>'+
-      '<div><b>'+pending.length+'</b> will be held pending (no profile yet)'+(pending.length?': <span style="color:var(--amber)">'+pending.slice(0,6).map(d=>_escapeHtml(d.builderName)).join(', ')+(pending.length>6?' +'+(pending.length-6)+' more':'')+'</span>':'')+'</div>';
+      '<div><b>'+pending.length+'</b> will get a new public profile created (no match found)'+(pending.length?': <span style="color:var(--amber)">'+pending.slice(0,6).map(d=>_escapeHtml(d.builderName)).join(', ')+(pending.length>6?' +'+(pending.length-6)+' more':'')+'</span>':'')+'</div>';
     previewEl.appendChild(summary);
     const confirmBtn = document.createElement('button');
     confirmBtn.className = 'btn-go';
@@ -8252,12 +8280,50 @@ async function flEventImportRun() {
         const candidates = closeKeys.map(k => ({ key:k, name:(window._playerRegistry[k]||{}).name||k, batchId: batchIdByRegKey[k] }));
         unsureMatches.push({ builderName: deck.builderName, candidates });
         log('<span style="color:var(--amber)">❓ '+_escapeHtml(deck.builderName)+' is a close name match to '+candidates.length+' existing profiles ('+candidates.map(c=>_escapeHtml(c.name)).join(', ')+') — not sure which, if any. Will ask at the end of this run.</span>');
+      } else {
+        // Genuinely no existing profile and no close-name candidate to be
+        // ambiguous about — rather than parking this player as a hidden
+        // "pending" batch that just sits invisible until someone happens to
+        // notice and manually creates a matching profile later, create a
+        // real, visible (public) profile for them right now, the same
+        // POST /api/batches a manual "Create new batch" import uses. Every
+        // downstream step below (replay fetch/parse, decklist attach, event-
+        // tag reconciliation, alias auto-discovery) then runs through the
+        // exact same "already has a profile" path as a pre-existing match —
+        // no separate pending/promotion logic needed for players created
+        // this way. A replay whose actual DuelingBook participants don't
+        // match this brand-new profile's name still saves with parsed:null
+        // and shows up via the event page's existing "Check Alias"
+        // flagging, exactly like it already does for any other profile —
+        // nothing extra is needed for that part.
+        try {
+          const cbRes = await fetch(API+'/batches', {
+            method: 'POST', headers: authHeaders(),
+            body: JSON.stringify({ name: deck.builderName, player: deck.builderName, aliases: [] })
+          });
+          if (cbRes.ok) {
+            const newBatch = await cbRes.json();
+            deck.matchedBatchId = newBatch.id;
+            deck.matchedPlayerName = deck.builderName;
+            deck._newlyCreatedProfile = true;
+            const regKeyNew = deck.builderName.toLowerCase();
+            if (!window._playerRegistry) window._playerRegistry = {};
+            if (!window._playerRegistry[regKeyNew]) window._playerRegistry[regKeyNew] = { name: deck.builderName, aliases: [] };
+            batchIdByRegKey[regKeyNew] = newBatch.id;
+            log('<span style="color:var(--blue)">＋ '+_escapeHtml(deck.builderName)+': no existing profile — created a new public profile.</span>');
+          } else {
+            const errData = await cbRes.json().catch(()=>({}));
+            log('<span style="color:var(--amber)">⚠ Could not create a profile for '+_escapeHtml(deck.builderName)+': '+_escapeHtml(errData.error||('HTTP '+cbRes.status))+'. Holding pending instead.</span>');
+          }
+        } catch(e) {
+          log('<span style="color:var(--amber)">⚠ Could not create a profile for '+_escapeHtml(deck.builderName)+': '+_escapeHtml(e.message)+'. Holding pending instead.</span>');
+        }
       }
     }
 
     const who = deck.matchedPlayerName || deck.builderName;
     statusEl.textContent = 'Importing '+(i+1)+'/'+decks.length+' — '+who+'…';
-    log('<span style="color:var(--muted)">→ '+_escapeHtml(who)+(deck.matchedPlayerName?' (matched profile)':' (no profile yet — will hold pending)')+'</span>');
+    log('<span style="color:var(--muted)">→ '+_escapeHtml(who)+(deck._newlyCreatedProfile?' (new public profile)':deck.matchedPlayerName?' (matched profile)':' (no profile yet — will hold pending)')+'</span>');
     try {
       // 1. YDK for this player's bracket deck, if any — keep the raw text
       // around too (not just the base64 copy) so it can be classified below,
@@ -8498,7 +8564,7 @@ async function flEventImportRun() {
           } catch(e) { log('<span style="color:var(--amber)">⚠ YDK save failed for '+_escapeHtml(who)+': '+_escapeHtml(e.message)+'</span>'); }
         }
         attachedDirect++;
-        log('<span style="color:var(--green)">✓ '+_escapeHtml(who)+': attached to existing profile ('+parsedReplays.length+' replay(s))</span>');
+        log('<span style="color:var(--green)">✓ '+_escapeHtml(who)+': attached to '+(deck._newlyCreatedProfile?'new public profile':'existing profile')+' ('+parsedReplays.length+' replay(s))</span>');
 
         // Catch replays this player ALREADY had saved (from an earlier
         // import, possibly long before this app tracked event/round data at
@@ -17848,6 +17914,30 @@ async function showEventIssuesModal(ev) {
     return;
   }
 
+  // Keep the row's own cached status in sync with what this fetch just
+  // found live — _eventsState.list is only re-fetched on an explicit "↺
+  // Refresh" (see loadEventsTab), so without this, a player issue already
+  // fixed through some other action since the list was last loaded (an
+  // alias correction, a replay re-sync, etc.) would leave the row showing
+  // a stale ⚠ even right after this same modal proves nothing's actually
+  // wrong anymore — exactly the "why still showing this?" gap. Mirrors
+  // computeEventStatus's own category logic server-side (missing_players
+  // wins over incomplete_data) so the two never disagree.
+  const freshMissingPlayers = [], freshIncomplete = [];
+  for (const d of (data.decks||[])) {
+    const name = d.builderName || '';
+    if (!name) continue;
+    if (!d.trackedPlayer) { freshMissingPlayers.push(name); continue; }
+    if (!d.hasCards || !d.hasReplays) freshIncomplete.push(name);
+  }
+  const freshStatus = freshMissingPlayers.length ? 'missing_players' : (freshIncomplete.length ? 'incomplete_data' : 'complete');
+  if (ev.status !== freshStatus || JSON.stringify(ev.missingPlayers||[]) !== JSON.stringify(freshMissingPlayers) || JSON.stringify(ev.incompleteData||[]) !== JSON.stringify(freshIncomplete)) {
+    ev.status = freshStatus;
+    ev.missingPlayers = freshMissingPlayers;
+    ev.incompleteData = freshIncomplete;
+    eventsRenderList();
+  }
+
   // One row per deck with at least one real issue — see the function-level
   // comment for why this is computed fresh from the full per-deck list
   // instead of trusting ev.status/missingPlayers/incompleteData alone.
@@ -18721,7 +18811,7 @@ async function eventsSyncAllPlayersFromFL(code, decks, statusEl) {
     let bracketDeck = null;
     if (d.deckId) {
       try {
-        const r = await fetch(API+'/events/'+encodeURIComponent(code)+'/deck/'+encodeURIComponent(d.deckId), { headers: authHeaders() });
+        const r = await fetchWithTimeout(API+'/events/'+encodeURIComponent(code)+'/deck/'+encodeURIComponent(d.deckId), { headers: authHeaders() });
         const dd = await r.json().catch(()=>({}));
         if (r.ok && dd.deck) {
           bracketDeck = dd.deck;
@@ -20608,7 +20698,12 @@ async function backfillMissingRounds(batchId, searchNames, preloadedBatch) {
     try {
       const [primary, ...rest] = uniqueNames;
       const qs = '/proxy/fl-replays?player='+encodeURIComponent(primary) + (rest.length ? '&aliases='+encodeURIComponent(rest.join(',')) : '');
-      const flRes = await fetch(`${API}${qs}`, { headers: authHeaders() });
+      // fetchWithTimeout, not plain fetch — see its own comment. A stuck
+      // search here (e.g. a short/common name FL's substring filter casts
+      // very wide, even with the server's own page cap) must not hang
+      // whatever bulk loop called this (Retry Round Data, Sync Replays from
+      // Format Library, Sync All Players) indefinitely on one player.
+      const flRes = await fetchWithTimeout(`${API}${qs}`, { headers: authHeaders() });
       const flData = await flRes.json().catch(()=>({}));
       if (flRes.ok) {
         for (const row of (flData.replays||[])) {
@@ -20616,7 +20711,7 @@ async function backfillMissingRounds(batchId, searchNames, preloadedBatch) {
           if (m && row.round && !roundByReplayId[m[1]]) roundByReplayId[m[1]] = row.round;
         }
       }
-    } catch(e) { console.warn('[backfillMissingRounds] FL lookup failed:', e.message); }
+    } catch(e) { console.warn('[backfillMissingRounds] FL lookup failed:', e.name === 'AbortError' ? 'timed out' : e.message); }
   }
   let backfilled = 0;
   for (const r of missingRound) {
@@ -20685,11 +20780,11 @@ async function eventsBackfillEventReplays(code, trackedPlayer, preloadedFlRows) 
     try {
       const [primary, ...rest] = searchNames;
       const qs = '/proxy/fl-replays?player='+encodeURIComponent(primary) + (rest.length ? '&aliases='+encodeURIComponent(rest.join(',')) : '');
-      const flRes = await fetch(`${API}${qs}`, { headers: authHeaders() });
+      const flRes = await fetchWithTimeout(`${API}${qs}`, { headers: authHeaders() });
       const flData = await flRes.json().catch(()=>({}));
       if (flRes.ok) flRows = flData.replays || [];
       else { result.error = flData.error || ('Format Library request failed (HTTP '+flRes.status+')'); return result; }
-    } catch(e) { result.error = e.message; return result; }
+    } catch(e) { result.error = (e.name === 'AbortError') ? 'Format Library request timed out' : e.message; return result; }
   }
 
   // With a code: only that event's rows, and every fix targets that one
