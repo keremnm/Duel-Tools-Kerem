@@ -11539,22 +11539,25 @@ function renderMatchSidebar(query) {
       // person scanning matches is often the first one to notice something
       // looks off (a card missing, a deck that doesn't match, etc.), and
       // shouldn't have to open the match first just to find a way to fix it.
-      // Deliberately refreshes EVERY replay in this player's batch, not just
-      // the one row it's clicked from: the usual reason to reach for this is
-      // "I just fixed/added an alias", and an alias change can affect how
-      // any of this player's replays parse (who's recognized as them, which
-      // side is theirs, etc.) — not only the one replay someone happened to
-      // notice looked wrong. Re-fetching only that one would still leave
-      // every other mis-tagged replay broken.
+      // Refreshes every OTHER replay in this same event group too (same
+      // `key` this row's group was bucketed under — e.g. all of "GFWC2026",
+      // not the player's whole multi-event batch), not just the one row
+      // it's clicked from: the usual reason to reach for this is "I just
+      // fixed/added an alias", and an alias change can affect how any of
+      // this player's replays for that event parse (who's recognized as
+      // them, which side is theirs, etc.) — not only the one replay someone
+      // happened to notice looked wrong. Scoped to the event rather than the
+      // whole batch so this stays fast for a player with many events on
+      // file instead of re-fetching hundreds of unrelated replays.
       const retryIconBtn = document.createElement('button');
       retryIconBtn.textContent = '↺';
-      retryIconBtn.title = 'Refresh ALL replays for this player: re-fetch and re-parse every replay in this batch from DuelingBook using the current aliases — not just this one. Use this right after fixing/adding an alias, since that can change how any of these replays parse.';
+      retryIconBtn.title = 'Refresh every replay from this same event for this player: re-fetch and re-parse them all from DuelingBook using the current aliases — not just this one. Use this right after fixing/adding an alias, since that can change how any of them parse.';
       retryIconBtn.style.cssText = 'background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px;padding:0 2px;font-family:monospace;flex-shrink:0;opacity:0;transition:opacity .15s';
       _allRetryIconBtns.push(retryIconBtn);
       retryIconBtn.onclick = async e => {
         e.stopPropagation();
         if (!_activeBatch) return;
-        const targets = [...(_activeBatch.replays||[])];
+        const targets = (_activeBatch.replays||[]).filter(r => (eventGroupKey(r.eventLabel||'') || 'Untagged') === key);
         if (!targets.length) return;
         _allRetryIconBtns.forEach(b => { b.disabled = true; });
         retryIconBtn.textContent = '…';
@@ -11568,7 +11571,7 @@ function renderMatchSidebar(query) {
           const res = await retryOneReplay(targets[i]);
           if (res.ok) succeeded++; else failed++;
         }
-        st(`Refreshed all replays for ${_activeBatch.player||'this player'}: ${succeeded} OK${failed ? ', '+failed+' failed' : ''}.`, failed ? 'var(--amber)' : 'var(--green)');
+        st(`Refreshed ${key==='Untagged'?'untagged':key} replays for ${_activeBatch.player||'this player'}: ${succeeded} OK${failed ? ', '+failed+' failed' : ''}.`, failed ? 'var(--amber)' : 'var(--green)');
         _batchLocalEdits = true;
         buildDeck(); // full re-render — rebuilds the sidebar (and these buttons) from the refreshed data
       };
@@ -18470,9 +18473,21 @@ function eventsRenderPlayerList(ev) {
     filtered.forEach((d) => {
       const idx = decks.indexOf(d);
       const place = d.placeNum!=null ? eventsOrdinal(d.placeNum) : (d.placement||'—');
+      // Show the PROFILE's own canonical name (same spelling the Profile
+      // tab uses) once this bracket entry is tracked, not the raw Format
+      // Library bracket spelling — the bracket's builderName is often just
+      // one of this player's known aliases (an old handle, a TO's slightly
+      // different spelling), and showing it here as if it were the name
+      // made it look like a different, untracked person at a glance. The
+      // original bracket spelling is kept as a small parenthetical next to
+      // it (not dropped) so it's still there for anyone cross-referencing
+      // against Format Library directly.
+      const normName = s => (s||'').trim().toLowerCase().replace(/_/g, ' ');
+      const displayName = d.trackedPlayer || d.builderName || 'Unknown';
+      const showOriginal = d.trackedPlayer && d.builderName && normName(d.trackedPlayer) !== normName(d.builderName);
       tbody += `<tr class="events-player-row" data-idx="${idx}" style="border-bottom:1px solid var(--border2);cursor:pointer">
         <td style="padding:7px 10px;color:var(--amber);white-space:nowrap">${_escapeHtml(String(place))}</td>
-        <td style="padding:7px 10px;color:var(--text)">${_escapeHtml(d.builderName||'Unknown')}${d.trackedPlayer?' <span style="color:var(--green);font-size:10px">✓ tracked</span>':''}${d.aliasError?aliasErrorMark:''}</td>
+        <td style="padding:7px 10px;color:var(--text)">${_escapeHtml(displayName)}${showOriginal?' <span style="color:var(--muted);font-size:10px" title="Format Library bracket spelling">('+_escapeHtml(d.builderName)+')</span>':''}${d.trackedPlayer?' <span style="color:var(--green);font-size:10px">✓ tracked</span>':''}${d.aliasError?aliasErrorMark:''}</td>
         <td style="padding:7px 10px;color:var(--muted)">${_escapeHtml(d.deckTypeName||'Unknown')}</td>
         <td style="padding:7px 10px;text-align:center">${d.hasCards?check:cross}</td>
         <td style="padding:7px 10px;text-align:center">${d.hasReplays ? (d.needsReview ? needsReviewMark : check) : cross}</td>
@@ -20516,7 +20531,30 @@ async function openProfile(player, batches, records) {
 
   // Use cached player registry instead of fetching /players again
   const _profileEntry = (window._playerRegistry && window._playerRegistry[player.toLowerCase()]) || null;
-  const _profileAliases = _profileEntry ? (_profileEntry.aliases||[]) : [];
+  // Union the registry's own alias list with every alias already recorded
+  // directly on this player's batches, not just the registry's — a handful
+  // of places in this app (a fuzzy-match "attach to existing batch" flow, a
+  // direct-batch alias add) PATCH batch.aliases alone without also writing
+  // through to the registry, so an alias can be real and already working
+  // (every batch-level check — buildEventReplayCoverageIndex, cross-linking,
+  // autoMergeHiddenBatches — reads batch.aliases directly) while being
+  // totally invisible here if only the registry list were shown. That
+  // invisibility used to be more than cosmetic: editAliases() below seeds
+  // its edit prompt from exactly this list and then SAVES whatever comes
+  // back over both the registry AND every owned batch — so an alias that
+  // only ever lived on a batch, and was never shown here, would silently
+  // vanish the next time someone opened "aka:" to add a totally different
+  // alias and hit save, with no indication anything had been removed.
+  // Showing (and therefore preserving) the full union closes that gap.
+  const _profileAliasesSeen = new Set();
+  const _profileAliases = [];
+  for (const a of [...((_profileEntry && _profileEntry.aliases) || []), ...batches.flatMap(b => (b && b.aliases) || [])]) {
+    if (!a) continue;
+    const low = a.toLowerCase();
+    if (_profileAliasesSeen.has(low)) continue;
+    _profileAliasesSeen.add(low);
+    _profileAliases.push(a);
+  }
 
   const aliasEl = document.getElementById('profile-view-aliases');
   if (aliasEl) {
