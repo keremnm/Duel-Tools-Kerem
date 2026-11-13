@@ -807,10 +807,22 @@ function saveDBDebounced(key) {
 // applies the same window by default, so the two can never disagree about
 // what counts as "the last week" even if a prune happens to lag behind.
 const CHANGE_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+// DESTRUCTIVE_ACTIONS are exempt from the 7-day prune above (and from the
+// default 7-day window GET /api/changelog otherwise applies) — these are
+// the only actions that make a player's data genuinely disappear (a whole
+// profile, a whole batch, or one batch folded/deleted into another via a
+// merge, including the AUTOMATIC merge autoMergeHiddenBatches runs on every
+// new/edited batch), as opposed to an edit that's still visible and
+// correctable somewhere. Losing the record of "who deleted this and when"
+// a week later is exactly how a profile disappearing becomes an unsolvable
+// mystery instead of a one-line answer — this keeps that one line around
+// indefinitely (still capped by the 5000-entry belt-and-suspenders below,
+// which these are far too rare to ever approach on their own).
+const DESTRUCTIVE_ACTIONS = new Set(['delete_profile', 'delete_batch', 'merge_batches']);
 function pruneChangeLog() {
   if (!db._changeLog || !db._changeLog.length) return;
   const cutoff = Date.now() - CHANGE_LOG_RETENTION_MS;
-  db._changeLog = db._changeLog.filter(l => l.t >= cutoff);
+  db._changeLog = db._changeLog.filter(l => l.t >= cutoff || DESTRUCTIVE_ACTIONS.has(l.action));
 }
 function logChange(req, action, details) {
   if (!db._changeLog) db._changeLog = [];
@@ -2809,11 +2821,14 @@ const server = http.createServer(async (req, res) => {
   // or narrows that window (e.g. ?days=1 for just today); since storage
   // itself is pruned to 7 days on every new log entry, asking for more than
   // that only finds more if the log has been completely quiet since.
-  // Optional filters — player (matches batchPlayer, case-insensitive
-  // substring), action (exact match, e.g. 'set_override'), user (matches the
-  // acting user's name/email, case-insensitive substring) — let admins
-  // narrow down "what has this person been doing" or "what happened to this
-  // player's data" without scrolling the whole log client-side.
+  // Optional filters — player (matches batchPlayer, or merge_batches'
+  // keepPlayer/mergedPlayer — a merge entry never had a batchPlayer field,
+  // so without checking those too, searching a player's name could silently
+  // miss exactly the merge that explains where their data went), action
+  // (exact match, e.g. 'set_override'), user (matches the acting user's
+  // name/email, case-insensitive substring) — let admins narrow down "what
+  // has this person been doing" or "what happened to this player's data"
+  // without scrolling the whole log client-side.
   if (parts[0]==='changelog' && method==='GET') {
     if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
     const limit = Math.min(parseInt(url.searchParams.get('limit')||'500'), 5000);
@@ -2822,8 +2837,14 @@ const server = http.createServer(async (req, res) => {
     const playerFilter = (url.searchParams.get('player')||'').toLowerCase().trim();
     const actionFilter = (url.searchParams.get('action')||'').trim();
     const userFilter   = (url.searchParams.get('user')||'').toLowerCase().trim();
-    let log = (db._changeLog||[]).filter(l => l.t >= cutoff).reverse();
-    if (playerFilter) log = log.filter(l => (l.batchPlayer||'').toLowerCase().includes(playerFilter));
+    // A destructive action (see DESTRUCTIVE_ACTIONS/pruneChangeLog above —
+    // delete_profile, delete_batch, merge_batches) is never excluded by the
+    // days window, default or explicit: these are the entries someone is
+    // most likely to come looking for well after the fact ("what happened
+    // to this profile?"), and they're retained in storage precisely so they
+    // can still be found here regardless of how old they are.
+    let log = (db._changeLog||[]).filter(l => l.t >= cutoff || DESTRUCTIVE_ACTIONS.has(l.action)).reverse();
+    if (playerFilter) log = log.filter(l => [l.batchPlayer, l.keepPlayer, l.mergedPlayer].some(n => (n||'').toLowerCase().includes(playerFilter)));
     if (actionFilter) log = log.filter(l => l.action === actionFilter);
     if (userFilter)   log = log.filter(l => (l.user||'').toLowerCase().includes(userFilter));
     return json(res, 200, { log: log.slice(0, limit), total: log.length });

@@ -1062,7 +1062,7 @@ select{cursor:pointer}
       <!-- Individual profile view — shown when a player is selected -->
       <div id="profile-view" style="display:none;flex:1;flex-direction:column;overflow:hidden">
         <!-- Profile header -->
-        <div style="padding:14px 20px;border-bottom:1px solid var(--border);background:var(--panel);flex-shrink:0;display:flex;align-items:center;gap:12px">
+        <div style="padding:14px 20px;border-bottom:1px solid var(--border);background:var(--panel);flex-shrink:0;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
           <button onclick="closeProfile()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:12px;padding:5px 12px;border-radius:6px;cursor:pointer">← Back</button>
           <div style="display:flex;flex-direction:column;gap:2px">
             <div id="profile-view-name" style="font-size:16px;font-weight:bold;color:var(--green);letter-spacing:.08em"></div>
@@ -1072,10 +1072,27 @@ select{cursor:pointer}
             <div id="profile-view-meta" style="font-size:12px;color:var(--muted)"></div>
             <div id="profile-view-updated" style="font-size:11px;color:var(--dim)"></div>
           </div>
-          <button onclick="exportPlayerXLSX(_activeProfile?.player)" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 12px;border-radius:6px;cursor:pointer" title="Export to Excel">⬇ Export</button>
+
+          <!-- Tags — moved up into the header, right alongside the player's
+               identity, so they're visible at a glance without scrolling
+               into the right-column panel (which now leads with GFWL Teams
+               instead — see below). -->
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;margin-left:8px;padding-left:12px;border-left:1px solid var(--border)">
+            <div id="profile-tags-list" style="display:flex;flex-wrap:wrap;gap:5px"></div>
+            <button onclick="document.getElementById('tag-add-row').style.display='flex'" title="Add tag" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:2px 9px;border-radius:4px;cursor:pointer;white-space:nowrap">+ Tag</button>
+            <div id="tag-add-row" style="display:none;gap:6px;align-items:center">
+              <input id="tag-inp" type="text" placeholder="#TopPlayer…"
+                style="width:120px;background:var(--card2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-family:monospace;font-size:12px;padding:4px 8px;outline:none"
+                onkeydown="if(event.key==='Enter')addProfileTag()"/>
+              <button onclick="addProfileTag()" style="background:none;border:1px solid var(--green);color:var(--green);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">Add</button>
+              <button onclick="document.getElementById('tag-add-row').style.display='none';document.getElementById('tag-inp').value=''" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:3px 8px;border-radius:4px;cursor:pointer">✕</button>
+            </div>
+          </div>
+
+          <button onclick="exportPlayerXLSX(_activeProfile?.player)" style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:6px 12px;border-radius:6px;cursor:pointer" title="Export to Excel">⬇ Export</button>
           <button onclick="deleteProfileFromServer()" id="profile-delete-btn" style="display:none;background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:11px;padding:6px 12px;border-radius:6px;cursor:pointer" title="Admin only: permanently deletes this player's registry entry and every batch/replay of theirs from the server">🗑 Delete Profile</button>
           <button onclick="loadProfileBatch()" id="profile-load-btn"
-            style="margin-left:auto;background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:12px;padding:7px 18px;border-radius:6px;cursor:pointer">
+            style="background:var(--green);color:#050508;border:none;font-family:monospace;font-weight:bold;font-size:12px;padding:7px 18px;border-radius:6px;cursor:pointer">
             ▶ Load into Analyzer
           </button>
         </div>
@@ -1159,25 +1176,11 @@ select{cursor:pointer}
           <!-- RIGHT: teams + event decklists panel -->
           <div style="width:640px;flex-shrink:0;border-left:1px solid var(--border);background:var(--panel);overflow-y:auto;display:flex;flex-direction:column">
 
-            <!-- Tags -->
-            <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
-              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-                <div class="slbl" style="margin:0">TAGS</div>
-                <button onclick="document.getElementById('tag-add-row').style.display='flex'" style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:2px 10px;border-radius:4px;cursor:pointer">+ Add</button>
-              </div>
-              <div id="profile-tags-list" style="display:flex;flex-wrap:wrap;gap:5px;min-height:20px">
-                <div style="font-size:12px;color:var(--muted)">No tags yet.</div>
-              </div>
-              <div id="tag-add-row" style="display:none;margin-top:8px;gap:6px;align-items:center">
-                <input id="tag-inp" type="text" placeholder="#TopPlayer, #NeverWL…"
-                  style="flex:1;background:var(--card2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-family:monospace;font-size:12px;padding:4px 8px;outline:none"
-                  onkeydown="if(event.key==='Enter')addProfileTag()"/>
-                <button onclick="addProfileTag()" style="background:none;border:1px solid var(--green);color:var(--green);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">Add</button>
-                <button onclick="document.getElementById('tag-add-row').style.display='none';document.getElementById('tag-inp').value=''" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:3px 8px;border-radius:4px;cursor:pointer">✕</button>
-              </div>
-            </div>
-
-            <!-- GFWL Teams -->
+            <!-- GFWL Teams — now the first section in this column (Tags
+                 moved up into the header above instead). Compact clickable
+                 tile grid: each tile goes to that season's GFWL Team Page
+                 (renderProfileTeams/navigateToGFWLTeam), and shows a 👑 for
+                 a season this team actually won (gfwlIsSeasonChampion). -->
             <div style="padding:14px 16px;border-bottom:1px solid var(--border);flex-shrink:0">
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
                 <div class="slbl" style="margin:0">GFWL TEAMS</div>
@@ -3349,6 +3352,40 @@ const CONF_COLORS = {
   'Blue':   { bg:'rgba(50,100,220,.15)', border:'rgba(50,100,220,.5)', text:'#5599ee' },
   'Yellow': { bg:'rgba(220,180,30,.15)', border:'rgba(220,180,30,.5)', text:'#ddbb30' },
 };
+
+// GFWL league champions by season — hand-entered per season until Placement
+// Recognition becomes a real, server-tracked field as part of the GFWL
+// Archive update (at which point this hardcoded map goes away in favor of
+// reading each team's actual recorded placement). Drives the 👑 crown shown
+// on a player's GFWL Teams tile for a season they won. No 2nd-place data
+// exists yet to drive a runner-up marker — that's part of the same future
+// Archive update, not added here.
+const GFWL_SEASON_CHAMPIONS = {
+  S1: 'Rampage HK',
+  S2: 'Safari Zone',
+  S3: 'Overdose',
+  S4: 'Rehab',
+  S5: 'Team RICO Act',
+  S6: 'Skull Servants',
+  S7: 'Legio Invictus', // user said "Legio Invicta" in chat; corrected to match the team's actual recorded name (see MattUber's own S7 team tile)
+  S8: 'LA Jinns',
+  S9: 'Warrior Solution',
+};
+// Whether `teamName` (as recorded on a player's own gfwlTeams entry, which
+// can drift slightly from the GFWL Archive's own team name — same typo/
+// handle gap flIsCloseNameMatch exists for elsewhere) is this season's
+// champion per GFWL_SEASON_CHAMPIONS above. Case-insensitive exact match
+// first; a close-prefix match (same rule as flIsCloseNameMatch) as a
+// fallback so a minor spelling difference doesn't silently hide a crown
+// that should be there.
+function gfwlIsSeasonChampion(season, teamName) {
+  const champ = GFWL_SEASON_CHAMPIONS[(season||'').toUpperCase()];
+  if (!champ || !teamName) return false;
+  const a = champ.trim().toLowerCase(), b = teamName.trim().toLowerCase();
+  if (a === b) return true;
+  if (a.length >= 4 && b.length >= 4 && (a.startsWith(b) || b.startsWith(a))) return true;
+  return false;
+}
 
 // Load event dates when app starts — catalog is built server-side, no client-triggered scrape
 loadEventDates();
@@ -16199,6 +16236,33 @@ function profileSubTab(tab, btn) {
   }
 }
 
+// Switches to the GFWL Prep tab and opens one specific team's page for one
+// specific season — the exact sequence (switch tab, gfwlInit, pick the
+// season in the dropdown, gfwlLoadSeason, then gfwlOpenTeam, with an alias
+// fallback via gfwlResolveTeam if the team name recorded on the player's own
+// gfwlTeams entry doesn't exactly match the Archive's own team name) that
+// renderGFWLTeamLinks's own buttons already used — pulled out so both that
+// panel and the GFWL Teams tiles in the profile header area/right column
+// can navigate to a team's page the same way instead of keeping two copies
+// of this logic in sync by hand.
+function navigateToGFWLTeam(season, teamName) {
+  const gfwlTab = document.querySelector('.ntab[onclick*="gfwl"]');
+  switchTab('gfwl', gfwlTab);
+  setTimeout(async () => {
+    await gfwlInit();
+    const sel = document.getElementById('gfwl-season-sel');
+    if (sel) { sel.value = season; }
+    await gfwlLoadSeason(season);
+    const teamData = _gfwlData[season]?.teams[teamName];
+    if (teamData) gfwlOpenTeam(season, teamName, teamData);
+    else {
+      // Try to find team by alias
+      const resolved = typeof gfwlResolveTeam === 'function' ? gfwlResolveTeam(season, teamName) : null;
+      if (resolved) gfwlOpenTeam(season, resolved, _gfwlData[season].teams[resolved]);
+    }
+  }, 400);
+}
+
 function renderGFWLTeamLinks(player) {
   const container = document.getElementById('profile-gfwl-team-links');
   if (!container) return;
@@ -16212,23 +16276,7 @@ function renderGFWLTeamLinks(player) {
     const btn = document.createElement('button');
     btn.style.cssText = 'background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-size:10px;padding:2px 10px;border-radius:4px;cursor:pointer';
     btn.textContent = '→ View '+season+' Team Sheet ('+entry.team+')';
-    btn.onclick = () => {
-      const gfwlTab = document.querySelector('.ntab[onclick*="gfwl"]');
-      switchTab('gfwl', gfwlTab);
-      setTimeout(async () => {
-        await gfwlInit();
-        const sel = document.getElementById('gfwl-season-sel');
-        if (sel) { sel.value = season; }
-        await gfwlLoadSeason(season);
-        const teamData = _gfwlData[season]?.teams[entry.team];
-        if (teamData) gfwlOpenTeam(season, entry.team, teamData);
-        else {
-          // Try to find team by alias
-          const resolved = typeof gfwlResolveTeam === 'function' ? gfwlResolveTeam(season, entry.team) : null;
-          if (resolved) gfwlOpenTeam(season, resolved, _gfwlData[season].teams[resolved]);
-        }
-      }, 400);
-    };
+    btn.onclick = () => navigateToGFWLTeam(season, entry.team);
     container.appendChild(btn);
   });
 }
@@ -20628,19 +20676,59 @@ function renderProfileTeams(player, teams) {
   if (!teams||!teams.length) {
     el.innerHTML = '<div style="font-size:12px;color:var(--muted)">No teams recorded.</div>'; return;
   }
+  // Small clickable tile grid instead of one row per team — this panel sits
+  // right under the profile header now (see the right-column reorder) and a
+  // player can rack up a tile per season, so compact cells that wrap read
+  // far better than a tall vertical list. Each tile is clickable (goes to
+  // that season's Team Page via navigateToGFWLTeam, same as the GFWL
+  // History panel's own "View Team Sheet" links) except for the small ✕
+  // remove control in its corner, which stops the click from bubbling up
+  // into the navigation.
+  el.style.display = 'grid';
+  el.style.gridTemplateColumns = 'repeat(auto-fill,minmax(108px,1fr))';
   el.innerHTML = '';
   // Sort by season descending
   [...teams].sort((a,b) => b.season.localeCompare(a.season)).forEach(t => {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--card2);border:1px solid var(--border);border-radius:6px;font-size:12px';
-    const season = document.createElement('span'); season.style.cssText='color:var(--amber);font-weight:bold;min-width:32px;font-size:11px'; season.textContent=t.season;
-    const name   = document.createElement('span'); name.style.cssText='color:var(--text);flex:1'; name.textContent=t.team;
-    const del    = document.createElement('button');
-    del.textContent='✕'; del.style.cssText='background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px;padding:0';
-    del.onmouseover=()=>del.style.color='var(--red)'; del.onmouseout=()=>del.style.color='var(--dim)';
-    del.onclick = () => deleteTeamEntry(player, t);
-    row.appendChild(season); row.appendChild(name); row.appendChild(del);
-    el.appendChild(row);
+    const season = typeof gfwlNormalizeSeason === 'function' ? gfwlNormalizeSeason(t.season) : (t.season||'').toUpperCase();
+    const isChamp = typeof gfwlIsSeasonChampion === 'function' && gfwlIsSeasonChampion(season, t.team);
+    const tile = document.createElement('div');
+    tile.style.cssText = 'position:relative;display:flex;flex-direction:column;gap:3px;padding:8px 9px;background:var(--card2);border:1px solid '+(isChamp?'var(--amber)':'var(--border)')+';border-radius:6px;font-size:12px;cursor:pointer;min-width:0';
+    tile.title = 'View '+season+' Team Page';
+    tile.onmouseover = () => tile.style.background = 'var(--card)';
+    tile.onmouseout  = () => tile.style.background = 'var(--card2)';
+    tile.onclick = () => navigateToGFWLTeam(season, t.team);
+
+    const top = document.createElement('div');
+    top.style.cssText = 'display:flex;align-items:center;gap:4px';
+    const seasonEl = document.createElement('span');
+    seasonEl.style.cssText = 'color:var(--amber);font-weight:bold;font-size:11px';
+    seasonEl.textContent = season;
+    top.appendChild(seasonEl);
+    if (isChamp) {
+      const crown = document.createElement('span');
+      crown.textContent = '👑';
+      crown.title = season+' League Champion';
+      crown.style.cssText = 'font-size:11px';
+      top.appendChild(crown);
+    }
+    tile.appendChild(top);
+
+    const name = document.createElement('div');
+    name.style.cssText = 'color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    name.textContent = t.team;
+    name.title = t.team;
+    tile.appendChild(name);
+
+    const del = document.createElement('button');
+    del.textContent = '✕';
+    del.title = 'Remove';
+    del.style.cssText = 'position:absolute;top:3px;right:4px;background:none;border:none;color:var(--dim);cursor:pointer;font-size:10px;padding:2px;line-height:1';
+    del.onmouseover = () => del.style.color = 'var(--red)';
+    del.onmouseout  = () => del.style.color = 'var(--dim)';
+    del.onclick = (e) => { e.stopPropagation(); deleteTeamEntry(player, t); };
+    tile.appendChild(del);
+
+    el.appendChild(tile);
   });
 }
 
