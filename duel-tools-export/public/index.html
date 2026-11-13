@@ -20685,7 +20685,7 @@ function renderProfileTeams(player, teams) {
   // remove control in its corner, which stops the click from bubbling up
   // into the navigation.
   el.style.display = 'grid';
-  el.style.gridTemplateColumns = 'repeat(auto-fill,minmax(108px,1fr))';
+  el.style.gridTemplateColumns = 'repeat(auto-fill,minmax(130px,1fr))';
   el.innerHTML = '';
   // Sort by season descending
   [...teams].sort((a,b) => b.season.localeCompare(a.season)).forEach(t => {
@@ -20713,10 +20713,12 @@ function renderProfileTeams(player, teams) {
     }
     tile.appendChild(top);
 
+    // Full team name, wrapped onto as many lines as it needs rather than
+    // truncated with an ellipsis — the user explicitly wants the whole name
+    // (and season) visible on the tile without having to hover/click in.
     const name = document.createElement('div');
-    name.style.cssText = 'color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    name.style.cssText = 'color:var(--text);white-space:normal;word-break:break-word;line-height:1.3';
     name.textContent = t.team;
-    name.title = t.team;
     tile.appendChild(name);
 
     const del = document.createElement('button');
