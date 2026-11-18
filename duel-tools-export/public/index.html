@@ -1401,11 +1401,116 @@ select{cursor:pointer}
         <!-- Toolbar -->
         <div style="padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap">
           <input id="igt-card-search" type="text" placeholder="Search card name..." style="flex:1;min-width:180px" oninput="igtSearchCards(this.value)"/>
+          <button class="dd-btn-sec" id="igt-adv-search-toggle" onclick="igtToggleAdvSearch()" style="font-size:11px">🔎 Advanced Search</button>
           <button class="dd-btn-sec" onclick="igtShowYdkeDialog('main')" style="font-size:11px">⬆ YDKe Code</button>
           <button class="dd-btn-sec" onclick="igtImportYDK()" style="font-size:11px">⬆ Import YDK</button>
           <button class="dd-btn-sec" onclick="igtExportYDK()" style="font-size:11px">⬇ Export YDK</button>
           <button class="dd-btn-sec" onclick="igtExportImage()" style="font-size:11px">🖼 Decklist Image</button>
           <button class="dd-btn-sec" onclick="igtClearDeck()" style="font-size:11px;color:var(--red)">✕ Clear</button>
+          <button class="dd-btn-sec" id="igt-undo-btn" onclick="igtUndo()" disabled title="Undo the last card added or removed" style="font-size:11px;margin-left:auto;opacity:.4;cursor:default">↶ Undo</button>
+        </div>
+        <!-- Advanced Search panel (Goat Format card pool — ygoprodeck, filtered
+             client-side so Desc/effect-text search works even though the API
+             itself has no full-text effect search param). Hidden by default,
+             toggled by the button above. Layout mirrors duelingbook.com's own
+             advanced search (Name/Desc, Card type -> sub-Type, monster-only
+             Race/Subtype/Attribute, Level/ATK/DEF range, paged results). -->
+        <div id="igt-adv-search-panel" style="display:none;padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--card2)">
+          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
+            <div style="display:flex;flex-direction:column;gap:3px">
+              <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">NAME</label>
+              <input id="igt-adv-name" type="text" style="width:160px" onkeydown="if(event.key==='Enter')igtAdvSearchRun()"/>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:3px">
+              <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">DESC / EFFECT</label>
+              <input id="igt-adv-desc" type="text" style="width:200px" onkeydown="if(event.key==='Enter')igtAdvSearchRun()"/>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:3px">
+              <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">CARD</label>
+              <select id="igt-adv-category" style="width:110px" onchange="igtAdvCategoryChanged()">
+                <option value="">Any</option>
+                <option value="Monster">Monster</option>
+                <option value="Spell">Spell</option>
+                <option value="Trap">Trap</option>
+              </select>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:3px">
+              <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">TYPE</label>
+              <select id="igt-adv-type" style="width:130px" disabled>
+                <option value="">Any</option>
+              </select>
+            </div>
+            <div id="igt-adv-monster-only-1" style="display:none;gap:8px;flex-wrap:wrap">
+              <div style="display:flex;flex-direction:column;gap:3px">
+                <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">SUBTYPE</label>
+                <select id="igt-adv-subtype" style="width:100px">
+                  <option value="">Any</option>
+                  <option value="Flip">Flip</option>
+                  <option value="Toon">Toon</option>
+                  <option value="Spirit">Spirit</option>
+                  <option value="Union">Union</option>
+                </select>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:3px">
+                <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">MONSTER TYPE</label>
+                <select id="igt-adv-race" style="width:130px">
+                  <option value="">Any</option>
+                  <option>Aqua</option><option>Beast</option><option>Beast-Warrior</option>
+                  <option>Dinosaur</option><option>Dragon</option><option>Fairy</option>
+                  <option>Fiend</option><option>Fish</option><option>Insect</option>
+                  <option>Machine</option><option>Plant</option><option>Pyro</option>
+                  <option>Reptile</option><option>Rock</option><option>Sea Serpent</option>
+                  <option>Spellcaster</option><option>Thunder</option><option>Warrior</option>
+                  <option>Winged Beast</option><option>Zombie</option>
+                </select>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:3px">
+                <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">ATTRIBUTE</label>
+                <select id="igt-adv-attribute" style="width:95px">
+                  <option value="">Any</option>
+                  <option>DARK</option><option>EARTH</option><option>FIRE</option>
+                  <option>LIGHT</option><option>WATER</option><option>WIND</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div id="igt-adv-monster-only-2" style="display:none;flex-wrap:wrap;gap:14px;align-items:flex-end;margin-top:8px">
+            <div style="display:flex;flex-direction:column;gap:3px">
+              <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">LEVEL / RANK</label>
+              <div style="display:flex;align-items:center;gap:4px">
+                <input id="igt-adv-level-min" type="number" min="0" max="12" style="width:52px" placeholder="min"/>
+                <span style="color:var(--muted);font-size:11px">≤ ★ ≤</span>
+                <input id="igt-adv-level-max" type="number" min="0" max="12" style="width:52px" placeholder="max"/>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:3px">
+              <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">ATK</label>
+              <div style="display:flex;align-items:center;gap:4px">
+                <input id="igt-adv-atk-min" type="number" min="0" style="width:64px" placeholder="min"/>
+                <span style="color:var(--muted);font-size:11px">≤ ATK ≤</span>
+                <input id="igt-adv-atk-max" type="number" min="0" style="width:64px" placeholder="max"/>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:3px">
+              <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">DEF</label>
+              <div style="display:flex;align-items:center;gap:4px">
+                <input id="igt-adv-def-min" type="number" min="0" style="width:64px" placeholder="min"/>
+                <span style="color:var(--muted);font-size:11px">≤ DEF ≤</span>
+                <input id="igt-adv-def-max" type="number" min="0" style="width:64px" placeholder="max"/>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;gap:7px;align-items:center;margin-top:10px">
+            <button class="dd-btn" onclick="igtAdvSearchRun()" style="font-size:11px;padding:6px 16px">Search</button>
+            <button class="dd-btn-sec" onclick="igtAdvSearchClear()" style="font-size:11px">✕ Clear Filters</button>
+            <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+              <button class="dd-btn-sec" onclick="igtAdvSearchPage(-1)" style="font-size:11px;padding:5px 10px">◀</button>
+              <span id="igt-adv-page-info" style="font-size:11px;color:var(--muted);min-width:70px;text-align:center">0 / 0</span>
+              <button class="dd-btn-sec" onclick="igtAdvSearchPage(1)" style="font-size:11px;padding:5px 10px">▶</button>
+            </div>
+          </div>
+          <div id="igt-adv-search-status" style="font-size:10px;color:var(--muted);margin-top:4px"></div>
+          <div id="igt-adv-search-results" style="display:grid;grid-template-columns:repeat(auto-fill,52px);gap:5px;margin-top:8px;max-height:220px;overflow-y:auto"></div>
         </div>
         <!-- Search results -->
         <div id="igt-search-results" style="padding:6px 14px;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:5px;min-height:32px;flex-shrink:0;max-height:80px;overflow-y:auto"></div>
@@ -22836,12 +22941,246 @@ async function igtSearchCards(query) {
   }, 350);
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// ADVANCED SEARCH — Goat Format card pool (ygoprodeck's own format=goat
+// filter — see https://ygoprodeck.com/api-guide/ — so the pool itself
+// always matches whatever ygoprodeck currently considers Goat-legal,
+// instead of this app maintaining its own stale era/banlist cutoff list).
+// Fetched and cached ONCE per page load (a few hundred KB, comparable to
+// everything else this SPA already keeps in memory), then every filter
+// (name, desc/effect substring, category, type, subtype, race, attribute,
+// level/ATK/DEF range) runs entirely client-side — ygoprodeck's API has no
+// full-text effect-search parameter, so Desc search specifically could not
+// be done server-side anyway. Layout mirrors duelingbook.com's own advanced
+// search: Name/Desc text, a Card category select that swaps the options in
+// a dependent Type select (Monster: Normal/Effect/Ritual/Fusion — Goat
+// Format predates Synchro/Xyz/Link/Pendulum, so those are intentionally
+// never offered; Spell: Normal/Continuous/Equip/Quick-Play/Field/Ritual;
+// Trap: Normal/Continuous/Counter), monster-only Subtype/Race/Attribute
+// selects, and Level/ATK/DEF range pairs — paged results below.
+// ══════════════════════════════════════════════════════════════════════
+let _igtGoatPool = null;
+let _igtGoatPoolPromise = null;
+async function igtLoadGoatPool() {
+  if (_igtGoatPool) return _igtGoatPool;
+  if (_igtGoatPoolPromise) return _igtGoatPoolPromise;
+  _igtGoatPoolPromise = (async () => {
+    const res = await fetch('https://db.ygoprodeck.com/api/v7/cardinfo.php?format=goat');
+    if (!res.ok) throw new Error('HTTP '+res.status);
+    const data = await res.json();
+    _igtGoatPool = (data.data||[]).slice().sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+    return _igtGoatPool;
+  })();
+  try { return await _igtGoatPoolPromise; }
+  finally { _igtGoatPoolPromise = null; }
+}
+
+// A card's broad category, derived from ygoprodeck's own `type` string
+// (e.g. "Effect Monster", "Spell Card", "Trap Card") rather than a
+// hardcoded enum, so this stays correct even for a type string this file
+// doesn't explicitly know about.
+function igtCardCategory(card) {
+  const t = card.type || '';
+  if (t.includes('Spell')) return 'Spell';
+  if (t.includes('Trap')) return 'Trap';
+  return 'Monster';
+}
+// Monster main type (the user's "Normal/Effect/Ritual/Fusion" grouping).
+// Flip Effect / Union Effect / Spirit / Toon monsters all fall through to
+// 'Effect' here (they ARE effect monsters gameplay-wise) — their specific
+// flavor is what the separate Subtype filter below is for, matching the
+// user's own two-tier Type-then-Subtype request.
+function igtMonsterMainType(card) {
+  const t = card.type || '';
+  if (t.includes('Fusion')) return 'Fusion';
+  if (t.includes('Ritual')) return 'Ritual';
+  if (t.includes('Normal')) return 'Normal';
+  return 'Effect';
+}
+function igtMonsterSubtype(card) {
+  const t = card.type || '';
+  if (t.includes('Flip')) return 'Flip';
+  if (t.includes('Toon')) return 'Toon';
+  if (t.includes('Spirit')) return 'Spirit';
+  if (t.includes('Union')) return 'Union';
+  return '';
+}
+
+const IGT_ADV_TYPE_OPTIONS = {
+  Monster: ['Normal','Effect','Ritual','Fusion'],
+  Spell: ['Normal','Continuous','Equip','Quick-Play','Field','Ritual'],
+  Trap: ['Normal','Continuous','Counter'],
+};
+
+function igtToggleAdvSearch() {
+  const panel = document.getElementById('igt-adv-search-panel');
+  const open = panel.style.display === 'none';
+  panel.style.display = open ? 'block' : 'none';
+  if (open && !_igtGoatPool) igtAdvPrimePool();
+}
+
+async function igtAdvPrimePool() {
+  const statusEl = document.getElementById('igt-adv-search-status');
+  statusEl.textContent = 'Loading Goat Format card pool...';
+  try {
+    const pool = await igtLoadGoatPool();
+    statusEl.textContent = pool.length+' cards in the Goat Format pool. Set your filters and hit Search.';
+  } catch(e) {
+    statusEl.textContent = 'Failed to load card pool: '+e.message;
+  }
+}
+
+function igtAdvCategoryChanged() {
+  const cat = document.getElementById('igt-adv-category').value;
+  const typeSel = document.getElementById('igt-adv-type');
+  const opts = IGT_ADV_TYPE_OPTIONS[cat] || null;
+  typeSel.innerHTML = '<option value="">Any</option>' + (opts ? opts.map(o=>'<option>'+o+'</option>').join('') : '');
+  typeSel.value = '';
+  typeSel.disabled = !opts;
+
+  const show = cat === 'Monster';
+  document.getElementById('igt-adv-monster-only-1').style.display = show ? 'flex' : 'none';
+  document.getElementById('igt-adv-monster-only-2').style.display = show ? 'flex' : 'none';
+  if (!show) {
+    // Switching away from Monster clears monster-only fields so a stale
+    // Race/Attribute/Level/ATK/DEF filter can't silently stay active while
+    // hidden the next time Search runs.
+    ['igt-adv-subtype','igt-adv-race','igt-adv-attribute','igt-adv-level-min','igt-adv-level-max',
+     'igt-adv-atk-min','igt-adv-atk-max','igt-adv-def-min','igt-adv-def-max'].forEach(id => {
+      document.getElementById(id).value = '';
+    });
+  }
+}
+
+let _igtAdvResults = [];
+let _igtAdvPage = 0;
+const IGT_ADV_PAGE_SIZE = 24;
+
+async function igtAdvSearchRun() {
+  const statusEl = document.getElementById('igt-adv-search-status');
+  statusEl.textContent = 'Searching...';
+  let pool;
+  try { pool = await igtLoadGoatPool(); }
+  catch(e) { statusEl.textContent = 'Failed to load card pool: '+e.message; return; }
+
+  const nameQ = document.getElementById('igt-adv-name').value.toLowerCase().trim();
+  const descQ = document.getElementById('igt-adv-desc').value.toLowerCase().trim();
+  const category = document.getElementById('igt-adv-category').value;
+  const typeVal = document.getElementById('igt-adv-type').value;
+  const subtype = document.getElementById('igt-adv-subtype').value;
+  const race = document.getElementById('igt-adv-race').value;
+  const attribute = document.getElementById('igt-adv-attribute').value;
+  const levelMin = parseInt(document.getElementById('igt-adv-level-min').value, 10);
+  const levelMax = parseInt(document.getElementById('igt-adv-level-max').value, 10);
+  const atkMin = parseInt(document.getElementById('igt-adv-atk-min').value, 10);
+  const atkMax = parseInt(document.getElementById('igt-adv-atk-max').value, 10);
+  const defMin = parseInt(document.getElementById('igt-adv-def-min').value, 10);
+  const defMax = parseInt(document.getElementById('igt-adv-def-max').value, 10);
+
+  const results = pool.filter(card => {
+    if (nameQ && !(card.name||'').toLowerCase().includes(nameQ)) return false;
+    if (descQ && !(card.desc||'').toLowerCase().includes(descQ)) return false;
+
+    const cat = igtCardCategory(card);
+    if (category && category !== cat) return false;
+
+    if (cat === 'Monster') {
+      if (typeVal && igtMonsterMainType(card) !== typeVal) return false;
+      if (subtype && igtMonsterSubtype(card) !== subtype) return false;
+      if (race && (card.race||'') !== race) return false;
+      if (attribute && (card.attribute||'').toUpperCase() !== attribute) return false;
+      if (!isNaN(levelMin) && !(card.level != null && card.level >= levelMin)) return false;
+      if (!isNaN(levelMax) && !(card.level != null && card.level <= levelMax)) return false;
+      if (!isNaN(atkMin) && !(card.atk != null && card.atk >= atkMin)) return false;
+      if (!isNaN(atkMax) && !(card.atk != null && card.atk <= atkMax)) return false;
+      if (!isNaN(defMin) && !(card.def != null && card.def >= defMin)) return false;
+      if (!isNaN(defMax) && !(card.def != null && card.def <= defMax)) return false;
+    } else if ((cat === 'Spell' || cat === 'Trap') && typeVal && (card.race||'') !== typeVal) {
+      return false;
+    }
+    return true;
+  });
+
+  _igtAdvResults = results;
+  _igtAdvPage = 0;
+  igtAdvSearchRenderPage();
+}
+
+function igtAdvSearchPage(delta) {
+  const maxPage = Math.max(0, Math.ceil(_igtAdvResults.length / IGT_ADV_PAGE_SIZE) - 1);
+  _igtAdvPage = Math.min(maxPage, Math.max(0, _igtAdvPage + delta));
+  igtAdvSearchRenderPage();
+}
+
+function igtAdvSearchRenderPage() {
+  const out = document.getElementById('igt-adv-search-results');
+  const pageInfo = document.getElementById('igt-adv-page-info');
+  const statusEl = document.getElementById('igt-adv-search-status');
+  const total = _igtAdvResults.length;
+  const totalPages = Math.max(1, Math.ceil(total / IGT_ADV_PAGE_SIZE));
+  pageInfo.textContent = (total ? _igtAdvPage+1 : 0)+' / '+totalPages;
+  statusEl.textContent = total+' card'+(total===1?'':'s')+' found.';
+  out.innerHTML = '';
+  const start = _igtAdvPage * IGT_ADV_PAGE_SIZE;
+  _igtAdvResults.slice(start, start + IGT_ADV_PAGE_SIZE).forEach(card => {
+    const tile = igtCardTile(card, { size:52, onClick:() => igtAddCard(card,'main') });
+    tile.title = card.name + ' (click=main, right-click=side)';
+    tile.oncontextmenu = e => { e.preventDefault(); igtAddCard(card,'side'); };
+    out.appendChild(tile);
+  });
+  if (!total) out.innerHTML = '<span style="font-size:11px;color:var(--muted)">No results.</span>';
+}
+
+function igtAdvSearchClear() {
+  document.getElementById('igt-adv-name').value = '';
+  document.getElementById('igt-adv-desc').value = '';
+  document.getElementById('igt-adv-category').value = '';
+  igtAdvCategoryChanged();
+  _igtAdvResults = [];
+  _igtAdvPage = 0;
+  document.getElementById('igt-adv-search-status').textContent = _igtGoatPool ? (_igtGoatPool.length+' cards in the Goat Format pool. Set your filters and hit Search.') : '';
+  document.getElementById('igt-adv-page-info').textContent = '0 / 0';
+  document.getElementById('igt-adv-search-results').innerHTML = '';
+}
+
+// ── Undo (Deck Builder: add/remove one card) ────────────────────────────────
+// A plain snapshot stack of _igtDeck's {main,side,extra} — simplest correct
+// approach for a deck this small (40+15 cards), no diffing needed. Scoped
+// deliberately to single-card add/remove only (igtAddCard below, and the
+// per-tile remove click inside igtRenderAllDeck) — NOT Clear Deck (which
+// already has its own confirm() prompt as a safety net) or YDK/YDKe import
+// (a deliberate bulk replace, not a misclick). Capped so a long session
+// doesn't grow this unbounded.
+let _igtUndoStack = [];
+const IGT_UNDO_MAX = 50;
+function igtSnapshotForUndo() {
+  _igtUndoStack.push(JSON.parse(JSON.stringify(_igtDeck)));
+  if (_igtUndoStack.length > IGT_UNDO_MAX) _igtUndoStack.shift();
+  igtUpdateUndoButton();
+}
+function igtUndo() {
+  if (!_igtUndoStack.length) return;
+  _igtDeck = _igtUndoStack.pop();
+  igtRenderAllDeck();
+  igtUpdateUndoButton();
+  st('Undo', 'var(--muted)');
+}
+function igtUpdateUndoButton() {
+  const btn = document.getElementById('igt-undo-btn');
+  if (!btn) return;
+  const empty = !_igtUndoStack.length;
+  btn.disabled = empty;
+  btn.style.opacity = empty ? '.4' : '1';
+  btn.style.cursor = empty ? 'default' : 'pointer';
+}
+
 function igtAddCard(card, section) {
   const deck = _igtDeck[section];
   const existing = deck.find(c => c.id === card.id);
   const max = section === 'main' ? 40 : 15;
   const total = deck.reduce((s,c)=>s+c.qty, 0);
   if (total >= max) { st(section+' deck full', 'var(--amber)'); return; }
+  if (!(existing && existing.qty >= 3)) igtSnapshotForUndo();
   if (existing && existing.qty < 3) existing.qty++;
   else if (!existing) deck.push({ id:card.id, name:card.name, type:card.type, qty:1 });
   igtRenderAllDeck();
@@ -22866,6 +23205,7 @@ function igtRenderAllDeck() {
         const qi = q; // closure
         const tile = igtCardTile(card, { size: sec==='main'?72:80,
           onClick: () => {
+            igtSnapshotForUndo();
             _igtDeck[sec][ci].qty--;
             if (_igtDeck[sec][ci].qty <= 0) _igtDeck[sec].splice(ci,1);
             igtRenderAllDeck();
