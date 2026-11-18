@@ -10210,9 +10210,15 @@ function importEventData() {
 // The old layout is one sheet per player with "Event ID"/"Replay Link"
 // columns (handled below, unchanged). The newer layout used for a full
 // event's match list is a single flat sheet, one row per MATCH, with
-// "Replay"/"EventID" (or "Event")/"Round"/"Player 1"/"Player 2" columns (a
-// trailing Month/Year column is informational only — the event's display
-// name is derived from the uploaded filename instead, see processEventXLSX).
+// "Replay"/"EventID" (or "Event")/"Round"/"Player 1"/"Player 2" columns. A
+// trailing Month/Year column (e.g. "November 2026") supplies this event's
+// DATE — see igtParseMonthYear below — which matters beyond just display:
+// the Events tab's default sort is by date, newest first, and a newly
+// imported event with no date sorts to the very BOTTOM of that list (an
+// empty string sorts before any real date string), so without this a
+// just-imported event looks "missing" until you search for it or page all
+// the way down. The event's display NAME still comes from the uploaded
+// filename, not this column — see processEventXLSX.
 // Normalizes header text (lowercase, strip everything but letters/digits)
 // so "Event ID", "EventID", "Event" and "event_id" all resolve the same way.
 function _eiNormHeader(h) { return String(h||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
@@ -10224,7 +10230,34 @@ function _eiDetectFlatHeaders(headerRow) {
   if (replayCol === -1 || player1Col === -1 || player2Col === -1) return null;
   const eventCol = norm.findIndex(h => h === 'eventid' || h === 'event');
   const roundCol = norm.findIndex(h => h.includes('round'));
-  return { replayCol, player1Col, player2Col, eventCol, roundCol };
+  const monthYearCol = norm.findIndex(h => h === 'monthyear' || h === 'month' || h === 'date');
+  return { replayCol, player1Col, player2Col, eventCol, roundCol, monthYearCol };
+}
+
+// Parses a loose "Month Year" cell (the sample's own format, e.g. "November
+// 2026", "Nov 2026") into a sortable 'YYYY-MM-01' date string — just enough
+// precision to place the event correctly in the Events tab's date sort,
+// not a claim about the exact day. Also accepts an already-numeric
+// 'YYYY-MM' or 'MM/YYYY' as a bonus, but returns '' (no date — same as
+// today's behavior) for anything it can't confidently parse, rather than
+// guessing: a missing date just means this event stays low in the "New ->
+// Old" sort until you search for it, same as now; a WRONG date would be
+// worse, silently misplacing it in every other date-based view too
+// (Format Data, Profiles, Power Rankings).
+const IGT_MONTH_NAMES = ['january','february','march','april','may','june','july','august','september','october','november','december'];
+function igtParseMonthYear(raw) {
+  const s = String(raw||'').trim().toLowerCase();
+  if (!s) return '';
+  let m = s.match(/^([a-z]+)\.?\s+(\d{4})$/); // "November 2026" / "Nov 2026" / "Nov. 2026"
+  if (m) {
+    const idx = IGT_MONTH_NAMES.findIndex(mn => mn === m[1] || mn.startsWith(m[1]));
+    if (idx >= 0) return m[2]+'-'+String(idx+1).padStart(2,'0')+'-01';
+  }
+  m = s.match(/^(\d{4})-(\d{1,2})$/); // "2026-11"
+  if (m) return m[1]+'-'+m[2].padStart(2,'0')+'-01';
+  m = s.match(/^(\d{1,2})\/(\d{4})$/); // "11/2026"
+  if (m) return m[2]+'-'+m[1].padStart(2,'0')+'-01';
+  return '';
 }
 
 async function processEventXLSX(arrayBuf, filename) {
@@ -10265,7 +10298,7 @@ async function processEventXLSX(arrayBuf, filename) {
   }
 
   if (flatLayout) {
-    const { replayCol, player1Col, player2Col, eventCol, roundCol, headerIdx, rows } = flatLayout;
+    const { replayCol, player1Col, player2Col, eventCol, roundCol, monthYearCol, headerIdx, rows } = flatLayout;
     st('Processing flat event-data sheet ('+(rows.length-headerIdx-1)+' matches)...', 'var(--muted)');
 
     // One replay row names two players (Player 1 and Player 2) — fan each
@@ -10274,6 +10307,7 @@ async function processEventXLSX(arrayBuf, filename) {
     // (findOrPromptPlayer, the import loop, crosslink scan) stays unchanged.
     const perPlayer = new Map(); // lowercased player name -> { player, replays, seenUrls }
     const seenEventCodes = new Set();
+    const eventDates = new Map(); // code -> first successfully-parsed date seen for it
 
     for (let i = headerIdx + 1; i < rows.length; i++) {
       const row = rows[i];
@@ -10285,7 +10319,13 @@ async function processEventXLSX(arrayBuf, filename) {
       const replayId = idMatch[1];
       const eventId = (eventCol >= 0 ? String(row[eventCol]||'').trim() : '').toUpperCase() || _xlsxEventId;
       const round = roundCol >= 0 ? String(row[roundCol]||'').trim() : '';
-      if (eventId) seenEventCodes.add(eventId);
+      if (eventId) {
+        seenEventCodes.add(eventId);
+        if (!eventDates.has(eventId) && monthYearCol >= 0) {
+          const parsed = igtParseMonthYear(row[monthYearCol]);
+          if (parsed) eventDates.set(eventId, parsed);
+        }
+      }
 
       for (const pname of [String(row[player1Col]||'').trim(), String(row[player2Col]||'').trim()]) {
         if (!pname) continue;
@@ -10298,16 +10338,19 @@ async function processEventXLSX(arrayBuf, filename) {
       }
     }
 
-    // Register each distinct event code right away (filename-derived name)
-    // so it shows up on the Events tab immediately rather than staying
-    // invisible until an unrelated FL scrape or admin backfill happens to
-    // touch this same code later — see POST /api/events/:code/ensure.
-    // Never clobbers a name/date an event already has from a better source.
+    // Register each distinct event code right away (filename-derived name,
+    // plus a date parsed from the sheet's own Month/Year column when
+    // present) so it shows up on the Events tab immediately AND sorts
+    // sensibly there — without a date it sorts to the very bottom of the
+    // default "New -> Old" view, which looks exactly like "the import
+    // silently failed" even though the event (and its replays) really are
+    // there; see POST /api/events/:code/ensure. Never clobbers a name/date
+    // an event already has from a better source (FL scrape, admin backfill).
     for (const code of seenEventCodes) {
       try {
         await fetch(API+'/events/'+encodeURIComponent(code)+'/ensure', {
           method:'POST', headers: authHeaders(),
-          body: JSON.stringify({ name: _xlsxEventName })
+          body: JSON.stringify({ name: _xlsxEventName, date: eventDates.get(code) || '' })
         });
       } catch(e) { console.error('[EventImport] Failed to register event', code, e.message); }
     }
