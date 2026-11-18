@@ -76,6 +76,97 @@ let _pgEverLoaded = false;
 // (admin-triggered merge) further down.
 let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {}, replayCache: {}, overrides: {}, _changeLog: [], events: {} };
 
+// ── KNOWN_EVENT_DATES — authoritative Month/Year (+ expected replay count)
+// for a fixed roster of German Goat events, handed over directly by the
+// user rather than derived from a CSV's own Month/Year column (which has
+// already been wrong for one of these — GER-NATS26 — before the
+// igtParseMonthYear fix shipped). Keyed by the SAME normalization
+// POST /api/events/:code/ensure applies to every incoming code
+// (.toUpperCase().trim()), so a lookup here always matches regardless of
+// the exact casing/spacing used in whatever file the code came from.
+// `replays` is the expected replay count for that event, kept here as
+// reference/QA info only (e.g. to sanity-check an import's total against
+// what was expected) — nothing currently enforces it automatically.
+// Both /ensure (on every future import) and applyKnownEventDatesAtStartup()
+// (once, at boot, for events already sitting in the DB from before this
+// list existed) treat `date` here as authoritative: it always WINS over
+// whatever a CSV's own Month/Year column parsed to, rather than only
+// filling in when blank — these are hand-confirmed dates for this exact
+// set of events, not a fallback.
+const KNOWN_EVENT_DATES = {
+  'GER-NATS26':          { date: '2026-11-01', name: 'German Goat Nationals 2026', replays: 202 },
+  'GER-LCQ 3':           { date: '2026-11-01', name: 'Last Chance Qualifier 3',     replays: 41  },
+  'GER-LCQ 2':           { date: '2026-11-01', name: 'Last Chance Qualifier 2',     replays: 62  },
+  'GER-LCQ 1':           { date: '2026-11-01', name: 'Last Chance Qualifier 1',     replays: 55  },
+  'GLITCH 16':           { date: '2026-11-01', name: 'GLITCH 16',                   replays: 12  },
+  'GLITCH 15':           { date: '2026-10-01', name: 'GLITCH 15',                   replays: 10  },
+  'GER-POTRS 15 (3V3)':  { date: '2026-10-01', name: 'Pot Racing Series 15 (3v3)',  replays: 51  },
+  'GLITCH 14':           { date: '2026-10-01', name: 'GLITCH 14',                   replays: 16  },
+  'GLITCH 13':           { date: '2026-10-01', name: 'GLITCH 13',                   replays: 15  },
+  'GLITCH 12':           { date: '2026-09-01', name: 'GLITCH 12',                   replays: 12  },
+  'GLITCH 11':           { date: '2026-09-01', name: 'GLITCH 11',                   replays: 11  },
+  'GLITCH 10':           { date: '2026-09-01', name: 'GLITCH 10',                   replays: 5   },
+  'GLITCH 09':           { date: '2026-09-01', name: 'GLITCH 09',                   replays: 10  },
+  'GER-POTRS 14':        { date: '2026-09-01', name: 'Pot Racing Series 14',        replays: 63  },
+  'GLITCH 08':           { date: '2026-09-01', name: 'GLITCH 08',                   replays: 15  },
+  'GLITCH 07':           { date: '2026-08-01', name: 'GLITCH 07',                   replays: 15  },
+  'GLITCH 06':           { date: '2026-08-01', name: 'GLITCH 06',                   replays: 16  },
+  'GER-POTRS 13':        { date: '2026-08-01', name: 'Pot Racing Series 13',        replays: 51  },
+  'GLITCH 05':           { date: '2026-08-01', name: 'GLITCH 05',                   replays: 6   },
+  'GLITCH 04':           { date: '2026-07-01', name: 'GLITCH 04',                   replays: 12  },
+  'GLITCH 03':           { date: '2026-07-01', name: 'GLITCH 03',                   replays: 13  },
+  'GER-POTRS 12':        { date: '2026-07-01', name: 'Pot Racing Series 12',        replays: 40  },
+  'GLITCH 02':           { date: '2026-07-01', name: 'GLITCH 02',                   replays: 8   },
+  'GLITCH 01':           { date: '2026-07-01', name: 'GLITCH 01',                   replays: 6   },
+  'GER-POTRS 11':        { date: '2026-06-01', name: 'Pot Racing Series 11',        replays: 40  },
+  'GER-POTRS 10':        { date: '2026-05-01', name: 'Pot Racing Series 10',        replays: 70  },
+  'GER-POTRS 9':         { date: '2026-04-01', name: 'Pot Racing Series 09',        replays: 45  },
+  'GER-POTRS 8':         { date: '2026-03-01', name: 'Pot Racing Series 08',        replays: 40  },
+  'GER-POTRS 7':         { date: '2026-02-01', name: 'Pot Racing Series 07',        replays: 45  },
+  'GER-POTRS 6':         { date: '2026-01-01', name: 'Pot Racing Series 06',        replays: 51  },
+  'GER-POTRS 5':         { date: '2025-12-01', name: 'Pot Racing Series 05',        replays: 20  },
+  'GER-POTRS 4':         { date: '2025-11-01', name: 'Pot Racing Series 04',        replays: 18  },
+  'GER-POTRS 3':         { date: '2025-09-01', name: 'Pot Racing Series 03',        replays: 17  },
+  'GER-POTRS 2':         { date: '2025-08-01', name: 'Pot Racing Series 02',        replays: 11  },
+  'GER-POTRS 1':         { date: '2025-07-01', name: 'Pot Racing Series 01',        replays: 17  },
+};
+
+// Self-heal pass for KNOWN_EVENT_DATES — run once at startup (see initDB())
+// so events already sitting in the DB from before this list existed (e.g.
+// GER-NATS26, imported back when CSV Month/Year parsing was still broken)
+// get corrected immediately on the next deploy, with no need to re-import
+// their source file. Only CORRECTS existing db.events/db.eventDates entries
+// for codes in the list — it deliberately does NOT create new placeholder
+// events for known codes that haven't been imported yet, so an event with
+// no data at all still doesn't show up on the Events tab until it actually
+// has some.
+function applyKnownEventDatesAtStartup() {
+  let changed = 0;
+  if (db.events) {
+    for (const code of Object.keys(db.events)) {
+      const known = KNOWN_EVENT_DATES[code];
+      if (!known) continue;
+      const ev = db.events[code];
+      let touched = false;
+      if (ev.date !== known.date) { ev.date = known.date; touched = true; }
+      if (!ev.name && known.name) { ev.name = known.name; touched = true; }
+      if (touched) { ev.updatedAt = Date.now(); changed++; }
+    }
+  }
+  if (db.eventDates) {
+    for (const code of Object.keys(db.eventDates)) {
+      const known = KNOWN_EVENT_DATES[code];
+      if (!known) continue;
+      const entry = db.eventDates[code];
+      let touched = false;
+      if (entry.date !== known.date) { entry.date = known.date; touched = true; }
+      if (!entry.name && known.name) { entry.name = known.name; touched = true; }
+      if (touched) changed++;
+    }
+  }
+  return changed;
+}
+
 async function connectPostgres() {
   const { Client } = require('pg');
   const client = new Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 10000 });
@@ -267,6 +358,13 @@ async function initDB() {
   const healedCount = applyAllGlobalOverridesAtStartup();
   if (healedCount > 0) {
     console.log(`[overrides] Startup: re-applied ${Object.keys(db.overrides||{}).length} global override(s) to ${healedCount} replay cop${healedCount===1?'y':'ies'} across all batches.`);
+  }
+  // Self-heal known-event dates (see KNOWN_EVENT_DATES above) for events
+  // already in the DB from before this list existed.
+  const eventDatesHealed = applyKnownEventDatesAtStartup();
+  if (eventDatesHealed > 0) {
+    console.log(`[events] Startup: corrected date/name on ${eventDatesHealed} known-event record(s) from KNOWN_EVENT_DATES.`);
+    await saveDB(['events', 'eventDates']);
   }
   // Trim the audit log to its 7-day retention window right away too, in
   // case the server was down (or just never restarted) long enough for
@@ -1276,6 +1374,16 @@ function buildEventReplayCoverageIndex() {
 //    always pass regardless of whether any real data had landed.
 //  - 'complete' (green): every tracked deck's builder has a profile AND has
 //    both a decklist and at least one replay on file for this event.
+//  - 'replay_only' (green, "Complete (Replay Data Only)"): only reachable
+//    when ev.ignoreDecklists is set (see PATCH /api/events/:code/ignore-
+//    decklists) — an event imported from parsed replay data alone (the Add
+//    Event Data CSV flow; see POST /api/events/:code/ensure), with no
+//    Format Library decklist bracket and no intention of ever getting one.
+//    There's no deck list to check player-by-player here, so this just
+//    requires at least one replay on file for this event code at all
+//    (buildEventReplayCoverageIndex) — an ignoreDecklists event with zero
+//    replays either is still 'error', since "ignore decklists" was never
+//    meant to paper over an event with literally no data.
 // A blank/missing builderName on an individual deck slot is skipped rather
 // than counted as missing — there's no name to show or match on, and that's
 // a data-quality issue distinct from either of the above. Same
@@ -1283,7 +1391,15 @@ function buildEventReplayCoverageIndex() {
 // FL builderNames need it too.
 function computeEventStatus(ev, profileIndex, replayCoverageIndex) {
   const decks = ev.decks || [];
-  if (!decks.length) return { status: 'error', missingPlayers: [], incompleteData: [] };
+  if (!decks.length) {
+    if (ev.ignoreDecklists) {
+      const coverage = (replayCoverageIndex && replayCoverageIndex[ev.code]) || { hasReplay: new Set() };
+      return coverage.hasReplay.size
+        ? { status: 'replay_only', missingPlayers: [], incompleteData: [] }
+        : { status: 'error', missingPlayers: [], incompleteData: [] };
+    }
+    return { status: 'error', missingPlayers: [], incompleteData: [] };
+  }
   const missingPlayers = [];
   const incompleteData = [];
   const seenMissing = new Set();
@@ -4077,6 +4193,11 @@ const server = http.createServer(async (req, res) => {
         // the Events list row itself so this doesn't need opening the event
         // detail page to notice; kept short here, full text lives client-side.
         note: ev.note || '',
+        // Whether this event's "no decklist bracket" status should be
+        // treated as intentional (replay data only) rather than broken —
+        // see PATCH /api/events/:code/ignore-decklists and the
+        // 'replay_only' status branch in computeEventStatus above.
+        ignoreDecklists: !!ev.ignoreDecklists,
       };
     });
     return json(res, 200, { events: list, total: list.length });
@@ -4175,7 +4296,40 @@ const server = http.createServer(async (req, res) => {
       size: ev.size || decks.length,
       winner: ev.winner || null,
       note: ev.note || '',
+      ignoreDecklists: !!ev.ignoreDecklists,
       decks,
+    });
+  }
+
+  // ── PATCH /api/events/:code/ignore-decklists — mark an event (that has no
+  // Format Library decklist bracket on file — ev.decks is empty, status
+  // would otherwise be 'error'/"Missing Data") as intentionally replay-data-
+  // only, typically after an Add Event Data CSV import that was never going
+  // to have decklists in the first place (those come from the separate Add
+  // YDK Files flow). Once set, computeEventStatus stops treating "no decks"
+  // as broken and instead reports 'replay_only' as long as at least one
+  // replay is on file for this code — see that function's own comment.
+  // Body: { ignore: true|false } — a toggle, not one-way, so it can be
+  // turned back off if decklists do end up getting added later after all.
+  if (parts[0]==='events' && parts[1] && parts[2]==='ignore-decklists' && !parts[3] && method==='PATCH') {
+    if (!isMiner(req)) return json(res, 403, { error: 'Miners and above only' });
+    const code = decodeURIComponent(parts[1]).toUpperCase();
+    const ev = db.events[code];
+    if (!ev) return json(res, 404, { error: 'No data for this event yet.' });
+    return readBody(req, async data => {
+      ev.ignoreDecklists = !!data.ignore;
+      await saveDB('events');
+      logChange(req, 'set_event_ignore_decklists', { code, ignore: ev.ignoreDecklists });
+      const profileIndex = buildProfileNameIndex();
+      const replayCoverageIndex = buildEventReplayCoverageIndex();
+      const statusInfo = computeEventStatus(ev, profileIndex, replayCoverageIndex);
+      return json(res, 200, {
+        ok: true,
+        ignoreDecklists: ev.ignoreDecklists,
+        status: statusInfo.status,
+        missingPlayers: statusInfo.missingPlayers,
+        incompleteData: statusInfo.incompleteData,
+      });
     });
   }
 
@@ -4222,14 +4376,22 @@ const server = http.createServer(async (req, res) => {
     if (!code) return json(res, 400, { error: 'Missing event code' });
     return readBody(req, async data => {
       const name = String(data.name == null ? '' : data.name).trim();
-      const date = String(data.date == null ? '' : data.date).trim().slice(0, 10);
+      let date = String(data.date == null ? '' : data.date).trim().slice(0, 10);
+      // KNOWN_EVENT_DATES (above) is hand-confirmed ground truth for this
+      // fixed roster of events, handed over directly by the user — its date
+      // always wins over whatever this particular import's Month/Year
+      // column parsed to, rather than only filling in when blank.
+      const known = KNOWN_EVENT_DATES[code];
+      if (known) date = known.date;
+      const fallbackName = (!name && known) ? known.name : name;
       if (!db.events) db.events = {};
       const existing = db.events[code];
       if (!existing) {
-        db.events[code] = { code, name, date, size: 0, winner: null, decks: [], note: '', source: 'csv-import', updatedAt: Date.now() };
+        db.events[code] = { code, name: fallbackName, date, size: 0, winner: null, decks: [], note: '', source: 'csv-import', updatedAt: Date.now() };
       } else {
-        if (!existing.name && name) existing.name = name;
-        if (!existing.date && date) existing.date = date;
+        if (!existing.name && fallbackName) existing.name = fallbackName;
+        if (known) existing.date = known.date;
+        else if (!existing.date && date) existing.date = date;
         existing.updatedAt = Date.now();
       }
       await saveDB('events');
@@ -4241,13 +4403,14 @@ const server = http.createServer(async (req, res) => {
       if (!db.eventDates) db.eventDates = {};
       const existingDate = db.eventDates[code];
       if (!existingDate) {
-        db.eventDates[code] = { date, name, source: 'csv-import' };
+        db.eventDates[code] = { date, name: fallbackName, source: 'csv-import' };
       } else {
-        if (!existingDate.name && name) existingDate.name = name;
-        if (!existingDate.date && date) existingDate.date = date;
+        if (!existingDate.name && fallbackName) existingDate.name = fallbackName;
+        if (known) existingDate.date = known.date;
+        else if (!existingDate.date && date) existingDate.date = date;
       }
       await saveDB('eventDates');
-      logChange(req, 'ensure_event', { code, name, date });
+      logChange(req, 'ensure_event', { code, name: fallbackName, date });
       return json(res, 200, { ok: true, event: db.events[code] });
     });
   }

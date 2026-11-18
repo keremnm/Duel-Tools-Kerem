@@ -1412,48 +1412,46 @@ select{cursor:pointer}
         <!-- Advanced Search panel (Goat Format card pool — ygoprodeck, filtered
              client-side so Desc/effect-text search works even though the API
              itself has no full-text effect search param). Hidden by default,
-             toggled by the button above. Layout mirrors duelingbook.com's own
-             advanced search (Name/Desc, Card type -> sub-Type, monster-only
-             Race/Subtype/Attribute, Level/ATK/DEF range, paged results). -->
-        <div id="igt-adv-search-panel" style="display:none;padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--card2)">
-          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
-            <div style="display:flex;flex-direction:column;gap:3px">
-              <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">NAME</label>
-              <input id="igt-adv-name" type="text" style="width:160px" onkeydown="if(event.key==='Enter')igtAdvSearchRun()"/>
+             toggled by the button above. Styled to look like duelingbook.com's
+             own "SEARCH" sidebar (sage-green/black card-game skin, stacked
+             Name/Desc/Card/Type/Attrib rows, ATK/DEF range rows, Limit/Order
+             row, big triangle pager, 4-col result grid, fixed cardpool
+             footer) per the user's reference screenshots — this app is
+             permanently locked to the Goat Format pool, so the footer is a
+             static label rather than duelingbook's own pool/era picker. -->
+        <div id="igt-adv-search-panel" style="display:none;flex-shrink:0;padding:10px 14px;border-bottom:1px solid var(--border)">
+          <div id="igt-dbsearch-box" style="width:320px;background:#b9c99e;border:3px solid #1c2e18;border-radius:3px;box-shadow:0 2px 10px rgba(0,0,0,.4);font-family:Arial,Helvetica,sans-serif;color:#15210f">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px 2px">
+              <span style="font-size:22px;font-weight:900;letter-spacing:.02em;color:#15210f">SEARCH</span>
+              <span style="font-size:10px;color:#2c4321;cursor:pointer" onclick="igtToggleAdvSearch()" title="Close">✕ close</span>
             </div>
-            <div style="display:flex;flex-direction:column;gap:3px">
-              <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">DESC / EFFECT</label>
-              <input id="igt-adv-desc" type="text" style="width:200px" onkeydown="if(event.key==='Enter')igtAdvSearchRun()"/>
-            </div>
-            <div style="display:flex;flex-direction:column;gap:3px">
-              <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">CARD</label>
-              <select id="igt-adv-category" style="width:110px" onchange="igtAdvCategoryChanged()">
-                <option value="">Any</option>
-                <option value="Monster">Monster</option>
-                <option value="Spell">Spell</option>
-                <option value="Trap">Trap</option>
-              </select>
-            </div>
-            <div style="display:flex;flex-direction:column;gap:3px">
-              <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">TYPE</label>
-              <select id="igt-adv-type" style="width:130px" disabled>
-                <option value="">Any</option>
-              </select>
-            </div>
-            <div id="igt-adv-monster-only-1" style="display:none;gap:8px;flex-wrap:wrap">
-              <div style="display:flex;flex-direction:column;gap:3px">
-                <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">SUBTYPE</label>
-                <select id="igt-adv-subtype" style="width:100px">
+            <div style="padding:2px 10px 10px;display:flex;flex-direction:column;gap:5px">
+
+              <div style="display:flex;align-items:center;gap:6px">
+                <label style="font-size:12px;font-weight:bold;width:44px;flex-shrink:0">Name:</label>
+                <input id="igt-adv-name" type="text" style="flex:1;min-width:0;background:#fff;border:1px solid #1c2e18;border-radius:2px;padding:3px 5px;font-size:12px" onkeydown="if(event.key==='Enter')igtAdvSearchRun()"/>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px">
+                <label style="font-size:12px;font-weight:bold;width:44px;flex-shrink:0">Desc:</label>
+                <input id="igt-adv-desc" type="text" style="flex:1;min-width:0;background:#fff;border:1px solid #1c2e18;border-radius:2px;padding:3px 5px;font-size:12px" onkeydown="if(event.key==='Enter')igtAdvSearchRun()"/>
+              </div>
+
+              <div style="display:flex;align-items:center;gap:6px">
+                <label style="font-size:12px;font-weight:bold;width:44px;flex-shrink:0">Card:</label>
+                <select id="igt-adv-category" style="flex:1;min-width:0;background:#cfdbb8;border:1px solid #1c2e18;border-radius:2px;padding:3px 2px;font-size:11px" onchange="igtAdvCategoryChanged()">
                   <option value="">Any</option>
-                  <option value="Flip">Flip</option>
-                  <option value="Toon">Toon</option>
-                  <option value="Spirit">Spirit</option>
-                  <option value="Union">Union</option>
+                  <option value="Monster">Monster</option>
+                  <option value="Spell">Spell</option>
+                  <option value="Trap">Trap</option>
+                </select>
+                <select id="igt-adv-type" style="flex:1;min-width:0;background:#cfdbb8;border:1px solid #1c2e18;border-radius:2px;padding:3px 2px;font-size:11px" disabled>
+                  <option value="">Any</option>
                 </select>
               </div>
-              <div style="display:flex;flex-direction:column;gap:3px">
-                <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">MONSTER TYPE</label>
-                <select id="igt-adv-race" style="width:130px">
+
+              <div id="igt-adv-monster-only-1" style="display:none;align-items:center;gap:6px">
+                <label style="font-size:12px;font-weight:bold;width:44px;flex-shrink:0">Type:</label>
+                <select id="igt-adv-race" style="flex:1;min-width:0;background:#cfdbb8;border:1px solid #1c2e18;border-radius:2px;padding:3px 2px;font-size:11px">
                   <option value="">Any</option>
                   <option>Aqua</option><option>Beast</option><option>Beast-Warrior</option>
                   <option>Dinosaur</option><option>Dragon</option><option>Fairy</option>
@@ -1463,54 +1461,76 @@ select{cursor:pointer}
                   <option>Spellcaster</option><option>Thunder</option><option>Warrior</option>
                   <option>Winged Beast</option><option>Zombie</option>
                 </select>
-              </div>
-              <div style="display:flex;flex-direction:column;gap:3px">
-                <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">ATTRIBUTE</label>
-                <select id="igt-adv-attribute" style="width:95px">
+                <select id="igt-adv-subtype" style="flex:1;min-width:0;background:#cfdbb8;border:1px solid #1c2e18;border-radius:2px;padding:3px 2px;font-size:11px">
                   <option value="">Any</option>
-                  <option>DARK</option><option>EARTH</option><option>FIRE</option>
-                  <option>LIGHT</option><option>WATER</option><option>WIND</option>
+                  <option value="Flip">Flip</option>
+                  <option value="Toon">Toon</option>
+                  <option value="Spirit">Spirit</option>
+                  <option value="Union">Union</option>
                 </select>
               </div>
-            </div>
-          </div>
-          <div id="igt-adv-monster-only-2" style="display:none;flex-wrap:wrap;gap:14px;align-items:flex-end;margin-top:8px">
-            <div style="display:flex;flex-direction:column;gap:3px">
-              <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">LEVEL / RANK</label>
-              <div style="display:flex;align-items:center;gap:4px">
-                <input id="igt-adv-level-min" type="number" min="0" max="12" style="width:52px" placeholder="min"/>
-                <span style="color:var(--muted);font-size:11px">≤ ★ ≤</span>
-                <input id="igt-adv-level-max" type="number" min="0" max="12" style="width:52px" placeholder="max"/>
+
+              <div id="igt-adv-monster-only-2" style="display:none;flex-direction:column;gap:5px">
+                <div style="display:flex;align-items:center;gap:6px">
+                  <label style="font-size:12px;font-weight:bold;width:44px;flex-shrink:0">Attrib:</label>
+                  <select id="igt-adv-attribute" style="width:68px;flex-shrink:0;background:#cfdbb8;border:1px solid #1c2e18;border-radius:2px;padding:3px 2px;font-size:11px">
+                    <option value="">Any</option>
+                    <option>DARK</option><option>EARTH</option><option>FIRE</option>
+                    <option>LIGHT</option><option>WATER</option><option>WIND</option>
+                  </select>
+                  <span style="font-size:11px;font-weight:bold;white-space:nowrap">≤</span>
+                  <input id="igt-adv-level-min" type="number" min="0" max="12" style="width:34px;background:#fff;border:1px solid #1c2e18;border-radius:2px;padding:2px" placeholder=""/>
+                  <span style="font-size:10px;font-weight:bold;text-align:center;line-height:1.05">Lvl/<br/>Rank</span>
+                  <span style="font-size:11px;font-weight:bold">≤</span>
+                  <input id="igt-adv-level-max" type="number" min="0" max="12" style="width:34px;background:#fff;border:1px solid #1c2e18;border-radius:2px;padding:2px" placeholder=""/>
+                </div>
+                <div style="display:flex;align-items:center;gap:4px;padding-left:50px">
+                  <input id="igt-adv-atk-min" type="number" min="0" style="width:48px;background:#fff;border:1px solid #1c2e18;border-radius:2px;padding:2px" placeholder=""/>
+                  <span style="font-size:11px;font-weight:bold;white-space:nowrap">≤ATK≤</span>
+                  <input id="igt-adv-atk-max" type="number" min="0" style="width:48px;background:#fff;border:1px solid #1c2e18;border-radius:2px;padding:2px" placeholder=""/>
+                </div>
+                <div style="display:flex;align-items:center;gap:4px;padding-left:50px">
+                  <input id="igt-adv-def-min" type="number" min="0" style="width:48px;background:#fff;border:1px solid #1c2e18;border-radius:2px;padding:2px" placeholder=""/>
+                  <span style="font-size:11px;font-weight:bold;white-space:nowrap">≤DEF≤</span>
+                  <input id="igt-adv-def-max" type="number" min="0" style="width:48px;background:#fff;border:1px solid #1c2e18;border-radius:2px;padding:2px" placeholder=""/>
+                </div>
+              </div>
+
+              <div style="display:flex;align-items:center;gap:6px">
+                <label style="font-size:12px;font-weight:bold;width:44px;flex-shrink:0">Limit:</label>
+                <select id="igt-adv-limit" style="width:56px;background:#cfdbb8;border:1px solid #1c2e18;border-radius:2px;padding:3px 2px;font-size:11px">
+                  <option value="20">20</option>
+                  <option value="40">40</option>
+                  <option value="60">60</option>
+                  <option value="9999">All</option>
+                </select>
+                <label style="font-size:12px;font-weight:bold;margin-left:6px">Order:</label>
+                <select id="igt-adv-order" style="flex:1;min-width:0;background:#cfdbb8;border:1px solid #1c2e18;border-radius:2px;padding:3px 2px;font-size:11px">
+                  <option value="alpha">Alpha</option>
+                  <option value="level">Level/Rank</option>
+                  <option value="atk">ATK</option>
+                  <option value="def">DEF</option>
+                </select>
+              </div>
+
+              <div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-top:4px">
+                <span onclick="igtAdvSearchPage(-1)" style="cursor:pointer;font-size:0;border-top:9px solid transparent;border-bottom:9px solid transparent;border-right:14px solid #1c2e18" title="Previous page"></span>
+                <button onclick="igtAdvSearchRun()" style="background:#dce6c9;border:1px solid #1c2e18;border-radius:3px;padding:5px 18px;font-size:12px;font-weight:bold;color:#15210f;cursor:pointer">Search</button>
+                <span onclick="igtAdvSearchPage(1)" style="cursor:pointer;font-size:0;border-top:9px solid transparent;border-bottom:9px solid transparent;border-left:14px solid #1c2e18" title="Next page"></span>
+              </div>
+              <div style="text-align:center;font-size:12px;font-weight:bold" id="igt-adv-page-info">0 / 0</div>
+              <div style="text-align:center">
+                <span onclick="igtAdvSearchClear()" style="font-size:10px;color:#2c4321;text-decoration:underline;cursor:pointer">clear filters</span>
+              </div>
+              <div id="igt-adv-search-status" style="font-size:10px;color:#2c4321;text-align:center"></div>
+
+              <div id="igt-adv-search-results" style="display:grid;grid-template-columns:repeat(4,64px);justify-content:center;gap:3px;margin-top:4px;max-height:280px;overflow-y:auto;background:#cfdbb8;border:1px solid #1c2e18;border-radius:2px;padding:4px"></div>
+
+              <div style="margin-top:2px;background:#d9e4c4;border:1px solid #1c2e18;border-radius:2px;padding:5px 8px;font-size:11px;font-weight:bold;color:#2c4321;text-align:center">
+                Goat Format Cardpool
               </div>
             </div>
-            <div style="display:flex;flex-direction:column;gap:3px">
-              <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">ATK</label>
-              <div style="display:flex;align-items:center;gap:4px">
-                <input id="igt-adv-atk-min" type="number" min="0" style="width:64px" placeholder="min"/>
-                <span style="color:var(--muted);font-size:11px">≤ ATK ≤</span>
-                <input id="igt-adv-atk-max" type="number" min="0" style="width:64px" placeholder="max"/>
-              </div>
-            </div>
-            <div style="display:flex;flex-direction:column;gap:3px">
-              <label style="font-size:9px;color:var(--muted);letter-spacing:.08em">DEF</label>
-              <div style="display:flex;align-items:center;gap:4px">
-                <input id="igt-adv-def-min" type="number" min="0" style="width:64px" placeholder="min"/>
-                <span style="color:var(--muted);font-size:11px">≤ DEF ≤</span>
-                <input id="igt-adv-def-max" type="number" min="0" style="width:64px" placeholder="max"/>
-              </div>
-            </div>
           </div>
-          <div style="display:flex;gap:7px;align-items:center;margin-top:10px">
-            <button class="dd-btn" onclick="igtAdvSearchRun()" style="font-size:11px;padding:6px 16px">Search</button>
-            <button class="dd-btn-sec" onclick="igtAdvSearchClear()" style="font-size:11px">✕ Clear Filters</button>
-            <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
-              <button class="dd-btn-sec" onclick="igtAdvSearchPage(-1)" style="font-size:11px;padding:5px 10px">◀</button>
-              <span id="igt-adv-page-info" style="font-size:11px;color:var(--muted);min-width:70px;text-align:center">0 / 0</span>
-              <button class="dd-btn-sec" onclick="igtAdvSearchPage(1)" style="font-size:11px;padding:5px 10px">▶</button>
-            </div>
-          </div>
-          <div id="igt-adv-search-status" style="font-size:10px;color:var(--muted);margin-top:4px"></div>
-          <div id="igt-adv-search-results" style="display:grid;grid-template-columns:repeat(auto-fill,52px);gap:5px;margin-top:8px;max-height:220px;overflow-y:auto"></div>
         </div>
         <!-- Search results -->
         <div id="igt-search-results" style="padding:6px 14px;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:5px;min-height:32px;flex-shrink:0;max-height:80px;overflow-y:auto"></div>
@@ -18061,6 +18081,9 @@ function eventStatusBadge(ev) {
     return '<span style="color:var(--amber);font-weight:bold">⚠ Missing Replays/Decklists</span>'
       + (incomplete.length ? `<div style="font-weight:normal;color:var(--amber);font-size:11px;margin-top:2px">${shown}${more}</div>` : '');
   }
+  if (ev.status === 'replay_only') {
+    return '<span style="color:var(--green);font-weight:bold">✓ Complete (Replay Data Only)</span>';
+  }
   // 'error' — no decks captured for this event at all.
   return '<span style="color:var(--red);font-weight:bold">✗ Missing Data</span>';
 }
@@ -18290,6 +18313,105 @@ async function showEventIssuesModal(ev) {
   });
 }
 
+// Shown when clicking a ✗ Missing Data status badge (ev.status === 'error'
+// — an event record with no decklist bracket captured at all, see
+// computeEventStatus). This is the normal, expected state for anything
+// brought in through Add Event Data CSV (replays only — decklists are a
+// separate Add YDK Files step), not necessarily a broken import, so this
+// offers a way to say so explicitly rather than leaving it flagged red
+// forever: a checkbox that PATCHes PATCH /api/events/:code/ignore-decklists,
+// after which computeEventStatus reports 'replay_only' (green) instead of
+// 'error' (red) as long as at least one replay is on file for this event.
+// Toggleable both ways, so turning it back off (e.g. decklists did end up
+// getting added after all, or this was checked by mistake) is just
+// unchecking the same box.
+async function showIgnoreDecklistsModal(ev) {
+  const existing = document.getElementById('event-ignore-decklists-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'event-ignore-decklists-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:440px;width:100%;display:flex;flex-direction:column;gap:12px';
+
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;gap:8px';
+  hdr.innerHTML = '<span style="font-family:monospace;font-weight:bold;font-size:13px;color:var(--red)">✗ Missing Data — '+_escapeHtml(ev.code)+'</span>';
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = 'margin-left:auto;background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer';
+  closeBtn.onclick = () => overlay.remove();
+  hdr.appendChild(closeBtn);
+  box.appendChild(hdr);
+
+  const explainEl = document.createElement('div');
+  explainEl.style.cssText = 'font-size:12px;color:var(--muted);font-family:monospace;line-height:1.5';
+  explainEl.textContent = 'This event has no Format Library decklist bracket on file — usually because it was brought in through Add Event Data CSV, which only imports replay/RPS data, not decklists (those come from the separate Add YDK Files button). If you\'re not planning to add decklists for this event, you can mark it as using replay data only instead of flagging it as missing.';
+  box.appendChild(explainEl);
+
+  const checkRow = document.createElement('label');
+  checkRow.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);font-family:monospace;cursor:pointer;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:10px 12px';
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.checked = !!ev.ignoreDecklists;
+  checkbox.style.cssText = 'width:16px;height:16px;accent-color:var(--green)';
+  checkRow.appendChild(checkbox);
+  const checkLabel = document.createElement('span');
+  checkLabel.textContent = 'Ignore decklists — use parsed replay data for this event';
+  checkRow.appendChild(checkLabel);
+  box.appendChild(checkRow);
+
+  const statusEl = document.createElement('div');
+  statusEl.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace;min-height:14px';
+  box.appendChild(statusEl);
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px';
+  const saveBtn = document.createElement('button');
+  saveBtn.textContent = 'Save';
+  saveBtn.style.cssText = 'flex:1;background:var(--green);color:#050508;border:none;border-radius:6px;font-family:monospace;font-weight:bold;font-size:12px;padding:9px;cursor:pointer';
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true;
+    statusEl.textContent = 'Saving...';
+    try {
+      const res = await fetch(API+'/events/'+encodeURIComponent(ev.code)+'/ignore-decklists', {
+        method: 'PATCH', headers: authHeaders(),
+        body: JSON.stringify({ ignore: checkbox.checked })
+      });
+      const data = await res.json().catch(()=>({}));
+      if (!res.ok) throw new Error(data.error || ('HTTP '+res.status));
+      // Keep the row's own cached state in sync, same pattern
+      // showEventIssuesModal uses — _eventsState.list is only re-fetched on
+      // an explicit Refresh, so without this the row would keep showing
+      // the old ✗ Missing Data badge until the next full reload even
+      // though the server just confirmed the new status.
+      ev.ignoreDecklists = data.ignoreDecklists;
+      ev.status = data.status;
+      ev.missingPlayers = data.missingPlayers || [];
+      ev.incompleteData = data.incompleteData || [];
+      eventsRenderList();
+      overlay.remove();
+    } catch(e) {
+      statusEl.textContent = 'Failed: '+e.message;
+      statusEl.style.color = 'var(--red)';
+      saveBtn.disabled = false;
+    }
+  };
+  btnRow.appendChild(saveBtn);
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.style.cssText = 'background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;font-family:monospace;font-size:12px;padding:9px 14px;cursor:pointer';
+  cancelBtn.onclick = () => overlay.remove();
+  btnRow.appendChild(cancelBtn);
+  box.appendChild(btnRow);
+
+  overlay.appendChild(box);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+}
+
 function eventsRenderList() {
   const tbody = document.getElementById('events-table-body');
   const countRow = document.getElementById('events-count-row');
@@ -18332,12 +18454,15 @@ function eventsRenderList() {
     tr.onmouseout  = () => tr.style.background = '';
     tr.onclick = (e) => { if (e.target.closest('.event-note-btn') || e.target.closest('.event-status-click')) return; eventsShowDetail(ev.code); };
     const hasNote = !!(ev.note && ev.note.trim());
-    // A status of 'missing_players' or 'incomplete_data' is the only case
-    // with actual per-player issues to drill into (see
-    // showEventIssuesModal) — 'complete' has nothing to show and 'error'
-    // means no decks were captured at all, so neither gets the clickable
-    // treatment/pointer cursor.
+    // A status of 'missing_players' or 'incomplete_data' has actual
+    // per-player issues to drill into (see showEventIssuesModal). 'error'
+    // ("Missing Data" — no decks captured at all) is also clickable, but
+    // routes to a different modal (showIgnoreDecklistsModal) offering to
+    // mark the event as replay-data-only instead, since there's no deck
+    // list here to drill into player-by-player. 'complete' and
+    // 'replay_only' have nothing left to act on, so neither is clickable.
     const hasIssues = ev.status === 'missing_players' || ev.status === 'incomplete_data';
+    const isNoDecks = ev.status === 'error';
     // Note button — a free-text admin annotation for known Format Library
     // data problems on this event (wrong replay submitted for a round, a
     // mangled bracket name, etc. — see showEventNoteModal / PATCH
@@ -18352,7 +18477,7 @@ function eventsRenderList() {
       <td style="padding:9px 10px;color:var(--muted)">${ev.date||'—'}</td>
       <td style="padding:9px 10px">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
-          <div class="${hasIssues?'event-status-click':''}" ${hasIssues?'title="Click to see each player with an issue and check it individually"':''} style="${hasIssues?'cursor:pointer':''}">${eventStatusBadge(ev)}</div>
+          <div class="${(hasIssues||isNoDecks)?'event-status-click':''}" ${hasIssues?'title="Click to see each player with an issue and check it individually"':(isNoDecks?'title="Click to mark this event as replay-data-only (no decklist bracket)"':'')} style="${(hasIssues||isNoDecks)?'cursor:pointer':''}">${eventStatusBadge(ev)}</div>
           <button class="event-note-btn" title="${hasNote ? 'View/edit note (click)' : 'Add a note about Format Library data issues for this event'}" style="background:none;border:1px solid ${hasNote?'var(--amber)':'var(--border)'};color:${hasNote?'var(--amber)':'var(--dim)'};font-family:monospace;font-size:11px;padding:2px 6px;border-radius:4px;cursor:pointer;flex-shrink:0;white-space:nowrap">🗒</button>
         </div>
       </td>
@@ -18360,7 +18485,7 @@ function eventsRenderList() {
     const noteBtn = tr.querySelector('.event-note-btn');
     if (noteBtn) noteBtn.onclick = e => { e.stopPropagation(); showEventNoteModal(ev); };
     const statusClick = tr.querySelector('.event-status-click');
-    if (statusClick) statusClick.onclick = e => { e.stopPropagation(); showEventIssuesModal(ev); };
+    if (statusClick) statusClick.onclick = e => { e.stopPropagation(); isNoDecks ? showIgnoreDecklistsModal(ev) : showEventIssuesModal(ev); };
     tbody.appendChild(tr);
   });
 
@@ -22963,6 +23088,11 @@ function igtCardTile(card, opts) {
 }
 
 // ── DECK BUILDER ──────────────────────────────────────────────────────────────
+// Quick search (the always-visible bar at the top of the Deck Builder).
+// Restricted to the Goat Format pool only, same as Advanced Search below —
+// this app is Goat Format only, so a card that isn't Goat-legal should never
+// be offered here, regardless of what the full ygoprodeck database returns
+// for a name match.
 async function igtSearchCards(query) {
   clearTimeout(_igtSearchTimeout);
   const out = document.getElementById('igt-search-results');
@@ -22970,16 +23100,17 @@ async function igtSearchCards(query) {
   _igtSearchTimeout = setTimeout(async () => {
     out.innerHTML = '<span style="font-size:11px;color:var(--muted)">Searching...</span>';
     try {
-      const res = await fetch('https://db.ygoprodeck.com/api/v7/cardinfo.php?fname='+encodeURIComponent(query)+'&num=20&offset=0');
-      const data = await res.json();
+      const pool = await igtLoadGoatPool();
+      const q = query.toLowerCase().trim();
+      const results = pool.filter(c => (c.name||'').toLowerCase().includes(q)).slice(0, 20);
       out.innerHTML = '';
-      (data.data||[]).forEach(card => {
+      results.forEach(card => {
         const tile = igtCardTile(card, { size:44, onClick:() => igtAddCard(card,'main') });
         tile.title = card.name + ' (click=main, right-click=side)';
         tile.oncontextmenu = e => { e.preventDefault(); igtAddCard(card,'side'); };
         out.appendChild(tile);
       });
-      if (!data.data || !data.data.length) out.innerHTML = '<span style="font-size:11px;color:var(--muted)">No results.</span>';
+      if (!results.length) out.innerHTML = '<span style="font-size:11px;color:var(--muted)">No results in the Goat Format pool.</span>';
     } catch(e) { out.innerHTML = '<span style="font-size:11px;color:var(--red)">Search failed.</span>'; }
   }, 350);
 }
@@ -23144,13 +23275,31 @@ async function igtAdvSearchRun() {
     return true;
   });
 
+  const order = document.getElementById('igt-adv-order').value;
+  results.sort((a,b) => {
+    if (order === 'level') return (b.level||0) - (a.level||0);
+    if (order === 'atk') return (b.atk||0) - (a.atk||0);
+    if (order === 'def') return (b.def||0) - (a.def||0);
+    return (a.name||'').localeCompare(b.name||'');
+  });
+
   _igtAdvResults = results;
   _igtAdvPage = 0;
   igtAdvSearchRenderPage();
 }
 
+// Page size follows the "Limit:" dropdown (duelingbook's own search has the
+// same control) rather than a fixed constant, so defaults to the dropdown's
+// own first option if the element isn't present yet for any reason.
+function igtAdvPageSize() {
+  const el = document.getElementById('igt-adv-limit');
+  const n = el ? parseInt(el.value, 10) : IGT_ADV_PAGE_SIZE;
+  return (!isNaN(n) && n > 0) ? n : IGT_ADV_PAGE_SIZE;
+}
+
 function igtAdvSearchPage(delta) {
-  const maxPage = Math.max(0, Math.ceil(_igtAdvResults.length / IGT_ADV_PAGE_SIZE) - 1);
+  const pageSize = igtAdvPageSize();
+  const maxPage = Math.max(0, Math.ceil(_igtAdvResults.length / pageSize) - 1);
   _igtAdvPage = Math.min(maxPage, Math.max(0, _igtAdvPage + delta));
   igtAdvSearchRenderPage();
 }
@@ -23159,13 +23308,14 @@ function igtAdvSearchRenderPage() {
   const out = document.getElementById('igt-adv-search-results');
   const pageInfo = document.getElementById('igt-adv-page-info');
   const statusEl = document.getElementById('igt-adv-search-status');
+  const pageSize = igtAdvPageSize();
   const total = _igtAdvResults.length;
-  const totalPages = Math.max(1, Math.ceil(total / IGT_ADV_PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   pageInfo.textContent = (total ? _igtAdvPage+1 : 0)+' / '+totalPages;
   statusEl.textContent = total+' card'+(total===1?'':'s')+' found.';
   out.innerHTML = '';
-  const start = _igtAdvPage * IGT_ADV_PAGE_SIZE;
-  _igtAdvResults.slice(start, start + IGT_ADV_PAGE_SIZE).forEach(card => {
+  const start = _igtAdvPage * pageSize;
+  _igtAdvResults.slice(start, start + pageSize).forEach(card => {
     const tile = igtCardTile(card, { size:52, onClick:() => igtAddCard(card,'main') });
     tile.title = card.name + ' (click=main, right-click=side)';
     tile.oncontextmenu = e => { e.preventDefault(); igtAddCard(card,'side'); };
