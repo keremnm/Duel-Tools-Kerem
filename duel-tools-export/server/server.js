@@ -4415,6 +4415,79 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
+  // ── POST /api/events/:code/sync-decklists — cross-reference every player
+  //    who appears in this event's already-imported replays (the CSV's own
+  //    Player 1/Player 2 columns, via each batch's replays[].oppName/player1/
+  //    player2 for this eventLabel) against tracked profile names/aliases,
+  //    and for each match, pull THAT player's own saved event-decklist entry
+  //    for this exact code (db.players[x].eventDecklists[], added through
+  //    "ADD EVENT DECKLISTS" on their profile page) into db.events[code].decks
+  //    — the same slot captureEventTopDecks fills from a Format Library
+  //    top-cut scrape. A CSV-only event never gets decks any other way: its
+  //    columns (Replay,EventID,Round,Player 1,Player 2,Month/Year) carry no
+  //    decklist data at all. Powers the Event detail page's
+  //    "🔄 Re-sync from CSV" button, called right after it re-imports the
+  //    replay data. Never overwrites a deck's placement/placeNum (CSV-sourced
+  //    profiles have none to offer) or a better deckTypeName already on file,
+  //    same "don't regress a better classification" rule captureEventTopDecks
+  //    follows. ────────────────────────────────────────────────────────────
+  if (parts[0]==='events' && parts[1] && parts[2]==='sync-decklists' && !parts[3] && method==='POST') {
+    if (!isMiner(req)) return json(res, 403, { error: 'Miners and above only' });
+    const code = decodeURIComponent(parts[1]).toUpperCase().trim();
+    if (!code) return json(res, 400, { error: 'Missing event code' });
+    if (!db.events || !db.events[code]) return json(res, 404, { error: 'No data for this event yet — import replay data first.' });
+
+    // Collect every player name seen in this event's replays, across every batch.
+    const namesSeen = new Set();
+    for (const batch of Object.values(db.batches)) {
+      for (const r of (batch.replays||[])) {
+        const evCode = (r.eventLabel || r.eventId || '').toUpperCase().trim();
+        if (evCode !== code) continue;
+        if (batch.player) namesSeen.add(batch.player);
+        if (r.oppName) namesSeen.add(r.oppName);
+        if (r.player1) namesSeen.add(r.player1);
+        if (r.player2) namesSeen.add(r.player2);
+      }
+    }
+
+    // Resolve each name to a tracked profile (alias-aware), deduped by registry key.
+    const resolvedProfiles = new Map();
+    for (const name of namesSeen) {
+      const found = findRegistryEntryForName(name);
+      if (found) resolvedProfiles.set(found.key, found.entry);
+    }
+
+    const existingDecks = db.events[code].decks || [];
+    const newDecks = [...existingDecks];
+    let added = 0, updated = 0;
+    for (const entry of resolvedProfiles.values()) {
+      const dEntry = (entry.eventDecklists || []).find(d => ((d.code || d.eventId || '')+'').toUpperCase().trim() === code);
+      if (!dEntry || !dEntry.deckId) continue;
+      const idx = newDecks.findIndex(d => String(d.deckId) === String(dEntry.deckId));
+      const prior = idx >= 0 ? newDecks[idx] : null;
+      const priorSource = prior && prior.deckTypeSource;
+      const ourClassification = (priorSource === 'decklist' || priorSource === 'replay') ? prior.deckTypeName : null;
+      const deckObj = {
+        deckId: dEntry.deckId,
+        builderName: entry.name,
+        placement: prior ? prior.placement : null,
+        placeNum: prior ? prior.placeNum : null,
+        deckTypeName: ourClassification || dEntry.deckTypeOverride || (prior && prior.deckTypeName) || '',
+        deckTypeSource: ourClassification ? priorSource : (dEntry.deckTypeOverride ? 'manual' : ((prior && prior.deckTypeSource) || null)),
+        ydkData: dEntry.ydkData || (prior && prior.ydkData) || undefined,
+        updatedAt: Date.now(),
+      };
+      if (idx >= 0) { newDecks[idx] = deckObj; updated++; }
+      else { newDecks.push(deckObj); added++; }
+    }
+
+    db.events[code].decks = newDecks;
+    db.events[code].updatedAt = Date.now();
+    await saveDB('events');
+    logChange(req, 'sync_event_decklists', { code, playersScanned: namesSeen.size, resolvedProfiles: resolvedProfiles.size, added, updated });
+    return json(res, 200, { ok: true, playersScanned: namesSeen.size, resolvedProfiles: resolvedProfiles.size, added, updated, totalDecks: newDecks.length });
+  }
+
   // ── GET /api/events/:code/deck/:deckId — full card data + tracked-player link ─
   if (parts[0]==='events' && parts[1] && parts[2]==='deck' && parts[3] && method==='GET') {
     if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot view event decklists' });
@@ -4925,6 +4998,18 @@ const server = http.createServer(async (req, res) => {
       await saveDB();
       return json(res, 200, { ok:true, season: db.gfwl[parts[1]] });
     });
+  }
+
+  // ── DELETE /api/gfwl/:season — permanently remove a season (and every
+  //    team/roster/schedule entry under it) ─────────────────────────────────
+  if (parts[0]==='gfwl' && parts[1] && !parts[2] && method==='DELETE') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    const sKey = normalizeSeason(parts[1]);
+    if (db.gfwl[sKey]) {
+      delete db.gfwl[sKey];
+      await saveDB();
+    }
+    return json(res, 200, { ok:true });
   }
 
   // ── PATCH /api/gfwl/:season/team/:teamName — update one team ─────────────

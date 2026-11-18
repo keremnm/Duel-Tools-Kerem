@@ -1263,6 +1263,8 @@ select{cursor:pointer}
         <button onclick="gfwlAutoImportSchedule(_gfwlCurrentSeason||'S9',_S9_SCHEDULE,true).then(()=>gfwlLoadSeason(_gfwlCurrentSeason||'S9'))" style="background:none;border:1px solid var(--dim);color:var(--dim);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer" title="Force re-import schedule from embedded data">↺ Schedule</button>
         <button onclick="gfwlImportSchedule()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">⬆ Schedule</button>
         <button onclick="gfwlNewSeason()" style="background:none;border:1px solid var(--amber);color:var(--amber);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">+ Season</button>
+        <button onclick="gfwlEditWeeks()" style="background:none;border:1px solid var(--blue);color:var(--blue);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer" title="Change the selected season's number of weeks">✎ Weeks</button>
+        <button onclick="gfwlDeleteSeason()" style="background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer" title="Permanently delete the selected season and all its teams">🗑 Delete Season</button>
         <input type="file" id="gfwl-schedule-inp" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="gfwlHandleScheduleImport(this)"/>
       </div>
     </div>
@@ -1342,6 +1344,7 @@ select{cursor:pointer}
         <button onclick="eventsShowList()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer">← Events</button>
         <div id="events-detail-title" style="font-size:14px;font-weight:bold;color:var(--amber);font-family:monospace"></div>
         <div id="events-detail-sub" style="font-size:11px;color:var(--muted)"></div>
+        <button id="events-resync-csv-btn" onclick="eventDetailResyncFromCsv(_eventsState.code)" style="display:none;background:none;border:1px solid var(--purple,#a78bfa);color:var(--purple,#a78bfa);font-family:monospace;font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer" title="Re-upload this event's CSV to refresh replay data, then cross-reference every player in it against tracked profiles and pull in any decklist they've already logged for this event">🔄 Re-sync from CSV</button>
         <div id="events-detail-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-left:auto"></div>
       </div>
       <div id="events-detail-body" style="flex:1;overflow-y:auto;min-height:0;padding:20px"></div>
@@ -1407,7 +1410,37 @@ select{cursor:pointer}
           <button class="dd-btn-sec" onclick="igtExportYDK()" style="font-size:11px">⬇ Export YDK</button>
           <button class="dd-btn-sec" onclick="igtExportImage()" style="font-size:11px">🖼 Decklist Image</button>
           <button class="dd-btn-sec" onclick="igtClearDeck()" style="font-size:11px;color:var(--red)">✕ Clear</button>
+          <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text);cursor:pointer;margin-left:4px" title="Show per-card win rates against a chosen matchup, right on the card images">
+            <input type="checkbox" id="igt-mw-checkbox" onchange="igtMwToggle(this.checked)" style="width:14px;height:14px;accent-color:var(--green)"/>
+            Matchup Winrate
+          </label>
           <button class="dd-btn-sec" id="igt-undo-btn" onclick="igtUndo()" disabled title="Undo the last card added or removed" style="font-size:11px;margin-left:auto;opacity:.4;cursor:default">↶ Undo</button>
+        </div>
+        <!-- Matchup Winrate filter panel — hidden until the checkbox above is
+             checked. "Your deck type" / matchup selections are deliberately
+             local-only (never saved) — see igtMwRecompute. -->
+        <div id="igt-mw-panel" style="display:none;padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap;align-items:center;gap:7px;background:var(--card2)">
+          <label style="font-size:10px;color:var(--muted)">Your Deck:</label>
+          <select id="igt-mw-mydeck" onchange="igtMwPopulateOppDropdown();igtMwComputeStats()" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 6px;border-radius:5px;outline:none;max-width:150px">
+            <option value="">— Select —</option>
+          </select>
+          <label style="font-size:10px;color:var(--muted)">vs:</label>
+          <select id="igt-mw-oppdeck" onchange="igtMwComputeStats()" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 6px;border-radius:5px;outline:none;max-width:150px">
+            <option value="">— Select —</option>
+          </select>
+          <label style="font-size:10px;color:var(--muted);margin-left:6px">Year:</label>
+          <select id="igt-mw-year-filter" onchange="igtMwPopulateDeckDropdowns();igtMwComputeStats()" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 6px;border-radius:5px;outline:none"></select>
+          <label style="font-size:10px;color:var(--muted)">GFWL Season:</label>
+          <select id="igt-mw-season-filter" onchange="igtMwPopulateDeckDropdowns();igtMwComputeStats()" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 6px;border-radius:5px;outline:none"></select>
+          <label style="font-size:10px;color:var(--muted)">Min Match %:</label>
+          <input id="igt-mw-minmatch-input" type="text" inputmode="decimal" value="5" oninput="igtMwComputeStats()" style="width:40px;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 6px;border-radius:5px;outline:none"/>
+          <button class="dd-btn-sec" id="igt-mw-recompute-btn" onclick="igtMwRecompute()" style="font-size:11px">↻ Recompute</button>
+          <span id="igt-mw-status" style="font-size:10px;color:var(--muted);width:100%"></span>
+          <span style="font-size:9px;color:var(--dim);width:100%">
+            <span style="color:var(--green);font-weight:bold">MATCH</span> = full match win rate ·
+            <span style="color:#e0b800;font-weight:bold">PRE</span> = Game 1 (pre-side) ·
+            <span style="color:var(--red);font-weight:bold">G2/3</span> = post-side win rate
+          </span>
         </div>
         <!-- Deck sections: Main (4x10) + Side (3x5) -->
         <div style="flex:1;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:14px">
@@ -1441,67 +1474,45 @@ select{cursor:pointer}
              everything duelingbook's "more options" view would otherwise
              show is inapplicable here, so that toggle is omitted too. -->
         <style>
-          /* Escape the app's global dark-theme input/select/button skin
-             inside the search sidebar only, so these render with plain
-             native browser chrome — matching duelingbook's own unstyled
-             <input>/<select>/<button> elements (confirmed via computed
-             styles: white inset text inputs, a bare 1px-gray/4px-radius
-             select, a stock OS push-button for Search). */
-          #igt-adv-search-panel input, #igt-adv-search-panel select, #igt-adv-search-panel button {
-            all: revert;
-            box-sizing: border-box;
-          }
-          #igt-adv-search-panel input[type=text], #igt-adv-search-panel input[type=number] {
-            background: #fff; color: #000; border: 2px inset #767676; font-family: Arial, sans-serif;
-          }
-          #igt-adv-search-panel select.dbsearch-cb {
-            background: transparent; border: 1px solid #808080; border-radius: 4px;
-            font-family: Arial, sans-serif; font-size: 12px; padding: 2px; cursor: pointer; color: #000;
-          }
-          #igt-adv-search-panel button {
-            font-family: Arial, sans-serif; cursor: pointer;
-          }
-          /* Each result tile gets the same translucent-white "slot" card
-             duelingbook's own result grid uses (rgba(255,255,255,.5) behind
-             every card thumbnail) — applied here rather than inside
-             igtCardTile() itself, since that function is shared by every
-             other deck/tile grid in the app and shouldn't change for them. */
+          /* Bigger, more legible result tiles in a 3-wide grid (was 4x60px) —
+             each gets a dark card-slot background instead of duelingbook's
+             translucent-white one, matching the rest of KDT's dark theme. */
           #igt-adv-search-results > div {
-            background: rgba(255,255,255,.5);
+            background: var(--card);
           }
         </style>
         <div id="igt-adv-search-panel" style="flex-shrink:0;width:300px;border-left:1px solid var(--border);overflow-y:auto;background:var(--panel)">
-          <div id="igt-dbsearch-box" style="background:rgba(195,233,149,.88);border-radius:9px 9px 0 0;font-family:Arial,Helvetica,sans-serif;color:#000;min-height:100%;box-sizing:border-box">
+          <div id="igt-dbsearch-box" style="background:var(--card2);min-height:100%;box-sizing:border-box">
             <div style="padding:10px 12px 4px">
-              <span style="font-size:30px;font-weight:700;letter-spacing:-.01em;color:#000">SEARCH</span>
+              <span style="font-size:28px;font-weight:700;letter-spacing:-.01em;color:var(--text);font-family:monospace">SEARCH</span>
             </div>
-            <div style="padding:2px 12px 10px;display:flex;flex-direction:column;gap:6px">
+            <div style="padding:2px 12px 10px;display:flex;flex-direction:column;gap:7px">
 
               <div style="display:flex;align-items:center;gap:6px">
-                <label style="font-size:14px;font-weight:700;width:46px;flex-shrink:0">Name:</label>
-                <input id="igt-adv-name" type="text" style="flex:1;min-width:0;font-size:12px;padding:3px 4px" onkeydown="if(event.key==='Enter')igtAdvSearchRun()"/>
+                <label style="font-size:11px;font-weight:bold;color:var(--muted);width:44px;flex-shrink:0">Name:</label>
+                <input id="igt-adv-name" type="text" style="flex:1;min-width:0;font-size:12px;padding:5px 6px" onkeydown="if(event.key==='Enter')igtAdvSearchRun()"/>
               </div>
               <div style="display:flex;align-items:center;gap:6px">
-                <label style="font-size:14px;font-weight:700;width:46px;flex-shrink:0">Desc:</label>
-                <input id="igt-adv-desc" type="text" style="flex:1;min-width:0;font-size:12px;padding:3px 4px" onkeydown="if(event.key==='Enter')igtAdvSearchRun()"/>
+                <label style="font-size:11px;font-weight:bold;color:var(--muted);width:44px;flex-shrink:0">Desc:</label>
+                <input id="igt-adv-desc" type="text" style="flex:1;min-width:0;font-size:12px;padding:5px 6px" onkeydown="if(event.key==='Enter')igtAdvSearchRun()"/>
               </div>
 
               <div style="display:flex;align-items:center;gap:6px">
-                <label style="font-size:14px;font-weight:700;width:46px;flex-shrink:0">Card:</label>
-                <select id="igt-adv-category" class="dbsearch-cb" style="flex:1.3;min-width:0" onchange="igtAdvCategoryChanged()">
+                <label style="font-size:11px;font-weight:bold;color:var(--muted);width:44px;flex-shrink:0">Card:</label>
+                <select id="igt-adv-category" style="flex:1.3;min-width:0;font-size:11px;padding:5px 2px" onchange="igtAdvCategoryChanged()">
                   <option value="">Any</option>
                   <option value="Monster">Monster</option>
                   <option value="Spell">Spell</option>
                   <option value="Trap">Trap</option>
                 </select>
-                <select id="igt-adv-type" class="dbsearch-cb" style="flex:1;min-width:0" disabled>
+                <select id="igt-adv-type" style="flex:1;min-width:0;font-size:11px;padding:5px 2px" disabled>
                   <option value="">Any</option>
                 </select>
               </div>
 
               <div id="igt-adv-monster-only-1" style="display:none;align-items:center;gap:6px">
-                <label style="font-size:14px;font-weight:700;width:46px;flex-shrink:0">Type:</label>
-                <select id="igt-adv-race" class="dbsearch-cb" style="flex:1.3;min-width:0">
+                <label style="font-size:11px;font-weight:bold;color:var(--muted);width:44px;flex-shrink:0">Type:</label>
+                <select id="igt-adv-race" style="flex:1.3;min-width:0;font-size:11px;padding:5px 2px">
                   <option value="">Any</option>
                   <option>Aqua</option><option>Beast</option><option>Beast-Warrior</option>
                   <option>Dinosaur</option><option>Dragon</option><option>Fairy</option>
@@ -1511,7 +1522,7 @@ select{cursor:pointer}
                   <option>Spellcaster</option><option>Thunder</option><option>Warrior</option>
                   <option>Winged Beast</option><option>Zombie</option>
                 </select>
-                <select id="igt-adv-subtype" class="dbsearch-cb" style="flex:1;min-width:0">
+                <select id="igt-adv-subtype" style="flex:1;min-width:0;font-size:11px;padding:5px 2px">
                   <option value="">Any</option>
                   <option value="Flip">Flip</option>
                   <option value="Toon">Toon</option>
@@ -1522,38 +1533,38 @@ select{cursor:pointer}
 
               <div id="igt-adv-monster-only-2" style="display:none;flex-direction:column;gap:6px">
                 <div style="display:flex;align-items:center;gap:5px">
-                  <label style="font-size:14px;font-weight:700;width:46px;flex-shrink:0">Attrib:</label>
-                  <select id="igt-adv-attribute" class="dbsearch-cb" style="width:72px;flex-shrink:0">
+                  <label style="font-size:11px;font-weight:bold;color:var(--muted);width:44px;flex-shrink:0">Attrib:</label>
+                  <select id="igt-adv-attribute" style="width:76px;flex-shrink:0;font-size:11px;padding:5px 2px">
                     <option value="">Any</option>
                     <option>DARK</option><option>EARTH</option><option>FIRE</option>
                     <option>LIGHT</option><option>WATER</option><option>WIND</option>
                   </select>
-                  <span style="font-size:12px;font-weight:700">≤</span>
-                  <input id="igt-adv-level-min" type="number" min="0" max="12" style="width:30px;padding:2px;font-size:11px"/>
-                  <span style="font-size:10px;font-weight:700;text-align:center;line-height:1.05">Lvl/<br/>Rank</span>
-                  <span style="font-size:12px;font-weight:700">≤</span>
-                  <input id="igt-adv-level-max" type="number" min="0" max="12" style="width:30px;padding:2px;font-size:11px"/>
+                  <span style="font-size:11px;font-weight:bold;color:var(--muted)">≤</span>
+                  <input id="igt-adv-level-min" type="number" min="0" max="12" style="width:32px;padding:4px 2px;font-size:11px"/>
+                  <span style="font-size:9px;font-weight:bold;color:var(--muted);text-align:center;line-height:1.05">Lvl/<br/>Rank</span>
+                  <span style="font-size:11px;font-weight:bold;color:var(--muted)">≤</span>
+                  <input id="igt-adv-level-max" type="number" min="0" max="12" style="width:32px;padding:4px 2px;font-size:11px"/>
                 </div>
                 <div style="display:flex;align-items:center;gap:5px">
-                  <input id="igt-adv-atk-min" type="number" min="0" style="width:40px;padding:2px;font-size:11px"/>
-                  <span style="font-size:12px;font-weight:700;white-space:nowrap">≤ATK≤</span>
-                  <input id="igt-adv-atk-max" type="number" min="0" style="width:40px;padding:2px;font-size:11px"/>
-                  <input id="igt-adv-def-min" type="number" min="0" style="width:40px;padding:2px;font-size:11px;margin-left:4px"/>
-                  <span style="font-size:12px;font-weight:700;white-space:nowrap">≤DEF≤</span>
-                  <input id="igt-adv-def-max" type="number" min="0" style="width:40px;padding:2px;font-size:11px"/>
+                  <input id="igt-adv-atk-min" type="number" min="0" style="width:42px;padding:4px 2px;font-size:11px"/>
+                  <span style="font-size:11px;font-weight:bold;color:var(--muted);white-space:nowrap">≤ATK≤</span>
+                  <input id="igt-adv-atk-max" type="number" min="0" style="width:42px;padding:4px 2px;font-size:11px"/>
+                  <input id="igt-adv-def-min" type="number" min="0" style="width:42px;padding:4px 2px;font-size:11px;margin-left:4px"/>
+                  <span style="font-size:11px;font-weight:bold;color:var(--muted);white-space:nowrap">≤DEF≤</span>
+                  <input id="igt-adv-def-max" type="number" min="0" style="width:42px;padding:4px 2px;font-size:11px"/>
                 </div>
               </div>
 
               <div style="display:flex;align-items:center;gap:6px">
-                <label style="font-size:14px;font-weight:700;width:46px;flex-shrink:0">Limit:</label>
-                <select id="igt-adv-limit" class="dbsearch-cb" style="width:54px">
+                <label style="font-size:11px;font-weight:bold;color:var(--muted);width:44px;flex-shrink:0">Limit:</label>
+                <select id="igt-adv-limit" style="width:58px;font-size:11px;padding:5px 2px">
                   <option value="20">20</option>
                   <option value="40">40</option>
                   <option value="60">60</option>
                   <option value="9999">All</option>
                 </select>
-                <label style="font-size:14px;font-weight:700;margin-left:4px">Order:</label>
-                <select id="igt-adv-order" class="dbsearch-cb" style="flex:1;min-width:0">
+                <label style="font-size:11px;font-weight:bold;color:var(--muted);margin-left:4px">Order:</label>
+                <select id="igt-adv-order" style="flex:1;min-width:0;font-size:11px;padding:5px 2px">
                   <option value="alpha">Alpha</option>
                   <option value="level">Level/Rank</option>
                   <option value="atk">ATK</option>
@@ -1562,19 +1573,19 @@ select{cursor:pointer}
               </div>
 
               <div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-top:2px">
-                <div onclick="igtAdvSearchPage(-1)" title="Previous page" style="width:26px;height:26px;background:#000;cursor:pointer;clip-path:polygon(0% 50%,100% 0%,100% 100%)"></div>
-                <button onclick="igtAdvSearchRun()" style="padding:4px 20px;font-size:13px">Search</button>
-                <div onclick="igtAdvSearchPage(1)" title="Next page" style="width:26px;height:26px;background:#000;cursor:pointer;clip-path:polygon(100% 50%,0% 0%,0% 100%)"></div>
+                <div onclick="igtAdvSearchPage(-1)" title="Previous page" style="width:24px;height:24px;background:var(--muted);cursor:pointer;clip-path:polygon(0% 50%,100% 0%,100% 100%)"></div>
+                <button class="dd-btn" onclick="igtAdvSearchRun()" style="padding:6px 22px;font-size:12px">Search</button>
+                <div onclick="igtAdvSearchPage(1)" title="Next page" style="width:24px;height:24px;background:var(--muted);cursor:pointer;clip-path:polygon(100% 50%,0% 0%,0% 100%)"></div>
               </div>
-              <div style="text-align:center;font-size:14px;font-weight:700" id="igt-adv-page-info">0 / 0</div>
+              <div style="text-align:center;font-size:13px;font-weight:bold;color:var(--text)" id="igt-adv-page-info">0 / 0</div>
               <div style="text-align:center">
-                <span onclick="igtAdvSearchClear()" style="font-size:10px;color:#1c2e18;text-decoration:underline;cursor:pointer">clear filters</span>
+                <span onclick="igtAdvSearchClear()" style="font-size:10px;color:var(--muted);text-decoration:underline;cursor:pointer">clear filters</span>
               </div>
-              <div id="igt-adv-search-status" style="font-size:10px;color:#1c2e18;text-align:center"></div>
+              <div id="igt-adv-search-status" style="font-size:10px;color:var(--muted);text-align:center"></div>
 
-              <div id="igt-adv-search-results" style="display:grid;grid-template-columns:repeat(4,60px);justify-content:center;justify-items:center;gap:3px;margin-top:4px"></div>
+              <div id="igt-adv-search-results" style="display:grid;grid-template-columns:repeat(3,84px);justify-content:center;justify-items:center;gap:5px;margin-top:4px"></div>
 
-              <div style="margin-top:6px;background:#e7d6aa;border:1px solid #767676;border-radius:3px;padding:5px 8px;font-size:11px;font-weight:700;color:#000;text-align:center">
+              <div style="margin-top:6px;background:var(--card);border:1px solid var(--border);border-radius:5px;padding:6px 8px;font-size:11px;font-weight:bold;color:var(--amber);text-align:center">
                 Goat Format Cardpool
               </div>
             </div>
@@ -4366,6 +4377,43 @@ async function gfwlNewSeason() {
     const sel = document.getElementById('gfwl-season-sel');
     if (sel) { sel.value = season; gfwlLoadSeason(season); }
   } catch(e) { st('Failed to create season', 'var(--red)'); }
+}
+
+async function gfwlEditWeeks() {
+  if (!_gfwlCurrentSeason) { alert('Select a season first.'); return; }
+  const season = gfwlNormalizeSeason(_gfwlCurrentSeason);
+  const current = (_gfwlData[season]||{}).numWeeks || 13;
+  const input = window.prompt('Number of weeks for Season '+season.replace(/^S/i,'')+':', String(current));
+  if (input === null) return; // cancelled
+  const numWeeks = parseInt(input);
+  if (!numWeeks || numWeeks < 1) { alert('Enter a valid number of weeks.'); return; }
+  try {
+    const r = await fetch(API+'/gfwl/'+season, {
+      method:'PATCH', headers: authHeaders(),
+      body: JSON.stringify({ numWeeks })
+    });
+    if (!r.ok) { const e = await r.json().catch(()=>{}); st('Save failed: '+(e?.error||r.status), 'var(--red)'); return; }
+    if (!_gfwlData[season]) _gfwlData[season] = { season, teams:{} };
+    _gfwlData[season].numWeeks = numWeeks;
+    st('Season '+season+' set to '+numWeeks+' weeks', 'var(--green)');
+    await gfwlLoadSeason(season);
+  } catch(e) { st('Failed to update weeks', 'var(--red)'); }
+}
+
+async function gfwlDeleteSeason() {
+  if (!_gfwlCurrentSeason) { alert('Select a season first.'); return; }
+  const season = gfwlNormalizeSeason(_gfwlCurrentSeason);
+  const teamCount = Object.keys((_gfwlData[season]||{}).teams || {}).length;
+  const warn = 'Permanently delete Season '+season.replace(/^S/i,'')+'? This removes all '+teamCount+' team(s), rosters, and schedule data for this season. This cannot be undone.';
+  if (!window.confirm(warn)) return;
+  try {
+    const r = await fetch(API+'/gfwl/'+season, { method:'DELETE', headers: authHeaders() });
+    if (!r.ok) { const e = await r.json().catch(()=>{}); st('Delete failed: '+(e?.error||r.status), 'var(--red)'); return; }
+    delete _gfwlData[season];
+    st('Season '+season+' deleted', 'var(--green)');
+    _gfwlCurrentSeason = null;
+    await gfwlInit();
+  } catch(e) { st('Failed to delete season', 'var(--red)'); }
 }
 
 async function gfwlAddTeam() {
@@ -10313,6 +10361,55 @@ function igtParseMonthYear(raw) {
   return '';
 }
 
+// ── "🔄 Re-sync from CSV" (Event detail page) ───────────────────────────────
+// Re-runs the exact same CSV/XLSX replay import processEventXLSX already
+// does (same Replay/EventID/Round/Player 1/Player 2/Month-Year parsing,
+// same per-player dedup — safe to run again on a file already imported),
+// then calls the new /sync-decklists endpoint. That's needed because the
+// CSV itself carries no decklist data at all (its columns are just
+// Replay/EventID/Round/Player 1/Player 2/Month-Year — confirmed against the
+// user's actual file) — the only way a CSV-only event's "0 decklist(s) on
+// record" gap ever gets filled is by cross-referencing the players who show
+// up in its replays against tracked profiles' own saved event-decklists
+// (ADD EVENT DECKLISTS on a profile page) and pulling those in here, the
+// same way captureEventTopDecks fills db.events[code].decks from a Format
+// Library top-cut scrape.
+async function eventDetailResyncFromCsv(code) {
+  if (!isMinerRole(_userRole)) { st('Miners and above only', 'var(--red)'); return; }
+  if (!code) { st('No event selected.', 'var(--red)'); return; }
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = '.xlsx,.xls,.csv';
+  inp.onchange = async () => {
+    const file = inp.files[0];
+    if (!file) return;
+    const btn = document.getElementById('events-resync-csv-btn');
+    const defaultLabel = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Re-syncing…'; }
+    st('Re-syncing '+code+' from '+file.name+'...', 'var(--muted)');
+    try {
+      const buf = await file.arrayBuffer();
+      const XLSX = await import('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js').catch(() => window.XLSX);
+      if (!XLSX) { st('SheetJS not available', 'var(--red)'); return; }
+      await processEventXLSX(buf, file.name);
+      st('Replay data re-synced — cross-referencing player decklists for '+code+'...', 'var(--muted)');
+      const r = await fetch(API+'/events/'+encodeURIComponent(code)+'/sync-decklists', { method:'POST', headers: authHeaders() });
+      const result = await r.json().catch(()=>({}));
+      if (!r.ok) {
+        st('Replay data re-synced, but decklist cross-reference failed: '+(result.error||r.status), 'var(--amber)');
+      } else {
+        st('Re-sync complete — '+result.resolvedProfiles+' tracked player(s) matched, '+result.added+' decklist(s) added, '+result.updated+' updated.', 'var(--green)');
+      }
+    } catch(e) {
+      st('Re-sync failed: '+e.message, 'var(--red)');
+      console.error('[EventDetail resync]', e);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = defaultLabel; }
+      if (_eventsState.code === code) await eventsShowDetail(code); // full refresh so the new decks show immediately
+    }
+  };
+  inp.click();
+}
+
 async function processEventXLSX(arrayBuf, filename) {
   // SheetJS loaded via CDN script tag at top of page or dynamic import
   const XLSX = window.XLSX;
@@ -15868,23 +15965,33 @@ function setTopCardsMetric(metric) {
 // card (once per game it showed up in). A game whose winner was never
 // parsed (g.winner falsy — manual/forfeit entries have no per-game data
 // at all) is skipped rather than miscounted.
-function _tcCardObservations(r) {
-  const matchField = _tcMetric === 'usage' ? 'allMyUsageCards' : 'allMyCards';
-  const gameField  = _tcMetric === 'usage' ? 'myUsageCards'    : 'myCards';
+// Phase-parameterized core — pulled out of _tcCardObservations so the
+// Deck Builder's Matchup Winrate overlay (igtMwRecompute) can get all 3
+// phases' observations for the SAME records without touching Top Cards'
+// own _tcMatchPhase global (which must stay whatever the Top Cards tab
+// itself currently has selected). _tcCardObservations below is now just a
+// one-line wrapper reading its usual globals, so Top Cards' own behavior
+// is unchanged.
+function _cardObservationsForPhase(r, phase, metric) {
+  const matchField = metric === 'usage' ? 'allMyUsageCards' : 'allMyCards';
+  const gameField  = metric === 'usage' ? 'myUsageCards'    : 'myCards';
   const obs = [];
-  if (_tcMatchPhase === 'full') {
+  if (phase === 'full') {
     if (!r.matchWon && !r.matchLost) return obs;
     const seen = new Set(r[matchField] || []);
     seen.forEach(key => { if (key) obs.push({ key, win: r.matchWon }); });
     return obs;
   }
-  const gameNums = _tcMatchPhase === 'preside' ? [1] : [2, 3];
+  const gameNums = phase === 'preside' ? [1] : [2, 3];
   (r.games||[]).forEach(g => {
     if (!gameNums.includes(g.gameNum) || !g.winner) return;
     const seen = new Set(g[gameField] || []);
     seen.forEach(key => { if (key) obs.push({ key, win: !!g.myWon }); });
   });
   return obs;
+}
+function _tcCardObservations(r) {
+  return _cardObservationsForPhase(r, _tcMatchPhase, _tcMetric);
 }
 
 // The currently-rendered rows, kept around so the drill-down modal
@@ -20737,7 +20844,7 @@ function profileTabFilter() {
   // Determine the latest season for conf/season lookups
   const latestSeason = (() => {
     const seasons = Object.keys(_gfwlData||{}).filter(k=>/^S\d+$/i.test(k));
-    if (!seasons.length) return 'S9';
+    if (!seasons.length) return 'S10';
     return seasons.sort((a,b)=>parseInt(b.slice(1))-parseInt(a.slice(1)))[0];
   })();
 
@@ -20855,7 +20962,7 @@ function renderProfileGrid(batches) {
   // Get latest GFWL season from all teams data
   const _latestGFWLSeason = (() => {
     const seasons = Object.keys(_gfwlData||{}).filter(k=>/^S\d+$/i.test(k));
-    if (!seasons.length) return 'S9'; // default
+    if (!seasons.length) return 'S10'; // default
     return seasons.sort((a,b)=>parseInt(b.slice(1))-parseInt(a.slice(1)))[0];
   })();
 
@@ -23327,9 +23434,13 @@ function igtAdvSearchRenderPage() {
   out.innerHTML = '';
   const start = _igtAdvPage * pageSize;
   _igtAdvResults.slice(start, start + pageSize).forEach(card => {
-    const tile = igtCardTile(card, { size:52, onClick:() => igtAddCard(card,'main') });
-    tile.title = card.name + ' (click=main, right-click=side)';
+    const tile = igtCardTile(card, { size:78, onClick:() => igtAddCard(card,'main') });
+    tile.title = card.name + ' (click=main, right-click=side, or drag to either deck)';
     tile.oncontextmenu = e => { e.preventDefault(); igtAddCard(card,'side'); };
+    tile.draggable = true;
+    tile.ondragstart = e => igtDragPayload(e, { source:'search', card });
+    const mwBadge = igtMwBadge(card.name);
+    if (mwBadge) tile.appendChild(mwBadge);
     out.appendChild(tile);
   });
   if (!total) out.innerHTML = '<span style="font-size:11px;color:var(--muted)">No results.</span>';
@@ -23390,6 +23501,46 @@ function igtAddCard(card, section) {
   igtRenderAllDeck();
 }
 
+// Remove exactly one copy of a card (by id) from a deck section. Used by
+// both the drag-to-move flow below and anything else that just needs a
+// single-copy decrement without a full re-render baked in.
+function igtRemoveOneCopy(section, cardId) {
+  const deck = _igtDeck[section];
+  const idx = deck.findIndex(c => c.id === cardId);
+  if (idx === -1) return false;
+  deck[idx].qty--;
+  if (deck[idx].qty <= 0) deck.splice(idx, 1);
+  return true;
+}
+
+// Move one copy of a card already in the deck from one section to the
+// other (drag a Main tile onto Side, or a Side tile onto Main). Respects
+// the same 40/15 section caps and 3-copy-per-card cap igtAddCard enforces.
+function igtMoveCard(cardId, fromSection, toSection) {
+  if (fromSection === toSection) return;
+  const entry = _igtDeck[fromSection].find(c => c.id === cardId);
+  if (!entry) return;
+  const max = toSection === 'main' ? 40 : 15;
+  const totalTo = _igtDeck[toSection].reduce((s,c)=>s+c.qty, 0);
+  if (totalTo >= max) { st(toSection+' deck full', 'var(--amber)'); return; }
+  const toExisting = _igtDeck[toSection].find(c => c.id === cardId);
+  if (toExisting && toExisting.qty >= 3) { st('Already 3 copies in '+toSection, 'var(--amber)'); return; }
+  const name = entry.name, type = entry.type;
+  igtSnapshotForUndo();
+  igtRemoveOneCopy(fromSection, cardId);
+  if (toExisting) toExisting.qty++;
+  else _igtDeck[toSection].push({ id: cardId, name, type, qty: 1 });
+  igtRenderAllDeck();
+}
+
+// Shared dragstart payload setter for any draggable card tile (search
+// result or a deck tile already in Main/Side) — `source` is 'search',
+// 'main', or 'side', matching what the drop zones below key off of.
+function igtDragPayload(e, payload) {
+  e.dataTransfer.effectAllowed = 'copyMove';
+  e.dataTransfer.setData('text/plain', JSON.stringify(payload));
+}
+
 function igtRenderAllDeck() {
   // Main deck: 4 rows of 10 = 40 tiles max, one per copy
   // Side deck: 3 rows of 5 = 15 tiles max, one per copy
@@ -23415,16 +23566,204 @@ function igtRenderAllDeck() {
             igtRenderAllDeck();
           }
         });
-        tile.title = card.name+' (click to remove)';
+        tile.title = card.name+' (click to remove, drag to move to the other deck)';
+        tile.draggable = true;
+        tile.ondragstart = e => igtDragPayload(e, { source: sec, id: card.id, name: card.name, type: card.type });
+        const mwBadge = igtMwBadge(card.name);
+        if (mwBadge) tile.appendChild(mwBadge);
         el.appendChild(tile);
       }
     });
+    // Drop zone: a tile dragged from the SEARCH sidebar adds it here; a tile
+    // dragged from the OTHER deck section moves it here. Reassigned (not
+    // addEventListener'd) every render, so this stays idempotent.
+    el.ondragover = e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; };
+    el.ondrop = e => {
+      e.preventDefault();
+      let payload;
+      try { payload = JSON.parse(e.dataTransfer.getData('text/plain')); } catch(err) { return; }
+      if (!payload || !payload.source) return;
+      if (payload.source === 'search') igtAddCard(payload.card, sec);
+      else if (payload.source === 'main' || payload.source === 'side') igtMoveCard(payload.id, payload.source, sec);
+    };
   });
 }
 
 function igtClearDeck() {
   if (!confirm('Clear all deck sections?')) return;
   _igtDeck = {main:[],side:[],extra:[]}; _igtSpState=null; igtRenderAllDeck();
+}
+
+// ── Deck Builder: MATCHUP WINRATE overlay ───────────────────────────────────
+// "Matchup Winrate" checkbox + the "Your Deck" / "vs" dropdowns pick a
+// (myDeck, oppDeck) pairing, purely in-memory and never saved anywhere (the
+// deck-type labeler is just a lens on the SAME shared _globalRecords replay
+// data Top Cards/Format Data already load, not new data of its own) — once
+// Recompute runs, every card tile in the SEARCH sidebar and in Main/Side
+// gets a 3-segment badge: MATCH (green, full-match result), PRE (yellow,
+// Game 1 only), G2/3 (red, Games 2+3) — reusing _cardObservationsForPhase
+// for all three phases so this can never disagree with what Top Cards'
+// own Match Phase toggle means by the same terms.
+let _igtMwActive = false;
+let _igtMwStats = null; // null = not computed; else { [cardNameLower]: {match:{w,l,n},pre:{w,l,n},post:{w,l,n}} }
+
+async function igtMwToggle(checked) {
+  _igtMwActive = checked;
+  const panel = document.getElementById('igt-mw-panel');
+  if (panel) panel.style.display = checked ? 'flex' : 'none';
+  if (checked) {
+    if (!_globalRecords.length) {
+      const statusEl = document.getElementById('igt-mw-status');
+      if (statusEl) statusEl.textContent = 'Loading replay data…';
+      await loadGlobalRecords();
+    }
+    igtMwPopulateDeckDropdowns();
+    if (!_igtMwStats) igtMwComputeStats();
+  }
+  igtRenderAllDeck();
+  igtAdvSearchRenderPage();
+}
+
+function igtMwPopulateDeckDropdowns() {
+  const mySel = document.getElementById('igt-mw-mydeck');
+  if (!mySel) return;
+  populateYearSeasonFilterPair(document.getElementById('igt-mw-year-filter'), document.getElementById('igt-mw-season-filter'));
+  const records = _filterRecordsByYearSeason(_globalRecords, 'igt-mw-year-filter', 'igt-mw-season-filter').filter(r => !r.incomplete && !r.omitted);
+  const counts = {};
+  records.forEach(r => { const k = r.myDeck||'Unknown'; counts[k] = (counts[k]||0)+1; });
+  const decks = Object.keys(counts).sort((a,b) => counts[b]-counts[a]);
+  const cur = mySel.value;
+  mySel.innerHTML = '<option value="">— Select —</option>' + decks.map(d => `<option value="${_escapeHtml(d)}">${_escapeHtml(d)} (${counts[d]})</option>`).join('');
+  mySel.value = decks.includes(cur) ? cur : '';
+  igtMwPopulateOppDropdown();
+}
+
+function igtMwPopulateOppDropdown() {
+  const mySel = document.getElementById('igt-mw-mydeck');
+  const oppSel = document.getElementById('igt-mw-oppdeck');
+  if (!oppSel) return;
+  const myDeck = mySel ? mySel.value : '';
+  const records = _filterRecordsByYearSeason(_globalRecords, 'igt-mw-year-filter', 'igt-mw-season-filter')
+    .filter(r => !r.incomplete && !r.omitted && (r.myDeck||'Unknown') === myDeck);
+  const mirrorCount = records.filter(r => (r.oppDeck||'Unknown') === myDeck).length;
+  const counts = {};
+  records.forEach(r => {
+    const opp = r.oppDeck || 'Unknown';
+    if (opp === myDeck || opp === 'Unknown') return;
+    counts[opp] = (counts[opp]||0) + 1;
+  });
+  const opps = Object.keys(counts).sort((a,b) => counts[b]-counts[a]);
+  const cur = oppSel.value;
+  let html = '<option value="">— Select —</option>';
+  if (mirrorCount) html += `<option value="__MIRROR__">Mirror Match (${mirrorCount})</option>`;
+  html += opps.map(o => `<option value="${_escapeHtml(o)}">${_escapeHtml(o)} (${counts[o]})</option>`).join('');
+  oppSel.innerHTML = html;
+  const validValues = ['', '__MIRROR__', ...opps];
+  oppSel.value = validValues.includes(cur) ? cur : '';
+}
+
+// Pure in-memory recompute from whatever _globalRecords already holds —
+// no network call. Wired to every filter control's onchange (deck
+// dropdowns, year/season, min match %) so adjusting any of them updates
+// the badges immediately, same as Top Cards' own filters do without
+// needing its separate "↻ Recompute" (server refetch) button.
+function igtMwComputeStats() {
+  const statusEl = document.getElementById('igt-mw-status');
+  const myDeck = document.getElementById('igt-mw-mydeck')?.value || '';
+  const oppDeck = document.getElementById('igt-mw-oppdeck')?.value || '';
+  if (!myDeck || !oppDeck) {
+    _igtMwStats = null;
+    if (statusEl) statusEl.textContent = 'Select both your deck type and a matchup to see winrates.';
+    igtRenderAllDeck();
+    igtAdvSearchRenderPage();
+    return;
+  }
+  let records = _filterRecordsByYearSeason(_globalRecords, 'igt-mw-year-filter', 'igt-mw-season-filter')
+    .filter(r => !r.incomplete && !r.omitted && (r.myDeck||'Unknown') === myDeck);
+  records = oppDeck === '__MIRROR__'
+    ? records.filter(r => (r.oppDeck||'Unknown') === myDeck)
+    : records.filter(r => (r.oppDeck||'Unknown') === oppDeck);
+
+  const minInput = document.getElementById('igt-mw-minmatch-input');
+  const rawMin = minInput ? parseFloat(minInput.value) : 5;
+  const minPct = (isNaN(rawMin) || rawMin < 0) ? 0 : rawMin;
+  const minSample = Math.round(records.length * (minPct/100));
+
+  const stats = {};
+  const phaseBucket = { full:'match', preside:'pre', postside:'post' };
+  ['full','preside','postside'].forEach(phase => {
+    const bucket = phaseBucket[phase];
+    records.forEach(r => {
+      _cardObservationsForPhase(r, phase, 'winrate').forEach(({ key, win }) => {
+        if (!key || TOP_CARDS_IGNORED_CARDS.has(key)) return;
+        if (!stats[key]) stats[key] = { match:{w:0,l:0}, pre:{w:0,l:0}, post:{w:0,l:0} };
+        if (win) stats[key][bucket].w++; else stats[key][bucket].l++;
+      });
+    });
+  });
+  Object.keys(stats).forEach(key => {
+    const s = stats[key];
+    s.match.n = s.match.w + s.match.l;
+    s.pre.n = s.pre.w + s.pre.l;
+    s.post.n = s.post.w + s.post.l;
+    if (s.match.n < minSample) delete stats[key]; // floor keyed off full-match sample size
+  });
+
+  _igtMwStats = stats;
+  const oppLabel = oppDeck === '__MIRROR__' ? 'Mirror' : oppDeck;
+  if (statusEl) statusEl.textContent = records.length+' match(es) — '+myDeck+' vs '+oppLabel+' — '+Object.keys(stats).length+' card(s) at '+minPct+'%+ ('+minSample+' match min).';
+  igtRenderAllDeck();
+  igtAdvSearchRenderPage();
+}
+
+// "↻ Recompute" button — forces a fresh server refetch of the shared
+// replay cache (same semantics as Top Cards/Format Data/Leaderboard/Power
+// Rankings' own Recompute buttons), keeping the current deck-type/year/
+// season/min-match selections, then re-runs igtMwComputeStats.
+async function igtMwRecompute() {
+  const btn = document.getElementById('igt-mw-recompute-btn');
+  const mySel = document.getElementById('igt-mw-mydeck');
+  const oppSel = document.getElementById('igt-mw-oppdeck');
+  const keepMy = mySel ? mySel.value : '';
+  const keepOpp = oppSel ? oppSel.value : '';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Recomputing...'; }
+  try {
+    await loadGlobalRecords(true);
+    igtMwPopulateDeckDropdowns();
+    if (mySel && keepMy && [...mySel.options].some(o=>o.value===keepMy)) mySel.value = keepMy;
+    igtMwPopulateOppDropdown();
+    if (oppSel && keepOpp && [...oppSel.options].some(o=>o.value===keepOpp)) oppSel.value = keepOpp;
+    igtMwComputeStats();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '↻ Recompute'; }
+  }
+}
+
+// Builds the 3-segment MATCH/PRE/G2-3 badge for one card, or null when the
+// overlay is off or this card has no (post-min-sample) data for the
+// current matchup. Appended onto an igtCardTile()'s returned element at
+// each of the two call sites below (search results + Main/Side deck) —
+// never baked into igtCardTile itself, since that shared function also
+// renders tiles elsewhere (Side Practice, Deck Viewer, etc.) that this
+// feature was never asked to touch.
+function igtMwBadge(cardName) {
+  if (!_igtMwActive || !_igtMwStats) return null;
+  const s = _igtMwStats[(cardName||'').toLowerCase()];
+  if (!s) return null;
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:absolute;left:0;right:0;bottom:0;display:flex;font-family:monospace;font-size:7px;font-weight:bold;color:#000;text-align:center;line-height:1.6;pointer-events:none';
+  const seg = (label, stat, bg) => {
+    const d = document.createElement('div');
+    const pctVal = stat && stat.n ? Math.round(100*stat.w/stat.n) : null;
+    d.style.cssText = 'flex:1;background:'+bg+';opacity:.92';
+    d.textContent = pctVal==null ? '–' : pctVal+'%';
+    d.title = label + (pctVal==null ? ': no data' : ': '+stat.w+'-'+stat.l+' ('+pctVal+'%)');
+    return d;
+  };
+  wrap.appendChild(seg('MATCH', s.match, '#3ddc84'));
+  wrap.appendChild(seg('PRE-SIDE (G1)', s.pre, '#f0c929'));
+  wrap.appendChild(seg('POST-SIDE (G2/3)', s.post, '#ff5c5c'));
+  return wrap;
 }
 
 function igtExportYDK(target) {
@@ -24709,6 +25048,7 @@ function applyRoleUI() {
     const _idk = document.getElementById('import-event-decks-btn'); if (_idk) _idk.style.display = 'block';
     const _flb = document.getElementById('fl-import-btn'); if (_flb) _flb.style.display = 'block';
     const _flei = document.getElementById('fl-event-import-btn'); if (_flei) _flei.style.display = 'block';
+    const _erc = document.getElementById('events-resync-csv-btn'); if (_erc) _erc.style.display = 'block';
   }
   // Admins only: show admin panel buttons
   if (!isAdminRole(_userRole)) {
@@ -24733,7 +25073,7 @@ function applyRoleUI() {
       if (el.id !== 'temp-batch-btn') el.style.display = 'none';
     });
     ['import-event-data-btn','import-event-decks-btn','fl-import-btn','fl-event-import-btn','clean-batch-btn',
-     'sidebar-export-import-row','sidebar-player-search'].forEach(id => {
+     'events-resync-csv-btn','sidebar-export-import-row','sidebar-player-search'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.style.display = 'none';
     });
