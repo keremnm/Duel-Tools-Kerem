@@ -4201,6 +4201,57 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
+  // ── POST /api/events/:code/ensure — create or update a manually-tracked
+  // event record (CSV/XLSX "Add Event Data" import, not sourced from Format
+  // Library) so it shows up on the Events tab immediately, instead of
+  // staying invisible until an FL top-decks scrape or admin backfill
+  // happens to touch this exact code later — db.events only ever gets a
+  // code from captureEventTopDecks/admin backfill otherwise (see the
+  // "EVENTS TAB" comment above GET /api/events), and a CSV import of plain
+  // replay data never goes through either of those. Never overwrites a
+  // name/date this event already has from a real source (FL scrape,
+  // catalog, admin backfill) — same "only upgrade a missing value" rule
+  // upsertEventDateFromFL already follows for db.eventDates, so a CSV
+  // re-import or a later FL scrape of the same code can't regress a better
+  // name/date someone already captured for it. Body: { name?, date? }.
+  // Idempotent — safe to call once per distinct event code found in an
+  // imported file, every time that file is imported. ─────────────────────
+  if (parts[0]==='events' && parts[1] && parts[2]==='ensure' && !parts[3] && method==='POST') {
+    if (!isMiner(req)) return json(res, 403, { error: 'Miners and above only' });
+    const code = decodeURIComponent(parts[1]).toUpperCase().trim();
+    if (!code) return json(res, 400, { error: 'Missing event code' });
+    return readBody(req, async data => {
+      const name = String(data.name == null ? '' : data.name).trim();
+      const date = String(data.date == null ? '' : data.date).trim().slice(0, 10);
+      if (!db.events) db.events = {};
+      const existing = db.events[code];
+      if (!existing) {
+        db.events[code] = { code, name, date, size: 0, winner: null, decks: [], note: '', source: 'csv-import', updatedAt: Date.now() };
+      } else {
+        if (!existing.name && name) existing.name = name;
+        if (!existing.date && date) existing.date = date;
+        existing.updatedAt = Date.now();
+      }
+      await saveDB('events');
+      // Keep the shared eventDates fallback catalog in sync too — that's
+      // what GET /api/events / GET /api/events/:code both read as
+      // `fallback.name`/`fallback.date` when db.events itself has neither
+      // yet, and what every other tab (Format Data, Profiles, RPS, Power
+      // Rankings) reads for Year/Season filtering and sorting.
+      if (!db.eventDates) db.eventDates = {};
+      const existingDate = db.eventDates[code];
+      if (!existingDate) {
+        db.eventDates[code] = { date, name, source: 'csv-import' };
+      } else {
+        if (!existingDate.name && name) existingDate.name = name;
+        if (!existingDate.date && date) existingDate.date = date;
+      }
+      await saveDB('eventDates');
+      logChange(req, 'ensure_event', { code, name, date });
+      return json(res, 200, { ok: true, event: db.events[code] });
+    });
+  }
+
   // ── GET /api/events/:code/deck/:deckId — full card data + tracked-player link ─
   if (parts[0]==='events' && parts[1] && parts[2]==='deck' && parts[3] && method==='GET') {
     if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot view event decklists' });

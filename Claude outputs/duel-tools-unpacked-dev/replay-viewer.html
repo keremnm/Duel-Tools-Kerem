@@ -1,0 +1,1271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>KeremBook — Offline Replay Viewer</title>
+<!--
+  KeremBook — a Duel Tools companion
+
+  Bundled by Settings → Downloads → Replay Viewer, inside the Duel Tools
+  (Kerem Duel Tools) browser extension. Fully standalone: no build step, no
+  server, no connection to duelingbook.com — just open this .html file in
+  any browser.
+
+  THE CARD DATABASE IS BAKED IN. At download time, Settings fetches the
+  full https://db.ygoprodeck.com/api/v7/cardinfo.php catalog and writes it
+  directly into this file in place of the EMBEDDED_CARDINFO placeholder
+  below (see dt-settings.js's renderReplayViewerDownloadFeature) — so by
+  default there's nothing extra to load or carry alongside this file.
+
+  BOARD RECONSTRUCTION — how it works and its real limits:
+  DuelingBook's replay JSON does NOT include a full board snapshot on every
+  play (confirmed live: only ~5 of 1086 plays in a sample replay carried an
+  embedded player1/player2 state, all at game-reset points) — it's a log of
+  discrete named actions (confirmed finite vocabulary, e.g. "Normal
+  Summon", "Set monster", "To GY", "Flip Summon", "To ATK"/"To DEF",
+  "Banish", "Move", "Life points", "Summon Token" — see uniquePlays in this
+  project's own investigation). Each action's own public_log sentence
+  reliably names the zone(s) involved in a fixed template per action type
+  ("Normal Summoned "X" from hand (n/n) to M-2", "Sent "X" from S-3 to GY",
+  etc.) — confirmed against real replay data, not guessed. This viewer
+  replays that log forward, parsing each sentence with a rule keyed to its
+  action type, to rebuild zone-by-zone board state at every step.
+  CONFIRMED-ACCURATE: Monster Zones (M1-5), Spell/Trap Zones (S1-5),
+  Graveyard, Banished, Hand, Deck/Extra Deck counts, LP, tokens, counters,
+  face-up/down, ATK/DEF position — all directly verified against a real
+  replay. NOT MODELED AT ALL (not best-effort — simply not rendered): Field
+  Spell Zone, Pendulum Zones, shared Extra Monster Zones, Skill cards, and
+  Xyz material stacking. No real replay has ever shown how (or whether) the
+  action log names these, so rather than show permanently-empty slots that
+  never actually populate, they're left out of the board entirely — this
+  also frees up real layout space for everything that IS modeled to render
+  much larger. Also: if a single play ever bundles more than one distinct
+  board effect under one entry (not observed in the data checked), only the
+  primary effect is applied.
+
+  VISUAL DESIGN — built to look and feel like DuelingBook itself, not just
+  functionally match it: square zone/pile cells with object-fit:contain so
+  the full card is always visible (never cropped to a tile); a DEF-position
+  card (face-up or set face-down) is rotated 90°, exactly like the real
+  client; Deck/Extra/Graveyard/Banished sit in pile columns flanking the
+  5x2 zone grid instead of a separate row, mirroring DuelingBook's own
+  corner placement; Graveyard/Banished piles show the actual last card
+  sent there (click one to list everything in it, each entry clickable for
+  full card detail — same as clicking those piles on the real site); a
+  DP/SP/M1/BP/M2/EP phase tracker with the current turn's player. The
+  whole board is scaled via CSS zoom (reflows layout, unlike
+  transform:scale) by fitBoard() to always fit the viewport with no
+  scrolling, regardless of window size.
+-->
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0a0a0a;
+    --panel: #151515;
+    --panel2: #1d1d1d;
+    --zone: #202020;
+    --zone-empty: #161616;
+    --border: #333;
+    --text: #e8e8e8;
+    --dim: #999;
+    --accent: #4da3ff;
+    --accent2: #ff9f43;
+    --good: #4caf50;
+    --bad: #e05656;
+    --cell: 140px;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    font-size: 13px;
+  }
+  body { display: flex; flex-direction: column; overflow: hidden; }
+  header {
+    flex: 0 0 auto;
+    padding: 8px 18px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, #171717, #111);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  header img { width: 34px; height: 34px; border-radius: 8px; }
+  header .wordmark { font-size: 19px; font-weight: 700; letter-spacing: .3px; }
+  header .wordmark span { color: var(--accent); }
+  header .sub { color: var(--dim); font-size: 11.5px; margin-top: 1px; }
+
+  #setup { max-width: 760px; margin: 24px auto; padding: 0 18px; overflow-y: auto; }
+  .card-box {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 18px; margin-bottom: 14px;
+  }
+  .card-box h2 { margin: 0 0 8px; font-size: 14px; }
+  .card-box p.hint { color: var(--dim); font-size: 12px; margin: 4px 0 10px; }
+  input[type="file"] { color: var(--text); font-size: 13px; }
+  input[type="number"] { width: 70px; background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; }
+  button { background: #222; color: var(--text); border: 1px solid var(--border); border-radius: 7px; padding: 7px 13px; font-size: 13px; cursor: pointer; }
+  button:hover:not(:disabled) { background: #2a2a2a; }
+  button:disabled { color: #666; cursor: default; }
+  button.active { background: var(--accent); color: #06111c; border-color: var(--accent); }
+  #status-line { font-size: 12px; color: var(--dim); margin-top: 8px; min-height: 16px; }
+  .badge-ok { color: var(--good); }
+  .badge-warn { color: var(--accent2); }
+
+  #viewer { display: none; flex: 1; flex-direction: column; min-height: 0; }
+  #scoreboard {
+    flex: 0 0 auto;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
+    gap: 10px; flex-wrap: wrap;
+  }
+  .player-lp { font-size: 12.5px; }
+  .player-lp b { font-size: 15px; }
+  .lp-good { color: var(--good); } .lp-bad { color: var(--bad); }
+  #turn-indicator { color: var(--dim); font-size: 12px; }
+
+  #hand-controls {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 8px; padding: 4px 16px;
+    border-bottom: 1px solid var(--border); background: var(--panel); flex-wrap: wrap; font-size: 12px;
+  }
+  #hand-controls .lbl { color: var(--dim); }
+
+  #controls {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 8px; padding: 6px 16px;
+    border-bottom: 1px solid var(--border); background: var(--panel); flex-wrap: wrap;
+  }
+  #scrubber { flex: 1; min-width: 140px; }
+  #game-select, #view-select { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; }
+  #step-counter { color: var(--dim); font-size: 12px; min-width: 80px; text-align: right; }
+
+  #main-area { flex: 1; min-height: 0; display: flex; }
+  #board-col { flex: 1; min-width: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; padding: 6px; }
+  #side-col {
+    width: 320px; flex: 0 0 auto; border-left: 1px solid var(--border); background: var(--panel);
+    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  }
+
+  /* Field Spell / Pendulum / shared Extra Monster / Skill zones are
+     intentionally NOT rendered — the action-log parser has no confirmed
+     template for any of them (none ever appeared in the real replay this
+     engine was validated against), so the code never actually places a
+     card in them. Rather than show permanently-empty, non-functional
+     slots, they're left out entirely, which also frees up real space for
+     everything that IS modeled to render bigger. */
+  .board-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .zone-row { display: flex; gap: 4px; }
+  .zone-grid { display: flex; flex-direction: column; gap: 4px; }
+  .pile-col { display: flex; flex-direction: column; gap: 4px; }
+  .side-zone-area { display: flex; justify-content: center; gap: 4px; }
+  .hand-row { display: flex; justify-content: center; gap: 4px; flex-wrap: wrap; min-height: var(--cell); padding: 2px; }
+
+  .zone, .pile {
+    width: var(--cell); height: var(--cell); border: 1px solid var(--border); border-radius: 7px;
+    background: var(--zone-empty); position: relative; cursor: pointer; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+  }
+  .zone.occupied, .pile.occupied { background: var(--zone); border-color: #555; }
+  .zone.current-focus { outline: 2px solid var(--accent); }
+  .zone.flash, .pile.flash { animation: dtflash 0.8s ease-out; }
+  @keyframes dtflash { 0% { box-shadow: 0 0 0 3px var(--accent2); } 100% { box-shadow: 0 0 0 0 rgba(0,0,0,0); } }
+  /* object-fit:contain (not cover) — the whole card is shown, never
+     cropped to a square "tile". A defense-position card (face-up or set
+     face-down) gets rotated 90°, same as DuelingBook itself; the square
+     cell means a rotated portrait card still fits fully in view. */
+  .zone img, .pile img { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; transition: transform .15s ease; }
+  .zone img.pos-def, .pile img.pos-def { transform: rotate(90deg); }
+  .zone .facedown, .pile .facedown {
+    width: 70%; height: 70%; border-radius: 5px;
+    background: repeating-linear-gradient(45deg,#2b2b40,#2b2b40 5px,#232336 5px,#232336 10px);
+    border: 1px solid #444; transition: transform .15s ease;
+  }
+  .zone .facedown.pos-def { transform: rotate(90deg); }
+  .zone .lbl { position: absolute; top: 2px; left: 4px; font-size: 12px; color: #999; z-index: 1; font-weight: 700; text-shadow: 0 1px 2px #000; }
+  .zone .cnt, .pile .cnt {
+    position: absolute; bottom: 3px; right: 4px; font-size: 14px; font-weight: 700;
+    background: #000e; padding: 2px 7px; border-radius: 4px; color: var(--accent2); z-index: 1;
+  }
+  .zone .pos-flag { position: absolute; top: 2px; right: 4px; font-size: 11px; color: #ddd; background: #000c; padding: 1px 5px; border-radius: 3px; z-index: 1; font-weight: 700; }
+  .pile .pile-tag { position: absolute; top: 2px; left: 4px; font-size: 12px; color: #aaa; z-index: 1; font-weight: 700; text-shadow: 0 1px 2px #000; }
+  /* Big transparent "GY" / "BANISH" watermark across the pile, behind the
+     card art, exactly like DuelingBook's own graveyard/banished zones —
+     requested so it's obvious which pile is which at a glance even when
+     the top card's art doesn't make it clear. */
+  .pile[data-pile-kind="grave"]::before, .pile[data-pile-kind="banished"]::before {
+    position: absolute; inset: 0; z-index: 2; pointer-events: none;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; letter-spacing: 1px; color: #fff; opacity: .4;
+    text-shadow: 0 0 4px #000, 0 0 8px #000; text-align: center; line-height: 1;
+  }
+  .pile[data-pile-kind="grave"]::before { content: "GY"; font-size: 34px; }
+  .pile[data-pile-kind="banished"]::before { content: "BANISH"; font-size: 17px; transform: rotate(-18deg); }
+  .side-caption { text-align: center; font-size: 14px; color: var(--dim); margin: 0; }
+  .side-caption b { color: var(--text); font-size: 16px; }
+  .pile-list-label { font-size: 13px; color: var(--dim); margin-bottom: 6px; }
+  .pile-list-row { font-size: 14px; padding: 5px 2px; border-bottom: 1px solid #1f1f1f; cursor: pointer; }
+  .pile-list-row:hover { color: var(--accent); }
+
+  .phase-row { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 5px 0; }
+  .phase-dot {
+    width: 34px; height: 34px; border-radius: 50%; background: #2a2a2a; border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--dim); font-weight: 700;
+  }
+  .phase-dot.active { background: var(--bad); color: #fff; border-color: var(--bad); }
+  .turn-tag { font-size: 13px; color: var(--accent2); font-weight: 700; margin-left: 8px; letter-spacing: .4px; }
+  .atk-banner {
+    font-size: 13px; color: #fff; font-weight: 700; margin-left: 10px; letter-spacing: .3px;
+    background: var(--bad); padding: 2px 10px; border-radius: 4px; animation: dtattackpulse 1s ease-out infinite;
+  }
+  @keyframes dtattackpulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+  /* Attack indication: attacker glows orange, the card being attacked (if
+     any — a direct attack has none) glows red, both with a small sword
+     badge, same idea as DuelingBook's own battle-phase highlight. */
+  .zone.atk-from { box-shadow: 0 0 0 3px var(--accent2), 0 0 14px 2px var(--accent2); }
+  .zone.atk-to { box-shadow: 0 0 0 3px var(--bad), 0 0 14px 2px var(--bad); }
+  .zone.atk-from .atk-badge, .zone.atk-to .atk-badge {
+    position: absolute; bottom: 2px; left: 50%; transform: translateX(-50%); z-index: 2;
+    font-size: 13px; background: #000c; border-radius: 3px; padding: 0 4px;
+  }
+
+  .art-fallback {
+    width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+    font-size: 9px; line-height: 1.15; text-align: center; color: var(--dim); padding: 3px;
+    background: var(--zone); overflow: hidden;
+  }
+
+  #log-panel { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0; border-bottom: 1px solid var(--border); }
+  .log-row { padding: 6px 14px; border-bottom: 1px solid #1f1f1f; cursor: pointer; display: flex; gap: 8px; font-size: 12px; }
+  .log-row:hover { background: #161616; }
+  .log-row.current { background: #142433; border-left: 3px solid var(--accent); }
+  .log-row .n { color: #555; font-size: 10px; min-width: 26px; }
+  .log-row .who { color: var(--accent); }
+
+  #card-panel { padding: 12px; overflow-y: auto; max-height: 40%; border-bottom: 1px solid var(--border); }
+  #card-panel .empty { color: var(--dim); font-size: 13px; padding-top: 10px; text-align: center; }
+  .card-tile img { width: 100%; max-width: 160px; display: block; margin: 0 auto 8px; border-radius: 6px; border: 1px solid var(--border); background: #000; }
+  .card-tile .name { font-size: 15px; font-weight: 600; margin-bottom: 3px; text-align: center; }
+  .card-tile .type { color: var(--dim); font-size: 12.5px; text-align: center; margin-bottom: 6px; }
+  .card-tile .stats { text-align: center; font-size: 13.5px; margin-bottom: 8px; }
+  .card-tile .effect { font-size: 12.5px; line-height: 1.45; white-space: pre-wrap; color: #ccc; }
+
+  /* ---- closeable pile-contents popup (Graveyard / Banished) ------------ */
+  #pile-modal-backdrop {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,.65); z-index: 1000;
+    align-items: center; justify-content: center;
+  }
+  #pile-modal-backdrop.open { display: flex; }
+  #pile-modal {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    width: min(680px, 92vw); max-height: 82vh; display: flex; flex-direction: column; overflow: hidden;
+    box-shadow: 0 10px 40px #000a;
+  }
+  #pile-modal-head {
+    display: flex; align-items: center; justify-content: space-between; padding: 12px 16px;
+    border-bottom: 1px solid var(--border); flex: 0 0 auto;
+  }
+  #pile-modal-head h3 { margin: 0; font-size: 16px; }
+  #pile-modal-close {
+    background: #222; border: 1px solid var(--border); color: var(--text); border-radius: 6px;
+    width: 30px; height: 30px; font-size: 16px; cursor: pointer; line-height: 1;
+  }
+  #pile-modal-close:hover { background: #333; }
+  #pile-modal-body { padding: 14px 16px; overflow-y: auto; display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+  .pile-modal-card { width: 110px; text-align: center; cursor: pointer; }
+  .pile-modal-card img, .pile-modal-card .art-fallback-sm {
+    width: 110px; height: 160px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border);
+    background: #000; display: block; margin: 0 auto 4px;
+  }
+  .pile-modal-card .art-fallback-sm { display: flex; align-items: center; justify-content: center; font-size: 10px; color: var(--dim); padding: 4px; }
+  .pile-modal-card .nm { font-size: 11.5px; line-height: 1.3; }
+  .pile-modal-card:hover .nm { color: var(--accent); }
+  .art-missing { width: 100%; max-width: 160px; aspect-ratio: 59/86; margin: 0 auto 8px; border: 1px dashed var(--border); border-radius: 6px; display: flex; align-items: center; justify-content: center; color: var(--dim); font-size: 10.5px; text-align: center; padding: 8px; }
+
+  #lookup-box { padding: 10px 14px; }
+  #lookup-box input[type="text"] { width: 100%; background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 13px; }
+  #lookup-results { max-height: 120px; overflow-y: auto; margin-top: 6px; }
+  #lookup-results div { padding: 3px 2px; cursor: pointer; font-size: 12px; }
+  #lookup-results div:hover { color: var(--accent); }
+
+  footer { flex: 0 0 auto; text-align: center; color: #555; font-size: 10.5px; padding: 4px; border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+
+<header>
+  <img src="data:image/png;base64,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" alt="">
+  <div>
+    <div class="wordmark">Kerem<span>Book</span></div>
+    <div class="sub">A Duel Tools companion — fully offline replay viewer</div>
+  </div>
+</header>
+
+<div id="setup">
+  <div class="card-box">
+    <h2>1. Card database</h2>
+    <p class="hint">Bundled right into this file by default — nothing to load. If this .html was separated from its database somehow, you can still point it at a cardinfo.json file manually below.</p>
+    <div id="cardinfo-status" style="color:var(--dim);font-size:12px;margin-bottom:8px;">Checking…</div>
+    <input type="file" id="cardinfo-input" accept="application/json">
+  </div>
+
+  <div class="card-box">
+    <h2>2. Load a replay</h2>
+    <p class="hint">Pick a .json file saved with Duel Tools' "Download JSON Replay" feature while watching a replay on duelingbook.com.</p>
+    <input type="file" id="replay-input" accept="application/json">
+  </div>
+
+  <div class="card-box">
+    <h2>Starting Life Points (optional)</h2>
+    <p class="hint">DuelingBook's replay data doesn't state starting LP directly, so this is used to render the running totals. 8000 is the normal default; change it for a Speed Duel (4000) or another format. Resets to these values at the start of each game in a multi-game match.</p>
+    Player 1: <input type="number" id="lp1-input" value="8000"> &nbsp; Player 2: <input type="number" id="lp2-input" value="8000">
+  </div>
+
+  <div class="card-box">
+    <h2>About the board view</h2>
+    <p class="hint">This reconstructs the full duel field step by step from the replay's own action log, sized to fill the screen with no scrolling: Monster &amp; Spell/Trap Zones, Graveyard and Banished piles (showing the actual last card sent there — click a pile to see everything in it), Deck/Extra counts, hand (toggle each player's visible below), and face-up/face-down + Attack/Defense position, all rendered with full card art. Field Spell, Pendulum, shared Extra Monster, and Skill Zones aren't shown — no real replay data has ever confirmed how (or whether) the action log names them, so rather than guess, those slots are left out entirely and that space goes to making everything else bigger.</p>
+  </div>
+
+  <div id="status-line"></div>
+</div>
+
+<div id="viewer">
+  <div id="scoreboard">
+    <div class="player-lp" id="p1-lp">—</div>
+    <div id="turn-indicator">—</div>
+    <div class="player-lp" id="p2-lp">—</div>
+  </div>
+  <div id="hand-controls">
+    <span class="lbl">Hands:</span>
+    <button id="btn-hand-p1" type="button">👁 P1</button>
+    <button id="btn-hand-p2" type="button">👁 P2</button>
+    <button id="btn-hand-both-show" type="button">Show Both</button>
+    <button id="btn-hand-both-hide" type="button">Hide Both</button>
+  </div>
+  <div id="controls">
+    <button id="btn-first" title="First play">⏮</button>
+    <button id="btn-prev" title="Previous play">◀</button>
+    <button id="btn-play" title="Auto-play">▶</button>
+    <button id="btn-next" title="Next play">▶|</button>
+    <button id="btn-last" title="Last play">⏭</button>
+    <select id="game-select"></select>
+    <input type="range" id="scrubber" min="0" value="0" step="1">
+    <div id="step-counter">0 / 0</div>
+  </div>
+  <div id="main-area">
+    <div id="board-col">
+      <div class="board-wrap" id="board-wrap"></div>
+    </div>
+    <div id="side-col">
+      <div id="card-panel"><div class="empty">Plays involving a card will show its details here.</div></div>
+      <div id="log-panel"></div>
+      <div id="lookup-box">
+        <input type="text" id="lookup-input" placeholder="Look up any card by name…" disabled>
+        <div id="lookup-results"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer>KeremBook — built by Kerem Duel Tools. Card data © Konami / YGOPRODeck. Not affiliated with DuelingBook.</footer>
+
+<!-- Markup must come before the script below: the script wires up
+     addEventListener calls on these elements synchronously as it
+     executes, which runs at parse time — placing this after the script
+     tag instead left these null until load, crashing the whole script. -->
+<div id="pile-modal-backdrop">
+  <div id="pile-modal" role="dialog" aria-modal="true">
+    <div id="pile-modal-head">
+      <h3 id="pile-modal-title">Graveyard</h3>
+      <button id="pile-modal-close" aria-label="Close" title="Close">✕</button>
+    </div>
+    <div id="pile-modal-body"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // Filled in by Settings → Downloads → Replay Viewer at download time by
+  // a direct text substitution of this placeholder (see dt-settings.js) —
+  // stays null only if this .html is opened without ever having been
+  // downloaded through that flow.
+  const EMBEDDED_CARDINFO = /*__DT_CARDINFO_JSON__*/null;
+
+  // ---- state ---------------------------------------------------------------
+  let steps = [];          // filtered, board-affecting plays, in order
+  let snapshots = [];      // board state after each step, parallel to `steps`
+  let cursor = 0;
+  let cardDb = null, cardDbList = [];
+  let playing = false, playTimer = null;
+  let games = [];
+  let handVisible = { p1: false, p2: false };
+
+  // Exact NOISE set from this project's own dt-replay-engine.js (confirmed
+  // against its source) — plays DuelingBook itself treats as not affecting
+  // the board, so excluded here the same way.
+  const NOISE = new Set(['Stop viewing', 'View deck', 'View GY', 'View GY 2', 'View Banished', 'View Banished 2',
+    'View ED', 'View ED 2', 'View Extra Deck', 'View Graveyard', 'View materials', 'Good', 'Stop good', 'Thinking',
+    'Add watcher', 'Remove watcher', 'Typing', 'Duel message', 'Watcher message', 'Edit duel message',
+    'Permission event', 'Permission granted', 'Permission denied', 'Show hand', 'Countdown', 'Swap cards', 'Message']);
+
+  function logEntriesOf(play) {
+    const raw = play.log;
+    if (!raw) return [];
+    return Array.isArray(raw) ? raw : [raw];
+  }
+  function firstPublicLog(play) {
+    const entries = logEntriesOf(play);
+    for (const l of entries) if (l && l.public_log) return l.public_log;
+    return '';
+  }
+  function textOf(play) {
+    return logEntriesOf(play).map(function (l) { return l && l.public_log; }).filter(Boolean).join(' — ');
+  }
+
+  // ---- zone-code parsing -----------------------------------------------------
+  // "M-3" -> {kind:'zone', code:'M3'}; "S-2" -> {code:'S2'}; "GY" -> grave;
+  // null when the text doesn't look like a zone this viewer understands —
+  // callers treat that as "don't move the card" rather than guessing.
+  function parseZoneCode(text) {
+    if (!text) return null;
+    let m = /^M-?(\d)$/.exec(text.trim());
+    if (m) return 'M' + m[1];
+    m = /^S-?(\d)$/.exec(text.trim());
+    if (m) return 'S' + m[1];
+    return null;
+  }
+
+  // ---- board state -----------------------------------------------------------
+  function mkSide(name, lp, deckCount, extraCount) {
+    return {
+      name: name, lp: lp,
+      zones: { M1: null, M2: null, M3: null, M4: null, M5: null, S1: null, S2: null, S3: null, S4: null, S5: null, F: null, PL: null, PR: null, SK: null },
+      hand: [], grave: [], banished: [], deckCount: deckCount, extraCount: extraCount
+    };
+  }
+  function freshState(names, lp1, lp2, deck1, extra1, deck2, extra2) {
+    return {
+      turn: null, turnCount: 0, phase: null, flashIds: [],
+      p1: mkSide(names.p1, lp1, deck1, extra1),
+      p2: mkSide(names.p2, lp2, deck2, extra2),
+      shared: { L1: null, L2: null }
+    };
+  }
+
+  // meta[id] persists across the whole replay (never reset per-game): the
+  // static card definition + display flags for each physical card
+  // instance. Board PLACEMENT (which zone, which side) lives in the
+  // per-step state snapshot instead, since that's exactly what resets each
+  // new game.
+  let meta = {};
+  function rememberCard(id, card) {
+    if (id == null) return;
+    if (card) meta[id] = Object.assign({}, meta[id], { card: card });
+    if (!meta[id]) meta[id] = {};
+  }
+
+  function findLocation(state, id) {
+    for (const side of ['p1', 'p2']) {
+      const s = state[side];
+      for (const z in s.zones) if (s.zones[z] === id) return { side: side, loc: z };
+      if (s.hand.indexOf(id) !== -1) return { side: side, loc: 'hand' };
+      if (s.grave.indexOf(id) !== -1) return { side: side, loc: 'grave' };
+      if (s.banished.indexOf(id) !== -1) return { side: side, loc: 'banished' };
+    }
+    if (state.shared.L1 === id) return { side: null, loc: 'L1' };
+    if (state.shared.L2 === id) return { side: null, loc: 'L2' };
+    return null;
+  }
+  function removeFromBoard(state, id) {
+    const found = findLocation(state, id);
+    if (!found) return null;
+    if (found.side) {
+      const s = state[found.side];
+      if (found.loc in s.zones) s.zones[found.loc] = null;
+      else if (found.loc === 'hand') s.hand.splice(s.hand.indexOf(id), 1);
+      else if (found.loc === 'grave') s.grave.splice(s.grave.indexOf(id), 1);
+      else if (found.loc === 'banished') s.banished.splice(s.banished.indexOf(id), 1);
+    } else {
+      state.shared[found.loc] = null;
+    }
+    return found;
+  }
+  function placeAt(state, id, side, loc) {
+    removeFromBoard(state, id);
+    if (loc === 'L1' || loc === 'L2') { state.shared[loc] = id; return; }
+    const s = state[side];
+    if (loc in s.zones) s.zones[loc] = id;
+    else if (loc === 'hand') s.hand.push(id);
+    else if (loc === 'grave') s.grave.push(id);
+    else if (loc === 'banished') s.banished.push(id);
+  }
+  function decDeck(state, side, fromText) {
+    if (!fromText) return;
+    if (/extra/i.test(fromText)) { if (state[side].extraCount > 0) state[side].extraCount--; }
+    else if (/deck/i.test(fromText)) { if (state[side].deckCount > 0) state[side].deckCount--; }
+  }
+
+  // Applies one play to `state` IN PLACE. `side` below always means the
+  // ACTING player (play.username) unless a comment says otherwise — for
+  // plays where the card could belong to either player (e.g. an opponent's
+  // effect sending YOUR card to YOUR own GY), the destination's SIDE is
+  // whichever side the instance was already found on, not the actor.
+  function applyPlay(state, play) {
+    const type = play.play;
+    const text = firstPublicLog(play);
+    const id = play.id;
+    const actingSide = (play.username === state.p1.name) ? 'p1' : 'p2';
+    if (play.card) rememberCard(id, play.card);
+
+    // GROUND-TRUTH HAND RESYNC — confirmed against a real replay: whenever a
+    // play carries an explicit `hand` array (seen on "Shuffle hand" and on
+    // "To hand" when a card is tutored/returned), that array is the
+    // COMPLETE, authoritative set of card-instance ids currently in that
+    // player's hand — not an incremental add. Critically, "Shuffle hand"
+    // MINTS BRAND NEW ids for every card already in hand (confirmed: a
+    // hand of ids [1,3,4,5,6,7] became [501..506] after one shuffle, same
+    // physical cards). Before this fix, shuffles were never applied at
+    // all, so the old (now-dead) ids sat in `hand` forever while newer
+    // zone/GY/banish plays kept referencing the NEW ids the parser had
+    // never heard of — hand count only ever grew, unbounded, exactly
+    // matching the reported "way too many cards in hand" bug. The fix:
+    // always trust this field completely, replacing (not merging into)
+    // that side's hand array. `prev` lists the OLD ids in the same
+    // positions as `hand` lists the NEW ones, so card identity (art/name)
+    // already known for the old id is carried forward positionally —
+    // the true post-shuffle order is randomized/unknowable anyway, so
+    // positional carry-forward is the best available approximation for a
+    // "show everything" viewer.
+    if (Array.isArray(play.hand)) {
+      const hSide = (play.username === state.p1.name) ? 'p1' : 'p2';
+      const newHand = play.hand.slice();
+      const prevArr = Array.isArray(play.prev) ? play.prev : [];
+      if (prevArr.length === newHand.length) {
+        for (let hi = 0; hi < newHand.length; hi++) {
+          const nid = newHand[hi], oid = prevArr[hi];
+          if (nid !== oid && meta[oid] && !meta[nid]) meta[nid] = meta[oid];
+        }
+      }
+      state[hSide].hand = newHand;
+    }
+
+    function ownerSideOf(fallback) {
+      const found = id != null ? findLocation(state, id) : null;
+      return (found && found.side) ? found.side : fallback;
+    }
+
+    switch (type) {
+      case 'Draw card':
+        decDeckDraw: { state[actingSide].deckCount = Math.max(0, state[actingSide].deckCount - 1); }
+        placeAt(state, id, actingSide, 'hand');
+        break;
+      case 'To hand': {
+        let m = /from (.+) to hand$/.exec(text);
+        decDeck(state, ownerSideOf(actingSide), m && m[1]);
+        // Skip the manual push when the play already carried a `hand`
+        // ground-truth array above (placeAt here would double-add it).
+        if (!Array.isArray(play.hand)) placeAt(state, id, ownerSideOf(actingSide), 'hand');
+        break;
+      }
+      case 'Set monster': {
+        let m = /to (M-\d)$/.exec(text);
+        const z = m && parseZoneCode(m[1]);
+        if (z) { meta[id] = Object.assign({}, meta[id], { faceDown: true, position: 'def' }); placeAt(state, id, actingSide, z); }
+        break;
+      }
+      case 'Set ST': {
+        let m = /to (S-\d)$/.exec(text);
+        const z = m && parseZoneCode(m[1]);
+        if (z) { meta[id] = Object.assign({}, meta[id], { faceDown: true, position: null }); placeAt(state, id, actingSide, z); }
+        break;
+      }
+      // Confirmed real-data gap (this is what let a just-activated hand
+      // card sit as a permanent "zombie" in `hand` until the next shuffle
+      // wiped it, inflating the count): activating a Spell/Trap moves it
+      // OUT of hand into the S/T zone, same as "Normal Summon" does for
+      // monsters — there was simply no case for it at all before. Two
+      // real text templates seen: 'Activated "X" from hand (n/n) to S-3'
+      // (straight from hand) and 'Activated Set "X" in S-3' (activating a
+      // card already Set — same zone it's already in, just flips face-up).
+      case 'Activate ST': {
+        let m = /\b(?:to|in) (S-\d)$/.exec(text);
+        const z = m && parseZoneCode(m[1]);
+        if (z) { meta[id] = Object.assign({}, meta[id], { faceDown: false, position: null }); placeAt(state, id, actingSide, z); }
+        break;
+      }
+      case 'Normal Summon': {
+        let m = /to (M-\d)$/.exec(text);
+        const z = m && parseZoneCode(m[1]);
+        if (z) { meta[id] = Object.assign({}, meta[id], { faceDown: false, position: 'atk' }); placeAt(state, id, actingSide, z); }
+        break;
+      }
+      case 'SS ATK': case 'SS DEF': {
+        let m = /from (.+) to (M-\d) \((ATK|DEF)\)$/.exec(text);
+        if (m) {
+          decDeck(state, actingSide, m[1]);
+          const z = parseZoneCode(m[2]);
+          meta[id] = Object.assign({}, meta[id], { faceDown: false, position: m[3].toLowerCase() });
+          if (z) placeAt(state, id, actingSide, z);
+        }
+        break;
+      }
+      case 'Flip Summon': {
+        meta[id] = Object.assign({}, meta[id], { faceDown: false, position: 'atk' });
+        break;
+      }
+      case 'Flip': {
+        meta[id] = Object.assign({}, meta[id], { faceDown: false });
+        break;
+      }
+      case 'To ATK':
+        meta[id] = Object.assign({}, meta[id], { position: 'atk' }); break;
+      case 'To DEF':
+        meta[id] = Object.assign({}, meta[id], { position: 'def' }); break;
+      case 'Move': {
+        let m = /to (M-\d)$/.exec(text);
+        const z = m && parseZoneCode(m[1]);
+        if (z) placeAt(state, id, ownerSideOf(actingSide), z);
+        break;
+      }
+      case 'To GY':
+        placeAt(state, id, ownerSideOf(actingSide), 'grave'); break;
+      case 'Banish':
+        placeAt(state, id, ownerSideOf(actingSide), 'banished'); break;
+      case 'Add counter': case 'Remove counter': {
+        let m = /\(now (\d+)\)$/.exec(text);
+        meta[id] = Object.assign({}, meta[id], { counters: m ? parseInt(m[1], 10) : (meta[id] && meta[id].counters) });
+        break;
+      }
+      case 'Life points': {
+        let m = /^(Gained|Lost) (\d+) LP$/.exec(text);
+        if (m) {
+          const delta = parseInt(m[2], 10) * (m[1] === 'Lost' ? -1 : 1);
+          state[actingSide].lp += delta;
+        }
+        break;
+      }
+      case 'Summon Token': {
+        let m = /in (M-\d)$/.exec(text);
+        const z = m && parseZoneCode(m[1]);
+        if (z) {
+          const tokId = 'tok_' + play.__stepIndex;
+          meta[tokId] = { card: { id: 0, name: 'Token', card_type: 'Token', type: 'Token', atk: '0', def: '0' }, faceDown: false, position: 'atk' };
+          placeAt(state, tokId, actingSide, z);
+          play.__syntheticId = tokId;
+        }
+        break;
+      }
+      case 'Remove Token': {
+        let m = /in (M-\d)$/.exec(text) || /from (M-\d)$/.exec(text);
+        const z = m && parseZoneCode(m[1]);
+        if (z && state[actingSide].zones[z] != null) state[actingSide].zones[z] = null;
+        break;
+      }
+      case 'Start turn':
+        state.turn = actingSide; state.turnCount++; break;
+      case 'Enter DP': state.phase = 'Draw Phase'; break;
+      case 'Enter M1': state.phase = 'Main Phase 1'; break;
+      case 'Enter M2': state.phase = 'Main Phase 2'; break;
+      case 'Enter SP': state.phase = 'Standby Phase'; break;
+      case 'Enter BP': state.phase = 'Battle Phase'; break;
+      case 'Enter EP': state.phase = 'End Phase'; break;
+      default:
+        // Attack / Attack directly / Declare / Target card / Admit defeat /
+        // Siding / Begin next duel / etc: no zone change applied — these
+        // are announcements, not board moves (confirmed: "Attack" plays
+        // carry no `id` at all in the real data checked).
+        break;
+    }
+
+    // transient highlight for whichever instance this step concerns
+    state.flashIds = [];
+    if (id != null) state.flashIds.push(id);
+    if (play.__syntheticId) state.flashIds.push(play.__syntheticId);
+
+    // ATTACK INDICATION — "Attack"/"Attack directly" carry no `id` field at
+    // all (confirmed against real data), so the attacker (and, for a
+    // non-direct attack, the target) have to be parsed out of the public
+    // log sentence instead, by zone. Two confirmed real templates:
+    //   Attacked directly with "X" in M-3
+    //   Attacked (Set card|"Y") in M-2 with "X" in M-3
+    state.attack = null;
+    if (type === 'Attack' || type === 'Attack directly') {
+      let m = /with "([^"]+)" in (M-\d)$/.exec(text);
+      if (m) {
+        const fromZone = parseZoneCode(m[2]);
+        const fromId = fromZone ? state[actingSide].zones[fromZone] : null;
+        if (fromId != null) state.flashIds.push(fromId);
+        const defSide = actingSide === 'p1' ? 'p2' : 'p1';
+        let tm = /^Attacked (?:Set card|"[^"]+") in (M-\d) with/.exec(text);
+        const toZone = tm ? parseZoneCode(tm[1]) : null;
+        const toId = toZone ? state[defSide].zones[toZone] : null;
+        if (toId != null) state.flashIds.push(toId);
+        state.attack = { fromSide: actingSide, fromId: fromId, toSide: toZone ? defSide : null, toId: toId, direct: !toZone };
+      }
+    }
+  }
+
+  // Reconstructs the bundled starting-hand draws hidden inside the
+  // combined "Pick first" mega-play — confirmed against real data to be
+  // the ONLY place card ids are never given explicitly (every other play
+  // type always carries its own `id`), so this is the one spot ids must
+  // be derived rather than read directly.
+  //
+  // Derivation (confirmed against real data, and NOT simply "smallest id
+  // used later" — that's circular, since a starting-hand card's own TRUE
+  // id is itself usually the smallest id that side ever uses, so scanning
+  // for a bare minimum just finds one of these same cards again): for
+  // each starting-hand card, scan forward through this side's own later
+  // plays (bounded by the next game start) for the FIRST one that both
+  // names this exact card AND carries an explicit `id` — that id IS this
+  // card's real engine id, confirmed e.g. "Activate ST id=2" naming
+  // "Upstart Goblin" exactly matches that card's 2nd-drawn starting-hand
+  // slot. This is safe even when a hand-wide shuffle happens before the
+  // match is found: "Shuffle hand"/"To hand" always carry their own
+  // ground-truth `hand` array (handled above in applyPlay) that REPLACES
+  // the whole hand regardless of what id this function assigned, so an
+  // exact match here only matters for a card that's played, discarded or
+  // otherwise directly referenced BEFORE the first such resync — which is
+  // exactly when getting the real id right actually matters. A starting
+  // card whose name is never referenced again before the game ends (rare)
+  // falls back to a private synthetic id, guaranteed not to collide with
+  // any real one. KNOWN LIMITATION: if a side's starting hand holds two
+  // copies of the same-named card, name-matching can't tell them apart —
+  // accepted here the same way other rare approximations in this file
+  // are (documented, not silently pretended away).
+  function applyPickFirst(state, play, steps, idx, names) {
+    if (!Array.isArray(play.log)) return;
+    const bySide = { p1: [], p2: [] };
+    play.log.forEach(function (entry) {
+      if (!entry || !entry.private_log || entry.private_log.indexOf('Drew "') !== 0) return;
+      const side = entry.username === names.p1 ? 'p1' : (entry.username === names.p2 ? 'p2' : null);
+      if (!side) return;
+      const m = /^Drew "(.+)"$/.exec(entry.private_log);
+      bySide[side].push(m ? m[1] : null);
+    });
+    const cardsByName = {};
+    (play.cards || []).forEach(function (c) { if (c && c.name) cardsByName[c.name] = c; });
+    ['p1', 'p2'].forEach(function (side) {
+      const drawn = bySide[side];
+      if (!drawn.length) return;
+      const resolved = new Array(drawn.length).fill(null);
+      for (let j = idx + 1; j < steps.length; j++) {
+        if (resolved.indexOf(null) === -1) break;
+        const p2 = steps[j];
+        if (p2.__gameStart) break;
+        if (p2.username !== names[side] || typeof p2.id !== 'number' || !p2.card || !p2.card.name) continue;
+        for (let s = 0; s < drawn.length; s++) {
+          if (resolved[s] == null && drawn[s] === p2.card.name) { resolved[s] = p2.id; break; }
+        }
+      }
+      drawn.forEach(function (cardName, k) {
+        const cardId = resolved[k] != null ? resolved[k] : ('pf_' + idx + '_' + side + '_' + k);
+        const cardDef = cardName ? cardsByName[cardName] : null;
+        meta[cardId] = Object.assign({}, meta[cardId], { card: cardDef || (cardName ? { name: cardName } : null) });
+        placeAt(state, cardId, side, 'hand');
+        if (state[side].deckCount > 0) state[side].deckCount--;
+      });
+    });
+  }
+
+  // ---- replay loading ----------------------------------------------------
+  function statusLine(msg, isError) {
+    const el = document.getElementById('status-line');
+    el.textContent = msg;
+    el.style.color = isError ? 'var(--bad)' : 'var(--dim)';
+  }
+
+  function loadReplayText(text) {
+    let data;
+    try { data = JSON.parse(text); }
+    catch (e) { statusLine('That file isn\'t valid JSON: ' + e.message, true); return; }
+
+    const rawPlays = Array.isArray(data.plays) ? data.plays : (Array.isArray(data) ? data : null);
+    if (!rawPlays) { statusLine('Couldn\'t find a "plays" array in that file — is this a Duel Tools replay .json?', true); return; }
+
+    let p1name = (data.player1 && data.player1.username) || null;
+    let p2name = (data.player2 && data.player2.username) || null;
+    if (!p1name || !p2name) {
+      const seen = [];
+      for (let i = 0; i < rawPlays.length && seen.length < 2; i++) {
+        const u = rawPlays[i] && rawPlays[i].username;
+        if (u && seen.indexOf(u) === -1) seen.push(u);
+      }
+      p1name = p1name || seen[0] || 'Player 1';
+      p2name = p2name || seen[1] || 'Player 2';
+    }
+    const deck1 = (data.player1 && Array.isArray(data.player1.main)) ? data.player1.main.length : null;
+    const extra1 = (data.player1 && Array.isArray(data.player1.extra)) ? data.player1.extra.length : null;
+    const deck2 = (data.player2 && Array.isArray(data.player2.main)) ? data.player2.main.length : null;
+    const extra2 = (data.player2 && Array.isArray(data.player2.extra)) ? data.player2.extra.length : null;
+
+    steps = [];
+    rawPlays.forEach(function (p, i) {
+      if (NOISE.has(p.play)) return;
+      const isGameStart = p.play === 'Pick first';
+      const clone = Object.assign({}, p, { __gameStart: isGameStart, __stepIndex: i });
+      steps.push(clone);
+    });
+
+    const lp1 = parseInt(document.getElementById('lp1-input').value, 10) || 8000;
+    const lp2 = parseInt(document.getElementById('lp2-input').value, 10) || 8000;
+    const names = { p1: p1name, p2: p2name };
+
+    meta = {};
+    snapshots = [];
+    let state = freshState(names, lp1, lp2, deck1 || 40, extra1 || 15, deck2 || 40, extra2 || 15);
+    steps.forEach(function (p, i) {
+      if (p.__gameStart) state = freshState(names, lp1, lp2, deck1 || 40, extra1 || 15, deck2 || 40, extra2 || 15);
+      if (p.play === 'Pick first') applyPickFirst(state, p, steps, i, names);
+      applyPlay(state, p);
+      snapshots.push(JSON.parse(JSON.stringify(state)));
+    });
+
+    games = [];
+    steps.forEach(function (p, i) { if (i === 0 || p.__gameStart) games.push({ startIdx: i, label: 'Game ' + (games.length + 1) }); });
+    if (games.length === 0) games = [{ startIdx: 0, label: 'Game 1' }];
+
+    document.getElementById('setup').style.display = 'none';
+    document.getElementById('viewer').style.display = 'flex';
+
+    buildGameSelect();
+    cursor = Math.max(0, steps.length - 1); // land on the final board state by default
+    renderAll();
+    statusLine('');
+  }
+
+  function buildGameSelect() {
+    const sel = document.getElementById('game-select');
+    sel.innerHTML = '';
+    games.forEach(function (g) {
+      const opt = document.createElement('option');
+      opt.value = String(g.startIdx);
+      opt.textContent = g.label;
+      sel.appendChild(opt);
+    });
+    sel.onchange = function () { cursor = parseInt(sel.value, 10) || 0; renderAll(); };
+  }
+
+  // ---- card rendering helpers ---------------------------------------------
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; });
+  }
+  // Real-world YGOPRODeck/Konami passcode for a card embedded in a
+  // DuelingBook replay is card.serial_number (e.g. "08131171") — NOT
+  // card.id, which is DuelingBook's own internal per-card database id and
+  // happens to work ONLY against images.duelingbook.com's own CDN, never
+  // YGOPRODeck's. Confirmed directly: images.ygoprodeck.com/images/
+  // cards_small/<card.id>.jpg 404s every time, while the same path built
+  // from parseInt(card.serial_number,10) returns the real art — this was
+  // the actual root cause of "art never loads", not an offline/connectivity
+  // issue (a real card.id DOES work against images.duelingbook.com/low-res/,
+  // DuelingBook's own CDN, which is why that one's used as the first try).
+  // A card looked up from the embedded cardinfo database (the "look up any
+  // card" box) already uses its own real `id` field directly, so it was
+  // never affected by this bug.
+  // Tokens never carry real art (no card.id, no serial_number/passcode —
+  // confirmed: the synthetic token object built in the "Summon Token"
+  // case above has none of these), so cardImgUrls used to skip adding
+  // any image source for them at all, rendering as a blank/facedown box.
+  // Embedded here so every Token on the field shows this little sheep
+  // instead, with zero extra network dependency.
+  const SCAPEGOAT_DATA_URI = 'data:image/jpeg;base64,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';
+  function realPasscode(card) {
+    if (!card) return null;
+    if (card.serial_number) { const n = parseInt(card.serial_number, 10); if (!isNaN(n) && n > 0) return n; }
+    if (card.passcode) { const n = parseInt(card.passcode, 10); if (!isNaN(n) && n > 0) return n; }
+    return null;
+  }
+  function cardImgUrls(card, size) {
+    if (card.name === 'Token') return [SCAPEGOAT_DATA_URI];
+    const urls = [];
+    const dbPath = size === 'large' ? '' : ''; // duelingbook only has one size (low-res)
+    if (card.id != null) urls.push('https://images.duelingbook.com/low-res/' + card.id + '.jpg');
+    const passcode = realPasscode(card);
+    if (passcode != null) urls.push('https://images.ygoprodeck.com/images/' + (size === 'large' ? 'cards' : 'cards_small') + '/' + passcode + '.jpg');
+    return urls;
+  }
+  // Tries each candidate URL in order; if all fail, swaps the <img> for a
+  // small text label with the card's name so a failure is visible (not a
+  // blank box) and distinguishable from "no card here".
+  window.dtImgError = function (imgEl) {
+    try {
+      const stage = parseInt(imgEl.getAttribute('data-stage') || '0', 10);
+      const urls = JSON.parse(imgEl.getAttribute('data-urls') || '[]');
+      if (stage < urls.length) {
+        imgEl.setAttribute('data-stage', String(stage + 1));
+        imgEl.src = urls[stage];
+      } else {
+        const div = document.createElement('div');
+        div.className = 'art-fallback';
+        div.textContent = imgEl.getAttribute('data-cardname') || '?';
+        if (imgEl.parentNode) imgEl.parentNode.replaceChild(div, imgEl);
+      }
+    } catch (e) {}
+  };
+  function cardImgTag(card, size, extraClass) {
+    if (!card) return '';
+    const urls = cardImgUrls(card, size);
+    if (!urls.length) return '';
+    const urlsAttr = escapeHtml(JSON.stringify(urls));
+    const nameAttr = escapeHtml(card.name || '?');
+    const cls = extraClass ? ' class="' + extraClass + '"' : '';
+    return '<img' + cls + ' src="' + urls[0] + '" data-stage="1" data-urls="' + urlsAttr + '" data-cardname="' + nameAttr + '" alt="' + nameAttr + '" onerror="window.dtImgError(this)">';
+  }
+  function cardImgSmall(card, extraClass) { return cardImgTag(card, 'small', extraClass); }
+  function cardTileHtml(card) {
+    const imgTag = cardImgTag(card, 'large');
+    const statLine = (card.atk != null || card.def != null)
+      ? 'ATK ' + (card.atk != null ? card.atk : '?') + ' / DEF ' + (card.def != null ? card.def : '?')
+      : (card.level != null ? 'Level ' + card.level : '');
+    return '<div class="card-tile">' +
+      (imgTag || '<div class="art-missing">No art source for this card</div>') +
+      '<div class="name">' + escapeHtml(card.name || 'Unknown card') + '</div>' +
+      '<div class="type">' + escapeHtml(card.card_type || card.type || '') + (card.attribute ? ' · ' + escapeHtml(card.attribute) : '') + '</div>' +
+      (statLine ? '<div class="stats">' + escapeHtml(statLine) + '</div>' : '') +
+      '<div class="effect">' + escapeHtml(card.effect || card.pendulum_effect || card.desc || '') + '</div>' +
+    '</div>';
+  }
+
+  // ---- board rendering -----------------------------------------------------
+  // A card in DEF position — whether face-up or set face-down — is
+  // rendered rotated 90°, same as DuelingBook itself; Spell/Trap zones
+  // never rotate (Set ST always stores position:null, confirmed above).
+  function zoneHtml(zoneKey, id, flashIds, atkRole) {
+    const m = meta[id] || {};
+    const card = m.card;
+    const faceDown = !!m.faceDown;
+    const isDef = m.position === 'def';
+    const flash = id != null && flashIds.indexOf(id) !== -1;
+    let inner = '';
+    if (id == null) inner = '';
+    else if (faceDown) inner = '<div class="facedown' + (isDef ? ' pos-def' : '') + '"></div>';
+    else if (card) inner = cardImgSmall(card, isDef ? 'pos-def' : '') || '<div class="facedown' + (isDef ? ' pos-def' : '') + '"></div>';
+    else inner = '<div class="facedown"></div>';
+    const posFlag = (!faceDown && m.position) ? '<span class="pos-flag">' + m.position.toUpperCase() + '</span>' : '';
+    const cnt = (m.counters) ? '<span class="cnt">+' + m.counters + '</span>' : '';
+    const atkCls = atkRole ? ' atk-' + atkRole : '';
+    const atkBadge = atkRole ? '<span class="atk-badge">' + (atkRole === 'from' ? '⚔' : '💥') + '</span>' : '';
+    return '<div class="zone ' + (id != null ? 'occupied' : '') + (flash ? ' flash' : '') + atkCls + '" data-id="' + (id == null ? '' : id) + '" title="' + (card ? escapeHtml(card.name) : zoneKey) + '">' +
+      '<span class="lbl">' + zoneKey + '</span>' + inner + posFlag + cnt + atkBadge + '</div>';
+  }
+  // Deck/Extra: always hidden (card-back + count only — real play order
+  // inside the deck isn't known). GY/Banish: DuelingBook shows the actual
+  // top (most recent) card's art on the pile itself, clickable to see
+  // everything that's gone there — matched here via the pile's own id
+  // list (oldest first, so the LAST entry is the most recently sent one).
+  function hiddenPileHtml(label, count) {
+    return '<div class="pile' + (count > 0 ? ' occupied' : '') + '" data-pile-kind="hidden" title="' + label + ' (' + count + ' left)">' +
+      '<div class="facedown"></div><span class="pile-tag">' + label + '</span><span class="cnt">' + count + '</span></div>';
+  }
+  function cardsPileHtml(label, ids, kind, flashIds) {
+    const count = ids.length;
+    const topId = count ? ids[ids.length - 1] : null;
+    const topCard = topId != null && meta[topId] ? meta[topId].card : null;
+    const flash = topId != null && flashIds.indexOf(topId) !== -1;
+    let inner = topCard ? cardImgSmall(topCard) : '';
+    if (!inner) inner = count ? '<div class="facedown"></div>' : '';
+    const idsAttr = escapeHtml(JSON.stringify(ids));
+    return '<div class="pile' + (count > 0 ? ' occupied' : '') + (flash ? ' flash' : '') + '" data-pile-kind="' + kind + '" data-pile-ids="' + idsAttr + '" title="' + label + (count ? ' (' + count + ') — click to see all' : '') + '">' +
+      inner + '<span class="pile-tag">' + label + '</span>' + (count ? '<span class="cnt">' + count + '</span>' : '') + '</div>';
+  }
+  function handHtml(ids, visible, flashIds) {
+    if (!ids.length) return '<div class="hand-row"></div>';
+    return '<div class="hand-row">' + ids.map(function (id) {
+      const m = meta[id] || {};
+      const flash = flashIds.indexOf(id) !== -1;
+      let inner;
+      if (visible && m.card) inner = cardImgSmall(m.card) || '<div class="facedown"></div>';
+      else inner = '<div class="facedown"></div>';
+      return '<div class="zone occupied' + (flash ? ' flash' : '') + '" data-id="' + id + '">' + inner + '</div>';
+    }).join('') + '</div>';
+  }
+
+  // Deck/Extra and GY/Banish sit in pile columns flanking the 5x2 zone
+  // grid (matching DuelingBook's own corner placement) instead of a
+  // separate full-width row — this removes a whole row of vertical space
+  // per side, which is what lets the board render noticeably bigger.
+  function renderSideBlock(side, sideState, flip, flashIds, handVis, attack) {
+    const spellRow = ['S1', 'S2', 'S3', 'S4', 'S5'];
+    const monsterRow = ['M1', 'M2', 'M3', 'M4', 'M5'];
+    const zones = sideState.zones;
+    function roleFor(z) {
+      if (!attack) return null;
+      if (attack.fromSide === side && zones[z] === attack.fromId) return 'from';
+      if (attack.toSide === side && zones[z] === attack.toId) return 'to';
+      return null;
+    }
+    const spellHtml = '<div class="zone-row">' + spellRow.map(function (z) { return zoneHtml(z, zones[z], flashIds, roleFor(z)); }).join('') + '</div>';
+    const monsterHtml = '<div class="zone-row">' + monsterRow.map(function (z) { return zoneHtml(z, zones[z], flashIds, roleFor(z)); }).join('') + '</div>';
+    const grid = '<div class="zone-grid">' + (flip ? spellHtml + monsterHtml : monsterHtml + spellHtml) + '</div>';
+    const leftCol = '<div class="pile-col">' + hiddenPileHtml('Extra', sideState.extraCount) + cardsPileHtml('Banish', sideState.banished, 'banished', flashIds) + '</div>';
+    const rightCol = '<div class="pile-col">' + cardsPileHtml('GY', sideState.grave, 'grave', flashIds) + hiddenPileHtml('Deck', sideState.deckCount) + '</div>';
+    const zoneArea = '<div class="side-zone-area">' + leftCol + grid + rightCol + '</div>';
+    const caption = '<div class="side-caption"><b>' + escapeHtml(sideState.name) + '</b> — ' + sideState.lp + ' LP</div>';
+    const hand = handHtml(sideState.hand, handVis, flashIds);
+    const rows = flip ? [hand, caption, zoneArea] : [zoneArea, caption, hand];
+    return rows.join('');
+  }
+
+  const PHASES = [
+    { key: 'Draw Phase', label: 'DP' }, { key: 'Standby Phase', label: 'SP' },
+    { key: 'Main Phase 1', label: 'M1' }, { key: 'Battle Phase', label: 'BP' },
+    { key: 'Main Phase 2', label: 'M2' }, { key: 'End Phase', label: 'EP' }
+  ];
+  function phaseRowHtml(snap) {
+    const dots = PHASES.map(function (p) {
+      return '<div class="phase-dot' + (snap.phase === p.key ? ' active' : '') + '">' + p.label + '</div>';
+    }).join('');
+    const turnName = snap.turn ? escapeHtml(snap[snap.turn].name) : '';
+    // A direct attack has no zone on the opponent's side to badge, so it
+    // gets its own pulsing banner next to the turn tag instead.
+    const atkBanner = (snap.attack && snap.attack.direct) ? '<span class="atk-banner">⚔ Direct Attack!</span>' : '';
+    return '<div class="phase-row">' + dots + (turnName ? '<span class="turn-tag">' + turnName + '’s turn' + (snap.turnCount ? ' · T' + snap.turnCount : '') + '</span>' : '') + atkBanner + '</div>';
+  }
+  function showPileContents(ids, label) {
+    const panel = document.getElementById('card-panel');
+    if (!ids.length) { panel.innerHTML = '<div class="empty">' + escapeHtml(label) + ' is empty.</div>'; return; }
+    let html = '<div class="pile-list-label">' + escapeHtml(label) + ' — ' + ids.length + ' card' + (ids.length === 1 ? '' : 's') + ', newest last</div>';
+    ids.forEach(function (id) {
+      const card = meta[id] && meta[id].card;
+      html += '<div class="pile-list-row" data-id="' + id + '">' + escapeHtml(card ? card.name : '(unknown card)') + '</div>';
+    });
+    panel.innerHTML = html;
+    panel.querySelectorAll('.pile-list-row').forEach(function (row) {
+      row.addEventListener('click', function () { showCardById(row.getAttribute('data-id')); });
+    });
+  }
+
+  // Closeable popup showing actual card ART for everything currently in a
+  // Graveyard/Banished pile (requested in place of the old text-only
+  // list above) — oldest first, newest (top-of-pile) last, same order
+  // DuelingBook itself uses when you open one of these piles.
+  function openPileModal(ids, label) {
+    const backdrop = document.getElementById('pile-modal-backdrop');
+    const body = document.getElementById('pile-modal-body');
+    document.getElementById('pile-modal-title').textContent = label + ' (' + ids.length + ')';
+    if (!ids.length) {
+      body.innerHTML = '<div class="empty" style="padding:30px;">' + escapeHtml(label) + ' is empty.</div>';
+    } else {
+      body.innerHTML = ids.map(function (id) {
+        const card = meta[id] && meta[id].card;
+        const name = card ? card.name : '(unknown card)';
+        const imgTag = card ? cardImgTag(card, 'large') : '';
+        const art = imgTag || '<div class="art-fallback-sm">' + escapeHtml(name) + '</div>';
+        return '<div class="pile-modal-card" data-id="' + id + '">' + art + '<div class="nm">' + escapeHtml(name) + '</div></div>';
+      }).join('');
+      body.querySelectorAll('.pile-modal-card').forEach(function (el) {
+        el.addEventListener('click', function () { showCardById(el.getAttribute('data-id')); });
+      });
+    }
+    backdrop.classList.add('open');
+  }
+  function closePileModal() { document.getElementById('pile-modal-backdrop').classList.remove('open'); }
+  document.getElementById('pile-modal-close').addEventListener('click', closePileModal);
+  document.getElementById('pile-modal-backdrop').addEventListener('click', function (ev) {
+    if (ev.target === this) closePileModal();
+  });
+
+  function renderBoard() {
+    const snap = snapshots[cursor];
+    const wrap = document.getElementById('board-wrap');
+    if (!snap) { wrap.innerHTML = ''; return; }
+    const flashIds = snap.flashIds || [];
+    wrap.innerHTML =
+      renderSideBlock('p2', snap.p2, true, flashIds, handVisible.p2, snap.attack) +
+      phaseRowHtml(snap) +
+      renderSideBlock('p1', snap.p1, false, flashIds, handVisible.p1, snap.attack);
+
+    wrap.querySelectorAll('.zone[data-id]').forEach(function (el) {
+      const id = el.getAttribute('data-id');
+      if (!id) return;
+      el.addEventListener('click', function () { showCardById(id); });
+    });
+    wrap.querySelectorAll('.pile[data-pile-kind]').forEach(function (el) {
+      const kind = el.getAttribute('data-pile-kind');
+      if (kind === 'hidden') return;
+      el.addEventListener('click', function () {
+        const ids = JSON.parse(el.getAttribute('data-pile-ids') || '[]');
+        openPileModal(ids, kind === 'grave' ? 'Graveyard' : 'Banished');
+      });
+    });
+    fitBoard();
+  }
+  // Scales the whole board down (never up) so it always fits #board-col
+  // without scrolling, regardless of window size — the fixed zone/pile
+  // sizes above are tuned to need little or no scaling on a normal laptop
+  // screen, this is the safety net for smaller windows. Uses CSS zoom
+  // (reflows layout, unlike transform:scale) since this is a Chromium-only
+  // tool in practice (DuelingBook itself requires Chrome/Edge-family).
+  function fitBoard() {
+    const wrap = document.getElementById('board-wrap');
+    const col = document.getElementById('board-col');
+    if (!wrap || !col) return;
+    wrap.style.zoom = 1;
+    const natW = wrap.scrollWidth, natH = wrap.scrollHeight;
+    const availW = col.clientWidth - 12, availH = col.clientHeight - 12;
+    if (natW <= 0 || natH <= 0 || availW <= 0 || availH <= 0) return;
+    const scale = Math.min(1, availW / natW, availH / natH);
+    wrap.style.zoom = scale;
+  }
+  window.addEventListener('resize', function () {
+    clearTimeout(window.__dtFitTimer);
+    window.__dtFitTimer = setTimeout(fitBoard, 120);
+  });
+  function showCardById(id) {
+    const m = meta[id];
+    const panel = document.getElementById('card-panel');
+    if (!m || !m.card) { panel.innerHTML = '<div class="empty">No card data captured for this card yet.</div>'; return; }
+    panel.innerHTML = cardTileHtml(m.card);
+  }
+
+  // ---- log + controls -------------------------------------------------------
+  function renderLog() {
+    const panel = document.getElementById('log-panel');
+    panel.innerHTML = '';
+    steps.forEach(function (p, i) {
+      const row = document.createElement('div');
+      row.className = 'log-row' + (i === cursor ? ' current' : '');
+      const txt = textOf(p) || ('[' + (p.play || 'play') + ']');
+      row.innerHTML = '<span class="n">' + (i + 1) + '</span><span>' + (p.username ? '<span class="who">' + escapeHtml(p.username) + '</span>: ' : '') + escapeHtml(txt) + '</span>';
+      row.addEventListener('click', function () { cursor = i; renderAll(); });
+      panel.appendChild(row);
+    });
+  }
+  function scrollLogToCurrent() {
+    const panel = document.getElementById('log-panel');
+    const row = panel.children[cursor];
+    if (row) row.scrollIntoView({ block: 'nearest' });
+  }
+  function renderCardPanel() {
+    const p = steps[cursor];
+    const panel = document.getElementById('card-panel');
+    const card = p && p.card;
+    if (!card) {
+      const fallbackId = p && p.id;
+      if (fallbackId != null && meta[fallbackId] && meta[fallbackId].card) { panel.innerHTML = cardTileHtml(meta[fallbackId].card); return; }
+      panel.innerHTML = '<div class="empty">This play doesn\'t involve a specific card.</div>';
+      return;
+    }
+    panel.innerHTML = cardTileHtml(card);
+  }
+  function renderScoreboard() {
+    const snap = snapshots[cursor];
+    if (!snap) return;
+    document.getElementById('p1-lp').innerHTML = escapeHtml(snap.p1.name) + ': <b class="' + (snap.p1.lp > 0 ? 'lp-good' : 'lp-bad') + '">' + snap.p1.lp + '</b> LP';
+    document.getElementById('p2-lp').innerHTML = escapeHtml(snap.p2.name) + ': <b class="' + (snap.p2.lp > 0 ? 'lp-good' : 'lp-bad') + '">' + snap.p2.lp + '</b> LP';
+    document.getElementById('turn-indicator').textContent = (snap.turn ? (snap[snap.turn].name + '\'s turn — ') : '') + (snap.phase || '') + (snap.turnCount ? ' (Turn ' + snap.turnCount + ')' : '');
+  }
+  function renderControls() {
+    document.getElementById('scrubber').max = String(Math.max(0, steps.length - 1));
+    document.getElementById('scrubber').value = String(cursor);
+    document.getElementById('step-counter').textContent = (cursor + 1) + ' / ' + steps.length;
+    const sel = document.getElementById('game-select');
+    let activeGame = games[0];
+    games.forEach(function (g) { if (g.startIdx <= cursor) activeGame = g; });
+    if (sel.value !== String(activeGame.startIdx)) sel.value = String(activeGame.startIdx);
+  }
+  function renderHandButtons() {
+    document.getElementById('btn-hand-p1').classList.toggle('active', handVisible.p1);
+    document.getElementById('btn-hand-p2').classList.toggle('active', handVisible.p2);
+  }
+
+  function renderAll() {
+    renderBoard();
+    renderLog();
+    scrollLogToCurrent();
+    renderCardPanel();
+    renderScoreboard();
+    renderControls();
+    renderHandButtons();
+  }
+  function step(delta) { cursor = Math.max(0, Math.min(steps.length - 1, cursor + delta)); renderAll(); }
+  function togglePlay() {
+    playing = !playing;
+    document.getElementById('btn-play').textContent = playing ? '⏸' : '▶';
+    if (playing) {
+      playTimer = setInterval(function () { if (cursor >= steps.length - 1) { togglePlay(); return; } step(1); }, 900);
+    } else clearInterval(playTimer);
+  }
+
+  // ---- card database (embedded by default) ---------------------------------
+  function indexCardDb(json) {
+    const list = json && Array.isArray(json.data) ? json.data : (Array.isArray(json) ? json : []);
+    cardDbList = list;
+    cardDb = new Map();
+    list.forEach(function (c) { if (c && c.id != null) cardDb.set(c.id, c); });
+    document.getElementById('cardinfo-status').innerHTML = '<span class="badge-ok">✓ Bundled card database loaded — ' + list.length.toLocaleString() + ' cards.</span>';
+    document.getElementById('lookup-input').disabled = false;
+  }
+  function initCardDb() {
+    if (EMBEDDED_CARDINFO) { indexCardDb(EMBEDDED_CARDINFO); return; }
+    fetch('./cardinfo.json').then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+      .then(indexCardDb)
+      .catch(function () {
+        document.getElementById('cardinfo-status').innerHTML = '<span class="badge-warn">⚠ No bundled database found in this copy of the file — pick one manually below if you want card lookup.</span>';
+      });
+  }
+  function runLookup(q) {
+    const results = document.getElementById('lookup-results');
+    results.innerHTML = '';
+    if (!cardDb || !q) return;
+    const lower = q.toLowerCase();
+    cardDbList.filter(function (c) { return c.name && c.name.toLowerCase().indexOf(lower) !== -1; }).slice(0, 25)
+      .forEach(function (c) {
+        const row = document.createElement('div');
+        row.textContent = c.name;
+        row.addEventListener('click', function () { document.getElementById('card-panel').innerHTML = cardTileHtml(Object.assign({}, c, { card_type: c.type, effect: c.desc })); });
+        results.appendChild(row);
+      });
+  }
+
+  // ---- wire up ---------------------------------------------------------------
+  document.getElementById('replay-input').addEventListener('change', function (ev) {
+    const file = ev.target.files[0];
+    if (!file) return;
+    statusLine('Reading ' + file.name + '…');
+    const reader = new FileReader();
+    reader.onload = function () { loadReplayText(reader.result); };
+    reader.onerror = function () { statusLine('Could not read that file.', true); };
+    reader.readAsText(file);
+  });
+  document.getElementById('cardinfo-input').addEventListener('change', function (ev) {
+    const file = ev.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function () { try { indexCardDb(JSON.parse(reader.result)); } catch (e) { document.getElementById('cardinfo-status').textContent = 'Invalid JSON: ' + e.message; } };
+    reader.readAsText(file);
+  });
+  document.getElementById('lookup-input').addEventListener('input', function (ev) { runLookup(ev.target.value.trim()); });
+  document.getElementById('btn-first').addEventListener('click', function () { cursor = 0; renderAll(); });
+  document.getElementById('btn-last').addEventListener('click', function () { cursor = steps.length - 1; renderAll(); });
+  document.getElementById('btn-prev').addEventListener('click', function () { step(-1); });
+  document.getElementById('btn-next').addEventListener('click', function () { step(1); });
+  document.getElementById('btn-play').addEventListener('click', togglePlay);
+  document.getElementById('scrubber').addEventListener('input', function (ev) { cursor = parseInt(ev.target.value, 10) || 0; renderAll(); });
+  document.getElementById('btn-hand-p1').addEventListener('click', function () { handVisible.p1 = !handVisible.p1; renderAll(); });
+  document.getElementById('btn-hand-p2').addEventListener('click', function () { handVisible.p2 = !handVisible.p2; renderAll(); });
+  document.getElementById('btn-hand-both-show').addEventListener('click', function () { handVisible.p1 = true; handVisible.p2 = true; renderAll(); });
+  document.getElementById('btn-hand-both-hide').addEventListener('click', function () { handVisible.p1 = false; handVisible.p2 = false; renderAll(); });
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape' && document.getElementById('pile-modal-backdrop').classList.contains('open')) {
+      closePileModal(); return;
+    }
+    if (document.getElementById('viewer').style.display === 'none') return;
+    if (ev.target && ev.target.tagName === 'INPUT') return;
+    if (ev.key === 'ArrowRight') step(1);
+    else if (ev.key === 'ArrowLeft') step(-1);
+    else if (ev.key === ' ') { ev.preventDefault(); togglePlay(); }
+  });
+
+  initCardDb();
+})();
+</script>
+
+</body>
+</html>

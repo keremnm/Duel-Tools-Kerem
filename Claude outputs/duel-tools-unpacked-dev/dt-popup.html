@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<style>
+  :root {
+    --bg:#06060c; --panel:#0e0e1a; --card:#131320; --border:#252538;
+    --text:#ffffff; --muted:#ccccdd; --green:#00e596;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; width: 230px; background: var(--bg); color: var(--text);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    padding: 16px;
+  }
+  .dt-popup-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .dt-popup-logo { width: 34px; height: 34px; border-radius: 7px; }
+  .dt-popup-name { font-weight: bold; font-size: 13px; line-height: 1.3; }
+  .dt-popup-sub { font-size: 10px; color: var(--muted); }
+  .dt-popup-btn {
+    display: block; width: 100%; background: var(--green); color: #050508;
+    border: none; border-radius: 7px; font-family: inherit; font-weight: bold;
+    font-size: 12.5px; padding: 10px; cursor: pointer; text-align: center;
+  }
+  .dt-popup-btn:hover { filter: brightness(1.08); }
+</style>
+</head>
+<body>
+  <div class="dt-popup-head">
+    <img class="dt-popup-logo" src="icons/icon128.png" alt=""/>
+    <div>
+      <div class="dt-popup-name">Kerem Duel Tools</div>
+      <div class="dt-popup-sub">DuelingBook Companion</div>
+    </div>
+  </div>
+  <button class="dt-popup-btn" id="dt-open-settings">Open Settings</button>
+  <script src="dt-popup.js"></script>
+</body>
+</html>

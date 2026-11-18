@@ -1,0 +1,59 @@
+{
+  "manifest_version": 3,
+  "name": "Kerem Duel Tools — DuelingBook Companion",
+  "version": "1.3.2",
+  "description": "Kerem Duel Tools — live match tracking, replay auto-save, and unlockable enhancements for DuelingBook.com.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": ["storage", "unlimitedStorage", "scripting", "webNavigation", "alarms", "cookies"],
+  "host_permissions": [
+    "https://www.duelingbook.com/*",
+    "https://duelingbook.com/*",
+    "https://db.ygoprodeck.com/*",
+    "https://translate.googleapis.com/*",
+    "https://images.duelingbook.com/*",
+    "https://duel-tools-kerem-production.up.railway.app/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "duel-tools-companion@duelingbook",
+      "strict_min_version": "128.0",
+      "data_collection_permissions": {
+        "required": ["websiteContent"],
+        "optional": []
+      }
+    }
+  },
+  "action": {
+    "default_popup": "dt-popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_ui": {
+    "page": "dt-settings.html",
+    "open_in_tab": true
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "icons/dt-tab-logo.gif",
+        "dt-settings.html",
+        "dt-settings.js",
+        "dt-settings.css",
+        "emotes/default-thinking.png",
+        "emotes/default-ok.png"
+      ],
+      "matches": ["https://www.duelingbook.com/*", "https://duelingbook.com/*"]
+    }
+  ]
+}
