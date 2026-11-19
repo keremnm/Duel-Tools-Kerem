@@ -1452,9 +1452,29 @@ select{cursor:pointer}
             <span style="color:#e0b800;font-weight:bold">PRE</span>=G1 ·
             <span style="color:var(--red);font-weight:bold">G2/3</span>=post-side
           </span>
+          <!-- Win Rate Avg. Score: one average per phase across the current
+               Main Deck, each card weighted by how many copies you're
+               running — updates live as cards are added/removed/swapped
+               (igtRenderAllDeck calls igtMwRenderAvgScore every render). -->
+          <div id="igt-mw-avgscore" style="width:100%;display:flex;align-items:center;gap:8px;font-family:monospace;font-size:11px;padding-top:2px;border-top:1px solid var(--border);margin-top:2px"></div>
         </div>
         <!-- Deck sections: Main (4x10) + Side (3x5) -->
         <div style="flex:1;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:14px">
+          <!-- Swap tool: left-click a Main tile to mark it OUT, left-click a
+               Side tile to mark it IN, right-click either to unmark —
+               mirrors Side Practice's OUT/IN + Swap mechanic, but commits
+               for real into THIS decklist (see igtSwapCommit) rather than a
+               separate practice clone, so the Win Rate Avg. Score's
+               Post-Side number reflects whatever you've actually swapped.
+               Takes over the Main/Side tiles' click behavior below —
+               dragging a tile to move it between sections still works
+               exactly as before, unaffected by any of this. -->
+          <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:10px;color:var(--muted)">
+            <span>Swap: OUT <b id="igt-swap-out-count" style="color:var(--red)">0</b> · IN <b id="igt-swap-in-count" style="color:var(--green)">0</b></span>
+            <button class="dd-btn-sec" onclick="igtSwapCommit()" style="font-size:11px;padding:3px 10px">⇄ Swap</button>
+            <button class="dd-btn-sec" onclick="igtSwapClear()" style="font-size:11px;padding:3px 10px">Clear marks</button>
+            <span style="margin-left:auto">left-click Main=OUT · left-click Side=IN · right-click to unmark</span>
+          </div>
           <div>
             <div class="slbl" style="margin-bottom:6px">MAIN DECK <span id="igt-main-count" style="color:var(--muted)">(0/60)</span></div>
             <div id="igt-main-tiles" style="display:grid;grid-template-columns:repeat(10,72px);gap:3px"></div>
@@ -14314,6 +14334,15 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
       myWon:    g.winner && matchesPlayerName(g.winner, player, aliases),
       myCards:  (g.mine||[]).map(c=>c.name.toLowerCase()),
       oppCards: (g.opp||[]).map(c=>c.name.toLowerCase()),
+      // Quantity-aware counterpart of myCards above, for the Deck Builder's
+      // "win rate by copy count" analysis (_cardObservationsByQtyForPhase) —
+      // a name->count map instead of a plain name list, since g.mine's own
+      // per-card displayCount (banlist/3-capped, same number the My Cards
+      // panel shows) otherwise gets thrown away the moment myCards reduces
+      // each card down to just its lowercase name. This is "copies actually
+      // observed (drawn/played/seen) in THIS game" — a proxy for copies run
+      // in the deck, not a direct read of the decklist itself.
+      myCardsQty: Object.fromEntries((g.mine||[]).map(c => [c.name.toLowerCase(), c.displayCount || c.raw || 1])),
       // Usage Rate's per-game equivalent of myCards/oppCards above — see
       // parseMatch's usageMine/usageOpp. Falls back to [] for any replay
       // parsed before this field existed (its cached g.usageMine is simply
@@ -14503,6 +14532,8 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
     myWon:     g.winner && matchesPlayerName(g.winner, player, aliases),
     myCards:   g.mine.map(c => c.name.toLowerCase()),
     oppCards:  g.opp.map(c => c.name.toLowerCase()),
+    // See the matching comment in the fast path above.
+    myCardsQty: Object.fromEntries((g.mine||[]).map(c => [c.name.toLowerCase(), c.displayCount || c.raw || 1])),
     myUsageCards:  (g.usageMine||[]).map(c => c.name.toLowerCase()),
     oppUsageCards: (g.usageOpp||[]).map(c => c.name.toLowerCase()),
     myDeck:    myClass  ? myClass.dc  : 'Unknown',
@@ -16023,6 +16054,44 @@ function _cardObservationsForPhase(r, phase, metric) {
 }
 function _tcCardObservations(r) {
   return _cardObservationsForPhase(r, _tcMatchPhase, _tcMetric);
+}
+
+// Quantity-aware counterpart of _cardObservationsForPhase, used only by the
+// Deck Builder's Matchup Winrate "win rate by copy count" stats
+// (igtMwComputeStats, below) — never touches Top Cards, which has no
+// concept of quantity and must keep working exactly as before. Returns
+// [{key, win, qty}] instead of [{key, win}]: qty is how many copies of
+// that card were actually OBSERVED (drawn/played/seen) in this match/game —
+// the same number the My Cards panel already shows (banlist- and 3-capped)
+// — not a direct read of the submitted decklist. A card run at 3 copies
+// but only drawn once in a short game still reports qty:1 for that game;
+// this is the best available proxy, not an exact count, and callers should
+// treat it that way (see igtMwBadge's tooltip and igtMwComputeStats' own
+// comment for how this gets surfaced/caveated to the user).
+function _cardObservationsByQtyForPhase(r, phase) {
+  const obs = [];
+  if (phase === 'full') {
+    // r.allMine already carries each card's match-wide displayCount/raw —
+    // built once in buildMatchRecord and never discarded the way the
+    // per-game myCards/oppCards lists are, so no new field was needed here.
+    if (!r.matchWon && !r.matchLost) return obs;
+    (r.allMine || []).forEach(c => {
+      const key = (c.name || '').toLowerCase();
+      if (!key) return;
+      obs.push({ key, win: r.matchWon, qty: c.displayCount || c.raw || 1 });
+    });
+    return obs;
+  }
+  const gameNums = phase === 'preside' ? [1] : [2, 3];
+  (r.games || []).forEach(g => {
+    if (!gameNums.includes(g.gameNum) || !g.winner) return;
+    const qtyMap = g.myCardsQty || {};
+    Object.keys(qtyMap).forEach(key => {
+      if (!key) return;
+      obs.push({ key, win: !!g.myWon, qty: qtyMap[key] || 1 });
+    });
+  });
+  return obs;
 }
 
 // The currently-rendered rows, kept around so the drill-down modal
@@ -23424,17 +23493,32 @@ async function igtAdvSearchRun() {
     return true;
   });
 
-  const order = document.getElementById('igt-adv-order').value;
-  results.sort((a,b) => {
+  _igtAdvResults = igtSortSearchResults(results);
+  _igtAdvPage = 0;
+  igtAdvSearchRenderPage();
+}
+
+// Shared by igtAdvSearchRun (sorts the freshly-filtered results) and
+// igtAdvSearchRenderPage (re-sorts the already-filtered results in place
+// when Order is "Winrate" and the Matchup-Winrate phase changes, below) so
+// the two can never drift into different comparators.
+function igtSortSearchResults(results) {
+  const orderEl = document.getElementById('igt-adv-order');
+  const order = orderEl ? orderEl.value : 'alpha';
+  return [...results].sort((a,b) => {
+    if (order === 'winrate') {
+      const wa = igtCardWinrateForPhase(a.name), wb = igtCardWinrateForPhase(b.name);
+      if (wa==null && wb==null) return (a.name||'').localeCompare(b.name||'');
+      if (wa==null) return 1;
+      if (wb==null) return -1;
+      if (wa !== wb) return wb - wa;
+      return (a.name||'').localeCompare(b.name||'');
+    }
     if (order === 'level') return (b.level||0) - (a.level||0);
     if (order === 'atk') return (b.atk||0) - (a.atk||0);
     if (order === 'def') return (b.def||0) - (a.def||0);
     return (a.name||'').localeCompare(b.name||'');
   });
-
-  _igtAdvResults = results;
-  _igtAdvPage = 0;
-  igtAdvSearchRenderPage();
 }
 
 // Page size follows the "Limit:" dropdown (duelingbook's own search has the
@@ -23454,6 +23538,15 @@ function igtAdvSearchPage(delta) {
 }
 
 function igtAdvSearchRenderPage() {
+  // "Order: Winrate" depends on whichever Matchup-Winrate phase the "Show:"
+  // dropdown currently has selected, and that can change (igtMwPhaseChanged
+  // calls this function) without a new Search — re-sort in place so the
+  // order never goes stale against the phase the badges are now showing.
+  // Cheap: these are small, already-filtered result sets, and every other
+  // Order option is untouched by this (igtSortSearchResults only reorders
+  // when order==='winrate').
+  const orderEl = document.getElementById('igt-adv-order');
+  if (orderEl && orderEl.value === 'winrate') _igtAdvResults = igtSortSearchResults(_igtAdvResults);
   const out = document.getElementById('igt-adv-search-results');
   const pageInfo = document.getElementById('igt-adv-page-info');
   const statusEl = document.getElementById('igt-adv-search-status');
@@ -23564,6 +23657,88 @@ function igtMoveCard(cardId, fromSection, toSection) {
   igtRenderAllDeck();
 }
 
+// ── Deck Builder Swap tool ───────────────────────────────────────────────
+// Mirrors Side Practice's OUT/IN + equal-count Swap mechanic (igtSpSwap),
+// but operates directly on the REAL _igtDeck instead of a separate
+// ephemeral practice clone, so a committed swap actually changes the saved
+// decklist (and the Win Rate Avg. Score's Post-Side number) right away.
+// Tracked per card id (Map, not a per-flattened-copy array like Side
+// Practice) since _igtDeck is already qty-grouped and every copy of the
+// same card is interchangeable — a left-click just increments how many
+// copies of that card are marked, up to its current qty; a right-click
+// decrements. Takes over the Main/Side tiles' click behavior in
+// igtRenderAllDeck below — the search sidebar's own left/right-click
+// (add to main/side) is untouched, and so is drag-and-drop between
+// sections.
+let _igtSwapOut = new Map(); // cardId -> count marked OUT of Main
+let _igtSwapIn  = new Map(); // cardId -> count marked IN from Side
+function igtSwapOutCount(cardId) { return _igtSwapOut.get(cardId) || 0; }
+function igtSwapInCount(cardId)  { return _igtSwapIn.get(cardId) || 0; }
+function igtSwapMarkOut(cardId, maxQty) {
+  const cur = igtSwapOutCount(cardId);
+  if (cur < maxQty) _igtSwapOut.set(cardId, cur + 1);
+  igtRenderAllDeck();
+}
+function igtSwapUnmarkOut(cardId) {
+  const cur = igtSwapOutCount(cardId);
+  if (cur <= 1) _igtSwapOut.delete(cardId); else _igtSwapOut.set(cardId, cur - 1);
+  igtRenderAllDeck();
+}
+function igtSwapMarkIn(cardId, maxQty) {
+  const cur = igtSwapInCount(cardId);
+  if (cur < maxQty) _igtSwapIn.set(cardId, cur + 1);
+  igtRenderAllDeck();
+}
+function igtSwapUnmarkIn(cardId) {
+  const cur = igtSwapInCount(cardId);
+  if (cur <= 1) _igtSwapIn.delete(cardId); else _igtSwapIn.set(cardId, cur - 1);
+  igtRenderAllDeck();
+}
+function igtSwapOutTotal() { let t=0; _igtSwapOut.forEach(n=>t+=n); return t; }
+function igtSwapInTotal()  { let t=0; _igtSwapIn.forEach(n=>t+=n); return t; }
+function igtSwapClear() { _igtSwapOut = new Map(); _igtSwapIn = new Map(); igtRenderAllDeck(); }
+
+// Commits the current OUT/IN marks for real: removes the marked copies from
+// Main and adds them to Side, removes the marked copies from Side and adds
+// them to Main — one atomic action (one undo snapshot for the whole swap,
+// not one per card, same as any other single deck action elsewhere in this
+// file). Requires an equal, non-zero OUT and IN count, and refuses a swap
+// that would push any single card over the existing 3-copies-per-section
+// cap rather than silently clamping it.
+function igtSwapCommit() {
+  const outTotal = igtSwapOutTotal(), inTotal = igtSwapInTotal();
+  if (!outTotal || !inTotal) { st('Mark at least one OUT and one IN card first', 'var(--amber)'); return; }
+  if (outTotal !== inTotal) { st('Select equal number of OUT and IN cards ('+outTotal+' out, '+inTotal+' in)', 'var(--amber)'); return; }
+  for (const [id, n] of _igtSwapOut) {
+    const mainCard = _igtDeck.main.find(c => c.id === id);
+    if (!mainCard || mainCard.qty < n) { st('Swap selection is out of date — re-select and try again', 'var(--amber)'); igtSwapClear(); return; }
+    const sideExisting = _igtDeck.side.find(c => c.id === id);
+    if ((sideExisting ? sideExisting.qty : 0) + n > 3) { st('Swap blocked — Side would have more than 3 copies of '+mainCard.name, 'var(--amber)'); return; }
+  }
+  for (const [id, n] of _igtSwapIn) {
+    const sideCard = _igtDeck.side.find(c => c.id === id);
+    if (!sideCard || sideCard.qty < n) { st('Swap selection is out of date — re-select and try again', 'var(--amber)'); igtSwapClear(); return; }
+    const mainExisting = _igtDeck.main.find(c => c.id === id);
+    if ((mainExisting ? mainExisting.qty : 0) + n > 3) { st('Swap blocked — Main would have more than 3 copies of '+sideCard.name, 'var(--amber)'); return; }
+  }
+  igtSnapshotForUndo();
+  const moveCopies = (fromSec, toSec, id, n) => {
+    const fromEntry = _igtDeck[fromSec].find(c => c.id === id);
+    fromEntry.qty -= n;
+    const name = fromEntry.name, type = fromEntry.type;
+    if (fromEntry.qty <= 0) _igtDeck[fromSec] = _igtDeck[fromSec].filter(c => c.id !== id);
+    const toEntry = _igtDeck[toSec].find(c => c.id === id);
+    if (toEntry) toEntry.qty += n;
+    else _igtDeck[toSec].push({ id, name, type, qty: n });
+  };
+  [..._igtSwapOut.entries()].forEach(([id, n]) => moveCopies('main', 'side', id, n));
+  [..._igtSwapIn.entries()].forEach(([id, n]) => moveCopies('side', 'main', id, n));
+  const count = outTotal;
+  _igtSwapOut = new Map(); _igtSwapIn = new Map();
+  igtRenderAllDeck();
+  st('Swapped '+count+' card(s)', 'var(--green)');
+}
+
 // Shared dragstart payload setter for any draggable card tile (search
 // result or a deck tile already in Main/Side) — `source` is 'search',
 // 'main', or 'side', matching what the drop zones below key off of.
@@ -23584,20 +23759,37 @@ function igtDragPayload(e, payload) {
 // using whichever phase the Show dropdown has selected — MATCH when it's
 // on "All"); cards with no data for that phase sort to the end of their
 // group and fall back to A-Z among themselves.
+// Shared by both win-rate-based sorts in this file — the "Sort by Win Rate"
+// deck checkbox (igtSortedDeckSection, below) and the "Order: Winrate"
+// search-sidebar option (igtSortSearchResults, further down) — so they can
+// never disagree about which phase's number "the" win rate means right now
+// (All defaults to Match, same as the badges themselves).
+// Bucket-parameterized core — pulled out of igtCardWinrateForPhase so the
+// Win Rate Avg. Score (igtMwAvgScore, below) can get a card's win rate for
+// EVERY phase at once (match AND pre AND post together) without relying on
+// whichever single phase the live "Show:" dropdown (_igtMwPhase) currently
+// has selected. igtCardWinrateForPhase itself is now just a one-line
+// wrapper reading that dropdown, so every existing caller (igtSortedDeckSection,
+// igtSortSearchResults, igtMwBadge's tooltip) is unchanged.
+function igtCardWinrateForBucket(cardName, bucket) {
+  if (!(_igtMwActive && _igtMwStats)) return null;
+  const s = _igtMwStats[(cardName||'').toLowerCase()];
+  const stat = s && s[bucket];
+  return (stat && stat.n) ? (stat.w/stat.n) : null;
+}
+function igtCardWinrateForPhase(cardName) {
+  const bucket = _igtMwPhase === 'pre' ? 'pre' : _igtMwPhase === 'post' ? 'post' : 'match';
+  return igtCardWinrateForBucket(cardName, bucket);
+}
+
 function igtSortedDeckSection(deck) {
   if (!(igtMwSortByWinrateOn() && _igtMwActive && _igtMwStats)) {
     return sortCardsByTypeThenName(deck, c => c.type);
   }
-  const bucket = _igtMwPhase === 'pre' ? 'pre' : _igtMwPhase === 'post' ? 'post' : 'match';
-  const wr = c => {
-    const s = _igtMwStats[(c.name||'').toLowerCase()];
-    const stat = s && s[bucket];
-    return (stat && stat.n) ? (stat.w/stat.n) : null;
-  };
   return [...deck].sort((a,b) => {
     const td = cardTypeSortOrder(a.type) - cardTypeSortOrder(b.type);
     if (td !== 0) return td;
-    const wa = wr(a), wb = wr(b);
+    const wa = igtCardWinrateForPhase(a.name), wb = igtCardWinrateForPhase(b.name);
     if (wa==null && wb==null) return (a.name||'').localeCompare(b.name||'');
     if (wa==null) return 1;
     if (wb==null) return -1;
@@ -23621,20 +23813,34 @@ function igtRenderAllDeck() {
     if (countEl) countEl.textContent = '('+total+'/'+max+')';
     el.innerHTML = '';
     // Sorted COPY for display only — _igtDeck[sec] itself keeps whatever
-    // order cards were added in; igtRemoveOneCopy below finds by card id,
-    // not array position, so the display sort can never desync from it.
+    // order cards were added in; igtMoveCard/the swap tool below find by
+    // card id, not array position, so the display sort can never desync
+    // from it.
     const deck = igtSortedDeckSection(rawDeck);
-    // Expand each card by qty — one tile per copy
+    // Expand each card by qty — one tile per copy. Left-click/right-click
+    // now drive the Swap tool (OUT on Main, IN on Side) instead of
+    // removing a copy outright — see the igtSwap* functions above.
+    // Clamped to card.qty in case a mark is momentarily stale (e.g. a drag
+    // moved copies away after marking — igtSwapCommit itself also guards
+    // this at commit time), so the displayed OUT/IN count on the tiles can
+    // never exceed how many copies are actually still there to show it on.
+    const markedCount = sec === 'main' ? igtSwapOutCount : igtSwapInCount;
+    const markFn = sec === 'main' ? igtSwapMarkOut : igtSwapMarkIn;
+    const unmarkFn = sec === 'main' ? igtSwapUnmarkOut : igtSwapUnmarkIn;
+    const markLabel = sec === 'main' ? 'OUT' : 'IN';
+    const markColor = sec === 'main' ? 'var(--red)' : 'var(--green)';
     deck.forEach((card) => {
+      const marked = Math.min(markedCount(card.id), card.qty);
       for (let q = 0; q < card.qty; q++) {
+        const isMarked = q < marked;
         const tile = igtCardTile(card, { size: sec==='main'?72:80,
-          onClick: () => {
-            igtSnapshotForUndo();
-            igtRemoveOneCopy(sec, card.id);
-            igtRenderAllDeck();
-          }
+          label: isMarked ? markLabel : null,
+          labelColor: isMarked ? markColor : null,
+          borderColor: isMarked ? markColor : 'transparent',
+          onClick: () => markFn(card.id, card.qty)
         });
-        tile.title = card.name+' (click to remove, drag to move to the other deck)';
+        tile.title = card.name+' (click to mark '+markLabel+' for Swap, right-click to unmark, drag to move to the other deck)';
+        tile.oncontextmenu = e => { e.preventDefault(); unmarkFn(card.id); };
         tile.draggable = true;
         tile.ondragstart = e => igtDragPayload(e, { source: sec, id: card.id, name: card.name, type: card.type });
         const mwBadge = igtMwBadge(card.name);
@@ -23655,11 +23861,22 @@ function igtRenderAllDeck() {
       else if (payload.source === 'main' || payload.source === 'side') igtMoveCard(payload.id, payload.source, sec);
     };
   });
+  const swapOutEl = document.getElementById('igt-swap-out-count');
+  const swapInEl  = document.getElementById('igt-swap-in-count');
+  if (swapOutEl) swapOutEl.textContent = igtSwapOutTotal();
+  if (swapInEl)  swapInEl.textContent  = igtSwapInTotal();
+  // Every deck-mutating path already funnels through this function (either
+  // directly, like igtAddCard, or via its own callers, like the click
+  // handler above) — one hook here keeps the Avg Score live without
+  // needing separate wiring anywhere else.
+  igtMwRenderAvgScore();
 }
 
 function igtClearDeck() {
   if (!confirm('Clear all deck sections?')) return;
-  _igtDeck = {main:[],side:[],extra:[]}; _igtSpState=null; igtRenderAllDeck();
+  _igtDeck = {main:[],side:[],extra:[]}; _igtSpState=null;
+  _igtSwapOut = new Map(); _igtSwapIn = new Map(); // a cleared deck can't have anything meaningfully marked
+  igtRenderAllDeck();
 }
 
 // ── Deck Builder: MATCHUP WINRATE overlay ───────────────────────────────────
@@ -23674,6 +23891,45 @@ function igtClearDeck() {
 // own Match Phase toggle means by the same terms.
 let _igtMwActive = false;
 let _igtMwStats = null; // null = not computed; else { [cardNameLower]: {match:{w,l,n},pre:{w,l,n},post:{w,l,n}} }
+// Quantity-bucketed sibling of _igtMwStats, computed alongside it in
+// igtMwComputeStats — null = not computed; else { [cardNameLower]:
+// { match:{1:{w,l,n},2:{...},3:{...}}, pre:{...}, post:{...} } }. Only
+// populated for cards whose banlist limit actually allows a choice of
+// quantity (Semi-Limited/Unlimited — see IGT_MW_QTY_MIN_SAMPLE below for
+// why a bucket with too little data still exists here but reads as "no
+// data" to callers).
+let _igtMwQtyStats = null;
+// Minimum observations (matches for the MATCH phase, games for PRE/POST)
+// a single quantity bucket needs before igtMwQtyWinrate will report a real
+// percentage instead of null — separate from, and usually stricter than,
+// the existing "min match %" slider above (which floors the card's OVERALL
+// sample, not each individual quantity split of it). Chosen deliberately
+// as a flat count, not a percentage: a quantity bucket's sample is already
+// a slice of a slice (this matchup → this card → this exact copy count),
+// so a percentage of an already-small number stops being a meaningful
+// floor very quickly.
+const IGT_MW_QTY_MIN_SAMPLE = 10;
+// Reads a card's win rate for the CURRENT phase (_igtMwPhase; 'all'
+// defaults to match, same convention as igtCardWinrateForPhase) at a
+// SPECIFIC copy count, or null if there isn't at least IGT_MW_QTY_MIN_SAMPLE
+// observations for that exact (card, phase, qty) combination yet. qty is
+// clamped to 1-3 (matching the display/banlist cap everywhere else in this
+// file) before lookup.
+// Bucket-parameterized core — same reasoning/pairing as igtCardWinrateForBucket
+// above: the Win Rate Avg. Score needs every phase's quantity-matched rate
+// at once, not just whichever one the "Show:" dropdown has selected.
+function igtMwQtyWinrateForBucket(cardName, qty, bucket) {
+  if (!(_igtMwActive && _igtMwQtyStats)) return null;
+  const s = _igtMwQtyStats[(cardName||'').toLowerCase()];
+  if (!s) return null;
+  const q = Math.max(1, Math.min(3, qty || 1));
+  const stat = s[bucket] && s[bucket][q];
+  return (stat && stat.n >= IGT_MW_QTY_MIN_SAMPLE) ? (stat.w/stat.n) : null;
+}
+function igtMwQtyWinrate(cardName, qty) {
+  const bucket = _igtMwPhase === 'pre' ? 'pre' : _igtMwPhase === 'post' ? 'post' : 'match';
+  return igtMwQtyWinrateForBucket(cardName, qty, bucket);
+}
 let _igtMwPhase = 'all'; // 'all' | 'match' | 'pre' | 'post' — which badge(s) show on each tile
 // Reads the "Sort by Win Rate" checkbox live, rather than tracking a
 // separate boolean that could drift out of sync with the actual DOM state.
@@ -23689,8 +23945,36 @@ function igtMwPhaseChanged(value) {
   igtAdvSearchRenderPage();
 }
 
+// "Winrate" is only a real, meaningful Order option once Matchup Winrate is
+// on — it's added to / removed from the actual <option> list (not just
+// hidden via CSS, which browser support for on <option> elements is
+// inconsistent), so it's simply never selectable while Matchup Winrate is
+// off, the same way the Monster-only filter fields already show/hide by
+// existing or not. If it was the active selection and Matchup Winrate gets
+// turned off, the dropdown falls back to Alpha; the already-displayed
+// results are left as-is (same as changing Order alone never re-sorts
+// without a new Search) until the next Search or phase change.
+function igtAdvOrderSyncWinrateOption() {
+  const sel = document.getElementById('igt-adv-order');
+  if (!sel) return;
+  let opt = sel.querySelector('option[value="winrate"]');
+  if (_igtMwActive) {
+    if (!opt) {
+      opt = document.createElement('option');
+      opt.value = 'winrate';
+      opt.textContent = 'Winrate';
+      sel.appendChild(opt);
+    }
+  } else if (opt) {
+    const wasSelected = sel.value === 'winrate';
+    opt.remove();
+    if (wasSelected) sel.value = 'alpha';
+  }
+}
+
 async function igtMwToggle(checked) {
   _igtMwActive = checked;
+  igtAdvOrderSyncWinrateOption();
   const panel = document.getElementById('igt-mw-panel');
   if (panel) panel.style.display = checked ? 'flex' : 'none';
   if (checked) {
@@ -23755,6 +24039,7 @@ function igtMwComputeStats() {
   const oppDeck = document.getElementById('igt-mw-oppdeck')?.value || '';
   if (!myDeck || !oppDeck) {
     _igtMwStats = null;
+    _igtMwQtyStats = null;
     if (statusEl) statusEl.textContent = 'Select both your deck type and a matchup to see winrates.';
     igtRenderAllDeck();
     igtAdvSearchRenderPage();
@@ -23772,6 +24057,12 @@ function igtMwComputeStats() {
   const minSample = Math.round(records.length * (minPct/100));
 
   const stats = {};
+  // Quantity-bucketed sibling of `stats` — see _igtMwQtyStats' own comment.
+  // Only accumulated for cards banLimit() says can actually be run at more
+  // than one copy; a Forbidden/Limited card (Pot of Greed, Snatch Steal,
+  // etc.) has no "2 vs 3" to compare in the first place, so it's excluded
+  // at computation time rather than just hidden later in the UI.
+  const qtyStats = {};
   const phaseBucket = { full:'match', preside:'pre', postside:'post' };
   ['full','preside','postside'].forEach(phase => {
     const bucket = phaseBucket[phase];
@@ -23780,6 +24071,15 @@ function igtMwComputeStats() {
         if (!key || TOP_CARDS_IGNORED_CARDS.has(key)) return;
         if (!stats[key]) stats[key] = { match:{w:0,l:0}, pre:{w:0,l:0}, post:{w:0,l:0} };
         if (win) stats[key][bucket].w++; else stats[key][bucket].l++;
+      });
+      _cardObservationsByQtyForPhase(r, phase).forEach(({ key, win, qty }) => {
+        if (!key || TOP_CARDS_IGNORED_CARDS.has(key)) return;
+        if (banLimit(key) <= 1) return; // no quantity choice possible — excluded, not just hidden
+        const q = Math.max(1, Math.min(3, qty));
+        if (!qtyStats[key]) qtyStats[key] = { match:{}, pre:{}, post:{} };
+        const byQty = qtyStats[key][bucket];
+        if (!byQty[q]) byQty[q] = { w:0, l:0 };
+        if (win) byQty[q].w++; else byQty[q].l++;
       });
     });
   });
@@ -23790,8 +24090,17 @@ function igtMwComputeStats() {
     s.post.n = s.post.w + s.post.l;
     if (s.match.n < minSample) delete stats[key]; // floor keyed off full-match sample size
   });
+  Object.keys(qtyStats).forEach(key => {
+    ['match','pre','post'].forEach(bucket => {
+      Object.keys(qtyStats[key][bucket]).forEach(q => {
+        const b = qtyStats[key][bucket][q];
+        b.n = b.w + b.l;
+      });
+    });
+  });
 
   _igtMwStats = stats;
+  _igtMwQtyStats = qtyStats;
   const oppLabel = oppDeck === '__MIRROR__' ? 'Mirror' : oppDeck;
   if (statusEl) {
     const summary = records.length+' match(es) — '+myDeck+' vs '+oppLabel+' — '+Object.keys(stats).length+' card(s) at '+minPct+'%+ ('+minSample+' match min).';
@@ -23837,32 +24146,108 @@ async function igtMwRecompute() {
 // to fill with just one number.
 function igtMwBadge(cardName) {
   if (!_igtMwActive || !_igtMwStats) return null;
-  const s = _igtMwStats[(cardName||'').toLowerCase()];
+  const key = (cardName||'').toLowerCase();
+  const s = _igtMwStats[key];
   if (!s) return null;
+  // undefined for a Forbidden/Limited card (excluded at computation time —
+  // see igtMwComputeStats) or one with no quantity data yet; either way,
+  // qtyBreakdown below just adds nothing to the tooltip in that case.
+  const qtyS = _igtMwQtyStats && _igtMwQtyStats[key];
   const phase = _igtMwPhase || 'all';
   const wrap = document.createElement('div');
   const fontSize = phase === 'all' ? '10px' : '13px';
   wrap.style.cssText = 'position:absolute;left:0;right:0;bottom:0;display:flex;font-family:monospace;font-size:'+fontSize+';font-weight:bold;color:#000;text-align:center;line-height:1.8;pointer-events:none';
-  const seg = (label, stat, bg) => {
+  // Appends a "win rate by copy count" line to a segment's hover tooltip
+  // when that data exists — never changes the percentage shown ON the
+  // badge itself, which always stays the quantity-BLIND match/pre/post
+  // number (same as before this existed). A bucket under
+  // IGT_MW_QTY_MIN_SAMPLE still shows here (so you can see the data exists
+  // and roughly what it says) but is explicitly flagged as below the
+  // minimum, since igtMwQtyWinrate elsewhere would treat it as no data.
+  const qtyBreakdown = (bucket) => {
+    if (!qtyS || !qtyS[bucket]) return '';
+    const parts = [1,2,3].map(q => {
+      const b = qtyS[bucket][q];
+      if (!b || !b.n) return null;
+      const pct = Math.round(100*b.w/b.n);
+      const below = b.n < IGT_MW_QTY_MIN_SAMPLE ? ', below the '+IGT_MW_QTY_MIN_SAMPLE+'-min' : '';
+      return 'at '+q+': '+pct+'% ('+b.n+below+')';
+    }).filter(Boolean);
+    return parts.length ? '\nby copy count — ' + parts.join('  ·  ') : '';
+  };
+  const seg = (label, stat, bg, bucket) => {
     const d = document.createElement('div');
     const pctVal = stat && stat.n ? Math.round(100*stat.w/stat.n) : null;
     d.style.cssText = 'flex:1;background:'+bg+';opacity:.92';
     d.textContent = pctVal==null ? '–' : pctVal+'%';
-    d.title = label + (pctVal==null ? ': no data' : ': '+stat.w+'-'+stat.l+' ('+pctVal+'%)');
+    d.title = label + (pctVal==null ? ': no data' : ': '+stat.w+'-'+stat.l+' ('+pctVal+'%)') + qtyBreakdown(bucket);
     return d;
   };
   if (phase === 'match') {
-    wrap.appendChild(seg('MATCH', s.match, '#3ddc84'));
+    wrap.appendChild(seg('MATCH', s.match, '#3ddc84', 'match'));
   } else if (phase === 'pre') {
-    wrap.appendChild(seg('PRE-SIDE (G1)', s.pre, '#f0c929'));
+    wrap.appendChild(seg('PRE-SIDE (G1)', s.pre, '#f0c929', 'pre'));
   } else if (phase === 'post') {
-    wrap.appendChild(seg('POST-SIDE (G2/3)', s.post, '#ff5c5c'));
+    wrap.appendChild(seg('POST-SIDE (G2/3)', s.post, '#ff5c5c', 'post'));
   } else {
-    wrap.appendChild(seg('MATCH', s.match, '#3ddc84'));
-    wrap.appendChild(seg('PRE-SIDE (G1)', s.pre, '#f0c929'));
-    wrap.appendChild(seg('POST-SIDE (G2/3)', s.post, '#ff5c5c'));
+    wrap.appendChild(seg('MATCH', s.match, '#3ddc84', 'match'));
+    wrap.appendChild(seg('PRE-SIDE (G1)', s.pre, '#f0c929', 'pre'));
+    wrap.appendChild(seg('POST-SIDE (G2/3)', s.post, '#ff5c5c', 'post'));
   }
   return wrap;
+}
+
+// ── Win Rate Avg. Score ─────────────────────────────────────────────────────
+// One average per phase (Match/Pre-Side/Post-Side) across the CURRENT Main
+// Deck, each card weighted by how many copies of it you're running right
+// now (a 3-of counts 3x, a 1-of counts 1x) — so this changes live as cards
+// are added/removed/swapped, same as every other deck-derived number here.
+// For each card, prefers its quantity-matched win rate (how it's actually
+// performed specifically AT the copy count you're running — see
+// igtMwQtyWinrateForBucket) when there's enough data; falls back to the
+// quantity-blind win rate otherwise. A card with no data at all for a given
+// phase (new/rare card, or no matching replays yet) is excluded from that
+// phase's average entirely, not counted as 0% — same "skip, don't zero"
+// convention the "Sort by Win Rate" deck-tile sort and Order:Winrate search
+// sort already use elsewhere in this file.
+function igtMwAvgScore() {
+  if (!(_igtMwActive && _igtMwStats)) return null;
+  const out = {};
+  ['match','pre','post'].forEach(bucket => {
+    let weightedSum = 0, totalWeight = 0, countedCards = 0;
+    _igtDeck.main.forEach(c => {
+      const qtyRate = igtMwQtyWinrateForBucket(c.name, c.qty, bucket);
+      const rate = qtyRate != null ? qtyRate : igtCardWinrateForBucket(c.name, bucket);
+      if (rate == null) return;
+      weightedSum += rate * c.qty;
+      totalWeight += c.qty;
+      countedCards++;
+    });
+    out[bucket] = totalWeight ? { rate: weightedSum/totalWeight, weight: totalWeight, cards: countedCards } : null;
+  });
+  return out;
+}
+
+// Renders the #igt-mw-avgscore row — called from igtRenderAllDeck (every
+// deck change already funnels through there, directly or via its callers),
+// and from igtMwComputeStats/igtMwToggle/igtMwPhaseChanged (which all
+// already call igtRenderAllDeck themselves, so this needs no separate
+// wiring at any of those call sites).
+function igtMwRenderAvgScore() {
+  const el = document.getElementById('igt-mw-avgscore');
+  if (!el) return;
+  const score = igtMwAvgScore();
+  if (!score) { el.innerHTML = ''; return; }
+  const total = _igtDeck.main.reduce((s,c)=>s+c.qty, 0);
+  const seg = (label, color, s) => {
+    if (!s) return '<span style="color:var(--muted)">'+label+': –</span>';
+    const pct = Math.round(100*s.rate);
+    return '<span title="'+s.cards+' unique card(s), '+s.weight+'/'+total+' copies of the Main Deck counted"><span style="color:'+color+';font-weight:bold">'+label+'</span>: '+pct+'%</span>';
+  };
+  el.innerHTML = '<span style="color:var(--muted)">Win Rate Avg. Score —</span>'
+    + seg('MATCH', '#3ddc84', score.match)
+    + seg('PRE', '#e0b800', score.pre)
+    + seg('POST', 'var(--red)', score.post);
 }
 
 function igtExportYDK(target) {
