@@ -1435,6 +1435,17 @@ select{cursor:pointer}
           <label style="font-size:10px;color:var(--muted)">Min %:</label>
           <input id="igt-mw-minmatch-input" type="text" inputmode="decimal" value="5" oninput="igtMwComputeStats()" style="width:34px;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 6px;border-radius:5px;outline:none"/>
           <button class="dd-btn-sec" id="igt-mw-recompute-btn" onclick="igtMwRecompute()" style="font-size:11px;padding:4px 8px">↻</button>
+          <label style="font-size:10px;color:var(--muted);margin-left:4px">Show:</label>
+          <select id="igt-mw-phase" onchange="igtMwPhaseChanged(this.value)" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 6px;border-radius:5px;outline:none;max-width:90px">
+            <option value="all" selected>All</option>
+            <option value="match">Match</option>
+            <option value="pre">Pre-Side</option>
+            <option value="post">Post-Side</option>
+          </select>
+          <label style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--muted);cursor:pointer" title="Within Monsters/Spells/Traps, order by the shown win rate (highest first) instead of A-Z. 'All' sorts by MATCH win rate.">
+            <input type="checkbox" id="igt-mw-sortwinrate" onchange="igtRenderAllDeck()" style="width:12px;height:12px;accent-color:var(--green)"/>
+            Sort by Win Rate
+          </label>
           <span id="igt-mw-status" style="font-size:10px;color:var(--muted);width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title=""></span>
           <span style="font-size:9px;color:var(--dim);width:100%">
             <span style="color:var(--green);font-weight:bold">MATCH</span>=full ·
@@ -1445,7 +1456,7 @@ select{cursor:pointer}
         <!-- Deck sections: Main (4x10) + Side (3x5) -->
         <div style="flex:1;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:14px">
           <div>
-            <div class="slbl" style="margin-bottom:6px">MAIN DECK <span id="igt-main-count" style="color:var(--muted)">(0/40)</span></div>
+            <div class="slbl" style="margin-bottom:6px">MAIN DECK <span id="igt-main-count" style="color:var(--muted)">(0/60)</span></div>
             <div id="igt-main-tiles" style="display:grid;grid-template-columns:repeat(10,72px);gap:3px"></div>
           </div>
           <div>
@@ -10805,6 +10816,15 @@ async function findOrPromptPlayer(playerName, replayIds) {
       html += '<div style="font-size:11px;color:var(--muted)">DuelingBook username detected in replays: <b style="color:var(--green)">'+detectedDbName+'</b></div>';
     }
 
+    // Manual fallback: search EVERY tracked profile by name/alias and
+    // attribute this CSV player to whichever one you pick. Exists because
+    // auto-matching (exact + fuzzy, above) can still miss a profile — stale
+    // local profile list, an alias spelled differently than expected, etc.
+    // — and you know which profile this really is better than any matcher.
+    html += '<div style="font-size:11px;color:var(--muted);margin-top:4px">Or search existing profiles:</div>';
+    html += '<input id="eip-search-inp" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:4px;outline:none" placeholder="Search by name or alias..." />';
+    html += '<div id="eip-search-results" style="display:flex;flex-direction:column;gap:4px;max-height:140px;overflow-y:auto"></div>';
+
     html += '<input id="eip-name-inp" value="'+(detectedDbName||playerName)+'" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:4px;outline:none" placeholder="Player name" />';
     html += '<div style="display:flex;gap:8px">'+
       '<button id="eip-create" style="flex:1;background:var(--green);color:#050508;border:none;padding:8px;border-radius:6px;font-family:monospace;font-weight:bold;cursor:pointer">✓ Create New Profile</button>'+
@@ -10815,25 +10835,54 @@ async function findOrPromptPlayer(playerName, replayIds) {
     overlay.appendChild(box);
     document.body.appendChild(overlay);
 
+    // Shared by the fuzzy-match buttons AND the manual search-result
+    // buttons below: attribute this CSV player name to an existing batch,
+    // saving it as a real alias (confirmed by the click, never guessed).
+    const useExistingBatch = async (batch) => {
+      overlay.remove();
+      const aliasToAdd = playerName;
+      const currentAliases = batch.aliases || [];
+      if (aliasToAdd && !currentAliases.some(a => typeof a==='string' && a.toLowerCase() === aliasToAdd.toLowerCase())) {
+        const newAliases = [...currentAliases, aliasToAdd];
+        await fetch(API+'/batches/'+batch.id, {
+          method:'PATCH', headers: authHeaders(),
+          body: JSON.stringify({ aliases: newAliases })
+        }).catch(()=>{});
+        batch.aliases = newAliases;
+      }
+      resolve({ batchId: batch.id, player: batch.player, existing: true, dbName: playerName });
+    };
+
     // Fuzzy match buttons — use existing batch
     box.querySelectorAll('.eip-fuzzy-btn').forEach((btn, i) => {
-      btn.onclick = async () => {
-        overlay.remove();
-        const f = fuzzy[i];
-        // Auto-add playerName as alias if not already there
-        const aliasToAdd = detectedDbName || playerName;
-        const currentAliases = f.batch.aliases || [];
-        if (aliasToAdd && !currentAliases.some(a => a.toLowerCase() === aliasToAdd.toLowerCase())) {
-          const newAliases = [...currentAliases, aliasToAdd];
-          await fetch(API+'/batches/'+f.batch.id, {
-            method:'PATCH', headers: authHeaders(),
-            body: JSON.stringify({ aliases: newAliases })
-          }).catch(()=>{});
-          f.batch.aliases = newAliases;
-        }
-        resolve({ batchId: f.batch.id, player: f.batch.player, existing: true, dbName: detectedDbName||playerName });
-      };
+      btn.onclick = () => useExistingBatch(fuzzy[i].batch);
     });
+
+    // Manual profile search — filters the full tracked-profile list by
+    // name or alias as you type, newest/most-relevant first.
+    const searchInp = box.querySelector('#eip-search-inp');
+    const searchResults = box.querySelector('#eip-search-results');
+    searchInp.oninput = () => {
+      const q = searchInp.value.toLowerCase().trim();
+      searchResults.innerHTML = '';
+      if (!q) return;
+      const matches = batches.filter(b => {
+        if ((typeof b.player==='string' ? b.player : '').toLowerCase().includes(q)) return true;
+        return (b.aliases||[]).some(a => typeof a==='string' && a.toLowerCase().includes(q));
+      }).slice(0, 8);
+      if (!matches.length) {
+        searchResults.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:4px 0">No profiles match "'+q.replace(/</g,'&lt;')+'"</div>';
+        return;
+      }
+      matches.forEach(b => {
+        const btn = document.createElement('button');
+        btn.style.cssText = 'background:var(--card);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;cursor:pointer;text-align:left;font-family:monospace;font-size:11px';
+        const akaList = (b.aliases||[]).filter(a=>typeof a==='string');
+        btn.textContent = '→ Attribute to: ' + b.player + (akaList.length ? '  (aka: '+akaList.join(', ')+')' : '');
+        btn.onclick = () => useExistingBatch(b);
+        searchResults.appendChild(btn);
+      });
+    };
 
     box.querySelector('#eip-create').onclick = async () => {
       overlay.remove();
@@ -23474,7 +23523,7 @@ function igtUpdateUndoButton() {
 function igtAddCard(card, section) {
   const deck = _igtDeck[section];
   const existing = deck.find(c => c.id === card.id);
-  const max = section === 'main' ? 40 : 15;
+  const max = section === 'main' ? 60 : 15;
   const total = deck.reduce((s,c)=>s+c.qty, 0);
   if (total >= max) { st(section+' deck full', 'var(--amber)'); return; }
   if (!(existing && existing.qty >= 3)) igtSnapshotForUndo();
@@ -23497,12 +23546,12 @@ function igtRemoveOneCopy(section, cardId) {
 
 // Move one copy of a card already in the deck from one section to the
 // other (drag a Main tile onto Side, or a Side tile onto Main). Respects
-// the same 40/15 section caps and 3-copy-per-card cap igtAddCard enforces.
+// the same 60/15 section caps and 3-copy-per-card cap igtAddCard enforces.
 function igtMoveCard(cardId, fromSection, toSection) {
   if (fromSection === toSection) return;
   const entry = _igtDeck[fromSection].find(c => c.id === cardId);
   if (!entry) return;
-  const max = toSection === 'main' ? 40 : 15;
+  const max = toSection === 'main' ? 60 : 15;
   const totalTo = _igtDeck[toSection].reduce((s,c)=>s+c.qty, 0);
   if (totalTo >= max) { st(toSection+' deck full', 'var(--amber)'); return; }
   const toExisting = _igtDeck[toSection].find(c => c.id === cardId);
@@ -23523,28 +23572,65 @@ function igtDragPayload(e, payload) {
   e.dataTransfer.setData('text/plain', JSON.stringify(payload));
 }
 
+// Display-order sort for a deck section array: always Monsters → Spells →
+// Traps, then A-Z within each group — this runs every render regardless of
+// the Matchup Winrate checkbox, so toggling that overlay on/off can never
+// change card order (it used to: igtRenderAllDeck never sorted at all, it
+// just rendered _igtDeck[sec] in whatever order cards were pushed/dragged
+// into it, which only ever looked "sorted" by coincidence of import order).
+// The one opt-in exception is the "Sort by Win Rate" checkbox: when that's
+// checked AND Matchup Winrate is active with computed stats, the A-Z
+// tiebreak within each type group is replaced by win rate (highest first,
+// using whichever phase the Show dropdown has selected — MATCH when it's
+// on "All"); cards with no data for that phase sort to the end of their
+// group and fall back to A-Z among themselves.
+function igtSortedDeckSection(deck) {
+  if (!(igtMwSortByWinrateOn() && _igtMwActive && _igtMwStats)) {
+    return sortCardsByTypeThenName(deck, c => c.type);
+  }
+  const bucket = _igtMwPhase === 'pre' ? 'pre' : _igtMwPhase === 'post' ? 'post' : 'match';
+  const wr = c => {
+    const s = _igtMwStats[(c.name||'').toLowerCase()];
+    const stat = s && s[bucket];
+    return (stat && stat.n) ? (stat.w/stat.n) : null;
+  };
+  return [...deck].sort((a,b) => {
+    const td = cardTypeSortOrder(a.type) - cardTypeSortOrder(b.type);
+    if (td !== 0) return td;
+    const wa = wr(a), wb = wr(b);
+    if (wa==null && wb==null) return (a.name||'').localeCompare(b.name||'');
+    if (wa==null) return 1;
+    if (wb==null) return -1;
+    if (wa !== wb) return wb - wa;
+    return (a.name||'').localeCompare(b.name||'');
+  });
+}
+
 function igtRenderAllDeck() {
-  // Main deck: 4 rows of 10 = 40 tiles max, one per copy
-  // Side deck: 3 rows of 5 = 15 tiles max, one per copy
+  // Main deck: up to 60 cards, one tile per copy (6 rows of 10 at the
+  // default tile size — grid wraps automatically as rows fill)
+  // Side deck: 15 cards max, one tile per copy
   // Extra deck: omitted from display
   ['main','side'].forEach(sec => {
     const el = document.getElementById('igt-'+sec+'-tiles');
     const countEl = document.getElementById('igt-'+sec+'-count');
     if (!el) return;
-    const deck = _igtDeck[sec];
-    const total = deck.reduce((s,c)=>s+c.qty,0);
-    const max = sec==='main'?40:15;
+    const rawDeck = _igtDeck[sec];
+    const total = rawDeck.reduce((s,c)=>s+c.qty,0);
+    const max = sec==='main'?60:15;
     if (countEl) countEl.textContent = '('+total+'/'+max+')';
     el.innerHTML = '';
+    // Sorted COPY for display only — _igtDeck[sec] itself keeps whatever
+    // order cards were added in; igtRemoveOneCopy below finds by card id,
+    // not array position, so the display sort can never desync from it.
+    const deck = igtSortedDeckSection(rawDeck);
     // Expand each card by qty — one tile per copy
-    deck.forEach((card, ci) => {
+    deck.forEach((card) => {
       for (let q = 0; q < card.qty; q++) {
-        const qi = q; // closure
         const tile = igtCardTile(card, { size: sec==='main'?72:80,
           onClick: () => {
             igtSnapshotForUndo();
-            _igtDeck[sec][ci].qty--;
-            if (_igtDeck[sec][ci].qty <= 0) _igtDeck[sec].splice(ci,1);
+            igtRemoveOneCopy(sec, card.id);
             igtRenderAllDeck();
           }
         });
@@ -23588,6 +23674,20 @@ function igtClearDeck() {
 // own Match Phase toggle means by the same terms.
 let _igtMwActive = false;
 let _igtMwStats = null; // null = not computed; else { [cardNameLower]: {match:{w,l,n},pre:{w,l,n},post:{w,l,n}} }
+let _igtMwPhase = 'all'; // 'all' | 'match' | 'pre' | 'post' — which badge(s) show on each tile
+// Reads the "Sort by Win Rate" checkbox live, rather than tracking a
+// separate boolean that could drift out of sync with the actual DOM state.
+function igtMwSortByWinrateOn() { const cb = document.getElementById('igt-mw-sortwinrate'); return !!(cb && cb.checked); }
+
+// "Show" dropdown — All (3-segment badge, unchanged) or a single phase
+// (MATCH / PRE-SIDE / POST-SIDE) rendered as one bigger, full-width badge.
+// Only changes which value(s) are displayed/sorted by; never recomputes
+// stats, so this is an instant re-render, not a network round trip.
+function igtMwPhaseChanged(value) {
+  _igtMwPhase = value || 'all';
+  igtRenderAllDeck();
+  igtAdvSearchRenderPage();
+}
 
 async function igtMwToggle(checked) {
   _igtMwActive = checked;
@@ -23725,19 +23825,24 @@ async function igtMwRecompute() {
   }
 }
 
-// Builds the 3-segment MATCH/PRE/G2-3 badge for one card, or null when the
-// overlay is off or this card has no (post-min-sample) data for the
-// current matchup. Appended onto an igtCardTile()'s returned element at
-// each of the two call sites below (search results + Main/Side deck) —
-// never baked into igtCardTile itself, since that shared function also
-// renders tiles elsewhere (Side Practice, Deck Viewer, etc.) that this
-// feature was never asked to touch.
+// Builds the win-rate badge for one card, or null when the overlay is off
+// or this card has no stats entry at all for the current matchup. Appended
+// onto an igtCardTile()'s returned element at each of the two call sites
+// below (search results + Main/Side deck) — never baked into igtCardTile
+// itself, since that shared function also renders tiles elsewhere (Side
+// Practice, Deck Viewer, etc.) that this feature was never asked to touch.
+// _igtMwPhase controls what renders: 'all' (default) keeps the original
+// 3-segment MATCH/PRE/G2-3 strip; a single phase instead renders one
+// full-width segment in a larger font, since there's a whole tile's width
+// to fill with just one number.
 function igtMwBadge(cardName) {
   if (!_igtMwActive || !_igtMwStats) return null;
   const s = _igtMwStats[(cardName||'').toLowerCase()];
   if (!s) return null;
+  const phase = _igtMwPhase || 'all';
   const wrap = document.createElement('div');
-  wrap.style.cssText = 'position:absolute;left:0;right:0;bottom:0;display:flex;font-family:monospace;font-size:10px;font-weight:bold;color:#000;text-align:center;line-height:1.8;pointer-events:none';
+  const fontSize = phase === 'all' ? '10px' : '13px';
+  wrap.style.cssText = 'position:absolute;left:0;right:0;bottom:0;display:flex;font-family:monospace;font-size:'+fontSize+';font-weight:bold;color:#000;text-align:center;line-height:1.8;pointer-events:none';
   const seg = (label, stat, bg) => {
     const d = document.createElement('div');
     const pctVal = stat && stat.n ? Math.round(100*stat.w/stat.n) : null;
@@ -23746,9 +23851,17 @@ function igtMwBadge(cardName) {
     d.title = label + (pctVal==null ? ': no data' : ': '+stat.w+'-'+stat.l+' ('+pctVal+'%)');
     return d;
   };
-  wrap.appendChild(seg('MATCH', s.match, '#3ddc84'));
-  wrap.appendChild(seg('PRE-SIDE (G1)', s.pre, '#f0c929'));
-  wrap.appendChild(seg('POST-SIDE (G2/3)', s.post, '#ff5c5c'));
+  if (phase === 'match') {
+    wrap.appendChild(seg('MATCH', s.match, '#3ddc84'));
+  } else if (phase === 'pre') {
+    wrap.appendChild(seg('PRE-SIDE (G1)', s.pre, '#f0c929'));
+  } else if (phase === 'post') {
+    wrap.appendChild(seg('POST-SIDE (G2/3)', s.post, '#ff5c5c'));
+  } else {
+    wrap.appendChild(seg('MATCH', s.match, '#3ddc84'));
+    wrap.appendChild(seg('PRE-SIDE (G1)', s.pre, '#f0c929'));
+    wrap.appendChild(seg('POST-SIDE (G2/3)', s.post, '#ff5c5c'));
+  }
   return wrap;
 }
 
