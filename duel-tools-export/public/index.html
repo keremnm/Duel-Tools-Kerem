@@ -1419,27 +1419,27 @@ select{cursor:pointer}
         <!-- Matchup Winrate filter panel — hidden until the checkbox above is
              checked. "Your deck type" / matchup selections are deliberately
              local-only (never saved) — see igtMwRecompute. -->
-        <div id="igt-mw-panel" style="display:none;padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap;align-items:center;gap:7px;background:var(--card2)">
+        <div id="igt-mw-panel" style="display:none;padding:6px 14px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap;align-items:center;gap:6px;background:var(--card2)">
           <label style="font-size:10px;color:var(--muted)">Your Deck:</label>
-          <select id="igt-mw-mydeck" onchange="igtMwPopulateOppDropdown();igtMwComputeStats()" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 6px;border-radius:5px;outline:none;max-width:150px">
+          <select id="igt-mw-mydeck" onchange="igtMwPopulateOppDropdown();igtMwComputeStats()" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 6px;border-radius:5px;outline:none;max-width:120px">
             <option value="">— Select —</option>
           </select>
           <label style="font-size:10px;color:var(--muted)">vs:</label>
-          <select id="igt-mw-oppdeck" onchange="igtMwComputeStats()" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 6px;border-radius:5px;outline:none;max-width:150px">
+          <select id="igt-mw-oppdeck" onchange="igtMwComputeStats()" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 6px;border-radius:5px;outline:none;max-width:120px">
             <option value="">— Select —</option>
           </select>
-          <label style="font-size:10px;color:var(--muted);margin-left:6px">Year:</label>
-          <select id="igt-mw-year-filter" onchange="igtMwPopulateDeckDropdowns();igtMwComputeStats()" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 6px;border-radius:5px;outline:none"></select>
-          <label style="font-size:10px;color:var(--muted)">GFWL Season:</label>
-          <select id="igt-mw-season-filter" onchange="igtMwPopulateDeckDropdowns();igtMwComputeStats()" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 6px;border-radius:5px;outline:none"></select>
-          <label style="font-size:10px;color:var(--muted)">Min Match %:</label>
-          <input id="igt-mw-minmatch-input" type="text" inputmode="decimal" value="5" oninput="igtMwComputeStats()" style="width:40px;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 6px;border-radius:5px;outline:none"/>
-          <button class="dd-btn-sec" id="igt-mw-recompute-btn" onclick="igtMwRecompute()" style="font-size:11px">↻ Recompute</button>
-          <span id="igt-mw-status" style="font-size:10px;color:var(--muted);width:100%"></span>
+          <label style="font-size:10px;color:var(--muted);margin-left:4px">Year:</label>
+          <select id="igt-mw-year-filter" onchange="igtMwPopulateDeckDropdowns();igtMwComputeStats()" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 6px;border-radius:5px;outline:none;max-width:100px"></select>
+          <label style="font-size:10px;color:var(--muted)">Season:</label>
+          <select id="igt-mw-season-filter" onchange="igtMwPopulateDeckDropdowns();igtMwComputeStats()" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 6px;border-radius:5px;outline:none;max-width:100px"></select>
+          <label style="font-size:10px;color:var(--muted)">Min %:</label>
+          <input id="igt-mw-minmatch-input" type="text" inputmode="decimal" value="5" oninput="igtMwComputeStats()" style="width:34px;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 6px;border-radius:5px;outline:none"/>
+          <button class="dd-btn-sec" id="igt-mw-recompute-btn" onclick="igtMwRecompute()" style="font-size:11px;padding:4px 8px">↻</button>
+          <span id="igt-mw-status" style="font-size:10px;color:var(--muted);width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title=""></span>
           <span style="font-size:9px;color:var(--dim);width:100%">
-            <span style="color:var(--green);font-weight:bold">MATCH</span> = full match win rate ·
-            <span style="color:#e0b800;font-weight:bold">PRE</span> = Game 1 (pre-side) ·
-            <span style="color:var(--red);font-weight:bold">G2/3</span> = post-side win rate
+            <span style="color:var(--green);font-weight:bold">MATCH</span>=full ·
+            <span style="color:#e0b800;font-weight:bold">PRE</span>=G1 ·
+            <span style="color:var(--red);font-weight:bold">G2/3</span>=post-side
           </span>
         </div>
         <!-- Deck sections: Main (4x10) + Side (3x5) -->
@@ -1485,6 +1485,7 @@ select{cursor:pointer}
           <div id="igt-dbsearch-box" style="background:var(--card2);min-height:100%;box-sizing:border-box">
             <div style="padding:10px 12px 4px">
               <span style="font-size:28px;font-weight:700;letter-spacing:-.01em;color:var(--text);font-family:monospace">SEARCH</span>
+              <div style="font-size:10px;color:var(--muted);margin-top:2px">Left-click a card: add to Main · Right-click: add to Side · drag to either deck</div>
             </div>
             <div style="padding:2px 12px 10px;display:flex;flex-direction:column;gap:7px">
 
@@ -1558,6 +1559,7 @@ select{cursor:pointer}
               <div style="display:flex;align-items:center;gap:6px">
                 <label style="font-size:11px;font-weight:bold;color:var(--muted);width:44px;flex-shrink:0">Limit:</label>
                 <select id="igt-adv-limit" style="width:58px;font-size:11px;padding:5px 2px">
+                  <option value="12" selected>12</option>
                   <option value="20">20</option>
                   <option value="40">40</option>
                   <option value="60">60</option>
@@ -10764,36 +10766,16 @@ async function findOrPromptPlayer(playerName, replayIds) {
     )
   })).filter(x => x.score >= 0.75).sort((a,b) => b.score - a.score);
 
-  // 3. Fetch replays to detect the most frequent DB username
+  // 3. DuelingBook-username auto-detection REMOVED by request — it sampled
+  // replay player1/player2 fields and guessed the "most frequent" name, but
+  // on some replay proxy shapes those fields come back as objects rather
+  // than plain strings, which silently stringified to the literal text
+  // "[object Object]" and then got saved as a real alias on the matched
+  // profile. Never guess a DB username here; detectedDbName stays null so
+  // the prompt below just shows playerName for the user to confirm/edit
+  // themselves, and nothing gets auto-added as an alias except the exact
+  // name the user is matching against (the "Use existing" click itself).
   let detectedDbName = null;
-  if (replayIds && replayIds.length) {
-    try {
-      const nameCounts = {};
-      // Sample first 3 replays
-      for (const rid of replayIds) { // sample ALL replays to find the consistent player
-        try {
-          let pd = window._eventImportCache && window._eventImportCache[rid];
-          if (!pd) {
-            const pr = await fetch(API+'/proxy/replay?id='+encodeURIComponent(rid), { headers: authHeaders() });
-            if (!pr.ok) continue;
-            pd = await pr.json();
-            if (!window._eventImportCache) window._eventImportCache = {};
-            window._eventImportCache[rid] = pd;
-          }
-          const rObj = pd.replay || pd;
-          if (rObj.player1) nameCounts[rObj.player1] = (nameCounts[rObj.player1]||0)+1;
-          if (rObj.player2) nameCounts[rObj.player2] = (nameCounts[rObj.player2]||0)+1;
-        } catch(e) {}
-      }
-      // Most frequent name that is similar to playerName
-      const sorted = Object.entries(nameCounts).sort((a,b)=>b[1]-a[1]);
-      for (const [name] of sorted) {
-        if (fuzzyMatchScore(playerName, name) >= 0.70) { detectedDbName = name; break; }
-      }
-      // Fallback: just take the most frequent name overall
-      if (!detectedDbName && sorted.length) detectedDbName = sorted[0][0];
-    } catch(e) {}
-  }
 
   // Show prompt with all info
   return new Promise(resolve => {
@@ -23346,7 +23328,7 @@ function igtAdvCategoryChanged() {
 
 let _igtAdvResults = [];
 let _igtAdvPage = 0;
-const IGT_ADV_PAGE_SIZE = 24;
+const IGT_ADV_PAGE_SIZE = 12; // matches the #igt-adv-limit select's own default (12) — see igtAdvPageSize
 
 async function igtAdvSearchRun() {
   const statusEl = document.getElementById('igt-adv-search-status');
@@ -23711,7 +23693,11 @@ function igtMwComputeStats() {
 
   _igtMwStats = stats;
   const oppLabel = oppDeck === '__MIRROR__' ? 'Mirror' : oppDeck;
-  if (statusEl) statusEl.textContent = records.length+' match(es) — '+myDeck+' vs '+oppLabel+' — '+Object.keys(stats).length+' card(s) at '+minPct+'%+ ('+minSample+' match min).';
+  if (statusEl) {
+    const summary = records.length+' match(es) — '+myDeck+' vs '+oppLabel+' — '+Object.keys(stats).length+' card(s) at '+minPct+'%+ ('+minSample+' match min).';
+    statusEl.textContent = summary;
+    statusEl.title = summary; // full text on hover since the line is now truncated to keep the panel compact
+  }
   igtRenderAllDeck();
   igtAdvSearchRenderPage();
 }
@@ -23751,7 +23737,7 @@ function igtMwBadge(cardName) {
   const s = _igtMwStats[(cardName||'').toLowerCase()];
   if (!s) return null;
   const wrap = document.createElement('div');
-  wrap.style.cssText = 'position:absolute;left:0;right:0;bottom:0;display:flex;font-family:monospace;font-size:7px;font-weight:bold;color:#000;text-align:center;line-height:1.6;pointer-events:none';
+  wrap.style.cssText = 'position:absolute;left:0;right:0;bottom:0;display:flex;font-family:monospace;font-size:10px;font-weight:bold;color:#000;text-align:center;line-height:1.8;pointer-events:none';
   const seg = (label, stat, bg) => {
     const d = document.createElement('div');
     const pctVal = stat && stat.n ? Math.round(100*stat.w/stat.n) : null;

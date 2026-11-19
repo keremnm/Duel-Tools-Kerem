@@ -3421,7 +3421,12 @@ const server = http.createServer(async (req, res) => {
   if (parts[0]==='batches' && !parts[1] && method==='GET') {
     if (isLimited(req)) return json(res, 403, { error: 'Limited accounts cannot browse saved batches' });
     const list = Object.values(db.batches)
-      .map(b => ({ id:b.id, name:b.name, player:b.player, replayCount:(b.replays||[]).length, createdAt:b.createdAt, hidden: !!b.hidden }));
+      // aliases included so client-side name matching (e.g. findOrPromptPlayer
+      // during event CSV import) can actually see a profile's known aliases —
+      // it used to be omitted from this lightweight list, so alias matches
+      // silently failed for every profile except whichever one happened to
+      // already be loaded in full via _activeBatch.
+      .map(b => ({ id:b.id, name:b.name, player:b.player, replayCount:(b.replays||[]).length, createdAt:b.createdAt, hidden: !!b.hidden, aliases: (b.aliases||[]).filter(a => typeof a === 'string') }));
     return json(res, 200, list.sort((a,b)=>b.createdAt-a.createdAt));
   }
   // ── GET /api/batches/all-full — every saved batch WITH its full replay
