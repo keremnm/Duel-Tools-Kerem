@@ -916,7 +916,7 @@ const CHANGE_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 // mystery instead of a one-line answer — this keeps that one line around
 // indefinitely (still capped by the 5000-entry belt-and-suspenders below,
 // which these are far too rare to ever approach on their own).
-const DESTRUCTIVE_ACTIONS = new Set(['delete_profile', 'delete_batch', 'merge_batches']);
+const DESTRUCTIVE_ACTIONS = new Set(['delete_profile', 'delete_batch', 'merge_batches', 'delete_event']);
 function pruneChangeLog() {
   if (!db._changeLog || !db._changeLog.length) return;
   const cutoff = Date.now() - CHANGE_LOG_RETENTION_MS;
@@ -1702,6 +1702,83 @@ async function mergeBatchesInternal(keep, merge, req, reason) {
   });
 
   return { ok: flush.ok, error: flush.ok ? undefined : flush.error, mergedReplays, mergedDecklists, aliasesAdded: newAliases, eventIds };
+}
+
+// ── deleteEventCascade(code, req) — admin-only "Delete Event" tool (Admin
+// Tools > Events). Permanently removes one event: its db.events record,
+// every replay tagged to this event code across every batch (hidden or
+// real — see DELETE /api/events/:code below), every decklist entry tagged
+// to this code on both db.batches[*].eventDecklists AND the separate
+// db.players[*].eventDecklists registry copy (these two legitimately
+// diverge — see the PATCH /api/players/:name/aliases and PATCH
+// /api/batches/:id handlers, both of which can hold their own
+// eventDecklists array), and — since a HIDDEN batch (a Format Library
+// import for a player with no real Duel Tools profile yet — see the
+// db.events comment near the top of this file) exists ONLY to hold exactly
+// this kind of data — any hidden batch left with zero replays and zero
+// decklists afterward, since there is nothing left for it to be a
+// placeholder for. A REAL (non-hidden) batch is never deleted here even if
+// this empties it out completely — it's a genuine tracked profile that may
+// still hold other events' data, aliases, notes, etc.
+// Matches events the exact same way every other cross-reference in this
+// file already does: a replay's event is `r.eventLabel || r.eventId`
+// (see computeEventStatus, buildEventReplayCoverageIndex), a decklist's
+// event is `d.code || d.eventId` (see mergeBatchesInternal's own
+// `.eventId`-only self-heal above) — never the dead `d.eventCode` field
+// logDecklistDiff reads (that field is never actually written by any
+// decklist-adding code path; `.code` is the real one).
+// Uses flushBatchNow (not the debounced saveBatchToPostgres) on every
+// batch it touches, same reasoning as mergeBatchesInternal above — this is
+// a one-shot irreversible action, so the caller should know the strip
+// actually landed before reporting success, not just that it was queued.
+// Does NOT touch db.eventDates — that's a separate, independent date/name
+// reference catalog sourced from Format Library/CSV/hardcoded data, not
+// data ABOUT this event's replays, so a bad or duplicate event import can
+// be deleted and safely re-imported later without losing its known date.
+async function deleteEventCascade(code, req) {
+  const upperCode = (code || '').toUpperCase().trim();
+  const matchesCode = v => (v || '').toUpperCase().trim() === upperCode;
+  let replaysRemoved = 0, decklistsRemoved = 0, hiddenBatchesRemoved = 0, profilesTouched = 0;
+
+  for (const b of Object.values(db.batches)) {
+    const replaysBefore = (b.replays || []).length;
+    b.replays = (b.replays || []).filter(r => !matchesCode(r.eventLabel || r.eventId));
+    const replaysDelta = replaysBefore - b.replays.length;
+
+    const decksBefore = (b.eventDecklists || []).length;
+    b.eventDecklists = (b.eventDecklists || []).filter(d => !matchesCode(d.code || d.eventId));
+    const decksDelta = decksBefore - b.eventDecklists.length;
+
+    if (!replaysDelta && !decksDelta) continue;
+    replaysRemoved += replaysDelta;
+    decklistsRemoved += decksDelta;
+    profilesTouched++;
+
+    if (b.hidden && !b.replays.length && !b.eventDecklists.length) {
+      delete db.batches[b.id];
+      await deleteBatchFromPostgres(b.id);
+      hiddenBatchesRemoved++;
+    } else {
+      await flushBatchNow(b.id);
+    }
+  }
+
+  let playersChanged = false;
+  for (const p of Object.values(db.players)) {
+    const before = (p.eventDecklists || []).length;
+    p.eventDecklists = (p.eventDecklists || []).filter(d => !matchesCode(d.code || d.eventId));
+    if (p.eventDecklists.length !== before) {
+      decklistsRemoved += before - p.eventDecklists.length;
+      playersChanged = true;
+    }
+  }
+  if (playersChanged) await saveDB('players');
+
+  delete db.events[upperCode];
+  await saveDB('events');
+
+  logChange(req, 'delete_event', { code: upperCode, replaysRemoved, decklistsRemoved, hiddenBatchesRemoved, profilesTouched });
+  return { replaysRemoved, decklistsRemoved, hiddenBatchesRemoved, profilesTouched };
 }
 
 // ── autoMergeHiddenBatches(newBatch, req) ────────────────────────────────────
@@ -4304,6 +4381,23 @@ const server = http.createServer(async (req, res) => {
       ignoreDecklists: !!ev.ignoreDecklists,
       decks,
     });
+  }
+
+  // ── DELETE /api/events/:code — admin-only "Delete Event" tool (Admin
+  // Tools > Events). Permanently removes the event record and strips every
+  // replay/decklist tagged to it from every batch and the player registry
+  // — see deleteEventCascade's own comment above for exactly what is and
+  // isn't touched. Admin-only (not Miner) for the same reason as DELETE
+  // /api/batches/:id and POST /api/batches/merge: this is NOT reversible
+  // by re-importing, since Format Library data a player no longer has
+  // saved locally (or a CSV an admin only keeps on their own machine)
+  // could be gone for good once this returns ok.
+  if (parts[0]==='events' && parts[1] && !parts[2] && method==='DELETE') {
+    if (!isAdmin(req)) return json(res, 403, { error: 'Admins only' });
+    const code = decodeURIComponent(parts[1]).toUpperCase().trim();
+    if (!db.events[code]) return json(res, 404, { error: 'No data for this event.' });
+    const result = await deleteEventCascade(code, req);
+    return json(res, 200, { ok: true, code, ...result });
   }
 
   // ── PATCH /api/events/:code/ignore-decklists — mark an event (that has no

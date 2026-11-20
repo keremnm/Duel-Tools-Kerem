@@ -1919,6 +1919,7 @@ select{cursor:pointer}
       <div id="admin-crosslinks-section" style="display:none"></div>
       <div id="admin-decktypes-section" style="display:none"></div>
       <div id="admin-merge-section" style="display:none"></div>
+      <div id="admin-events-section" style="display:none"></div>
 
       <!-- Log sub-tab — audit trail of who did what to whose data -->
       <div id="admin-log-section" style="display:none;flex-direction:column;gap:16px">
@@ -25844,6 +25845,7 @@ async function renderAdminPage() {
   const crosslinksSection = document.getElementById('admin-crosslinks-section');
   const decktypesSection = document.getElementById('admin-decktypes-section');
   const mergeSection = document.getElementById('admin-merge-section');
+  const eventsSection = document.getElementById('admin-events-section');
   const logSection = document.getElementById('admin-log-section');
   if (!tabBar || !usersSection) return;
 
@@ -25867,8 +25869,8 @@ async function renderAdminPage() {
 
   // Tab buttons — bigger, roomier than the old modal's
   tabBar.innerHTML = '';
-  const ADMIN_TAB_KEYS = { 'Users':'users', 'Roles & Permissions':'perms', 'Sessions':'sessions', 'Cross-Links':'crosslinks', 'Deck Types':'decktypes', 'Merge Profiles':'merge', 'Log':'log' };
-  ['Users','Roles & Permissions','Sessions','Cross-Links','Deck Types','Merge Profiles','Log'].forEach(tab => {
+  const ADMIN_TAB_KEYS = { 'Users':'users', 'Roles & Permissions':'perms', 'Sessions':'sessions', 'Cross-Links':'crosslinks', 'Deck Types':'decktypes', 'Merge Profiles':'merge', 'Events':'events', 'Log':'log' };
+  ['Users','Roles & Permissions','Sessions','Cross-Links','Deck Types','Merge Profiles','Events','Log'].forEach(tab => {
     const tb = document.createElement('button');
     tb.textContent = tab;
     tb.style.cssText = 'background:none;border:none;font-family:monospace;font-size:15px;cursor:pointer;padding:9px 18px;border-radius:6px;color:var(--muted)';
@@ -25886,6 +25888,8 @@ async function renderAdminPage() {
       else if (decktypesSection) decktypesSection.style.display = 'none';
       if (_adminTab === 'merge') { mergeSection.style.display='block'; loadMergeProfilesSection(mergeSection); }
       else if (mergeSection) mergeSection.style.display = 'none';
+      if (_adminTab === 'events') { eventsSection.style.display='block'; loadAdminEventsSection(eventsSection); }
+      else if (eventsSection) eventsSection.style.display = 'none';
       if (_adminTab === 'log') { logSection.style.display='flex'; loadEditLog(); }
       else if (logSection) logSection.style.display = 'none';
     };
@@ -26174,6 +26178,115 @@ async function loadMergeProfilesSection(el) {
 
   mergePopulateSelect('merge-keep-select', '');
   mergePopulateSelect('merge-away-select', '');
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// ADMIN TOOLS — DELETE EVENTS. Search the full event database (same list
+// the public Events tab shows) and permanently delete one — removes the
+// event itself plus every replay/decklist tagged to it from every player
+// profile that has one, via DELETE /api/events/:code → deleteEventCascade
+// on the server. Admin-only: this whole section only ever renders inside
+// the Admin page, which is already gated to admins client-side (the
+// '#ntab-admin' nav entry/admin-panel-btn are hidden for every other role
+// — see updateUIForRole's "Admins only" block) AND server-side (the DELETE
+// route itself checks isAdmin(req), same as /api/batches/merge).
+// ══════════════════════════════════════════════════════════════════════
+let _adminEventsState = { all: [] };
+
+async function loadAdminEventsSection(el) {
+  el.innerHTML = '<div style="color:var(--muted);font-size:14px;padding:16px">Loading events...</div>';
+  try {
+    const res = await fetch(API+'/events', { headers: authHeaders() });
+    const body = await res.json();
+    if (!res.ok || !Array.isArray(body.events)) {
+      el.innerHTML = '<div style="color:var(--red);font-size:14px;padding:16px">'+_escapeHtml((body&&body.error)||('Failed to load events (HTTP '+res.status+')'))+'</div>';
+      return;
+    }
+    _adminEventsState.all = body.events.sort((a,b) => (b.date||'').localeCompare(a.date||''));
+  } catch(e) {
+    el.innerHTML = '<div style="color:var(--red);font-size:14px;padding:16px">Failed to load events: '+_escapeHtml(e.message)+'</div>';
+    return;
+  }
+
+  el.innerHTML =
+    '<div style="font-size:15px;color:var(--text);margin-bottom:14px">' +
+      '<b>Delete Events</b>' +
+      '<div style="font-size:13px;color:var(--muted);margin-top:8px;line-height:1.6">' +
+        'Search for an event by code or name and permanently delete it. This removes the event ' +
+        'itself and strips every replay and decklist tagged to it from every player profile that ' +
+        'has one — exactly as if it had never been imported. <b>This cannot be undone.</b> A hidden ' +
+        'placeholder profile (a Format Library import for a player with no real Duel Tools profile) ' +
+        'left with nothing in it afterward is removed too; real profiles are only stripped of this ' +
+        'event\'s data, never deleted.' +
+      '</div>' +
+    '</div>' +
+    '<input id="admin-events-search" placeholder="Search by event code or name…" oninput="adminEventsRenderList()" ' +
+      'style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:13px;padding:9px 12px;border-radius:6px;margin-bottom:12px">' +
+    '<div id="admin-events-list" style="display:flex;flex-direction:column;gap:8px"></div>' +
+    '<div id="admin-events-status" style="font-size:13px;color:var(--muted);min-height:20px;margin-top:10px"></div>';
+
+  adminEventsRenderList();
+}
+
+function adminEventsRenderList() {
+  const listEl = document.getElementById('admin-events-list');
+  if (!listEl) return;
+  const q = (document.getElementById('admin-events-search')?.value || '').toLowerCase().trim();
+  const RECENT_LIMIT = 20, MATCH_LIMIT = 25;
+  const rows = q
+    ? _adminEventsState.all.filter(ev => (ev.code||'').toLowerCase().includes(q) || (ev.name||'').toLowerCase().includes(q)).slice(0, MATCH_LIMIT)
+    : _adminEventsState.all.slice(0, RECENT_LIMIT);
+
+  if (!rows.length) {
+    listEl.innerHTML = '<div style="color:var(--muted);font-size:12.5px;padding:8px">'+(q ? 'No matching events.' : 'No events yet.')+'</div>';
+    return;
+  }
+
+  listEl.innerHTML = (!q ? '<div style="color:var(--muted);font-size:11px;padding:0 2px 2px">Showing the '+Math.min(RECENT_LIMIT, rows.length)+' most recent events ('+_adminEventsState.all.length+' total) — search to find others.</div>' : '');
+  rows.forEach(ev => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:12px;background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:10px 14px';
+    row.innerHTML =
+      '<div style="flex:1;min-width:0">' +
+        '<span style="color:var(--amber);font-weight:bold;font-family:monospace">'+_escapeHtml(ev.code)+'</span>' +
+        (ev.name ? '<span style="color:var(--muted);font-size:12px;margin-left:8px">'+_escapeHtml(ev.name)+'</span>' : '') +
+        '<div style="color:var(--muted);font-size:11px;margin-top:2px">'+(ev.date||'—')+' · '+ev.deckCount+' deck(s)'+(ev.size&&ev.size!==ev.deckCount?' of '+ev.size:'')+'</div>' +
+      '</div>' +
+      '<button style="background:none;border:1px solid var(--red);color:var(--red);font-family:monospace;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer;flex-shrink:0;white-space:nowrap">🗑 Delete</button>';
+    row.querySelector('button').onclick = () => adminEventsDelete(ev);
+    listEl.appendChild(row);
+  });
+}
+
+async function adminEventsDelete(ev) {
+  const statusEl = document.getElementById('admin-events-status');
+  const confirmed = confirm(
+    'Permanently delete event "'+ev.code+(ev.name?' — '+ev.name:'')+'"?\n\n' +
+    'This removes the event and strips its replays/decklists from every player profile that has them. This cannot be undone.'
+  );
+  if (!confirmed) return;
+  if (statusEl) { statusEl.style.color = 'var(--muted)'; statusEl.textContent = 'Deleting '+ev.code+'…'; }
+  try {
+    const res = await fetch(API+'/events/'+encodeURIComponent(ev.code), { method: 'DELETE', headers: authHeaders() });
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok) {
+      if (statusEl) { statusEl.style.color = 'var(--red)'; statusEl.textContent = '✗ Delete failed: ' + (data.error||'HTTP '+res.status); }
+      return;
+    }
+    _adminEventsState.all = _adminEventsState.all.filter(e => e.code !== ev.code);
+    adminEventsRenderList();
+    if (statusEl) {
+      statusEl.style.color = 'var(--green)';
+      statusEl.textContent = '✓ Deleted '+ev.code+' — removed '+(data.replaysRemoved||0)+' replay(s) and '+(data.decklistsRemoved||0)+' decklist(s) across '+(data.profilesTouched||0)+' profile(s)'+(data.hiddenBatchesRemoved?', cleaned up '+data.hiddenBatchesRemoved+' empty hidden profile(s) too':'')+'.';
+    }
+    // The public Events tab caches its own list and only re-fetches when
+    // empty (see loadEventsTab) — drop that cache so it doesn't keep
+    // showing this now-deleted event until something else happens to
+    // force-refresh it.
+    if (typeof _eventsState !== 'undefined') _eventsState.list = [];
+  } catch(e) {
+    if (statusEl) { statusEl.style.color = 'var(--red)'; statusEl.textContent = 'Error: '+e.message; }
+  }
 }
 
 // ── Registry Check — read-only scan for likely player-registry mess:
