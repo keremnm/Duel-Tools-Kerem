@@ -1505,7 +1505,7 @@ select{cursor:pointer}
                    count once igtSwapCommit moves it into Main for real. -->
               <span id="igt-mw-sidedeck-note" style="display:none;font-weight:normal;color:var(--muted);font-size:10px;margin-left:8px">— not counted in the Win Rate Avg. Score above (Main Deck only; swap a card in to have it count)</span>
             </div>
-            <div id="igt-side-tiles" style="display:grid;grid-template-columns:repeat(15,78px);gap:2px"></div>
+            <div id="igt-side-tiles" style="display:grid;grid-template-columns:repeat(15,56px);gap:2px"></div>
           </div>
           <!-- hidden for compat -->
           <div style="display:none"><div id="igt-extra-tiles"></div><span id="igt-extra-count"></span></div>
@@ -23870,7 +23870,7 @@ function igtRenderAllDeck() {
       const marked = Math.min(markedCount(card.id), card.qty);
       for (let q = 0; q < card.qty; q++) {
         const isMarked = q < marked;
-        const tile = igtCardTile(card, { size: sec==='main'?72:80,
+        const tile = igtCardTile(card, { size: sec==='main'?72:56,
           label: isMarked ? markLabel : null,
           labelColor: isMarked ? markColor : null,
           borderColor: isMarked ? markColor : 'transparent',
@@ -24322,36 +24322,39 @@ function igtMwRenderMatchupGrid() {
     const score = slot ? igtMwAvgScoreFrom(slot.stats, slot.qtyStats) : null;
     let headerHtml;
     if (def.variantOptions) {
-      headerHtml = '<select data-grid-variant="'+def.variantKey+'" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-weight:bold;font-size:11px;padding:1px 3px;border-radius:4px;outline:none;max-width:132px">'
+      headerHtml = '<select data-grid-variant="'+def.variantKey+'" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-weight:bold;font-size:10px;padding:0 2px;border-radius:4px;outline:none;max-width:132px">'
         + def.variantOptions.map(o => '<option value="'+_escapeHtml(o.value)+'"'+(o.value===def.variantValue?' selected':'')+'>'+_escapeHtml(o.label)+'</option>').join('')
         + '</select>';
     } else if (def.isCustom) {
-      headerHtml = '<select id="igt-mw-grid-custom-select" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-weight:bold;font-size:11px;padding:1px 3px;border-radius:4px;outline:none;max-width:132px">'
+      headerHtml = '<select id="igt-mw-grid-custom-select" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-weight:bold;font-size:10px;padding:0 2px;border-radius:4px;outline:none;max-width:132px">'
         + '<option value="">+ Add a matchup…</option>'
         + customOptions.map(o => '<option value="'+_escapeHtml(o)+'"'+(o===_igtMwGridCustomOpp?' selected':'')+'>'+_escapeHtml(o)+' ('+oppCounts[o]+')</option>').join('')
         + '</select>';
     } else {
-      headerHtml = '<span style="font-size:12px;font-weight:bold;color:var(--text)">'+_escapeHtml(def.label)+'</span>';
+      headerHtml = '<span style="font-size:11px;font-weight:bold;color:var(--text)">'+_escapeHtml(def.label)+'</span>';
     }
     const clickable = !!(def.opp && slot && slot.recordCount);
     const bodyHtml = score
       ? seg('MATCH','#3ddc84',score.match)+' · '+seg('PRE','#e0b800',score.pre)+' · '+seg('POST','var(--red)',score.post)
       : '<span style="color:var(--dim)">'+(def.isCustom && !def.opp ? 'Pick a deck above' : 'No data')+'</span>';
-    return '<div class="igt-mw-grid-row"'+(clickable?' data-opp="'+_escapeHtml(def.opp)+'" data-mirror="'+(def.key==='mirror'?'1':'0')+'"':'')+' style="background:var(--card2);border:1px solid var(--border2);border-radius:6px;padding:6px 8px;display:flex;flex-direction:column;gap:4px;'+(clickable?'cursor:pointer':'')+'" title="'+(clickable?'Click to load this matchup in the vs: dropdown above':'')+'">'
+    // Rows are kept this compact specifically so all 9 fit in the panel's
+    // max-height without needing its own internal scrollbar on top of the
+    // page's — see igt-mw-matchup-grid-panel's max-height below.
+    return '<div class="igt-mw-grid-row"'+(clickable?' data-opp="'+_escapeHtml(def.opp)+'" data-mirror="'+(def.key==='mirror'?'1':'0')+'"':'')+' style="background:var(--card2);border:1px solid var(--border2);border-radius:5px;padding:3px 7px;display:flex;flex-direction:column;gap:2px;'+(clickable?'cursor:pointer':'')+'" title="'+(clickable?'Click to load this matchup in the vs: dropdown above':'')+'">'
       + '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px">'
       + headerHtml
-      + '<span style="color:var(--muted);font-size:9px;white-space:nowrap">'+(slot?slot.recordCount:0)+' match(es)</span>'
+      + '<span style="color:var(--muted);font-size:8px;white-space:nowrap">'+(slot?slot.recordCount:0)+' match(es)</span>'
       + '</div>'
-      + '<div style="font-family:monospace;font-size:10px">'+bodyHtml+'</div>'
+      + '<div style="font-family:monospace;font-size:9px">'+bodyHtml+'</div>'
       + '</div>';
   };
 
   panel.innerHTML =
-    '<div style="padding:8px 10px 4px;flex-shrink:0">'
-      + '<span style="font-size:13px;font-weight:700;color:var(--text);font-family:monospace">VS THE FIELD</span>'
-      + '<div style="font-size:9px;color:var(--muted);margin-top:2px">'+_escapeHtml(myDeck)+'\'s Win Rate Avg. Score against the field — click a row to load it above</div>'
+    '<div style="padding:6px 9px 2px;flex-shrink:0">'
+      + '<span style="font-size:12px;font-weight:700;color:var(--text);font-family:monospace">VS THE FIELD</span>'
+      + '<div style="font-size:8px;color:var(--muted);margin-top:1px">'+_escapeHtml(myDeck)+'\'s Win Rate Avg. Score against the field — click a row to load it above</div>'
     + '</div>'
-    + '<div style="flex:1;min-height:0;overflow-y:auto;padding:4px 10px 10px;display:flex;flex-direction:column;gap:5px">'
+    + '<div style="flex:1;min-height:0;overflow-y:auto;padding:3px 9px 9px;display:flex;flex-direction:column;gap:3px">'
       + defs.map(rowHtml).join('')
     + '</div>';
 
