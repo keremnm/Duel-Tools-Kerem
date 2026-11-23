@@ -1446,6 +1446,15 @@ select{cursor:pointer}
             <input type="checkbox" id="igt-mw-sortwinrate" onchange="igtRenderAllDeck()" style="width:12px;height:12px;accent-color:var(--green)"/>
             Sort by Win Rate
           </label>
+          <!-- On by default — the Avg Score bar, VS THE FIELD, and Sort by
+               Win Rate all read the underlying stats directly (not this
+               badge), so they keep working exactly the same with the
+               per-tile percentage badges hidden; this only declutters the
+               tiles themselves. See igtMwBadge's own early-return. -->
+          <label style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--muted);cursor:pointer" title="Hides the MATCH/PRE/POST percentage strip on each card tile (Main/Side Deck and Search results). The Win Rate Avg. Score, VS THE FIELD, and Sort by Win Rate are unaffected.">
+            <input type="checkbox" id="igt-mw-hidebadges" checked onchange="igtRenderAllDeck();igtAdvSearchRenderPage()" style="width:12px;height:12px;accent-color:var(--green)"/>
+            Hide Win Rate %s on cards
+          </label>
           <span id="igt-mw-status" style="font-size:10px;color:var(--muted);width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title=""></span>
           <span style="font-size:9px;color:var(--dim);width:100%">
             <span style="color:var(--green);font-weight:bold">MATCH</span>=full ·
@@ -1459,7 +1468,7 @@ select{cursor:pointer}
                Styled as its own standout bar (bigger numbers, a real card
                background) rather than a plain text line, so it reads at a
                glance instead of blending into the filter controls above it. -->
-          <div id="igt-mw-avgscore" style="width:100%;display:flex;align-items:center;gap:14px;font-family:monospace;padding:8px 12px;margin-top:4px;background:var(--card);border:1px solid var(--border2);border-radius:8px"></div>
+          <div id="igt-mw-avgscore" style="width:100%;display:flex;flex-direction:column;gap:8px;font-family:monospace;padding:8px 12px;margin-top:4px;background:var(--card);border:1px solid var(--border2);border-radius:8px"></div>
         </div>
         <!-- Deck sections: Swap tool row, then Main Deck paired with the
              Matchup Grid beside it (see igt-mw-matchup-grid-panel below —
@@ -23939,6 +23948,15 @@ let _igtMwStats = null; // null = not computed; else { [cardNameLower]: {match:{
 // why a bucket with too little data still exists here but reads as "no
 // data" to callers).
 let _igtMwQtyStats = null;
+// "vs ENTIRE FIELD" sibling of _igtMwStats/_igtMwQtyStats — same shape, but
+// built from EVERY recorded match for "Your Deck" (myDeck), regardless of
+// which opponent is picked in the vs: dropdown or even whether one is
+// picked at all. Lets the Win Rate Avg. Score show both "this exact
+// matchup" and "the whole field at once" side by side. Recomputed by
+// igtMwRecomputeFieldStats, called from igtMwComputeStats (which already
+// fires on every Your Deck/Year/Season/Min % change) — see there.
+let _igtMwFieldStats = null;
+let _igtMwFieldQtyStats = null;
 // Minimum observations (matches for the MATCH phase, games for PRE/POST)
 // a single quantity bucket needs before igtMwQtyWinrate will report a real
 // percentage instead of null — separate from, and usually stricter than,
@@ -23979,6 +23997,12 @@ let _igtMwPhase = 'all'; // 'all' | 'match' | 'pre' | 'post' — which badge(s) 
 // Reads the "Sort by Win Rate" checkbox live, rather than tracking a
 // separate boolean that could drift out of sync with the actual DOM state.
 function igtMwSortByWinrateOn() { const cb = document.getElementById('igt-mw-sortwinrate'); return !!(cb && cb.checked); }
+// Reads the "Hide Win Rate %s on cards" checkbox live — same convention as
+// igtMwSortByWinrateOn above. Defaults to TRUE (hidden) when the checkbox
+// isn't in the DOM at all, matching its `checked` HTML default, rather than
+// silently falling back to "show everything" the way a missing/falsy
+// element would for a plain `!!(cb && cb.checked)` read.
+function igtMwHideBadgesOn() { const cb = document.getElementById('igt-mw-hidebadges'); return cb ? cb.checked : true; }
 
 // "Show" dropdown — All (3-segment badge, unchanged) or a single phase
 // (MATCH / PRE-SIDE / POST-SIDE) rendered as one bigger, full-width badge.
@@ -24143,10 +24167,28 @@ function igtMwBuildStatsFromRecords(records, minPct) {
   return { stats, qtyStats, minSample };
 }
 
+// Builds the "vs ENTIRE FIELD" stats — every match recorded for myDeck,
+// no opponent filter at all (not even the Matchup Grid's own pinned/Rest-
+// of-Field split — this is the true, unsplit whole). Unlike _igtMwStats,
+// this only needs myDeck to be picked, not also a vs: opponent, so it's
+// computed independently of the early-return below.
+function igtMwRecomputeFieldStats(myDeck) {
+  if (!myDeck) { _igtMwFieldStats = null; _igtMwFieldQtyStats = null; return; }
+  const minInput = document.getElementById('igt-mw-minmatch-input');
+  const rawMin = minInput ? parseFloat(minInput.value) : 5;
+  const minPct = (isNaN(rawMin) || rawMin < 0) ? 0 : rawMin;
+  const records = _filterRecordsByYearSeason(_globalRecords, 'igt-mw-year-filter', 'igt-mw-season-filter')
+    .filter(r => !r.incomplete && !r.omitted && (r.myDeck||'Unknown') === myDeck);
+  const built = igtMwBuildStatsFromRecords(records, minPct);
+  _igtMwFieldStats = built.stats;
+  _igtMwFieldQtyStats = built.qtyStats;
+}
+
 function igtMwComputeStats() {
   const statusEl = document.getElementById('igt-mw-status');
   const myDeck = document.getElementById('igt-mw-mydeck')?.value || '';
   const oppDeck = document.getElementById('igt-mw-oppdeck')?.value || '';
+  igtMwRecomputeFieldStats(myDeck);
   if (!myDeck || !oppDeck) {
     _igtMwStats = null;
     _igtMwQtyStats = null;
@@ -24415,6 +24457,7 @@ async function igtMwRecompute() {
 // to fill with just one number.
 function igtMwBadge(cardName) {
   if (!_igtMwActive || !_igtMwStats) return null;
+  if (igtMwHideBadgesOn()) return null;
   const key = (cardName||'').toLowerCase();
   const s = _igtMwStats[key];
   if (!s) return null;
@@ -24507,17 +24550,31 @@ function igtMwAvgScoreFrom(stats, qtyStats) {
 function igtMwAvgScore() {
   return igtMwAvgScoreFrom(_igtMwStats, _igtMwQtyStats);
 }
+// "vs ENTIRE FIELD" sibling — same weighted-by-current-Main-Deck average,
+// just computed against _igtMwFieldStats/_igtMwFieldQtyStats (every match
+// recorded for Your Deck, not just the selected vs: opponent) instead of
+// the matchup-specific stats. See igtMwRecomputeFieldStats.
+function igtMwAvgScoreField() {
+  return igtMwAvgScoreFrom(_igtMwFieldStats, _igtMwFieldQtyStats);
+}
 
-// Renders the #igt-mw-avgscore row — called from igtRenderAllDeck (every
+// Renders the #igt-mw-avgscore block — called from igtRenderAllDeck (every
 // deck change already funnels through there, directly or via its callers),
 // and from igtMwComputeStats/igtMwToggle/igtMwPhaseChanged (which all
 // already call igtRenderAllDeck themselves, so this needs no separate
-// wiring at any of those call sites).
+// wiring at any of those call sites). Shows up to two rows stacked: the
+// selected matchup's score (only once both Your Deck AND vs: are picked —
+// same as before) and the "vs ENTIRE FIELD" score (as soon as just Your
+// Deck is picked, since that one doesn't depend on vs: at all), each
+// labeled with the actual deck name(s) selected rather than a bare generic
+// heading, so the numbers are never ambiguous about which matchup they're
+// for even without reading the filter-summary line above.
 function igtMwRenderAvgScore() {
   const el = document.getElementById('igt-mw-avgscore');
   if (!el) return;
-  const score = igtMwAvgScore();
-  if (!score) { el.innerHTML = ''; return; }
+  const myDeck = document.getElementById('igt-mw-mydeck')?.value || '';
+  const oppDeckRaw = document.getElementById('igt-mw-oppdeck')?.value || '';
+  const oppLabel = oppDeckRaw === '__MIRROR__' ? 'Mirror' : oppDeckRaw;
   const total = _igtDeck.main.reduce((s,c)=>s+c.qty, 0);
   const seg = (label, color, s) => {
     if (!s) return '<div style="display:flex;flex-direction:column;align-items:center;min-width:64px"><span style="font-size:10px;font-weight:bold;letter-spacing:.05em;color:var(--muted)">'+label+'</span><span style="font-size:20px;font-weight:bold;color:var(--muted)">–</span></div>';
@@ -24527,11 +24584,24 @@ function igtMwRenderAvgScore() {
       + '<span style="font-size:20px;font-weight:bold;color:var(--text)">'+pct+'%</span>'
       + '</div>';
   };
-  el.innerHTML = '<span style="font-size:13px;font-weight:bold;color:var(--text)">Win Rate Avg. Score</span>'
+  const row = (titleHtml, score, borderTop) => '<div style="display:flex;align-items:center;gap:14px;'+(borderTop?'padding-top:8px;border-top:1px solid var(--border2)':'')+'">'
+    + titleHtml
     + '<span style="flex:1"></span>'
     + seg('MATCH', '#3ddc84', score.match)
     + seg('PRE', '#e0b800', score.pre)
-    + seg('POST', 'var(--red)', score.post);
+    + seg('POST', 'var(--red)', score.post)
+    + '</div>';
+
+  const matchupScore = myDeck && oppDeckRaw ? igtMwAvgScore() : null;
+  const fieldScore = myDeck ? igtMwAvgScoreField() : null;
+  let html = '';
+  if (matchupScore) {
+    html += row('<span style="font-size:13px;font-weight:bold;color:var(--text)">'+_escapeHtml(myDeck)+' <span style="color:var(--muted);font-weight:normal">vs</span> '+_escapeHtml(oppLabel)+'</span>', matchupScore, false);
+  }
+  if (fieldScore) {
+    html += row('<span style="font-size:13px;font-weight:bold;color:var(--text)">'+_escapeHtml(myDeck)+' <span style="color:var(--muted);font-weight:normal">vs</span> ENTIRE FIELD</span>', fieldScore, !!matchupScore);
+  }
+  el.innerHTML = html;
 }
 
 function igtExportYDK(target) {
