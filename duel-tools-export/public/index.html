@@ -1461,15 +1461,14 @@ select{cursor:pointer}
                glance instead of blending into the filter controls above it. -->
           <div id="igt-mw-avgscore" style="width:100%;display:flex;align-items:center;gap:14px;font-family:monospace;padding:8px 12px;margin-top:4px;background:var(--card);border:1px solid var(--border2);border-radius:8px"></div>
         </div>
-        <!-- Deck sections: Main (4x10) + Side (3x5), plus the Matchup Grid
-             filling the space to their right (see igt-mw-matchup-grid-panel
-             below) — the deck grids are fixed-width CSS grids, so on a wide
-             enough window there's real unused space here once they're laid
-             out, which used to just sit empty. flex-wrap lets the grid
-             panel wrap below instead of squeezing the deck grids on a
-             narrower window, rather than forcing horizontal scrolling. -->
-        <div style="flex:1;min-height:0;overflow-y:auto;padding:10px 14px;display:flex;flex-wrap:wrap;gap:16px;align-content:flex-start">
-          <div style="flex:0 0 auto;display:flex;flex-direction:column;gap:14px">
+        <!-- Deck sections: Swap tool row, then Main Deck paired with the
+             Matchup Grid beside it (see igt-mw-matchup-grid-panel below —
+             Main Deck's own grid is a fixed ~747px-wide CSS grid, so pairing
+             the panel with Main Deck specifically — not with Main+Side
+             together — is what actually leaves it the real unused space to
+             fill, since Side Deck's wider 15-col grid no longer competes for
+             the same row's width budget), then Side Deck full-width below. -->
+        <div style="flex:1;min-height:0;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:14px">
           <!-- Swap tool: left-click a Main tile to mark it OUT, left-click a
                Side tile to mark it IN, right-click either to unmark —
                mirrors Side Practice's OUT/IN + Swap mechanic, but commits
@@ -1485,10 +1484,17 @@ select{cursor:pointer}
             <button class="dd-btn-sec" onclick="igtSwapClear()" style="font-size:11px;padding:3px 10px">Clear marks</button>
             <span style="margin-left:auto">left-click Main=OUT · left-click Side=IN · right-click to unmark</span>
           </div>
-          <div>
-            <div class="slbl" style="margin-bottom:6px">MAIN DECK <span id="igt-main-count" style="color:var(--muted)">(0/60)</span></div>
-            <div id="igt-main-tiles" style="display:grid;grid-template-columns:repeat(10,72px);gap:3px"></div>
+          <!-- Row: Main Deck + Matchup Grid panel, side by side -->
+          <div style="display:flex;flex-wrap:wrap;align-items:flex-start;gap:16px">
+            <div style="flex:0 0 auto">
+              <div class="slbl" style="margin-bottom:6px">MAIN DECK <span id="igt-main-count" style="color:var(--muted)">(0/60)</span></div>
+              <div id="igt-main-tiles" style="display:grid;grid-template-columns:repeat(10,72px);gap:3px"></div>
+            </div>
+            <!-- Matchup Grid — hidden until Matchup Winrate is on (see
+                 igtMwToggle/igtMwRenderMatchupGrid, which fills this in). -->
+            <div id="igt-mw-matchup-grid-panel" style="display:none;flex:1 1 280px;min-width:220px;max-width:420px;max-height:460px;flex-direction:column;background:var(--panel);border:1px solid var(--border);border-radius:8px"></div>
           </div>
+          <!-- Side Deck — full width, below Main Deck/Matchup Grid row -->
           <div>
             <div class="slbl" style="margin-bottom:6px">SIDE DECK <span id="igt-side-count" style="color:var(--muted)">(0/15)</span>
               <!-- Shown/hidden together with the Matchup Winrate panel itself
@@ -1503,11 +1509,6 @@ select{cursor:pointer}
           </div>
           <!-- hidden for compat -->
           <div style="display:none"><div id="igt-extra-tiles"></div><span id="igt-extra-count"></span></div>
-          </div>
-          <!-- Matchup Grid — hidden until Matchup Winrate is on (see
-               igtMwToggle/igtMwRenderMatchupGrid, which fills this in). -->
-          <div id="igt-mw-matchup-grid-panel" style="display:none;flex:1 1 260px;min-width:260px;max-width:380px;max-height:640px;flex-direction:column;background:var(--panel);border:1px solid var(--border);border-radius:8px"></div>
-        </div>
         </div>
         <!-- end left column -->
 
@@ -24203,10 +24204,26 @@ function igtMwComputeStats() {
 const IGT_MW_GRID_NAMED_OPPONENTS = ['Warrior', 'Chaos Control', 'Chaos Return', 'Chaos Warrior'];
 const IGT_MW_GRID_BURN_VARIANTS = ['Rescue Cat Burn', 'Panda Burn'];
 const IGT_MW_GRID_GATE_VARIANTS = ['Reasoning Gate Turbo', 'Reasoning Gate Machine'];
+// Burn/Reasoning Gate rows are a 3-way pick, not just a toggle between the
+// two named variants: 'combined' (the default) pools BOTH variants' records
+// together under one row, while picking either individual variant isolates
+// just that one — same as before. 'combined' is a sentinel value, never a
+// real deck-type string, so it can never collide with an actual archetype
+// name read out of _globalRecords.
+const IGT_MW_GRID_BURN_OPTIONS = [
+  { value: 'combined', label: 'Burn (Combined)' },
+  { value: 'Rescue Cat Burn', label: 'Rescue Cat Burn' },
+  { value: 'Panda Burn', label: 'Panda Burn' },
+];
+const IGT_MW_GRID_GATE_OPTIONS = [
+  { value: 'combined', label: 'Reasoning Gate (Combined)' },
+  { value: 'Reasoning Gate Turbo', label: 'Reasoning Gate Turbo' },
+  { value: 'Reasoning Gate Machine', label: 'Reasoning Gate Machine' },
+];
 // Local-only session state, deliberately never saved — same convention as
 // Your Deck/vs:/Year/Season/Min% above (see the top of igt-mw-panel).
-let _igtMwGridBurnVariant = IGT_MW_GRID_BURN_VARIANTS[0];
-let _igtMwGridGateVariant = IGT_MW_GRID_GATE_VARIANTS[0];
+let _igtMwGridBurnMode = 'combined';
+let _igtMwGridGateMode = 'combined';
 let _igtMwGridCustomOpp = '';
 // { [rowKey]: {stats, qtyStats, recordCount} | null } — null for a fixed
 // row with zero matching records, or for the Custom row before anything is
@@ -24226,12 +24243,16 @@ function igtMwMatchupGridDefs(myDeck) {
     { key: 'mirror', label: 'Mirror Match', opp: myDeck, matchOpp: o => o === myDeck },
     { key: 'warrior', label: 'Warrior', opp: 'Warrior', matchOpp: o => o === 'Warrior' },
     { key: 'chaoscontrol', label: 'Chaos Control', opp: 'Chaos Control', matchOpp: o => o === 'Chaos Control' },
-    { key: 'burn', label: 'Burn', opp: _igtMwGridBurnVariant, matchOpp: o => o === _igtMwGridBurnVariant,
-      variantKey: 'burn', variantOptions: IGT_MW_GRID_BURN_VARIANTS },
+    { key: 'burn', label: 'Burn',
+      opp: _igtMwGridBurnMode === 'combined' ? null : _igtMwGridBurnMode,
+      matchOpp: _igtMwGridBurnMode === 'combined' ? (o => IGT_MW_GRID_BURN_VARIANTS.includes(o)) : (o => o === _igtMwGridBurnMode),
+      variantKey: 'burn', variantValue: _igtMwGridBurnMode, variantOptions: IGT_MW_GRID_BURN_OPTIONS },
     { key: 'chaosreturn', label: 'Chaos Return', opp: 'Chaos Return', matchOpp: o => o === 'Chaos Return' },
     { key: 'chaoswarrior', label: 'Chaos Warrior', opp: 'Chaos Warrior', matchOpp: o => o === 'Chaos Warrior' },
-    { key: 'reasoninggate', label: 'Reasoning Gate', opp: _igtMwGridGateVariant, matchOpp: o => o === _igtMwGridGateVariant,
-      variantKey: 'gate', variantOptions: IGT_MW_GRID_GATE_VARIANTS },
+    { key: 'reasoninggate', label: 'Reasoning Gate',
+      opp: _igtMwGridGateMode === 'combined' ? null : _igtMwGridGateMode,
+      matchOpp: _igtMwGridGateMode === 'combined' ? (o => IGT_MW_GRID_GATE_VARIANTS.includes(o)) : (o => o === _igtMwGridGateMode),
+      variantKey: 'gate', variantValue: _igtMwGridGateMode, variantOptions: IGT_MW_GRID_GATE_OPTIONS },
     { key: 'restoffield', label: 'Rest of Field', opp: null, matchOpp: o => o !== 'Unknown' && !pinnedExcl.has(o) },
     { key: 'custom', label: 'Custom', opp: _igtMwGridCustomOpp || null, isCustom: true,
       matchOpp: _igtMwGridCustomOpp ? (o => o === _igtMwGridCustomOpp) : null },
@@ -24300,36 +24321,36 @@ function igtMwRenderMatchupGrid() {
     const score = slot ? igtMwAvgScoreFrom(slot.stats, slot.qtyStats) : null;
     let headerHtml;
     if (def.variantOptions) {
-      headerHtml = '<select data-grid-variant="'+def.variantKey+'" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-weight:bold;font-size:12px;padding:2px 4px;border-radius:4px;outline:none">'
-        + def.variantOptions.map(v => '<option value="'+_escapeHtml(v)+'"'+(v===def.opp?' selected':'')+'>'+_escapeHtml(v)+'</option>').join('')
+      headerHtml = '<select data-grid-variant="'+def.variantKey+'" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-weight:bold;font-size:11px;padding:1px 3px;border-radius:4px;outline:none;max-width:132px">'
+        + def.variantOptions.map(o => '<option value="'+_escapeHtml(o.value)+'"'+(o.value===def.variantValue?' selected':'')+'>'+_escapeHtml(o.label)+'</option>').join('')
         + '</select>';
     } else if (def.isCustom) {
-      headerHtml = '<select id="igt-mw-grid-custom-select" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-weight:bold;font-size:12px;padding:2px 4px;border-radius:4px;outline:none;max-width:150px">'
+      headerHtml = '<select id="igt-mw-grid-custom-select" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-weight:bold;font-size:11px;padding:1px 3px;border-radius:4px;outline:none;max-width:132px">'
         + '<option value="">+ Add a matchup…</option>'
         + customOptions.map(o => '<option value="'+_escapeHtml(o)+'"'+(o===_igtMwGridCustomOpp?' selected':'')+'>'+_escapeHtml(o)+' ('+oppCounts[o]+')</option>').join('')
         + '</select>';
     } else {
-      headerHtml = '<span style="font-size:13px;font-weight:bold;color:var(--text)">'+_escapeHtml(def.label)+'</span>';
+      headerHtml = '<span style="font-size:12px;font-weight:bold;color:var(--text)">'+_escapeHtml(def.label)+'</span>';
     }
     const clickable = !!(def.opp && slot && slot.recordCount);
     const bodyHtml = score
       ? seg('MATCH','#3ddc84',score.match)+' · '+seg('PRE','#e0b800',score.pre)+' · '+seg('POST','var(--red)',score.post)
       : '<span style="color:var(--dim)">'+(def.isCustom && !def.opp ? 'Pick a deck above' : 'No data')+'</span>';
-    return '<div class="igt-mw-grid-row"'+(clickable?' data-opp="'+_escapeHtml(def.opp)+'" data-mirror="'+(def.key==='mirror'?'1':'0')+'"':'')+' style="background:var(--card2);border:1px solid var(--border2);border-radius:7px;padding:8px 10px;display:flex;flex-direction:column;gap:5px;'+(clickable?'cursor:pointer':'')+'" title="'+(clickable?'Click to load this matchup in the vs: dropdown above':'')+'">'
+    return '<div class="igt-mw-grid-row"'+(clickable?' data-opp="'+_escapeHtml(def.opp)+'" data-mirror="'+(def.key==='mirror'?'1':'0')+'"':'')+' style="background:var(--card2);border:1px solid var(--border2);border-radius:6px;padding:6px 8px;display:flex;flex-direction:column;gap:4px;'+(clickable?'cursor:pointer':'')+'" title="'+(clickable?'Click to load this matchup in the vs: dropdown above':'')+'">'
       + '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px">'
       + headerHtml
-      + '<span style="color:var(--muted);font-size:10px;white-space:nowrap">'+(slot?slot.recordCount:0)+' match(es)</span>'
+      + '<span style="color:var(--muted);font-size:9px;white-space:nowrap">'+(slot?slot.recordCount:0)+' match(es)</span>'
       + '</div>'
-      + '<div style="font-family:monospace;font-size:11px">'+bodyHtml+'</div>'
+      + '<div style="font-family:monospace;font-size:10px">'+bodyHtml+'</div>'
       + '</div>';
   };
 
   panel.innerHTML =
-    '<div style="padding:10px 12px 4px;flex-shrink:0">'
-      + '<span style="font-size:15px;font-weight:700;color:var(--text);font-family:monospace">VS THE FIELD</span>'
-      + '<div style="font-size:10px;color:var(--muted);margin-top:2px">'+_escapeHtml(myDeck)+'\'s Win Rate Avg. Score against the field — click a row to load it above</div>'
+    '<div style="padding:8px 10px 4px;flex-shrink:0">'
+      + '<span style="font-size:13px;font-weight:700;color:var(--text);font-family:monospace">VS THE FIELD</span>'
+      + '<div style="font-size:9px;color:var(--muted);margin-top:2px">'+_escapeHtml(myDeck)+'\'s Win Rate Avg. Score against the field — click a row to load it above</div>'
     + '</div>'
-    + '<div style="flex:1;min-height:0;overflow-y:auto;padding:4px 12px 12px;display:flex;flex-direction:column;gap:7px">'
+    + '<div style="flex:1;min-height:0;overflow-y:auto;padding:4px 10px 10px;display:flex;flex-direction:column;gap:5px">'
       + defs.map(rowHtml).join('')
     + '</div>';
 
@@ -24346,8 +24367,8 @@ function igtMwRenderMatchupGrid() {
   });
   panel.querySelectorAll('select[data-grid-variant]').forEach(sel => {
     sel.addEventListener('change', () => {
-      if (sel.dataset.gridVariant === 'burn') _igtMwGridBurnVariant = sel.value;
-      else if (sel.dataset.gridVariant === 'gate') _igtMwGridGateVariant = sel.value;
+      if (sel.dataset.gridVariant === 'burn') _igtMwGridBurnMode = sel.value;
+      else if (sel.dataset.gridVariant === 'gate') _igtMwGridGateMode = sel.value;
       igtMwRecomputeMatchupGrid();
     });
   });
