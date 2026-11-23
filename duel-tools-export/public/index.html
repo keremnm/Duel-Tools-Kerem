@@ -1455,11 +1455,21 @@ select{cursor:pointer}
           <!-- Win Rate Avg. Score: one average per phase across the current
                Main Deck, each card weighted by how many copies you're
                running — updates live as cards are added/removed/swapped
-               (igtRenderAllDeck calls igtMwRenderAvgScore every render). -->
-          <div id="igt-mw-avgscore" style="width:100%;display:flex;align-items:center;gap:8px;font-family:monospace;font-size:11px;padding-top:2px;border-top:1px solid var(--border);margin-top:2px"></div>
+               (igtRenderAllDeck calls igtMwRenderAvgScore every render).
+               Styled as its own standout bar (bigger numbers, a real card
+               background) rather than a plain text line, so it reads at a
+               glance instead of blending into the filter controls above it. -->
+          <div id="igt-mw-avgscore" style="width:100%;display:flex;align-items:center;gap:14px;font-family:monospace;padding:8px 12px;margin-top:4px;background:var(--card);border:1px solid var(--border2);border-radius:8px"></div>
         </div>
-        <!-- Deck sections: Main (4x10) + Side (3x5) -->
-        <div style="flex:1;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:14px">
+        <!-- Deck sections: Main (4x10) + Side (3x5), plus the Matchup Grid
+             filling the space to their right (see igt-mw-matchup-grid-panel
+             below) — the deck grids are fixed-width CSS grids, so on a wide
+             enough window there's real unused space here once they're laid
+             out, which used to just sit empty. flex-wrap lets the grid
+             panel wrap below instead of squeezing the deck grids on a
+             narrower window, rather than forcing horizontal scrolling. -->
+        <div style="flex:1;min-height:0;overflow-y:auto;padding:10px 14px;display:flex;flex-wrap:wrap;gap:16px;align-content:flex-start">
+          <div style="flex:0 0 auto;display:flex;flex-direction:column;gap:14px">
           <!-- Swap tool: left-click a Main tile to mark it OUT, left-click a
                Side tile to mark it IN, right-click either to unmark —
                mirrors Side Practice's OUT/IN + Swap mechanic, but commits
@@ -1480,11 +1490,23 @@ select{cursor:pointer}
             <div id="igt-main-tiles" style="display:grid;grid-template-columns:repeat(10,72px);gap:3px"></div>
           </div>
           <div>
-            <div class="slbl" style="margin-bottom:6px">SIDE DECK <span id="igt-side-count" style="color:var(--muted)">(0/15)</span></div>
+            <div class="slbl" style="margin-bottom:6px">SIDE DECK <span id="igt-side-count" style="color:var(--muted)">(0/15)</span>
+              <!-- Shown/hidden together with the Matchup Winrate panel itself
+                   (see igtMwToggle) — the Win Rate Avg. Score above only ever
+                   reads _igtDeck.main, so this spells that out right where
+                   someone looking at the Side Deck would otherwise wonder why
+                   its cards don't move the score. A swapped-in Side card DOES
+                   count once igtSwapCommit moves it into Main for real. -->
+              <span id="igt-mw-sidedeck-note" style="display:none;font-weight:normal;color:var(--muted);font-size:10px;margin-left:8px">— not counted in the Win Rate Avg. Score above (Main Deck only; swap a card in to have it count)</span>
+            </div>
             <div id="igt-side-tiles" style="display:grid;grid-template-columns:repeat(15,78px);gap:2px"></div>
           </div>
           <!-- hidden for compat -->
           <div style="display:none"><div id="igt-extra-tiles"></div><span id="igt-extra-count"></span></div>
+          </div>
+          <!-- Matchup Grid — hidden until Matchup Winrate is on (see
+               igtMwToggle/igtMwRenderMatchupGrid, which fills this in). -->
+          <div id="igt-mw-matchup-grid-panel" style="display:none;flex:1 1 260px;min-width:260px;max-width:380px;max-height:640px;flex-direction:column;background:var(--panel);border:1px solid var(--border);border-radius:8px"></div>
         </div>
         </div>
         <!-- end left column -->
@@ -2893,11 +2915,16 @@ const STAPLE_CARDS = new Set([
 ]);
 function isStapleCard(name) { return STAPLE_CARDS.has((name||'').toLowerCase().trim()); }
 
-// Top Cards excludes these entirely (not just hides their "GN" label like
-// STAPLE_CARDS above) — known-good staples that are in basically every deck
-// regardless of archetype, so surfacing their win% there is just noise, not
-// signal about the deck itself.
-const TOP_CARDS_IGNORED_CARDS = new Set(['pot of greed', 'graceful charity']);
+// Top Cards and Matchup Winrate both excluded Pot of Greed/Graceful Charity
+// entirely (not just hidden their "GN" label like STAPLE_CARDS above) —
+// they're in basically every deck regardless of archetype, so the original
+// reasoning was that surfacing their win% on Top Cards is noise, not signal
+// about the deck itself. Left empty now (not removed — several call sites
+// still check it, and it stays as the one place to re-add a card everyone
+// agrees should be excluded from win-rate analysis) per an explicit request
+// to see real win-rate badges for every card, including these two, in both
+// places.
+const TOP_CARDS_IGNORED_CARDS = new Set([]);
 
 // Which game(s) of a match a card was seen in, formatted as "G1", "G2/3",
 // "G1/2/3", etc. Staples (see above) never get a label — they show up in
@@ -23772,11 +23799,18 @@ function igtDragPayload(e, payload) {
 // has selected. igtCardWinrateForPhase itself is now just a one-line
 // wrapper reading that dropdown, so every existing caller (igtSortedDeckSection,
 // igtSortSearchResults, igtMwBadge's tooltip) is unchanged.
-function igtCardWinrateForBucket(cardName, bucket) {
-  if (!(_igtMwActive && _igtMwStats)) return null;
-  const s = _igtMwStats[(cardName||'').toLowerCase()];
+// Stats-source-parameterized core — pulled out of igtCardWinrateForBucket
+// below so the Matchup Grid (igtMwRenderMatchupGrid) can get a card's win
+// rate against an ARBITRARY opponent's stats object, not just whichever
+// matchup the main Your Deck/vs: dropdowns currently have selected.
+function igtCardWinrateForBucketFrom(stats, cardName, bucket) {
+  if (!(_igtMwActive && stats)) return null;
+  const s = stats[(cardName||'').toLowerCase()];
   const stat = s && s[bucket];
   return (stat && stat.n) ? (stat.w/stat.n) : null;
+}
+function igtCardWinrateForBucket(cardName, bucket) {
+  return igtCardWinrateForBucketFrom(_igtMwStats, cardName, bucket);
 }
 function igtCardWinrateForPhase(cardName) {
   const bucket = _igtMwPhase === 'pre' ? 'pre' : _igtMwPhase === 'post' ? 'post' : 'match';
@@ -23869,8 +23903,11 @@ function igtRenderAllDeck() {
   // Every deck-mutating path already funnels through this function (either
   // directly, like igtAddCard, or via its own callers, like the click
   // handler above) — one hook here keeps the Avg Score live without
-  // needing separate wiring anywhere else.
+  // needing separate wiring anywhere else. igtMwRenderMatchupGrid is the
+  // same deal for the Matchup Grid's own per-row scores — cheap (no
+  // _globalRecords scan), so it's fine to re-run on every render too.
   igtMwRenderAvgScore();
+  igtMwRenderMatchupGrid();
 }
 
 function igtClearDeck() {
@@ -23919,13 +23956,18 @@ const IGT_MW_QTY_MIN_SAMPLE = 10;
 // Bucket-parameterized core — same reasoning/pairing as igtCardWinrateForBucket
 // above: the Win Rate Avg. Score needs every phase's quantity-matched rate
 // at once, not just whichever one the "Show:" dropdown has selected.
-function igtMwQtyWinrateForBucket(cardName, qty, bucket) {
-  if (!(_igtMwActive && _igtMwQtyStats)) return null;
-  const s = _igtMwQtyStats[(cardName||'').toLowerCase()];
+// Stats-source-parameterized core — same reasoning as
+// igtCardWinrateForBucketFrom above, for the Matchup Grid.
+function igtMwQtyWinrateForBucketFrom(qtyStats, cardName, qty, bucket) {
+  if (!(_igtMwActive && qtyStats)) return null;
+  const s = qtyStats[(cardName||'').toLowerCase()];
   if (!s) return null;
   const q = Math.max(1, Math.min(3, qty || 1));
   const stat = s[bucket] && s[bucket][q];
   return (stat && stat.n >= IGT_MW_QTY_MIN_SAMPLE) ? (stat.w/stat.n) : null;
+}
+function igtMwQtyWinrateForBucket(cardName, qty, bucket) {
+  return igtMwQtyWinrateForBucketFrom(_igtMwQtyStats, cardName, qty, bucket);
 }
 function igtMwQtyWinrate(cardName, qty) {
   const bucket = _igtMwPhase === 'pre' ? 'pre' : _igtMwPhase === 'post' ? 'post' : 'match';
@@ -23978,6 +24020,8 @@ async function igtMwToggle(checked) {
   igtAdvOrderSyncWinrateOption();
   const panel = document.getElementById('igt-mw-panel');
   if (panel) panel.style.display = checked ? 'flex' : 'none';
+  const sideNote = document.getElementById('igt-mw-sidedeck-note');
+  if (sideNote) sideNote.style.display = checked ? 'inline' : 'none';
   if (checked) {
     if (!_globalRecords.length) {
       const statusEl = document.getElementById('igt-mw-status');
@@ -23986,6 +24030,14 @@ async function igtMwToggle(checked) {
     }
     igtMwPopulateDeckDropdowns();
     if (!_igtMwStats) igtMwComputeStats();
+    // igtMwComputeStats() above already recomputes the matchup grid when it
+    // runs, but it's skipped whenever stats already existed from before this
+    // toggle-off/on — recompute explicitly here too so re-enabling always
+    // shows a grid instead of occasionally leaving a stale/empty one.
+    igtMwRecomputeMatchupGrid();
+  } else {
+    const gridPanel = document.getElementById('igt-mw-matchup-grid-panel');
+    if (gridPanel) gridPanel.style.display = 'none';
   }
   igtRenderAllDeck();
   igtAdvSearchRenderPage();
@@ -24034,29 +24086,16 @@ function igtMwPopulateOppDropdown() {
 // dropdowns, year/season, min match %) so adjusting any of them updates
 // the badges immediately, same as Top Cards' own filters do without
 // needing its separate "↻ Recompute" (server refetch) button.
-function igtMwComputeStats() {
-  const statusEl = document.getElementById('igt-mw-status');
-  const myDeck = document.getElementById('igt-mw-mydeck')?.value || '';
-  const oppDeck = document.getElementById('igt-mw-oppdeck')?.value || '';
-  if (!myDeck || !oppDeck) {
-    _igtMwStats = null;
-    _igtMwQtyStats = null;
-    if (statusEl) statusEl.textContent = 'Select both your deck type and a matchup to see winrates.';
-    igtRenderAllDeck();
-    igtAdvSearchRenderPage();
-    return;
-  }
-  let records = _filterRecordsByYearSeason(_globalRecords, 'igt-mw-year-filter', 'igt-mw-season-filter')
-    .filter(r => !r.incomplete && !r.omitted && (r.myDeck||'Unknown') === myDeck);
-  records = oppDeck === '__MIRROR__'
-    ? records.filter(r => (r.oppDeck||'Unknown') === myDeck)
-    : records.filter(r => (r.oppDeck||'Unknown') === oppDeck);
-
-  const minInput = document.getElementById('igt-mw-minmatch-input');
-  const rawMin = minInput ? parseFloat(minInput.value) : 5;
-  const minPct = (isNaN(rawMin) || rawMin < 0) ? 0 : rawMin;
+// Records-in, {stats,qtyStats}-out core — pulled out of igtMwComputeStats
+// below so the Matchup Grid (igtMwRecomputeMatchupGrid) can run this exact
+// same per-card win/loss tally against a DIFFERENT, already-filtered slice
+// of _globalRecords (e.g. "vs Warrior" or "vs everything except these 8
+// named archetypes") without duplicating the accumulation logic. minPct is
+// a percentage of THIS records array's own length — same "relative to this
+// matchup's sample size" floor igtMwComputeStats always used, just made
+// reusable instead of reading records.length from the enclosing scope.
+function igtMwBuildStatsFromRecords(records, minPct) {
   const minSample = Math.round(records.length * (minPct/100));
-
   const stats = {};
   // Quantity-bucketed sibling of `stats` — see _igtMwQtyStats' own comment.
   // Only accumulated for cards banLimit() says can actually be run at more
@@ -24099,17 +24138,221 @@ function igtMwComputeStats() {
       });
     });
   });
+  return { stats, qtyStats, minSample };
+}
 
-  _igtMwStats = stats;
-  _igtMwQtyStats = qtyStats;
+function igtMwComputeStats() {
+  const statusEl = document.getElementById('igt-mw-status');
+  const myDeck = document.getElementById('igt-mw-mydeck')?.value || '';
+  const oppDeck = document.getElementById('igt-mw-oppdeck')?.value || '';
+  if (!myDeck || !oppDeck) {
+    _igtMwStats = null;
+    _igtMwQtyStats = null;
+    if (statusEl) statusEl.textContent = 'Select both your deck type and a matchup to see winrates.';
+    igtMwRecomputeMatchupGrid();
+    igtRenderAllDeck();
+    igtAdvSearchRenderPage();
+    return;
+  }
+  let records = _filterRecordsByYearSeason(_globalRecords, 'igt-mw-year-filter', 'igt-mw-season-filter')
+    .filter(r => !r.incomplete && !r.omitted && (r.myDeck||'Unknown') === myDeck);
+  records = oppDeck === '__MIRROR__'
+    ? records.filter(r => (r.oppDeck||'Unknown') === myDeck)
+    : records.filter(r => (r.oppDeck||'Unknown') === oppDeck);
+
+  const minInput = document.getElementById('igt-mw-minmatch-input');
+  const rawMin = minInput ? parseFloat(minInput.value) : 5;
+  const minPct = (isNaN(rawMin) || rawMin < 0) ? 0 : rawMin;
+
+  const built = igtMwBuildStatsFromRecords(records, minPct);
+  _igtMwStats = built.stats;
+  _igtMwQtyStats = built.qtyStats;
   const oppLabel = oppDeck === '__MIRROR__' ? 'Mirror' : oppDeck;
   if (statusEl) {
-    const summary = records.length+' match(es) — '+myDeck+' vs '+oppLabel+' — '+Object.keys(stats).length+' card(s) at '+minPct+'%+ ('+minSample+' match min).';
+    const summary = records.length+' match(es) — '+myDeck+' vs '+oppLabel+' — '+Object.keys(built.stats).length+' card(s) at '+minPct+'%+ ('+built.minSample+' match min).';
     statusEl.textContent = summary;
     statusEl.title = summary; // full text on hover since the line is now truncated to keep the panel compact
   }
+  igtMwRecomputeMatchupGrid();
   igtRenderAllDeck();
   igtAdvSearchRenderPage();
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// MATCHUP GRID — fills the otherwise-empty space to the right of the Main/
+// Side Deck grids (visible on a wide-enough window, since those grids are
+// fixed-width while their containing column isn't) with Your Deck's Win
+// Rate Avg. Score against a curated set of format pillars, so checking how
+// THIS decklist fares against the rest of the field doesn't mean flipping
+// the vs: dropdown back and forth. Four of the nine rows are fixed single
+// opponents, two are "pick one of two known variants" (Burn, Reasoning
+// Gate — see the *_VARIANTS consts below), one is "everything not already
+// named above" (Rest of Field), and the last is a fully free "add any
+// matchup" picker — same deck list the vs: dropdown itself offers.
+//
+// Two-tier recompute, same shape as _igtMwStats/_igtMwQtyStats vs.
+// igtMwRenderAvgScore: igtMwRecomputeMatchupGrid() is the EXPENSIVE part
+// (scans _globalRecords once per row) and only needs to re-run when the
+// inputs that change WHICH records qualify change — Your Deck, Year,
+// Season, Min %, or a Burn/Reasoning Gate/Custom picker inside the grid
+// itself. igtMwRenderMatchupGrid() is the CHEAP part (just a weighted sum
+// over the current, already-small _igtDeck.main) and re-runs on every
+// single deck-mutating render (igtRenderAllDeck), exactly like
+// igtMwRenderAvgScore, so the grid stays live as cards are added/removed/
+// swapped without re-scanning match records on every click.
+const IGT_MW_GRID_NAMED_OPPONENTS = ['Warrior', 'Chaos Control', 'Chaos Return', 'Chaos Warrior'];
+const IGT_MW_GRID_BURN_VARIANTS = ['Rescue Cat Burn', 'Panda Burn'];
+const IGT_MW_GRID_GATE_VARIANTS = ['Reasoning Gate Turbo', 'Reasoning Gate Machine'];
+// Local-only session state, deliberately never saved — same convention as
+// Your Deck/vs:/Year/Season/Min% above (see the top of igt-mw-panel).
+let _igtMwGridBurnVariant = IGT_MW_GRID_BURN_VARIANTS[0];
+let _igtMwGridGateVariant = IGT_MW_GRID_GATE_VARIANTS[0];
+let _igtMwGridCustomOpp = '';
+// { [rowKey]: {stats, qtyStats, recordCount} | null } — null for a fixed
+// row with zero matching records, or for the Custom row before anything is
+// picked. Rebuilt wholesale by igtMwRecomputeMatchupGrid(); read (not
+// mutated) by the cheap igtMwRenderMatchupGrid().
+let _igtMwGridSlotData = null;
+
+// One definition per row. `matchOpp(oppValue)` decides which records count
+// as this row's opponent — everything else (variant toggles, the Custom
+// picker's current value) is read live from state/DOM at recompute time so
+// a definition never goes stale between recomputes.
+function igtMwMatchupGridDefs(myDeck) {
+  const pinnedExcl = new Set([
+    myDeck, ...IGT_MW_GRID_NAMED_OPPONENTS, ...IGT_MW_GRID_BURN_VARIANTS, ...IGT_MW_GRID_GATE_VARIANTS,
+  ]);
+  return [
+    { key: 'mirror', label: 'Mirror Match', opp: myDeck, matchOpp: o => o === myDeck },
+    { key: 'warrior', label: 'Warrior', opp: 'Warrior', matchOpp: o => o === 'Warrior' },
+    { key: 'chaoscontrol', label: 'Chaos Control', opp: 'Chaos Control', matchOpp: o => o === 'Chaos Control' },
+    { key: 'burn', label: 'Burn', opp: _igtMwGridBurnVariant, matchOpp: o => o === _igtMwGridBurnVariant,
+      variantKey: 'burn', variantOptions: IGT_MW_GRID_BURN_VARIANTS },
+    { key: 'chaosreturn', label: 'Chaos Return', opp: 'Chaos Return', matchOpp: o => o === 'Chaos Return' },
+    { key: 'chaoswarrior', label: 'Chaos Warrior', opp: 'Chaos Warrior', matchOpp: o => o === 'Chaos Warrior' },
+    { key: 'reasoninggate', label: 'Reasoning Gate', opp: _igtMwGridGateVariant, matchOpp: o => o === _igtMwGridGateVariant,
+      variantKey: 'gate', variantOptions: IGT_MW_GRID_GATE_VARIANTS },
+    { key: 'restoffield', label: 'Rest of Field', opp: null, matchOpp: o => o !== 'Unknown' && !pinnedExcl.has(o) },
+    { key: 'custom', label: 'Custom', opp: _igtMwGridCustomOpp || null, isCustom: true,
+      matchOpp: _igtMwGridCustomOpp ? (o => o === _igtMwGridCustomOpp) : null },
+  ];
+}
+
+// Runs igtMwBuildStatsFromRecords for one row's already-filtered record
+// slice — same Year/Season/Min% filters as the main matchup, just a
+// different opponent predicate.
+function igtMwBuildStatsForOpponent(myDeck, matchOpp) {
+  const minInput = document.getElementById('igt-mw-minmatch-input');
+  const rawMin = minInput ? parseFloat(minInput.value) : 5;
+  const minPct = (isNaN(rawMin) || rawMin < 0) ? 0 : rawMin;
+  const records = _filterRecordsByYearSeason(_globalRecords, 'igt-mw-year-filter', 'igt-mw-season-filter')
+    .filter(r => !r.incomplete && !r.omitted && (r.myDeck||'Unknown') === myDeck && matchOpp(r.oppDeck||'Unknown'));
+  const built = igtMwBuildStatsFromRecords(records, minPct);
+  return { stats: built.stats, qtyStats: built.qtyStats, recordCount: records.length };
+}
+
+// The expensive half — see the block comment above.
+function igtMwRecomputeMatchupGrid() {
+  const myDeck = document.getElementById('igt-mw-mydeck')?.value || '';
+  if (!_igtMwActive || !myDeck) { _igtMwGridSlotData = null; igtMwRenderMatchupGrid(); return; }
+  const data = {};
+  igtMwMatchupGridDefs(myDeck).forEach(def => {
+    data[def.key] = def.matchOpp ? igtMwBuildStatsForOpponent(myDeck, def.matchOpp) : null;
+  });
+  _igtMwGridSlotData = data;
+  igtMwRenderMatchupGrid();
+}
+
+// The cheap half — see the block comment above. Safe to call on every deck
+// render; never touches _globalRecords.
+function igtMwRenderMatchupGrid() {
+  const panel = document.getElementById('igt-mw-matchup-grid-panel');
+  if (!panel) return;
+  if (!_igtMwActive) { panel.style.display = 'none'; return; }
+  const myDeck = document.getElementById('igt-mw-mydeck')?.value || '';
+  if (!myDeck) {
+    panel.style.display = 'flex';
+    panel.innerHTML = '<div style="padding:14px;color:var(--muted);font-size:11px;line-height:1.6">Select <b>Your Deck</b> above to see it against the field — Mirror, the named archetypes, and the rest of the format, all at once.</div>';
+    return;
+  }
+  panel.style.display = 'flex';
+  const defs = igtMwMatchupGridDefs(myDeck);
+  // The Custom row's own picker offers exactly what the vs: dropdown would
+  // — every deck actually recorded against Your Deck under the current
+  // Year/Season filters — built the same way igtMwPopulateOppDropdown
+  // builds that dropdown, rather than depending on its current DOM state.
+  const oppCounts = {};
+  _filterRecordsByYearSeason(_globalRecords, 'igt-mw-year-filter', 'igt-mw-season-filter')
+    .filter(r => !r.incomplete && !r.omitted && (r.myDeck||'Unknown') === myDeck)
+    .forEach(r => {
+      const o = r.oppDeck || 'Unknown';
+      if (o === myDeck || o === 'Unknown') return;
+      oppCounts[o] = (oppCounts[o]||0) + 1;
+    });
+  const customOptions = Object.keys(oppCounts).sort((a,b) => oppCounts[b]-oppCounts[a]);
+
+  const seg = (label, color, s) => {
+    if (!s) return '<span style="color:var(--dim)">'+label+' –</span>';
+    return '<span><span style="color:'+color+';font-weight:bold">'+label+'</span> '+Math.round(100*s.rate)+'%</span>';
+  };
+  const rowHtml = def => {
+    const slot = _igtMwGridSlotData ? _igtMwGridSlotData[def.key] : null;
+    const score = slot ? igtMwAvgScoreFrom(slot.stats, slot.qtyStats) : null;
+    let headerHtml;
+    if (def.variantOptions) {
+      headerHtml = '<select data-grid-variant="'+def.variantKey+'" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-weight:bold;font-size:12px;padding:2px 4px;border-radius:4px;outline:none">'
+        + def.variantOptions.map(v => '<option value="'+_escapeHtml(v)+'"'+(v===def.opp?' selected':'')+'>'+_escapeHtml(v)+'</option>').join('')
+        + '</select>';
+    } else if (def.isCustom) {
+      headerHtml = '<select id="igt-mw-grid-custom-select" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-weight:bold;font-size:12px;padding:2px 4px;border-radius:4px;outline:none;max-width:150px">'
+        + '<option value="">+ Add a matchup…</option>'
+        + customOptions.map(o => '<option value="'+_escapeHtml(o)+'"'+(o===_igtMwGridCustomOpp?' selected':'')+'>'+_escapeHtml(o)+' ('+oppCounts[o]+')</option>').join('')
+        + '</select>';
+    } else {
+      headerHtml = '<span style="font-size:13px;font-weight:bold;color:var(--text)">'+_escapeHtml(def.label)+'</span>';
+    }
+    const clickable = !!(def.opp && slot && slot.recordCount);
+    const bodyHtml = score
+      ? seg('MATCH','#3ddc84',score.match)+' · '+seg('PRE','#e0b800',score.pre)+' · '+seg('POST','var(--red)',score.post)
+      : '<span style="color:var(--dim)">'+(def.isCustom && !def.opp ? 'Pick a deck above' : 'No data')+'</span>';
+    return '<div class="igt-mw-grid-row"'+(clickable?' data-opp="'+_escapeHtml(def.opp)+'" data-mirror="'+(def.key==='mirror'?'1':'0')+'"':'')+' style="background:var(--card2);border:1px solid var(--border2);border-radius:7px;padding:8px 10px;display:flex;flex-direction:column;gap:5px;'+(clickable?'cursor:pointer':'')+'" title="'+(clickable?'Click to load this matchup in the vs: dropdown above':'')+'">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px">'
+      + headerHtml
+      + '<span style="color:var(--muted);font-size:10px;white-space:nowrap">'+(slot?slot.recordCount:0)+' match(es)</span>'
+      + '</div>'
+      + '<div style="font-family:monospace;font-size:11px">'+bodyHtml+'</div>'
+      + '</div>';
+  };
+
+  panel.innerHTML =
+    '<div style="padding:10px 12px 4px;flex-shrink:0">'
+      + '<span style="font-size:15px;font-weight:700;color:var(--text);font-family:monospace">VS THE FIELD</span>'
+      + '<div style="font-size:10px;color:var(--muted);margin-top:2px">'+_escapeHtml(myDeck)+'\'s Win Rate Avg. Score against the field — click a row to load it above</div>'
+    + '</div>'
+    + '<div style="flex:1;min-height:0;overflow-y:auto;padding:4px 12px 12px;display:flex;flex-direction:column;gap:7px">'
+      + defs.map(rowHtml).join('')
+    + '</div>';
+
+  panel.querySelectorAll('.igt-mw-grid-row[data-opp]').forEach(row => {
+    row.addEventListener('click', e => {
+      if (e.target.tagName === 'SELECT') return;
+      const oppSel = document.getElementById('igt-mw-oppdeck');
+      if (!oppSel) return;
+      const targetValue = row.getAttribute('data-mirror') === '1' ? '__MIRROR__' : row.getAttribute('data-opp');
+      if (![...oppSel.options].some(o => o.value === targetValue)) return; // not actually on offer right now — nothing to switch to
+      oppSel.value = targetValue;
+      igtMwComputeStats();
+    });
+  });
+  panel.querySelectorAll('select[data-grid-variant]').forEach(sel => {
+    sel.addEventListener('change', () => {
+      if (sel.dataset.gridVariant === 'burn') _igtMwGridBurnVariant = sel.value;
+      else if (sel.dataset.gridVariant === 'gate') _igtMwGridGateVariant = sel.value;
+      igtMwRecomputeMatchupGrid();
+    });
+  });
+  const customSel = document.getElementById('igt-mw-grid-custom-select');
+  if (customSel) customSel.addEventListener('change', () => { _igtMwGridCustomOpp = customSel.value; igtMwRecomputeMatchupGrid(); });
 }
 
 // "↻ Recompute" button — forces a fresh server refetch of the shared
@@ -24211,14 +24454,22 @@ function igtMwBadge(cardName) {
 // phase's average entirely, not counted as 0% — same "skip, don't zero"
 // convention the "Sort by Win Rate" deck-tile sort and Order:Winrate search
 // sort already use elsewhere in this file.
-function igtMwAvgScore() {
-  if (!(_igtMwActive && _igtMwStats)) return null;
+// Stats-source-parameterized core — same reasoning as
+// igtCardWinrateForBucketFrom/igtMwQtyWinrateForBucketFrom above: the
+// Matchup Grid needs this exact same weighted-by-current-Main-Deck average
+// computed against an arbitrary opponent's {stats,qtyStats}, not just
+// whichever matchup is in the main Your Deck/vs: dropdowns. Deliberately
+// still only ever reads _igtDeck.main (never .side) — Side Deck cards are
+// not part of your decklist until a Swap commit actually moves them into
+// Main, same as the main score's own behavior.
+function igtMwAvgScoreFrom(stats, qtyStats) {
+  if (!(_igtMwActive && stats)) return null;
   const out = {};
   ['match','pre','post'].forEach(bucket => {
     let weightedSum = 0, totalWeight = 0, countedCards = 0;
     _igtDeck.main.forEach(c => {
-      const qtyRate = igtMwQtyWinrateForBucket(c.name, c.qty, bucket);
-      const rate = qtyRate != null ? qtyRate : igtCardWinrateForBucket(c.name, bucket);
+      const qtyRate = igtMwQtyWinrateForBucketFrom(qtyStats, c.name, c.qty, bucket);
+      const rate = qtyRate != null ? qtyRate : igtCardWinrateForBucketFrom(stats, c.name, bucket);
       if (rate == null) return;
       weightedSum += rate * c.qty;
       totalWeight += c.qty;
@@ -24227,6 +24478,9 @@ function igtMwAvgScore() {
     out[bucket] = totalWeight ? { rate: weightedSum/totalWeight, weight: totalWeight, cards: countedCards } : null;
   });
   return out;
+}
+function igtMwAvgScore() {
+  return igtMwAvgScoreFrom(_igtMwStats, _igtMwQtyStats);
 }
 
 // Renders the #igt-mw-avgscore row — called from igtRenderAllDeck (every
@@ -24241,11 +24495,15 @@ function igtMwRenderAvgScore() {
   if (!score) { el.innerHTML = ''; return; }
   const total = _igtDeck.main.reduce((s,c)=>s+c.qty, 0);
   const seg = (label, color, s) => {
-    if (!s) return '<span style="color:var(--muted)">'+label+': –</span>';
+    if (!s) return '<div style="display:flex;flex-direction:column;align-items:center;min-width:64px"><span style="font-size:10px;font-weight:bold;letter-spacing:.05em;color:var(--muted)">'+label+'</span><span style="font-size:20px;font-weight:bold;color:var(--muted)">–</span></div>';
     const pct = Math.round(100*s.rate);
-    return '<span title="'+s.cards+' unique card(s), '+s.weight+'/'+total+' copies of the Main Deck counted"><span style="color:'+color+';font-weight:bold">'+label+'</span>: '+pct+'%</span>';
+    return '<div title="'+s.cards+' unique card(s), '+s.weight+'/'+total+' copies of the Main Deck counted" style="display:flex;flex-direction:column;align-items:center;min-width:64px">'
+      + '<span style="font-size:10px;font-weight:bold;letter-spacing:.05em;color:'+color+'">'+label+'</span>'
+      + '<span style="font-size:20px;font-weight:bold;color:var(--text)">'+pct+'%</span>'
+      + '</div>';
   };
-  el.innerHTML = '<span style="color:var(--muted)">Win Rate Avg. Score —</span>'
+  el.innerHTML = '<span style="font-size:13px;font-weight:bold;color:var(--text)">Win Rate Avg. Score</span>'
+    + '<span style="flex:1"></span>'
     + seg('MATCH', '#3ddc84', score.match)
     + seg('PRE', '#e0b800', score.pre)
     + seg('POST', 'var(--red)', score.post);
