@@ -1419,7 +1419,7 @@ select{cursor:pointer}
         <!-- Matchup Winrate filter panel — hidden until the checkbox above is
              checked. "Your deck type" / matchup selections are deliberately
              local-only (never saved) — see igtMwRecompute. -->
-        <div id="igt-mw-panel" style="display:none;padding:6px 14px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap;align-items:center;gap:6px;background:var(--card2)">
+        <div id="igt-mw-panel" style="display:none;padding:5px 14px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap;align-items:center;gap:5px;background:var(--card2)">
           <label style="font-size:10px;color:var(--muted)">Your Deck:</label>
           <select id="igt-mw-mydeck" onchange="igtMwPopulateOppDropdown();igtMwComputeStats()" style="background:var(--card);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 6px;border-radius:5px;outline:none;max-width:120px">
             <option value="">— Select —</option>
@@ -1468,7 +1468,7 @@ select{cursor:pointer}
                Styled as its own standout bar (bigger numbers, a real card
                background) rather than a plain text line, so it reads at a
                glance instead of blending into the filter controls above it. -->
-          <div id="igt-mw-avgscore" style="width:100%;display:flex;flex-direction:column;gap:8px;font-family:monospace;padding:8px 12px;margin-top:4px;background:var(--card);border:1px solid var(--border2);border-radius:8px"></div>
+          <div id="igt-mw-avgscore" style="width:100%;display:flex;flex-direction:column;gap:5px;font-family:monospace;padding:6px 12px;margin-top:3px;background:var(--card);border:1px solid var(--border2);border-radius:8px"></div>
         </div>
         <!-- Deck sections: Swap tool row, then Main Deck paired with the
              Matchup Grid beside it (see igt-mw-matchup-grid-panel below —
@@ -1477,7 +1477,7 @@ select{cursor:pointer}
              together — is what actually leaves it the real unused space to
              fill, since Side Deck's wider 15-col grid no longer competes for
              the same row's width budget), then Side Deck full-width below. -->
-        <div style="flex:1;min-height:0;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:14px">
+        <div style="flex:1;min-height:0;overflow-y:auto;padding:6px 12px;display:flex;flex-direction:column;gap:8px">
           <!-- Swap tool: left-click a Main tile to mark it OUT, left-click a
                Side tile to mark it IN, right-click either to unmark —
                mirrors Side Practice's OUT/IN + Swap mechanic, but commits
@@ -1494,18 +1494,30 @@ select{cursor:pointer}
             <span style="margin-left:auto">left-click Main=OUT · left-click Side=IN · right-click to unmark</span>
           </div>
           <!-- Row: Main Deck + Matchup Grid panel, side by side -->
-          <div style="display:flex;flex-wrap:wrap;align-items:flex-start;gap:16px">
+          <div style="display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px">
             <div style="flex:0 0 auto">
-              <div class="slbl" style="margin-bottom:6px">MAIN DECK <span id="igt-main-count" style="color:var(--muted)">(0/60)</span></div>
-              <div id="igt-main-tiles" style="display:grid;grid-template-columns:repeat(10,72px);gap:3px"></div>
+              <div class="slbl" style="margin-bottom:5px">MAIN DECK <span id="igt-main-count" style="color:var(--muted)">(0/60)</span></div>
+              <div id="igt-main-tiles" style="display:grid;grid-template-columns:repeat(10,52px);gap:3px"></div>
             </div>
             <!-- Matchup Grid — hidden until Matchup Winrate is on (see
-                 igtMwToggle/igtMwRenderMatchupGrid, which fills this in). -->
-            <div id="igt-mw-matchup-grid-panel" style="display:none;flex:1 1 280px;min-width:220px;max-width:420px;max-height:460px;flex-direction:column;background:var(--panel);border:1px solid var(--border);border-radius:8px"></div>
+                 igtMwToggle/igtMwRenderMatchupGrid, which fills this in).
+                 Sized to match Main Deck's own footprint: min-width shrunk
+                 (was 220) so the two keep sitting side-by-side down to a
+                 ~1300px-wide window instead of only ~1570px+, and max-height
+                 shrunk to what its fixed 9-row list actually needs (was
+                 460, oversized — see igtMwRenderMatchupGrid's own comment on
+                 row compactness) so it never forces the row taller than a
+                 60-card Main Deck's own 6-row height. -->
+            <div id="igt-mw-matchup-grid-panel" style="display:none;flex:1 1 210px;min-width:150px;max-width:360px;max-height:400px;flex-direction:column;background:var(--panel);border:1px solid var(--border);border-radius:8px"></div>
           </div>
-          <!-- Side Deck — full width, below Main Deck/Matchup Grid row -->
+          <!-- Side Deck — full width, below Main Deck/Matchup Grid row.
+               Tiles kept smaller than Main Deck's (40 vs 56) — it's a
+               single row of at most 15 cards, so there's no 6-row stack to
+               worry about, and shrinking it here is what buys Main Deck +
+               the Matchup Grid the vertical room to stay comfortably big
+               without the page ever needing to scroll. -->
           <div>
-            <div class="slbl" style="margin-bottom:6px">SIDE DECK <span id="igt-side-count" style="color:var(--muted)">(0/15)</span>
+            <div class="slbl" style="margin-bottom:5px">SIDE DECK <span id="igt-side-count" style="color:var(--muted)">(0/15)</span>
               <!-- Shown/hidden together with the Matchup Winrate panel itself
                    (see igtMwToggle) — the Win Rate Avg. Score above only ever
                    reads _igtDeck.main, so this spells that out right where
@@ -1514,7 +1526,7 @@ select{cursor:pointer}
                    count once igtSwapCommit moves it into Main for real. -->
               <span id="igt-mw-sidedeck-note" style="display:none;font-weight:normal;color:var(--muted);font-size:10px;margin-left:8px">— not counted in the Win Rate Avg. Score above (Main Deck only; swap a card in to have it count)</span>
             </div>
-            <div id="igt-side-tiles" style="display:grid;grid-template-columns:repeat(15,56px);gap:2px"></div>
+            <div id="igt-side-tiles" style="display:grid;grid-template-columns:repeat(15,40px);gap:2px"></div>
           </div>
           <!-- hidden for compat -->
           <div style="display:none"><div id="igt-extra-tiles"></div><span id="igt-extra-count"></span></div>
@@ -23879,7 +23891,7 @@ function igtRenderAllDeck() {
       const marked = Math.min(markedCount(card.id), card.qty);
       for (let q = 0; q < card.qty; q++) {
         const isMarked = q < marked;
-        const tile = igtCardTile(card, { size: sec==='main'?72:56,
+        const tile = igtCardTile(card, { size: sec==='main'?52:40,
           label: isMarked ? markLabel : null,
           labelColor: isMarked ? markColor : null,
           borderColor: isMarked ? markColor : 'transparent',
@@ -24244,7 +24256,7 @@ function igtMwComputeStats() {
 // single deck-mutating render (igtRenderAllDeck), exactly like
 // igtMwRenderAvgScore, so the grid stays live as cards are added/removed/
 // swapped without re-scanning match records on every click.
-const IGT_MW_GRID_NAMED_OPPONENTS = ['Warrior', 'Chaos Control', 'Chaos Return', 'Chaos Warrior'];
+const IGT_MW_GRID_NAMED_OPPONENTS = ['Chaos Turbo', 'Warrior', 'Chaos Control', 'Chaos Return', 'Chaos Warrior'];
 const IGT_MW_GRID_BURN_VARIANTS = ['Rescue Cat Burn', 'Panda Burn'];
 const IGT_MW_GRID_GATE_VARIANTS = ['Reasoning Gate Turbo', 'Reasoning Gate Machine'];
 // Burn/Reasoning Gate rows are a 3-way pick, not just a toggle between the
@@ -24283,7 +24295,7 @@ function igtMwMatchupGridDefs(myDeck) {
     myDeck, ...IGT_MW_GRID_NAMED_OPPONENTS, ...IGT_MW_GRID_BURN_VARIANTS, ...IGT_MW_GRID_GATE_VARIANTS,
   ]);
   return [
-    { key: 'mirror', label: 'Mirror Match', opp: myDeck, matchOpp: o => o === myDeck },
+    { key: 'chaosturbo', label: 'Chaos Turbo', opp: 'Chaos Turbo', matchOpp: o => o === 'Chaos Turbo' },
     { key: 'warrior', label: 'Warrior', opp: 'Warrior', matchOpp: o => o === 'Warrior' },
     { key: 'chaoscontrol', label: 'Chaos Control', opp: 'Chaos Control', matchOpp: o => o === 'Chaos Control' },
     { key: 'burn', label: 'Burn',
@@ -24382,7 +24394,7 @@ function igtMwRenderMatchupGrid() {
     // Rows are kept this compact specifically so all 9 fit in the panel's
     // max-height without needing its own internal scrollbar on top of the
     // page's — see igt-mw-matchup-grid-panel's max-height below.
-    return '<div class="igt-mw-grid-row"'+(clickable?' data-opp="'+_escapeHtml(def.opp)+'" data-mirror="'+(def.key==='mirror'?'1':'0')+'"':'')+' style="background:var(--card2);border:1px solid var(--border2);border-radius:5px;padding:3px 7px;display:flex;flex-direction:column;gap:2px;'+(clickable?'cursor:pointer':'')+'" title="'+(clickable?'Click to load this matchup in the vs: dropdown above':'')+'">'
+    return '<div class="igt-mw-grid-row"'+(clickable?' data-opp="'+_escapeHtml(def.opp)+'"':'')+' style="background:var(--card2);border:1px solid var(--border2);border-radius:5px;padding:3px 7px;display:flex;flex-direction:column;gap:2px;'+(clickable?'cursor:pointer':'')+'" title="'+(clickable?'Click to load this matchup in the vs: dropdown above':'')+'">'
       + '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px">'
       + headerHtml
       + '<span style="color:var(--muted);font-size:8px;white-space:nowrap">'+(slot?slot.recordCount:0)+' match(es)</span>'
@@ -24584,7 +24596,7 @@ function igtMwRenderAvgScore() {
       + '<span style="font-size:20px;font-weight:bold;color:var(--text)">'+pct+'%</span>'
       + '</div>';
   };
-  const row = (titleHtml, score, borderTop) => '<div style="display:flex;align-items:center;gap:14px;'+(borderTop?'padding-top:8px;border-top:1px solid var(--border2)':'')+'">'
+  const row = (titleHtml, score, borderTop) => '<div style="display:flex;align-items:center;gap:14px;'+(borderTop?'padding-top:5px;border-top:1px solid var(--border2)':'')+'">'
     + titleHtml
     + '<span style="flex:1"></span>'
     + seg('MATCH', '#3ddc84', score.match)
