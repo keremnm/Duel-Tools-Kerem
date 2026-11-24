@@ -1042,6 +1042,22 @@ select{cursor:pointer}
           </div>
           <!-- Filter tabs -->
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+            <!-- Sort selector — controls the ORDER players appear in the
+                 grid, independent of the Mode selector/sub-tabs below (which
+                 control WHICH players show). Recent Activity is the
+                 default: ranks by the most recent real-world activity we
+                 can resolve for a player — actual event dates, or GFWL
+                 season participation mapped to an approximate date — never
+                 by when the profile or its batches were created/imported.
+                 See refreshProfileActivityDates(). -->
+            <div style="display:flex;align-items:center;gap:6px;margin-right:6px">
+              <span style="font-size:10px;color:var(--muted)">Sort:</span>
+              <div style="display:flex;gap:4px">
+                <button class="ptab-sort" id="ptab-sort-recent" onclick="setProfileSortMode('recent')" title="Most recent real-world activity first (actual event dates, or GFWL season play) — not when the profile was added" style="font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--green);color:var(--green);background:none;cursor:pointer">🕐 Recent Activity</button>
+                <button class="ptab-sort" id="ptab-sort-alpha" onclick="setProfileSortMode('alpha')" style="font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--border);color:var(--muted);background:none;cursor:pointer">A–Z</button>
+              </div>
+            </div>
+            <div style="width:1px;height:18px;background:var(--border);margin:0 2px"></div>
             <!-- Mode selector -->
             <div style="display:flex;gap:4px;margin-right:6px">
               <button class="ptab-mode active" id="ptab-mode-alpha" onclick="setProfileMode('alpha')" style="font-family:monospace;font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--green);color:var(--green);background:none;cursor:pointer">A–Z</button>
@@ -20852,6 +20868,7 @@ async function loadProfiles() {
     }
     renderProfileSubTabs();
     profileTabFilter();
+    refreshProfileActivityDates(); // not awaited — see its own comment on why
   } catch(e) {
     console.error('[Profiles] loadProfiles error:', e.message);
     // Only show error state if we have nothing rendered yet
@@ -20863,6 +20880,101 @@ async function loadProfiles() {
       }
       renderProfileGrid(_allProfileBatches);
     }
+  }
+}
+
+// ── Profile grid sort (independent of the filter Mode below) ────────────────
+// Controls the ORDER players appear in the grid — the Mode selector/sub-tabs
+// further down control WHICH players show, and are unaffected by this.
+// Default is 'recent': ranks by the most recent real-world activity we can
+// resolve for a player, never by when their profile/batches were
+// created/imported — see refreshProfileActivityDates() below.
+let _profileSortMode = 'recent'; // 'recent' | 'alpha'
+
+function setProfileSortMode(mode) {
+  _profileSortMode = mode;
+  document.querySelectorAll('.ptab-sort').forEach(b => {
+    const active = b.id === 'ptab-sort-'+mode;
+    b.style.borderColor = active ? 'var(--green)' : 'var(--border)';
+    b.style.color = active ? 'var(--green)' : 'var(--muted)';
+  });
+  profileTabFilter();
+}
+
+// { [player]: 'YYYY-MM-DD' }, the most recent resolvable activity date for
+// that player — null until refreshProfileActivityDates() first completes
+// this session. Keyed by the exact player string (same casing byPlayer uses
+// throughout this file), not lowercased.
+let _playerActivityDates = null;
+let _profileActivityRefreshing = false; // dedupes overlapping refreshes (rapid tab switches)
+
+// A GFWL season has no event date of its own (see getEventDate's own
+// comment — it deliberately returns null for "S#" codes, since a season
+// sorts by week number, not a date), so approximate one from the same
+// season->year/half mapping the Year filter already uses for GFWL-season-
+// coded matches (GFWL_SEASON_YEAR_MAP, defined further down with
+// isGFWLSeason/gfwlSeasonToYear) — a mid-point of whichever half of the
+// year that season ran. Good enough to rank recency against real event
+// dates; never shown to the user as a literal date.
+function _approxGfwlSeasonDate(code) {
+  const m = /^S(\d+)$/i.exec((code||'').trim());
+  if (!m) return null;
+  const entry = GFWL_SEASON_YEAR_MAP[parseInt(m[1], 10)];
+  if (!entry) return null;
+  return entry.year + (entry.half === 1 ? '-03-15' : '-09-15');
+}
+
+// Computes _playerActivityDates in the background and re-renders once done.
+// Deliberately NOT awaited by loadProfiles() — the grid paints immediately
+// off whatever's already cached (or a plain alphabetical fallback, the
+// first time this session), rather than blocking the whole Profiles tab on
+// one more network round trip before anything shows. Two signals per
+// player, merged by taking whichever is more recent:
+//   1. GFWL season participation — window._playerRegistry[...].gfwlTeams,
+//      already loaded with the rest of the roster for the Season/Conference
+//      tabs, so this costs no extra fetch at all.
+//   2. Real (non-GFWL-season) event replay dates — scanned from every
+//      batch system-wide via the shared getAllBatchesFull() cache (one
+//      request, reused by Format Data/GFWL Archive/Events too — see that
+//      function's own comment on why this is the cheap path here, versus
+//      the per-profile id-scoped fetch openProfile() deliberately uses
+//      instead for a SINGLE player).
+async function refreshProfileActivityDates() {
+  if (_profileActivityRefreshing) return;
+  _profileActivityRefreshing = true;
+  try {
+    const dates = {};
+    const players = [...new Set((_allProfileBatches||[]).map(b => b.player))];
+    for (const player of players) {
+      const reg = window._playerRegistry && window._playerRegistry[player.toLowerCase()];
+      const teams = reg ? (reg.gfwlTeams||[]) : [];
+      for (const t of teams) {
+        const code = gfwlNormalizeSeason ? gfwlNormalizeSeason(t.season||'') : (t.season||'').toUpperCase();
+        const d = _approxGfwlSeasonDate(code);
+        if (d && (!dates[player] || d > dates[player])) dates[player] = d;
+      }
+    }
+    const allFull = await getAllBatchesFull();
+    for (const b of (allFull||[])) {
+      if (!b || !b.player) continue;
+      for (const r of (b.replays||[])) {
+        const code = eventGroupKey(r.eventLabel||'');
+        if (!code) continue;
+        const d = isGFWLSeason(code) ? _approxGfwlSeasonDate(code) : getEventDate(code);
+        if (d && (!dates[b.player] || d > dates[b.player])) dates[b.player] = d;
+      }
+    }
+    _playerActivityDates = dates;
+  } catch(e) {
+    console.warn('[Profiles] activity-date computation failed:', e.message);
+  } finally {
+    _profileActivityRefreshing = false;
+  }
+  // Re-render with the freshly computed dates — a no-op visually if A–Z
+  // sort is active, but cheap either way (profileTabFilter only re-filters
+  // and re-sorts in memory, no network).
+  if (document.getElementById('profile-browser') && document.getElementById('profile-browser').style.display !== 'none') {
+    profileTabFilter();
   }
 }
 
@@ -21117,8 +21229,18 @@ function renderProfileGrid(batches) {
     return seasons.sort((a,b)=>parseInt(b.slice(1))-parseInt(a.slice(1)))[0];
   })();
 
-  // Sort players alphabetically
-  Object.entries(byPlayer).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([player, pBatches]) => {
+  // Sort players — 'recent' (default) ranks by the most recent resolvable
+  // real-world activity date (see refreshProfileActivityDates()/_playerActivityDates
+  // above), NOT by when the profile/batches were created or imported; unresolved
+  // players sort last. 'alpha' is a plain A-Z fallback, ignoring activity dates.
+  Object.entries(byPlayer).sort((a,b) => {
+    if (_profileSortMode === 'recent') {
+      const da = (_playerActivityDates && _playerActivityDates[a[0]]) || '';
+      const db = (_playerActivityDates && _playerActivityDates[b[0]]) || '';
+      if (da !== db) return db.localeCompare(da); // descending — most recent first
+    }
+    return a[0].localeCompare(b[0]);
+  }).forEach(([player, pBatches]) => {
     // Card — horizontal: name left (wraps), team badge right, tags below if any
     const card = document.createElement('div');
     card.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 14px;cursor:pointer;transition:border-color .12s,transform .12s;display:flex;flex-direction:column;gap:4px';
