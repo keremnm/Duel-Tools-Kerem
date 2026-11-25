@@ -27864,8 +27864,8 @@ async function adminScanUnknownEventDates() {
         '<div style="font-weight:bold">' + _escapeHtml(c.code) + '</div>' +
         '<div style="font-size:11px;color:var(--muted)">' + c.count + ' replay(s) — e.g. "' + _escapeHtml(c.example) + '"</div>' +
       '</div>' +
-      '<input type="date" id="admin-unknown-date-input-' + _escapeHtml(c.code) + '" style="font-size:13px;padding:5px 8px"/>' +
-      '<button class="btn-go" style="font-size:12px;padding:6px 12px" onclick="adminResolveUnknownEventDate(this)" data-code="' + _escapeHtml(c.code) + '">Save</button>' +
+      '<input type="date" id="admin-unknown-date-input-' + _escapeHtml(c.code) + '" style="width:160px;flex:none;font-size:13px;padding:5px 8px"/>' +
+      '<button class="btn-go" style="flex:none;font-size:12px;padding:6px 16px" onclick="adminResolveUnknownEventDate(this)" data-code="' + _escapeHtml(c.code) + '">Save</button>' +
     '</div>'
   )).join('');
 }
