@@ -3926,7 +3926,12 @@ const server = http.createServer(async (req, res) => {
       // any replay that has it set, so a manual correction sticks through
       // every future "Retry Round Data" / "Sync Replays from Format
       // Library" run instead of being silently re-blanked or re-guessed.
-      const fields = ['plays','allPlays','parsed','timedOut','oppName','player1','player2','eventLabel','round','roundManual','mergedReplays'];
+      // 'cardTiming' — per-game opening-hand/draw-timing data computed by
+      // extractCardTimingData (see adminBackfillCardTiming client-side and
+      // GET /api/admin/replay-cache/:replayId below). Purely additive and
+      // read by nothing else on this route, so it's safe to just whitelist
+      // alongside everything else here rather than giving it its own route.
+      const fields = ['plays','allPlays','parsed','timedOut','oppName','player1','player2','eventLabel','round','roundManual','mergedReplays','cardTiming'];
       for (const f of fields) { if (data[f] !== undefined) r[f] = data[f]; }
       if (data.parsed) {
         r.allPlays = [];
@@ -5786,6 +5791,27 @@ ${value}
       console.error(`[proxy/replay] Failed for ${replayId}:`, e.message, is600010 ? '— CapSolver bot flag, try again in a moment' : '');
       return json(res, 502, { error: is600010 ? 'CapSolver flagged as bot (error 600010). Wait a moment and retry — or check your CapSolver balance/account.' : e.message });
     }
+  }
+
+  // ── GET /api/admin/replay-cache/:replayId — cache-ONLY lookup of a
+  // replay's raw play-by-play JSON, for the Card Timing Data backfill (see
+  // adminBackfillCardTiming client-side). Every replay ever fetched through
+  // GET /api/proxy/replay above is cached indefinitely in
+  // duel_tools_replay_cache (see cacheReplay/getCachedReplay) — separately
+  // from a batch's own r.allPlays, which gets cleared once a replay is
+  // parsed (see PATCH .../replay/:replayId/parsed) to keep batch storage
+  // small. This route reads ONLY that cache and deliberately never falls
+  // through to a live DuelingBook/CapSolver fetch on a miss — the whole
+  // point of the backfill reading from here is to never trigger (or pay
+  // for) a live refetch. A miss just means this replay was never run
+  // through the cache; the backfill reports it to the admin as skipped
+  // rather than silently paying to refetch it.
+  if (parts[0]==='admin' && parts[1]==='replay-cache' && parts[2] && method==='GET') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    const replayId = decodeURIComponent(parts[2]);
+    const cached = await getCachedReplay(replayId);
+    if (!cached || !(cached.plays||[]).length) return json(res, 200, { ok:true, cached:false });
+    return json(res, 200, { ok:true, cached:true, plays: cached.plays });
   }
 
   return json(res, 404, { error:'Not found' });

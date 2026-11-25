@@ -1985,6 +1985,7 @@ select{cursor:pointer}
       <div id="admin-decktypes-section" style="display:none"></div>
       <div id="admin-merge-section" style="display:none"></div>
       <div id="admin-events-section" style="display:none"></div>
+      <div id="admin-tools-section" style="display:none"></div>
 
       <!-- Log sub-tab — audit trail of who did what to whose data -->
       <div id="admin-log-section" style="display:none;flex-direction:column;gap:16px">
@@ -14037,6 +14038,163 @@ function parseMatch(replayId, plays, player, aliases, replayPlayer1, replayPlaye
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// CARD TIMING DATA — opening-hand / draw-turn / hand-vs-field extraction
+// from a replay's raw play-by-play log, for the Format Data "Card Timing"
+// sub-tab (Deeper Analysis — Parsed Replay Data mode). Verified directly
+// against a real DuelingBook replay JSON (not guessed at) — see the
+// project's card_timing_extractor test harness for the exact cross-checks.
+//
+// Scope (v1): MAIN DECK cards only. Extra Deck Special Summons are real
+// "added to field" events but have no "opening hand" or "drawn from deck"
+// concept — they never get shuffled into the 40/60-card main deck — so
+// tracking them under the same opening-hand/turn-drawn framing this
+// feature is built around would be misleading. They're excluded below.
+//
+// "First appearance" events (everything else — Normal Summon, Set,
+// Activate, Flip Summon, Attack, etc. — only ever moves a card that's
+// already been seen this game, so none of them matter here):
+//   1. The opening-hand deal ('Pick first' — bundles both players' first
+//      5 draws in one play's log array, each log entry matched 1:1, in
+//      order, against that SAME play's own `cards` array).
+//   2. 'Draw card' — covers a normal per-turn draw AND any card-effect
+//      draw identically ("Drew a card"/"Drew \"X\""); the log doesn't
+//      distinguish the two, and this feature's spec doesn't ask us to.
+//   3. 'To hand' sourced "from Deck" or "from GY" (search/return effects)
+//      — a card entering HAND for the first time without being drawn.
+//   4. 'SS ATK' / 'SS DEF' / 'Set monster' / 'Set ST' sourced "from Deck",
+//      "from GY", or "from Banished" (never "from hand", never "from
+//      Extra Deck") — a card entering the FIELD directly, skipping hand
+//      entirely.
+// ══════════════════════════════════════════════════════════════════════
+
+function extractCardTimingData(plays, player1Username, player2Username) {
+  const games = [];
+  let cur = null;
+  let turnNum = 0;
+
+  function flattenLogs(play) {
+    const logs = play.log;
+    if (!logs) return [];
+    return Array.isArray(logs) ? logs : [logs];
+  }
+  function firstQuoted(text) {
+    const m = /"([^"]+)"/.exec(text || '');
+    return m ? m[1] : null;
+  }
+
+  for (const play of (plays||[])) {
+    const pt = play.play;
+    const entries = flattenLogs(play);
+
+    if (pt === 'Pick first') {
+      turnNum = 0;
+      const entry = { gameNum: games.length + 1, firstPlayer: null, secondPlayer: null, openingHand: {}, events: [] };
+      games.push(entry);
+      cur = entry;
+      entry.openingHand[player1Username] = [];
+      entry.openingHand[player2Username] = [];
+      let cardIdx = 0;
+      const cardsArr = play.cards || [];
+      for (const e of entries) {
+        const pub = e.public_log || '';
+        const uname = e.username;
+        if (/Chose to go first/i.test(pub)) {
+          entry.firstPlayer = uname;
+          entry.secondPlayer = (uname === player1Username) ? player2Username : player1Username;
+        } else if (/^Drew a card$/i.test(pub)) {
+          const c = cardsArr[cardIdx++];
+          if (c && entry.openingHand[uname]) {
+            entry.openingHand[uname].push({ cardId: c.id, cardName: c.name });
+          }
+        }
+      }
+      continue;
+    }
+
+    if (pt === 'Start turn') { turnNum++; continue; }
+    if (!cur) continue; // nothing before the first 'Pick first' is game-scoped
+
+    if (pt === 'Draw card') {
+      const e = entries[0] || {};
+      const uname = e.username || play.username;
+      const name = firstQuoted(e.private_log) || firstQuoted(e.public_log);
+      const c = play.card;
+      if (name) {
+        cur.events.push({ turn: turnNum, username: uname, type: 'draw', zone: 'hand', cardId: c ? c.id : null, cardName: c ? c.name : name, fromZone: 'Deck' });
+      }
+      continue;
+    }
+
+    if (pt === 'To hand') {
+      const e = entries[0] || {};
+      const uname = e.username || play.username;
+      const text = e.private_log || e.public_log || '';
+      const m = /from (Deck|GY)\b/i.exec(text);
+      const name = firstQuoted(text);
+      const c = play.card;
+      if (name && m) {
+        cur.events.push({ turn: turnNum, username: uname, type: 'added', zone: 'hand', cardId: c ? c.id : null, cardName: c ? c.name : name, fromZone: m[1] });
+      }
+      continue;
+    }
+
+    if (pt === 'SS ATK' || pt === 'SS DEF' || pt === 'Set monster' || pt === 'Set ST') {
+      const e = entries[0] || {};
+      const uname = e.username || play.username;
+      const text = e.public_log || e.private_log || ''; // these are logged publicly — no private_log
+      const m = /from (Deck|GY|Banished|Extra Deck)\b/i.exec(text);
+      if (!m) continue; // "from hand" (or no source phrase logged at all) -> not a new appearance
+      if (/Extra Deck/i.test(m[1])) continue; // out of scope — see header comment
+      const name = firstQuoted(text);
+      const c = play.card;
+      if (name) {
+        cur.events.push({ turn: turnNum, username: uname, type: 'added', zone: 'field', cardId: c ? c.id : null, cardName: c ? c.name : name, fromZone: m[1] });
+      }
+      continue;
+    }
+  }
+
+  return games;
+}
+
+// Wraps extractCardTimingData with this match's already-resolved player
+// identity (matchesPlayerName() — the same alias-matching parseMatch uses
+// internally) and cross-references parsed.games (already computed by
+// parseMatch, from the SAME raw plays) for the authoritative "who went
+// first" / "who won" facts, rather than re-deriving them a second,
+// possibly-inconsistent way. `parsed` is this replay's existing r.parsed —
+// the backfill never needs to re-run parseMatch itself.
+// Returns null when there's nothing usable to attach (no plays, no parsed
+// games, or neither side of a game could be identified as "me").
+function buildCardTimingForMatch(plays, player, aliases, player1, player2, parsed) {
+  if (!plays || !plays.length || !parsed || !parsed.games || !parsed.games.length) return null;
+  const rawGames = extractCardTimingData(plays, player1, player2);
+  if (!rawGames.length) return null;
+  const isMine = u => matchesPlayerName(u, player, aliases);
+  const games = [];
+  parsed.games.forEach(pg => {
+    const rg = rawGames.find(g => g.gameNum === pg.gameNum);
+    if (!rg) return; // extractor saw fewer games than parseMatch did — skip rather than guess
+    const myName = isMine(rg.firstPlayer) ? rg.firstPlayer : (isMine(rg.secondPlayer) ? rg.secondPlayer : null);
+    if (!myName) return; // couldn't identify either side as "me" this game — skip rather than guess
+    const oppName = myName === rg.firstPlayer ? rg.secondPlayer : rg.firstPlayer;
+    const slim = c => ({ cardId: c.cardId, cardName: c.cardName });
+    const slimEv = e => ({ turn: e.turn, type: e.type, zone: e.zone, cardId: e.cardId, cardName: e.cardName, fromZone: e.fromZone });
+    games.push({
+      gameNum: pg.gameNum,
+      myFirst: !!pg.first && isMine(pg.first), // authoritative — same fact every other view already reads
+      myWon: !!pg.winner && isMine(pg.winner),
+      myOpeningHand: (rg.openingHand[myName]||[]).map(slim),
+      oppOpeningHand: (rg.openingHand[oppName]||[]).map(slim),
+      myEvents: rg.events.filter(e=>e.username===myName).map(slimEv),
+      oppEvents: rg.events.filter(e=>e.username===oppName).map(slimEv),
+    });
+  });
+  if (!games.length) return null;
+  return { version: 1, games };
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // MERGE REPLAY — stitches a continuation replay (DuelingBook gives a
 // disconnect-forced reconnect its own replay ID) into an EXISTING match's
 // stored r.parsed. Because buildDeck()'s fast path and buildMatchRecord()
@@ -15789,6 +15947,86 @@ function populateFormatDataDropdown() {
   sel.value = decks.includes(cur) ? cur : decks[0];
 }
 
+// ── Format Data matchup table: fixed named rows instead of "every opponent
+// that happens to have data" ─────────────────────────────────────────────
+// Same idea as the In-Game Tools "vs the field" matchup grid
+// (igtMwMatchupGridDefs) — a fixed, ordered list of the format's
+// established archetypes, with Burn and Reasoning Gate each pooled into
+// one row by default (a per-row dropdown isolates a single variant) and
+// everything else folded into one "Rest of Field" row — but this list and
+// its variant handling are Format-Data-specific (the named decks and the
+// "any deck with Burn/Reasoning Gate in its name" rule differ from that
+// grid's own), so they're kept separate rather than shared consts.
+const FD_MATCHUP_FIXED_NAMES = [
+  'Chaos Turbo', 'Warrior', 'Chaos Control', 'Chaos Return', 'Chaos Warrior',
+  'Goat Control', 'Chaos Relinquished', 'Stein OTK', 'Earth Aggro',
+  'Aggro Lockdown', 'Rescue Cat OTK', 'Zombie', 'Monarch',
+];
+// Derived from the real classifier's own ALL_DECK_CLASSES rather than
+// hardcoded, per the actual request ("any of the deck types with 'Burn' in
+// their name") — so a newly added Burn archetype is picked up automatically
+// instead of silently landing in Rest of Field. Reasoning Gate only ever
+// has these two named variants today, matched by name-prefix the same way.
+const FD_MATCHUP_BURN_VARIANTS = ALL_DECK_CLASSES.filter(d => /burn/i.test(d));
+const FD_MATCHUP_GATE_VARIANTS = ALL_DECK_CLASSES.filter(d => /^reasoning gate/i.test(d));
+const FD_MATCHUP_BURN_OPTIONS = [{ value: 'combined', label: 'Burn (Combined)' }, ...FD_MATCHUP_BURN_VARIANTS.map(v => ({ value: v, label: v }))];
+const FD_MATCHUP_GATE_OPTIONS = [{ value: 'combined', label: 'Reasoning Gate (Combined)' }, ...FD_MATCHUP_GATE_VARIANTS.map(v => ({ value: v, label: v }))];
+// Burn/Gate variant mode is a single global preference (not per "my deck"),
+// same convention as the In-Game Tools grid. "Add a Matchup" additions are
+// kept per "my deck" instead — which opponent you want pinned out of Rest
+// of Field naturally depends on which deck's page you're looking at, and
+// keying it that way means switching My Deck doesn't leave a stray
+// unrelated row behind. Neither is saved — session-only, same as every
+// other Format Data filter control.
+let _fdMatchupBurnMode = 'combined';
+let _fdMatchupGateMode = 'combined';
+let _fdMatchupCustomOppsByDeck = {}; // { [myDeck]: [oppDeckName, ...] }
+
+function fdMatchupCustomOpps(myDeck) {
+  return _fdMatchupCustomOppsByDeck[myDeck] || [];
+}
+
+// One definition per row, in display order. `matchOpp(oppDeckName)` decides
+// which of byOpp's already-aggregated opponent keys count toward this row.
+function fdMatchupRowDefs(myDeck) {
+  const customOpps = fdMatchupCustomOpps(myDeck);
+  const pinnedExcl = new Set([
+    myDeck, ...FD_MATCHUP_FIXED_NAMES, ...FD_MATCHUP_BURN_VARIANTS, ...FD_MATCHUP_GATE_VARIANTS, ...customOpps,
+  ]);
+  const rows = [];
+  const BURN_SLOT = 3;   // sits right after Chaos Control, per the requested order
+  const GATE_SLOT = 5;   // sits right after Chaos Warrior, before Goat Control
+  FD_MATCHUP_FIXED_NAMES.forEach((name, i) => {
+    if (i === BURN_SLOT) {
+      rows.push({ key: 'burn', label: 'Burn', variantKey: 'burn', variantValue: _fdMatchupBurnMode, variantOptions: FD_MATCHUP_BURN_OPTIONS,
+        matchOpp: _fdMatchupBurnMode === 'combined' ? (o => FD_MATCHUP_BURN_VARIANTS.includes(o)) : (o => o === _fdMatchupBurnMode) });
+    }
+    if (i === GATE_SLOT) {
+      rows.push({ key: 'gate', label: 'Reasoning Gate', variantKey: 'gate', variantValue: _fdMatchupGateMode, variantOptions: FD_MATCHUP_GATE_OPTIONS,
+        matchOpp: _fdMatchupGateMode === 'combined' ? (o => FD_MATCHUP_GATE_VARIANTS.includes(o)) : (o => o === _fdMatchupGateMode) });
+    }
+    rows.push({ key: 'named:'+name, label: name, matchOpp: o => o === name });
+  });
+  rows.push({ key: 'restoffield', label: 'Rest of Field', isRestOfField: true,
+    matchOpp: o => o !== 'Unknown' && !pinnedExcl.has(o) });
+  customOpps.forEach(o => {
+    rows.push({ key: 'custom:'+o, label: o, isCustomAdded: true, customOpp: o, matchOpp: k => k === o });
+  });
+  return rows;
+}
+
+// Sums byOpp's already-aggregated per-opponent W/L/G1/PS tallies across
+// every opponent key this row's matchOpp accepts — cheap (no re-scan of raw
+// records) since byOpp/byOppRecords are already built once per render.
+function fdAggregateMatchupRow(byOpp, matchOpp) {
+  let w=0, l=0, g1w=0, g1l=0, psw=0, psl=0, oppCount=0;
+  Object.entries(byOpp).forEach(([opp, rec]) => {
+    if (!matchOpp(opp)) return;
+    w += rec.w; l += rec.l; g1w += rec.g1w; g1l += rec.g1l; psw += rec.psw; psl += rec.psl; oppCount++;
+  });
+  return { w, l, g1w, g1l, psw, psl, oppCount };
+}
+
 function renderFormatDataTable(deckType) {
   const out = document.getElementById('fd-output');
   if (!out) return;
@@ -15873,8 +16111,6 @@ function renderFormatDataTable(deckType) {
     const ps = gameOutcomeTally(r.games, [2,3]);
     byOpp[k].psw += ps.w; byOpp[k].psl += ps.l;
   });
-  const rows = Object.entries(byOpp).sort((a,b) => (b[1].w+b[1].l)-(a[1].w+a[1].l));
-
   const mirrorW = mirrors.filter(r=>r.matchWon).length;
   const mirrorL = mirrors.filter(r=>r.matchLost).length;
   const fieldW = nonMirrors.filter(r=>r.matchWon).length;
@@ -15911,31 +16147,78 @@ function renderFormatDataTable(deckType) {
   chipsRow.appendChild(chip(fieldWP+'%', 'Win Rate vs Field', fieldWP>=50?'var(--green)':'var(--red)'));
   out.appendChild(chipsRow);
 
-  // Matchup table
+  // "Add a Matchup" — lets this session pin an extra opponent deck (one
+  // that would otherwise be folded into Rest of Field) as its own row,
+  // scoped to this "my deck" page (see fdMatchupCustomOpps above).
+  const addMatchupWrap = document.createElement('div');
+  addMatchupWrap.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:2px';
+  const customOpps = fdMatchupCustomOpps(deck);
+  const pinnedForAdd = new Set([deck, ...FD_MATCHUP_FIXED_NAMES, ...FD_MATCHUP_BURN_VARIANTS, ...FD_MATCHUP_GATE_VARIANTS, ...customOpps]);
+  const addableDecks = ALL_DECK_CLASSES.filter(d => !pinnedForAdd.has(d)).sort();
+  addMatchupWrap.innerHTML = '<select id="fd-add-matchup-select" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:4px 8px;border-radius:5px;outline:none">'
+    + '<option value="">+ Add a matchup…</option>'
+    + addableDecks.map(d => `<option value="${_escapeHtml(d)}">${_escapeHtml(d)}</option>`).join('')
+    + '</select>';
+  out.appendChild(addMatchupWrap);
+  const addMatchupSel = addMatchupWrap.querySelector('#fd-add-matchup-select');
+  addMatchupSel.addEventListener('change', () => {
+    const v = addMatchupSel.value;
+    if (!v) return;
+    if (!_fdMatchupCustomOppsByDeck[deck]) _fdMatchupCustomOppsByDeck[deck] = [];
+    if (!_fdMatchupCustomOppsByDeck[deck].includes(v)) _fdMatchupCustomOppsByDeck[deck].push(v);
+    renderFormatDataTable(deck);
+  });
+
+  // Matchup table — a fixed, ordered list of the format's named archetypes
+  // (see fdMatchupRowDefs) instead of every opponent that happens to have
+  // data, so every deck's page is laid out the same way and easy to
+  // compare at a glance.
   const table = document.createElement('table');
   table.className = 'dd-table';
   table.style.marginTop = '4px';
   table.innerHTML = '<thead><tr><th>Opponent Deck</th><th>N</th><th>W-L</th><th>Win %</th><th title="Win rate of Game 1 only, before either side adjusts their deck">Pre-Side Win %</th><th title="Combined win rate of Games 2+3, after siding">Post-Side Win %</th><th title="Click a row to see every individual match\'s Game 1/2/3 results">Games</th><th>95% CI</th><th style="min-width:90px"></th></tr></thead>';
   const tbody = document.createElement('tbody');
 
-  rows.forEach(([opp, rec]) => {
+  const matchupDefs = fdMatchupRowDefs(deck);
+  matchupDefs.forEach(def => {
+    const rec = fdAggregateMatchupRow(byOpp, def.matchOpp);
     const tot = rec.w + rec.l;
     const wp = pct(rec.w, tot);
     const ci = wilsonCI(rec.w, tot);
     const tr = document.createElement('tr');
-    tr.style.cursor = 'pointer';
-    tr.title = 'Click to see every individual match vs ' + opp + ' (Game 1/2/3 results)';
+    tr.style.cursor = tot ? 'pointer' : 'default';
+    tr.title = tot ? ('Click to see every individual match vs ' + def.label + ' (Game 1/2/3 results)') : '';
+    let labelHtml;
+    if (def.variantOptions) {
+      labelHtml = `<select data-fd-matchup-variant="${def.variantKey}" style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-weight:bold;font-size:11px;padding:1px 4px;border-radius:4px;outline:none">`
+        + def.variantOptions.map(o => `<option value="${_escapeHtml(o.value)}"${o.value===def.variantValue?' selected':''}>${_escapeHtml(o.label)}</option>`).join('')
+        + '</select>';
+    } else if (def.isCustomAdded) {
+      labelHtml = `<span style="font-weight:bold;color:var(--text)">${_escapeHtml(def.label)}</span> <button data-fd-remove-custom="${_escapeHtml(def.customOpp)}" title="Remove this matchup row" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:11px;padding:0 2px;line-height:1">✕</button>`;
+    } else {
+      labelHtml = `<span style="font-weight:bold;color:${def.isRestOfField?'var(--muted)':'var(--text)'}">${_escapeHtml(def.label)}</span>`;
+    }
     tr.innerHTML = `
-      <td style="font-weight:bold;color:var(--text)">${opp}</td>
+      <td>${labelHtml}</td>
       <td class="dd-record">${tot}</td>
       <td><span class="dd-pct-w">${rec.w}</span>-<span class="dd-pct-l">${rec.l}</span></td>
-      <td style="font-weight:bold;color:${wp>=50?'var(--green)':'var(--red)'}">${wp}%</td>
+      ${tot ? `<td style="font-weight:bold;color:${wp>=50?'var(--green)':'var(--red)'}">${wp}%</td>` : '<td style="color:var(--dim);font-size:11px">No data</td>'}
       ${sideWinCell(rec.g1w, rec.g1l)}
       ${sideWinCell(rec.psw, rec.psl)}
-      <td style="text-align:center;color:var(--muted)"><span class="fd-games-caret">▸</span></td>
-      <td style="color:var(--muted);font-size:11px">${ci.low}–${ci.high}%</td>
+      <td style="text-align:center;color:var(--muted)">${tot ? '<span class="fd-games-caret">▸</span>' : ''}</td>
+      <td style="color:var(--muted);font-size:11px">${tot ? ci.low+'–'+ci.high+'%' : ''}</td>
       <td><div class="dd-winbar"><div class="dd-winbar-w" style="width:${tot?rec.w/tot*100:0}%"></div><div class="dd-winbar-l" style="width:${tot?rec.l/tot*100:0}%"></div></div></td>`;
-    tr.onclick = () => toggleFormatDataMatchLog(tr, opp, byOppRecords[opp]||[]);
+    if (tot) {
+      // A row can span several real opponent deck types (Burn/Reasoning
+      // Gate combined, Rest of Field) — the drill-down gets every matching
+      // opponent's records unioned together, not just one.
+      const matchingOpps = Object.keys(byOpp).filter(def.matchOpp);
+      const unionRecords = matchingOpps.flatMap(o => byOppRecords[o] || []);
+      tr.onclick = e => {
+        if (e.target.closest('select') || e.target.closest('button')) return;
+        toggleFormatDataMatchLog(tr, def.label, unionRecords);
+      };
+    }
     tbody.appendChild(tr);
   });
 
@@ -15957,9 +16240,26 @@ function renderFormatDataTable(deckType) {
   table.appendChild(tbody);
   out.appendChild(table);
 
+  table.querySelectorAll('select[data-fd-matchup-variant]').forEach(sel => {
+    sel.addEventListener('change', () => {
+      if (sel.dataset.fdMatchupVariant === 'burn') _fdMatchupBurnMode = sel.value;
+      else if (sel.dataset.fdMatchupVariant === 'gate') _fdMatchupGateMode = sel.value;
+      renderFormatDataTable(deck);
+    });
+    sel.addEventListener('click', e => e.stopPropagation());
+  });
+  table.querySelectorAll('button[data-fd-remove-custom]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const opp = btn.getAttribute('data-fd-remove-custom');
+      if (_fdMatchupCustomOppsByDeck[deck]) _fdMatchupCustomOppsByDeck[deck] = _fdMatchupCustomOppsByDeck[deck].filter(o => o !== opp);
+      renderFormatDataTable(deck);
+    });
+  });
+
   const note = document.createElement('div');
   note.style.cssText = 'font-size:10px;color:var(--dim);margin-top:4px';
-  note.textContent = 'Deck types auto-classified by TF-IDF model. The Opponent Deck breakdown below only includes matches cross-linked to the opponent\'s own archive — guaranteeing it\'s built from the exact same matches, with the exact same two deck labels, as that opponent deck\'s own page, so e.g. Warrior\'s win % vs Chaos Turbo and Chaos Turbo\'s win % vs Warrior always sum to 100%. 95% CI via Wilson score interval. Mirror matches (self-deck) excluded from the opponent breakdown above. Pre-Side Win % = Game 1 only; Post-Side Win % = Games 2+3 combined — shown as N/A where there\'s no per-game data (manual/forfeit entries, or replays whose game winner was never parsed). Click a row to see every individual match\'s Game 1/2/3 results.'
+  note.textContent = 'Deck types auto-classified by TF-IDF model. Burn and Reasoning Gate are pooled by default (pick a specific variant from that row\'s own dropdown); every other deck not named above is folded into Rest of Field — use "+ Add a matchup" to pin one out as its own row for this session. The Opponent Deck breakdown below only includes matches cross-linked to the opponent\'s own archive — guaranteeing it\'s built from the exact same matches, with the exact same two deck labels, as that opponent deck\'s own page, so e.g. Warrior\'s win % vs Chaos Turbo and Chaos Turbo\'s win % vs Warrior always sum to 100%. 95% CI via Wilson score interval. Mirror matches (self-deck) excluded from the opponent breakdown above. Pre-Side Win % = Game 1 only; Post-Side Win % = Games 2+3 combined — shown as N/A where there\'s no per-game data (manual/forfeit entries, or replays whose game winner was never parsed). Click a row to see every individual match\'s Game 1/2/3 results.'
     + (unknownOppExcluded ? ` ${unknownOppExcluded} match${unknownOppExcluded!==1?'es':''} vs an opponent who isn\'t archived/cross-linked excluded from the breakdown (still counted in Total Matches and Win Rate vs Field above, which don\'t depend on knowing the opponent\'s deck).` : '')
     + (incompleteExcluded ? ` ${incompleteExcluded} match${incompleteExcluded!==1?'es':''} excluded from every number above as not a valid best-of-3 score — a real (non-manual, non-overridden) replay whose recorded wins are either short of the 2 needed to decide it (e.g. 1-0, 0-1, 1-1) or impossible to reach in a real match (e.g. 3-0, 0-3, 2-2). See Admin → Cross-Links → Check & Fix Data to review these.` : '')
     + (omittedExcluded ? ` ${omittedExcluded} match${omittedExcluded!==1?'es':''} manually omitted from every number above — see Admin → Cross-Links → Check & Fix Data → Omitted Data to review or un-omit.` : '');
@@ -26664,6 +26964,7 @@ async function renderAdminPage() {
   const decktypesSection = document.getElementById('admin-decktypes-section');
   const mergeSection = document.getElementById('admin-merge-section');
   const eventsSection = document.getElementById('admin-events-section');
+  const toolsSection = document.getElementById('admin-tools-section');
   const logSection = document.getElementById('admin-log-section');
   if (!tabBar || !usersSection) return;
 
@@ -26687,8 +26988,8 @@ async function renderAdminPage() {
 
   // Tab buttons — bigger, roomier than the old modal's
   tabBar.innerHTML = '';
-  const ADMIN_TAB_KEYS = { 'Users':'users', 'Roles & Permissions':'perms', 'Sessions':'sessions', 'Cross-Links':'crosslinks', 'Deck Types':'decktypes', 'Merge Profiles':'merge', 'Events':'events', 'Log':'log' };
-  ['Users','Roles & Permissions','Sessions','Cross-Links','Deck Types','Merge Profiles','Events','Log'].forEach(tab => {
+  const ADMIN_TAB_KEYS = { 'Users':'users', 'Roles & Permissions':'perms', 'Sessions':'sessions', 'Cross-Links':'crosslinks', 'Deck Types':'decktypes', 'Merge Profiles':'merge', 'Events':'events', 'Tools':'tools', 'Log':'log' };
+  ['Users','Roles & Permissions','Sessions','Cross-Links','Deck Types','Merge Profiles','Events','Tools','Log'].forEach(tab => {
     const tb = document.createElement('button');
     tb.textContent = tab;
     tb.style.cssText = 'background:none;border:none;font-family:monospace;font-size:15px;cursor:pointer;padding:9px 18px;border-radius:6px;color:var(--muted)';
@@ -26708,6 +27009,8 @@ async function renderAdminPage() {
       else if (mergeSection) mergeSection.style.display = 'none';
       if (_adminTab === 'events') { eventsSection.style.display='block'; loadAdminEventsSection(eventsSection); }
       else if (eventsSection) eventsSection.style.display = 'none';
+      if (_adminTab === 'tools') { toolsSection.style.display='block'; loadAdminToolsSection(toolsSection); }
+      else if (toolsSection) toolsSection.style.display = 'none';
       if (_adminTab === 'log') { logSection.style.display='flex'; loadEditLog(); }
       else if (logSection) logSection.style.display = 'none';
     };
@@ -27105,6 +27408,107 @@ async function adminEventsDelete(ev) {
   } catch(e) {
     if (statusEl) { statusEl.style.color = 'var(--red)'; statusEl.textContent = 'Error: '+e.message; }
   }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// ADMIN TOOLS TAB — one-off maintenance jobs. First (and so far only) one:
+// backfilling Card Timing Data (see extractCardTimingData/
+// buildCardTimingForMatch above) onto every already-imported replay, for
+// the Format Data "Card Timing" sub-tab.
+// ══════════════════════════════════════════════════════════════════════
+function loadAdminToolsSection(el) {
+  el.innerHTML =
+    '<div style="font-size:15px;color:var(--text);margin-bottom:14px">' +
+      '<b>Backfill Card Timing Data</b>' +
+      '<div style="font-size:13px;color:var(--muted);margin-top:8px;line-height:1.6">' +
+        'Computes opening-hand / draw-turn / hand-vs-field timing for every already-imported ' +
+        'replay, from its raw play-by-play log — powers Format Data\'s Card Timing sub-tab. ' +
+        'Reads each replay\'s raw plays from the server\'s permanent replay cache (every replay ever ' +
+        'fetched stays cached there, even after a batch\'s own copy is cleared once parsed) — ' +
+        '<b>never re-fetches from DuelingBook, so this never costs a CapSolver charge.</b> A replay ' +
+        'whose raw plays genuinely aren\'t in that cache (never fetched through this app, or fetched ' +
+        'before caching existed) is skipped and reported, not re-fetched live. Safe to re-run any ' +
+        'time — a replay that already has this data is skipped instantly, so running it again after ' +
+        'new replays come in only computes the new ones.' +
+      '</div>' +
+    '</div>' +
+    '<button id="admin-backfill-cardtiming-btn" class="btn-go" onclick="adminBackfillCardTiming()" style="font-size:14px;padding:10px 18px">▶ Run Backfill</button>' +
+    '<div id="admin-backfill-cardtiming-status" style="font-size:13px;color:var(--muted);min-height:20px;margin-top:10px"></div>' +
+    '<div id="admin-backfill-cardtiming-log" style="display:none;flex-direction:column;gap:4px;font-size:12px;font-family:monospace;max-height:360px;overflow-y:auto;background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:10px;margin-top:8px"></div>';
+}
+
+async function adminBackfillCardTiming() {
+  const btn = document.getElementById('admin-backfill-cardtiming-btn');
+  const statusEl = document.getElementById('admin-backfill-cardtiming-status');
+  const logEl = document.getElementById('admin-backfill-cardtiming-log');
+  if (btn) { btn.disabled = true; btn.textContent = 'Running…'; }
+  logEl.style.display = 'flex'; logEl.innerHTML = '';
+  const log = (html, color) => {
+    const d = document.createElement('div');
+    if (color) d.style.color = color;
+    d.innerHTML = html;
+    logEl.appendChild(d);
+    logEl.scrollTop = logEl.scrollHeight;
+  };
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = 'Loading batches…';
+
+  let batches = [];
+  try {
+    batches = await getAllBatchesFull(true);
+  } catch(e) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = 'Failed to load batches: ' + e.message;
+    if (btn) { btn.disabled = false; btn.textContent = '▶ Run Backfill'; }
+    return;
+  }
+
+  let totalReplays = 0, computed = 0, alreadyDone = 0, noCache = 0, noUsableData = 0, errors = 0;
+
+  for (const batch of batches) {
+    const replays = batch.replays || [];
+    if (!replays.length) continue;
+    let batchComputed = 0, batchNoCache = 0, batchNoUsable = 0, batchErrors = 0;
+
+    for (const r of replays) {
+      totalReplays++;
+      if (r.cardTiming) { alreadyDone++; continue; } // idempotent re-run
+      if (r.isManual || !r.parsed || !r.parsed.games || !r.parsed.games.length) continue; // nothing to correlate raw plays against
+
+      try {
+        const res = await fetch(API+'/admin/replay-cache/'+encodeURIComponent(r.replayId), { headers: authHeaders() });
+        const body = await res.json();
+        if (!res.ok || !body.ok) { batchErrors++; errors++; continue; }
+        if (!body.cached) { batchNoCache++; noCache++; continue; }
+
+        const timing = buildCardTimingForMatch(body.plays, batch.player, batch.aliases||[], r.player1, r.player2, r.parsed);
+        if (!timing) { batchNoUsable++; noUsableData++; continue; }
+
+        const saveRes = await fetch(API+'/batches/'+batch.id+'/replay/'+encodeURIComponent(r.replayId), {
+          method: 'PATCH', headers: { 'Content-Type':'application/json', ...authHeaders() },
+          body: JSON.stringify({ cardTiming: timing }),
+        });
+        if (!saveRes.ok) { batchErrors++; errors++; continue; }
+        batchComputed++; computed++;
+      } catch(e) {
+        batchErrors++; errors++;
+      }
+    }
+
+    if (batchComputed || batchNoCache || batchNoUsable || batchErrors) {
+      log(`${_escapeHtml(batch.player||'(unknown)')} — ✓ ${batchComputed} computed`
+        + (batchNoCache ? `, <span style="color:var(--amber)">${batchNoCache} skipped (not in cache)</span>` : '')
+        + (batchNoUsable ? `, ${batchNoUsable} skipped (no usable data)` : '')
+        + (batchErrors ? `, <span style="color:var(--red)">${batchErrors} errored</span>` : ''));
+    }
+    statusEl.textContent = `Working… ${computed} computed, ${totalReplays} replays scanned so far`;
+  }
+
+  statusEl.style.color = 'var(--green)';
+  statusEl.textContent = `✓ Done — ${computed} replay(s) computed, ${alreadyDone} already had it, `
+    + `${noCache} skipped (not in the replay cache — would need a live re-fetch), `
+    + `${noUsableData} skipped (no usable parsed/raw data), ${errors} errored. ${totalReplays} replays scanned in total.`;
+  if (btn) { btn.disabled = false; btn.textContent = '▶ Run Backfill'; }
 }
 
 // ── Registry Check — read-only scan for likely player-registry mess:
