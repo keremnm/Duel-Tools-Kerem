@@ -3030,10 +3030,84 @@ function switchTabMobile(name) {
   switchTab(name, btn || null);
 }
 
-function switchTab(name, btn) {
+// ── URL routing for top-level tabs ───────────────────────────────────────
+// Every top-level tab gets its own path (/profiles, /deck, /rps,
+// /formatdata, /topcards, /leaderboard, /powerrankings, /ingame, /gfwl,
+// /events, /admin) via switchTab()'s own pushState call above. This map is
+// the single source of truth for which names are real routable tabs AND
+// which nav button to mark "on" for each — not a separate guess-the-id
+// helper, so a typo here fails loudly (a missing button) rather than
+// silently routing to a blank nav. The path segment is deliberately the
+// same string switchTab() already uses internally, so adding a new tab to
+// switchTab's own if-chain only needs one new entry here, not a parallel
+// translation table.
+//
+// This needed NO server-side change: server.js's static-file handler
+// already falls back to serving index.html for any path that isn't a real
+// file in public/ (checked directly — see its try/catch around
+// fs.readFileSync), which is exactly what a client-side-routed page needs.
+const URL_ROUTE_TAB_BTN_IDS = {
+  profiles: 'ntab-profiles', deck: 'ntab-deck', rps: 'ntab-rps',
+  formatdata: 'ntab-formatdata', topcards: 'ntab-topcards',
+  leaderboard: 'ntab-leaderboard', powerrankings: 'ntab-powerrankings',
+  ingame: 'ntab-ingame', gfwl: 'gfwl-prep-tab', events: 'ntab-events',
+  admin: 'ntab-admin',
+};
+function _navBtnForTab(name) {
+  const id = URL_ROUTE_TAB_BTN_IDS[name];
+  return id ? document.getElementById(id) : null;
+}
+// Resolves the CURRENT location.pathname to a tab name this account is
+// allowed to land on. Returns null for "/", an unrecognized path, or a tab
+// this account can't see (Admin for a non-admin) — the caller falls back
+// to the default Profiles landing tab in every one of those cases, same as
+// a logged-out/non-admin user clicking a stale admin link would see today.
+function _tabFromURL() {
+  const seg = location.pathname.replace(/^\/+|\/+$/g, '').toLowerCase();
+  if (!seg || !URL_ROUTE_TAB_BTN_IDS[seg]) return null;
+  if (seg === 'admin' && !isAdminRole(_userRole)) return null;
+  return seg;
+}
+// Applies whichever tab the URL points to, once the account's role is
+// actually known (called from gateLogin()/initAuth() right after
+// applyRoleUI() — NOT from initApp(), which runs before login and always
+// defaults to Profiles under the still-visible auth gate). skipPushState
+// is true here because this is restoring state FROM the URL the user
+// already arrived on, not a fresh navigation to push. A path that doesn't
+// resolve to anything this account can reach gets quietly corrected back
+// to "/" instead, so the address bar never shows a URL whose content it
+// didn't actually get.
+function _routeFromURLOnce() {
+  const tab = _tabFromURL();
+  if (tab && tab !== 'profiles') switchTab(tab, _navBtnForTab(tab), true);
+  else if (location.pathname !== '/' && !tab) history.replaceState({ tab: 'profiles' }, '', '/');
+}
+// Browser back/forward between tabs. e.state is set by switchTab's own
+// pushState above when present (the normal case); falling back to
+// re-resolving the URL covers a state-less history entry (e.g. the very
+// first "/" this tab started on, which never went through pushState).
+window.addEventListener('popstate', (e) => {
+  const tab = (e.state && e.state.tab) || _tabFromURL() || 'profiles';
+  switchTab(tab, _navBtnForTab(tab), true);
+});
+
+function switchTab(name, btn, skipPushState) {
   // Keep mobile dropdown in sync
   const mobileSel = document.getElementById('nav-mobile-sel');
   if (mobileSel && mobileSel.value !== name) mobileSel.value = name;
+
+  // URL routing — gives each top-level tab its own path (/formatdata,
+  // /gfwl, etc.) so a bookmark, a shared link, or hitting refresh lands
+  // back on the right tab, and back/forward moves between tabs like any
+  // other site. skipPushState is true when switchTab is restoring state
+  // FROM the URL (initial load, back/forward) rather than being triggered
+  // by an actual click — pushing a new entry in that case would fight with
+  // the browser's own history instead of following it. See
+  // URL_ROUTE_TAB_BTN_IDS/_tabFromURL/_routeFromURLOnce below.
+  if (!skipPushState && URL_ROUTE_TAB_BTN_IDS[name]) {
+    const newPath = '/' + name;
+    if (location.pathname !== newPath) history.pushState({ tab: name }, '', newPath);
+  }
 
   document.querySelectorAll('.ntab').forEach(b=>b.classList.remove('on'));
   if (btn) btn.classList.add('on');
@@ -14670,18 +14744,48 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
 
 let _globalRecords = []; // all records from all batches
 
-function buildGlobalRecordsFromBatches(batchList) {
+// buildMatchRecord's deck classification (classifyFromCards, run once for
+// "my deck" and once for "opponent deck" per replay — see its own ~340
+// lines of card-based heuristic scoring above) is real synchronous work.
+// Run in one tight loop over a league's FULL replay history in one go —
+// thousands of replays, system-wide, every time Format Data/Top Cards
+// first loads this session or Recompute is hit — this was long enough to
+// visibly freeze the tab (no paint, no response to input) for the whole
+// duration, since nothing yields back to the browser until it's all done.
+// Chunking the loop and yielding via a plain setTimeout(0) between chunks
+// (not requestAnimationFrame, which a backgrounded tab can starve) fixes
+// that: the browser gets to paint and handle input between chunks, so the
+// "Loading replay data…" message can show real progress instead of the
+// tab just appearing hung. This only changes HOW the work is scheduled —
+// every record computed is identical to the old synchronous version.
+const GLOBAL_RECORDS_CHUNK_SIZE = 300;
+function _yieldToBrowser() {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+async function buildGlobalRecordsFromBatches(batchList, onProgress) {
   const records = [];
+  // Flatten to one entry per REPLAY first (not per batch) so progress/
+  // chunking is counted in units of the actual cost center — batches vary
+  // wildly in replay count, which would make "batches processed" a
+  // misleading progress signal and an uneven chunk size.
+  const work = [];
   for (const full of batchList) {
     if (!full || !(full.replays||[]).length) continue;
     const player = full.player||'';
     const aliases = (window._playerRegistry && window._playerRegistry[player.toLowerCase()])
       ? (window._playerRegistry[player.toLowerCase()].aliases||[]) : (full.aliases||[]);
-    for (const rep of full.replays) {
-      const rec = buildMatchRecord(rep, player, aliases, full);
-      if (rec) records.push(rec);
+    for (const rep of full.replays) work.push({ rep, player, aliases, full });
+  }
+  for (let i = 0; i < work.length; i++) {
+    const { rep, player, aliases, full } = work[i];
+    const rec = buildMatchRecord(rep, player, aliases, full);
+    if (rec) records.push(rec);
+    if ((i + 1) % GLOBAL_RECORDS_CHUNK_SIZE === 0) {
+      if (onProgress) onProgress(i + 1, work.length);
+      await _yieldToBrowser();
     }
   }
+  if (onProgress) onProgress(work.length, work.length);
   reconcileCrossLinkedDeckLabels(records);
   return records;
 }
@@ -14837,12 +14941,25 @@ async function loadGlobalRecords(force) {
   // 1 + N requests — one for the batch list, then one more per non-empty
   // batch — just to populate the Format Data tab, which visibly crawled
   // once there were more than a handful of saved batches.
+  // Progress goes to whichever of Format Data / Top Cards is currently
+  // showing the "Loading replay data…" placeholder (set by loadFormatData/
+  // loadTopCards just before calling this) — checked by content rather than
+  // by "which tab is active" so this works no matter which page triggered
+  // the load, without this function needing to know or care which one that is.
+  function _reportGlobalRecordsProgress(done, total) {
+    const msg = '<div class="dd-empty">Loading replay data… (' + done.toLocaleString() + ' / ' + total.toLocaleString() + ')</div>';
+    ['fd-output', 'tc-output'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el && el.innerHTML.includes('Loading replay data')) el.innerHTML = msg;
+    });
+  }
+
   try {
     const res = await fetch(API+'/batches/all-full');
     if (res.ok) {
       const list = await res.json();
       if (Array.isArray(list)) {
-        _globalRecords = buildGlobalRecordsFromBatches(list);
+        _globalRecords = await buildGlobalRecordsFromBatches(list, _reportGlobalRecordsProgress);
         return _globalRecords;
       }
     }
@@ -14858,7 +14975,7 @@ async function loadGlobalRecords(force) {
       try {
         const r    = await fetch(API+'/batches/'+b.id);
         const full = await r.json();
-        records.push(...buildGlobalRecordsFromBatches([full]));
+        records.push(...await buildGlobalRecordsFromBatches([full]));
       } catch(e) {}
     }));
   } catch(e) {}
@@ -15166,12 +15283,22 @@ function _recordMatchesYear(r, year) {
   const code = eventGroupKey(r.eventLabel||'');
   // GFWL season-coded events have no FL-resolvable date of their own (see
   // getEventDate) but DO map onto a calendar year via GFWL_SEASON_YEAR_MAP
-  // — e.g. picking "2026" in Year now also pulls in S8/S9 matches. Not
-  // attempted for the relative Last 3/6 Months options below — a season
-  // only pins down a year/half, not a precise enough date to compare
-  // against a rolling cutoff.
+  // — e.g. picking "2026" in Year now also pulls in S8/S9 matches. For the
+  // relative Last 3/6 Months options, use the same season->approximate-date
+  // proxy the Recent Activity profile sort already relies on
+  // (_approxGfwlSeasonDate — a mid-point of whichever half of the year that
+  // season ran). It's not exact, but a currently-running or just-finished
+  // season (e.g. S9, which actually ran July-October 2026) needs to be
+  // able to show up under "Last 6 Months" at all — unconditionally
+  // excluding every GFWL-season match from both relative ranges (the old
+  // behavior here) meant defaulting Format Data to "Last 6 Months" would
+  // silently hide an entire recent season's worth of data.
   if (isGFWLSeason(code)) {
-    if (year === 'last3m' || year === 'last6m') return false;
+    if (year === 'last3m' || year === 'last6m') {
+      const approx = _approxGfwlSeasonDate(code);
+      if (!approx) return false;
+      return approx >= _monthsAgoISO(year === 'last3m' ? 3 : 6);
+    }
     return gfwlSeasonToYear(code) === year;
   }
   const d = code ? getEventDate(code) : null;
@@ -15450,7 +15577,7 @@ function openCustomFilterModal(scope) {
 // underlying _globalRecords, same filter semantics) — pass in that page's
 // own Year/Season <select> elements. Kept as one function so none of the
 // four pages' filters can ever drift out of sync with each other.
-function populateYearSeasonFilterPair(yearSel, seasonSel) {
+function populateYearSeasonFilterPair(yearSel, seasonSel, defaultYearValue) {
   const scope = _scopeFromSelId(yearSel ? yearSel.id : (seasonSel ? seasonSel.id : ''));
   const cf = _customFilters[scope];
   const curSeason = seasonSel ? seasonSel.value : '';
@@ -15459,12 +15586,19 @@ function populateYearSeasonFilterPair(yearSel, seasonSel) {
   const { yearsSet, seasonsSet } = _knownYearsAndSeasons();
   if (yearSel) {
     const years = [...yearsSet].sort((a,b)=>b-a);
-    // Default to 2026 the very first time this select is ever populated
-    // (nothing chosen yet) — every call after that preserves whatever is
-    // actually selected, same as every other option here always has.
+    // Default the very first time this select is ever populated (nothing
+    // chosen yet) — every call after that preserves whatever is actually
+    // selected, same as every other option here always has. Format Data
+    // passes 'last6m' here (see populateFormatDataYearSeasonFilters) so it
+    // opens scoped to recent data instead of the whole league's history;
+    // every other page (Top Cards, Leaderboard, Power Rankings, the Deck
+    // Builder matchup grid) keeps the original plain-2026 default by
+    // passing nothing.
     let cur = curYear;
     if (!yearSel.dataset.defaulted) {
-      if (years.includes('2026')) cur = '2026';
+      const dv = defaultYearValue || '2026';
+      if (dv === 'last3m' || dv === 'last6m' || years.includes(dv)) cur = dv;
+      else if (years.includes('2026')) cur = '2026';
       yearSel.dataset.defaulted = '1';
     }
     // Respect the current season selection, if any, same cross-filtering
@@ -15509,7 +15643,7 @@ function populateYearSeasonFilterPair(yearSel, seasonSel) {
 }
 
 function populateFormatDataYearSeasonFilters() {
-  populateYearSeasonFilterPair(document.getElementById('fd-year-filter'), document.getElementById('fd-season-filter'));
+  populateYearSeasonFilterPair(document.getElementById('fd-year-filter'), document.getElementById('fd-season-filter'), 'last6m');
 }
 
 function populateTopCardsYearSeasonFilters() {
@@ -21048,7 +21182,7 @@ function renderProfileSubTabs() {
         for (const t of (p.gfwlTeams||[])) { if (t.season) seasons.add(t.season.toUpperCase()); }
       }
     }
-    const sorted = [...seasons].filter(s=>s!=='all').sort((a,b)=>b.localeCompare(a));
+    const sorted = [...seasons].filter(s=>s!=='all').sort((a,b)=>gfwlSeasonNum(b)-gfwlSeasonNum(a));
     tabs = [{ label:'All', value:'all' }, ...sorted.map(s=>({ label:s, value:s }))];
   } else if (_profileMode === 'conf') {
     tabs = [
@@ -21258,7 +21392,7 @@ function renderProfileGrid(batches) {
     // Find team for latest season, fall back to most recent any season
     let _currentTeam = _teams.find(t => gfwlNormalizeSeason && gfwlNormalizeSeason(t.season||'') === _latestGFWLSeason);
     if (!_currentTeam && _teams.length) {
-      _currentTeam = [..._teams].sort((a,b)=>(b.season||'').localeCompare(a.season||''))[0];
+      _currentTeam = [..._teams].sort((a,b)=>gfwlSeasonNum(b.season)-gfwlSeasonNum(a.season))[0];
     }
 
     // Top row: just the name, centered on the tile
@@ -21369,16 +21503,32 @@ function isGFWLSeason(groupKey) {
   return /^S\d+$/i.test(groupKey);
 }
 
+// Numeric season number from a season code ("S9" -> 9, "S10" -> 10), for
+// sorting seasons in the correct chronological order. A plain string sort
+// (.localeCompare, or JS's default .sort()) compares season codes
+// character-by-character, which puts "S10" between "S2" and "S1" — wrong
+// as soon as a season reaches double digits. Every place that sorts GFWL
+// season codes (Profiles' Season sub-tabs, a player's "current team"
+// lookup, the GFWL Teams tile grid) uses this instead. Returns -1 for a
+// non-season/unrecognized code so it sorts last rather than erroring.
+function gfwlSeasonNum(code) {
+  const m = /^S(\d+)$/i.exec((code||'').trim());
+  return m ? parseInt(m[1], 10) : -1;
+}
+
 // GFWL season -> calendar year (+ which half of that year), per the
 // mapping given directly: S1->2022, S2/S3->2023, S4/S5->2024, S6/S7->2025,
-// S8/S9->2026 (S8 = first half of 2026, S9 = second half). Lets a GFWL
-// season-coded match (which has no FL-resolvable date of its own — see
-// getEventDate) still count toward the Year filter instead of being
-// invisible to it entirely (previously only the separate GFWL S# dropdown
-// could ever select a season's matches). `half` isn't used for the
-// relative Last 3/6 Months options (those stay keyed off an actual
-// resolved date — approximating a season's midpoint would be guesswork),
-// only for literal Year matching below.
+// S8/S9->2026 (S8 = first half of 2026, S9 = second half), S10->2027 (S10
+// starts in December 2026 but is counted as 2027 data — same "even season
+// = first half" pattern as S2/S4/S6/S8). Lets a GFWL season-coded match
+// (which has no FL-resolvable date of its own — see getEventDate) still
+// count toward the Year filter instead of being invisible to it entirely
+// (previously only the separate GFWL S# dropdown could ever select a
+// season's matches). `half` isn't used for the relative Last 3/6 Months
+// options (those stay keyed off an actual resolved date — approximating a
+// season's midpoint would be guesswork), only for literal Year matching
+// below (and for the Recent Activity profile sort's season approximation —
+// see _approxGfwlSeasonDate).
 const GFWL_SEASON_YEAR_MAP = {
   1: { year: '2022', half: 2 }, // only one season that year — no split
   2: { year: '2023', half: 1 },
@@ -21389,6 +21539,7 @@ const GFWL_SEASON_YEAR_MAP = {
   7: { year: '2025', half: 2 },
   8: { year: '2026', half: 1 },
   9: { year: '2026', half: 2 },
+  10: { year: '2027', half: 1 },
 };
 function gfwlSeasonToYear(groupKey) {
   const m = /^S(\d+)$/i.exec((groupKey||'').trim());
@@ -21474,8 +21625,8 @@ function renderProfileTeams(player, teams) {
   el.style.display = 'grid';
   el.style.gridTemplateColumns = 'repeat(auto-fill,minmax(130px,1fr))';
   el.innerHTML = '';
-  // Sort by season descending
-  [...teams].sort((a,b) => b.season.localeCompare(a.season)).forEach(t => {
+  // Sort by season descending (numeric — see gfwlSeasonNum)
+  [...teams].sort((a,b) => gfwlSeasonNum(b.season)-gfwlSeasonNum(a.season)).forEach(t => {
     const season = typeof gfwlNormalizeSeason === 'function' ? gfwlNormalizeSeason(t.season) : (t.season||'').toUpperCase();
     const isChamp = typeof gfwlIsSeasonChampion === 'function' && gfwlIsSeasonChampion(season, t.team);
     const tile = document.createElement('div');
@@ -25858,9 +26009,15 @@ async function initApp() {
   // main cause of slow post-sign-in loads: it fires one GET /api/batches/:id
   // per batch, in parallel, for everyone, every time — competing with
   // loadBatches()/loadProfiles() for the same server and connection pool.
-  // Profiles is the landing page
+  // Profiles is the landing page — skipPushState:true because this is just
+  // the pre-auth default (the auth-gate overlay covers it either way); the
+  // REAL URL-based routing decision happens once the account's role is
+  // known, in _routeFromURLOnce() (called from gateLogin()/initAuth()). If
+  // this call pushed state too, it would stomp the incoming URL (e.g.
+  // someone opening a bookmarked /formatdata link) before that later
+  // routing step ever got to read it.
   const firstTab = document.querySelector('.ntab');
-  switchTab('profiles', firstTab);
+  switchTab('profiles', firstTab, true);
 }
 
 initApp();
@@ -25910,6 +26067,7 @@ async function gateLogin() {
     localStorage.setItem('dt_token', _authToken);
     document.getElementById('auth-gate').remove();
     applyRoleUI();
+    _routeFromURLOnce();
     // initApp() already rendered the sidebar batch list once at page load,
     // before this login happened — with no token, so an account-gated
     // endpoint like GET /api/batches had no way to know who was asking and
@@ -28207,6 +28365,7 @@ async function initAuth() {
         const gate = document.getElementById('auth-gate');
         if (gate) gate.remove();
         applyRoleUI();
+        _routeFromURLOnce();
         loadBatches(); // re-fetch now that the account/role is confirmed (see gateLogin)
         checkPendingDtImport();
         return;
