@@ -1229,7 +1229,11 @@ select{cursor:pointer}
                 </div>
               </div>
               <input id="profile-edl-search" class="edl-search" type="text" placeholder="Search event code..." oninput="(()=>{const p=_activeProfile&&_activeProfile.player;if(p)renderEventDecks(p,_activeProfile.batches||[],_activeProfile.records||[]);})()"
-                style="width:100%;font-size:12px;margin-bottom:8px;padding:5px 8px"/>
+                style="width:100%;font-size:12px;margin-bottom:6px;padding:5px 8px"/>
+              <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);margin-bottom:8px;cursor:pointer;font-family:monospace">
+                <input type="checkbox" id="profile-edl-allhistory" onchange="(()=>{const p=_activeProfile&&_activeProfile.player;if(p)renderEventDecks(p,_activeProfile.batches||[],_activeProfile.records||[]);})()" style="cursor:pointer;accent-color:var(--green)"/>
+                Include All Historical Data
+              </label>
               <div id="profile-event-decklists" style="display:flex;flex-direction:column;gap:6px">
                 <div style="font-size:12px;color:var(--muted)">No event decklists added yet.</div>
               </div>
@@ -9378,6 +9382,17 @@ function renderRPS() {
     }
     return r;
   });
+  // Default a NEW batch to recent data (current year + next year, and any
+  // matching GFWL season) rather than its whole history — only the first
+  // render of a given batch gets this applied; re-renders of the same batch
+  // (toggling another checkbox) leave the user's own choice alone. See
+  // isRecentYearSeasonKey/_recencyDefaultedFor.
+  const _rpsBatchKey = _batchIdentityKey(_activeBatch);
+  if (_recencyDefaultedFor.rps !== _rpsBatchKey) {
+    _recencyDefaultedFor.rps = _rpsBatchKey;
+    _rpsFilterSelected = computeRecentFilterDefault(_allReplays);
+  }
+
   // Apply multi-select filter (null = all)
   let replays = _allReplays;
   if (_rpsFilterSelected !== null && _rpsFilterSelected.size > 0) {
@@ -9592,7 +9607,7 @@ function renderRPS() {
         const newDropdown = document.querySelector('.rps-filter-dropdown');
         if (newDropdown) newDropdown.style.display = 'block';
       };
-      allRow.appendChild(allCb); allRow.appendChild(document.createTextNode('All Data'));
+      allRow.appendChild(allCb); allRow.appendChild(document.createTextNode('Include All Historical Data'));
       dropdown.appendChild(allRow);
 
       if (years.length) {
@@ -10036,6 +10051,72 @@ async function retryOneReplay(r) {
   }
 }
 
+// Populates the Deck Viewer's year <select> from this batch's matches,
+// defaulting a NEWLY selected batch (tracked via batchKey against
+// _recencyDefaultedFor.deck) to a "Recent (<year>-<year+1>)" option that
+// spans both regular event years and any matching GFWL season — "All"
+// always restores everything, same convention as the rest of this feature.
+// Re-renders of the SAME batch (switching matches, re-searching) leave
+// whatever the user picked alone. Returns the filtered matches array.
+function applyDeckYearFilter(matches, yearSel, batchKey) {
+  let curYear = yearSel.value;
+  // Collect years from event dates cache AND from match event labels
+  const yearsSet = new Set();
+  matches.forEach(m => {
+    const code = (m.eventLabel||'').split(':')[0].trim().toUpperCase();
+    const d = getEventDate(code);
+    if (d) yearsSet.add(d.slice(0,4));
+    // Also extract from label directly e.g. "ACAD 2/13/2026"
+    const y = (m.eventLabel||'').match(/(20\d{2})/);
+    if (y) yearsSet.add(y[1]);
+  });
+  const years = [...yearsSet].sort((a,b)=>b-a);
+
+  // Also check GFWL seasons present so "Recent" (which spans both regular
+  // event years AND any matching GFWL season) knows whether it has
+  // anything to show before offering itself as the default — see
+  // isRecentYearSeasonKey.
+  const seasonsPresentForRecent = [...new Set(matches.map(m => eventGroupKey(m.eventLabel||'')).filter(c => c && isGFWLSeason(c)))];
+  const recentAvailable = [...years, ...seasonsPresentForRecent].some(isRecentYearSeasonKey);
+
+  // Default a NEW batch to "Recent" rather than "All" — only the first
+  // render of a given batch; re-renders of the same batch (switching
+  // matches, re-searching) leave the user's own dropdown choice alone. The
+  // owner-guard alone decides this (not whatever curYear happens to read —
+  // see the equivalent, more defensive note in populateGfwlSeasonFilter,
+  // whose virgin option value is NOT empty the way this select's is).
+  if (_recencyDefaultedFor.deck !== batchKey) {
+    _recencyDefaultedFor.deck = batchKey;
+    curYear = recentAvailable ? 'recent' : '';
+  }
+
+  const recentLabel = 'Recent (' + _recentFilterYears().join('-') + ')';
+  yearSel.innerHTML = '<option value="">All</option>' +
+    (recentAvailable ? `<option value="recent"${curYear==='recent'?' selected':''}>${recentLabel}</option>` : '') +
+    years.map(y=>`<option value="${y}"${y===curYear?'selected':''}>${y}</option>`).join('');
+  const filterYear = yearSel.value;
+  if (filterYear === 'recent') {
+    return matches.filter(m => {
+      const grpCode = eventGroupKey(m.eventLabel||'');
+      if (grpCode && isGFWLSeason(grpCode)) return isRecentYearSeasonKey(grpCode);
+      const code = (m.eventLabel||'').split(':')[0].trim().toUpperCase();
+      const d = getEventDate(code);
+      if (d) return isRecentYearSeasonKey(d.slice(0,4));
+      const y = (m.eventLabel||'').match(/(20\d{2})/);
+      return y ? isRecentYearSeasonKey(y[1]) : false;
+    });
+  } else if (filterYear) {
+    return matches.filter(m => {
+      const code = (m.eventLabel||'').split(':')[0].trim().toUpperCase();
+      const d = getEventDate(code);
+      if (d) return d.startsWith(filterYear);
+      // Fallback: check label for year
+      return (m.eventLabel||'').includes(filterYear);
+    });
+  }
+  return matches;
+}
+
 function buildDeck() {
   if (!_activeBatch) return;
   _matches = [];
@@ -10196,32 +10277,11 @@ function buildDeck() {
   // score — see replayNeedsRetry() above.
   const failedReplays = replays.filter(replayNeedsRetry);
 
-  // Populate year filter dropdown from event dates
+  // Populate year filter dropdown from event dates, defaulting a newly
+  // selected batch to "Recent" (see applyDeckYearFilter), and apply it.
   const yearSel = document.getElementById('deck-year-filter');
   if (yearSel) {
-    const curYear = yearSel.value;
-    // Collect years from event dates cache AND from match event labels
-    const yearsSet = new Set();
-    _matches.forEach(m => {
-      const code = (m.eventLabel||'').split(':')[0].trim().toUpperCase();
-      const d = getEventDate(code);
-      if (d) yearsSet.add(d.slice(0,4));
-      // Also extract from label directly e.g. "ACAD 2/13/2026"
-      const y = (m.eventLabel||'').match(/(20\d{2})/);
-      if (y) yearsSet.add(y[1]);
-    });
-    const years = [...yearsSet].sort((a,b)=>b-a);
-    yearSel.innerHTML = '<option value="">All</option>' + years.map(y=>`<option value="${y}"${y===curYear?'selected':''}>${y}</option>`).join('');
-    const filterYear = yearSel.value;
-    if (filterYear) {
-      _matches = _matches.filter(m => {
-        const code = (m.eventLabel||'').split(':')[0].trim().toUpperCase();
-        const d = getEventDate(code);
-        if (d) return d.startsWith(filterYear);
-        // Fallback: check label for year
-        return (m.eventLabel||'').includes(filterYear);
-      });
-    }
+    _matches = applyDeckYearFilter(_matches, yearSel, _batchIdentityKey(_activeBatch));
   }
 
   // Populate GFWL season filter dropdown from match event labels (e.g. "S8: WK 1" -> "S8")
@@ -16991,6 +17051,45 @@ function renderGFWLTeamLinks(player) {
   });
 }
 
+// Populates the GFWL History season <select> and returns the matching
+// records, defaulting a NEWLY-opened profile (tracked via ownerKey against
+// _recencyDefaultedFor.gfwl) to a "Recent Seasons (<year>-<year+1>)" option
+// — "All Seasons" always restores everything. Re-renders of the SAME
+// profile (switching sub-tabs, picking a specific season) leave whatever
+// the user picked alone. Falls back to "all" if this player has no
+// recent-window season at all.
+function populateGfwlSeasonFilter(sel, seasons, allGFWL, ownerKey) {
+  let curVal = sel.value;
+  const recentSeasonsAvailable = seasons.some(isRecentYearSeasonKey);
+  // NOTE: unlike Deck Viewer's year <select> (whose virgin/"show everything"
+  // option is value="" — falsy, so an unguarded `!curVal` check alone would
+  // have worked there too), this select's static markup ships with a
+  // non-empty value="all" as its only option — so checking `!curVal` here
+  // would never be true and the recent default would never apply on a
+  // profile's first view. The owner-guard below is the only thing that
+  // should decide whether to apply a fresh default; a genuinely new owner
+  // always gets one, overriding whatever curVal happened to read (the
+  // virgin "all", or state left over from a previously-viewed profile).
+  if (_recencyDefaultedFor.gfwl !== ownerKey) {
+    _recencyDefaultedFor.gfwl = ownerKey;
+    curVal = recentSeasonsAvailable ? 'recent' : 'all';
+  }
+
+  sel.innerHTML = '<option value="all">All Seasons</option>' +
+    (recentSeasonsAvailable ? `<option value="recent"${curVal==='recent'?' selected':''}>Recent Seasons (${_recentFilterYears().join('-')})</option>` : '');
+  seasons.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s;
+    opt.textContent = 'Season ' + s.slice(1);
+    if (s === curVal) opt.selected = true;
+    sel.appendChild(opt);
+  });
+
+  return sel.value === 'recent' ? allGFWL.filter(r => isRecentYearSeasonKey(eventGroupKey(r.eventLabel)))
+    : sel.value === 'all' ? allGFWL
+    : allGFWL.filter(r => eventGroupKey(r.eventLabel) === sel.value);
+}
+
 function renderGFWLHistory() {
   if (!_activeProfile) return;
   const { records } = _activeProfile;
@@ -17004,18 +17103,8 @@ function renderGFWLHistory() {
   // Get unique season keys
   const seasons = [...new Set(allGFWL.map(r => eventGroupKey(r.eventLabel)))]
     .sort((a,b) => parseInt(b.slice(1)) - parseInt(a.slice(1)));
-  const curVal = sel.value;
-  sel.innerHTML = '<option value="all">All Seasons</option>';
-  seasons.forEach(s => {
-    const opt = document.createElement('option');
-    opt.value = s;
-    opt.textContent = 'Season ' + s.slice(1);
-    if (s === curVal) opt.selected = true;
-    sel.appendChild(opt);
-  });
 
-  const filtered = sel.value === 'all' ? allGFWL
-    : allGFWL.filter(r => eventGroupKey(r.eventLabel) === sel.value);
+  const filtered = populateGfwlSeasonFilter(sel, seasons, allGFWL, _activeProfile && _activeProfile.player);
 
   // Update deck usage pie chart based on selected season filter
   const player = _activeProfile && _activeProfile.player;
@@ -17025,7 +17114,7 @@ function renderGFWLHistory() {
     const myDeckUsage = {};
     pieRecords.forEach(r => { myDeckUsage[r.myDeck||'Unknown'] = (myDeckUsage[r.myDeck||'Unknown']||0)+1; });
     const sortedMy = Object.entries(myDeckUsage).sort((a,b)=>b[1]-a[1]).slice(0,10);
-    const label = sel.value === 'all' ? 'All GFWL Seasons' : 'Season '+sel.value.slice(1);
+    const label = sel.value === 'all' ? 'All GFWL Seasons' : sel.value === 'recent' ? 'Recent Seasons' : 'Season '+sel.value.slice(1);
     buildDonutChart('profile-deck-chart','profile-deck-legend', sortedMy, player+' — '+label);
   }
 
@@ -17169,7 +17258,7 @@ function renderGFWLHistory() {
     const W = filtered.filter(r=>r.matchWon).length;
     const L = filtered.filter(r=>r.matchLost).length;
     const WR = W+L > 0 ? Math.round(W/(W+L)*100) : 0;
-    const seasonLabel = sel.value === 'all' ? 'GFWL' : 'S'+sel.value.replace(/^S/i,'');
+    const seasonLabel = sel.value === 'all' ? 'GFWL' : sel.value === 'recent' ? 'Recent GFWL' : 'S'+sel.value.replace(/^S/i,'');
     const batches = _activeProfile.batches || [];
     const totalReplays = batches.reduce((sum,b)=>(sum+(b.replays||[]).length),0);
     chips.innerHTML = '';
@@ -21548,6 +21637,55 @@ function gfwlSeasonToYear(groupKey) {
   return entry ? entry.year : null;
 }
 
+// ── "Recent" defaults for a player's OWN history views ───────────────────────
+// Format Data's "Last 6 Months" default (see populateYearSeasonFilterPair)
+// exists for a different reason — system-wide meta relevance decays fast
+// there. Here the ask is coarser: a player's Deck Viewer, RPS Analysis, and
+// Profile panels (Deck Matchups/Deck Usage/GFWL History/Event Decklists)
+// should default to "this year + next year" rather than every year they've
+// ever played — e.g. right now (current year 2026) that's 2026-2027, which
+// via GFWL_SEASON_YEAR_MAP correctly pulls in a season like S10 that starts
+// in December but counts as next year's data. An explicit "Include All
+// Historical Data" control always restores everything. This is a documented
+// assumption, not a literal hardcoded "2026-2027" — it recomputes off the
+// real clock, so it keeps working after this year without edits.
+function _recentFilterYears() {
+  const y = new Date().getFullYear();
+  return [String(y), String(y + 1)];
+}
+function isRecentYearSeasonKey(key) {
+  if (!key) return false;
+  const years = _recentFilterYears();
+  if (isGFWLSeason(key)) {
+    const y = gfwlSeasonToYear(key);
+    return !!y && years.includes(y);
+  }
+  return years.includes(key);
+}
+// Tracks which "owner" (a batch identity, or a profile's player name) each
+// per-view filter has already had the recency default applied for, so
+// re-renders of the SAME batch/profile (toggling another checkbox,
+// switching sub-tabs) leave the user's own choice alone — only a genuinely
+// different batch/profile gets a fresh recency default applied once.
+const _recencyDefaultedFor = { deck: null, rps: null, gfwl: null };
+function _batchIdentityKey(batch) {
+  if (!batch) return null;
+  return batch.id || ((batch.player||'') + '|' + ((batch.replays||[]).length));
+}
+// Shared by Profile's Deck Matchups filter and RPS Analysis's filter — both
+// use the same "null = all, Set = specific years/seasons" convention.
+// Returns a Set of this record set's own recent-window keys, or null (no
+// filtering — equivalent to "Include All Historical Data") if none exist.
+function computeRecentFilterDefault(records) {
+  const keys = [...new Set((records||[]).map(r => {
+    const code = (r.eventLabel||'').split(':')[0].trim().toUpperCase();
+    if (isGFWLSeason(code)) return code;
+    const d = getEventDate(code);
+    return d ? d.slice(0,4) : null;
+  }).filter(Boolean))].filter(isRecentYearSeasonKey);
+  return keys.length ? new Set(keys) : null;
+}
+
 // Most recent real (non-GFWL-season) event date found among a batch's
 // replays, as a 'YYYY-MM-DD' string, or null if none of its events have a
 // resolvable date (e.g. a GFWL-season-only batch, or unrecognized codes).
@@ -22069,9 +22207,16 @@ async function openProfile(player, batches, records) {
       }
     }
   }
-  _profileFilterSelected = null; // reset filter for new profile
+  // Default to this player's recent data (current year + next year, and any
+  // GFWL season that maps to one of those years) rather than dumping their
+  // entire history — "Include All Historical Data" in the filter dropdown
+  // always restores everything. Falls back to showing everything if this
+  // player has no recent-window data at all (an all-time-only player).
+  _profileFilterSelected = computeRecentFilterDefault(records);
   const _mdSel = document.getElementById('profile-mydeck-filter');
   if (_mdSel) _mdSel.value = '';
+  const _edlAllHist = document.getElementById('profile-edl-allhistory');
+  if (_edlAllHist) _edlAllHist.checked = false; // reset to recent-only for the newly opened profile
   _activeProfile = { player, batches, records };
   document.getElementById('profile-browser').style.display = 'none';
   document.getElementById('profile-view').style.display = 'flex';
@@ -22505,7 +22650,7 @@ function rebuildProfileYearDropdown(records) {
     ddRenderMatchups();
   };
   allRow.appendChild(allCb);
-  allRow.appendChild(document.createTextNode('All Data'));
+  allRow.appendChild(document.createTextNode('Include All Historical Data'));
   panel.appendChild(allRow);
 
   // Year checkboxes
@@ -23105,6 +23250,25 @@ function saveEventDecks(player, list) {
   }
 }
 
+// A deck entry's own event code is "recent" if it falls in the current
+// year + next year window (or maps to a GFWL season that does) — see
+// isRecentYearSeasonKey. When showAllHistory is true, or when this player
+// has no recent-window decklists at all (don't show an empty panel with no
+// obvious reason why — same fallback pattern as every other recency
+// default in this app), returns the full list unfiltered.
+function filterEventDecksByRecency(sortedDecks, showAllHistory) {
+  if (showAllHistory) return sortedDecks;
+  const isRecentDeckCode = code => {
+    const grp = eventGroupKey(code||'');
+    if (!grp) return false;
+    if (isGFWLSeason(grp)) return isRecentYearSeasonKey(grp);
+    const d = getEventDate(grp);
+    return d ? isRecentYearSeasonKey(d.slice(0,4)) : false;
+  };
+  const recencyFiltered = sortedDecks.filter(d => isRecentDeckCode(d.code));
+  return recencyFiltered.length ? recencyFiltered : sortedDecks;
+}
+
 function renderEventDecks(player, batches, records) {
   const el = document.getElementById('profile-event-decklists') || document.getElementById('profile-event-decks');
   if (!el) return;
@@ -23127,6 +23291,13 @@ function renderEventDecks(player, batches, records) {
   const searchEl = el.parentElement.querySelector('.edl-search');
   const searchQ = searchEl ? searchEl.value.toLowerCase().trim() : '';
 
+  // Recency filter — defaults to current year + next year (and any matching
+  // GFWL season — see isRecentYearSeasonKey) unless "Include All Historical
+  // Data" is checked. Checkbox defaults unchecked per newly-opened profile
+  // (reset in loadProfileBatch).
+  const allHistoryEl = document.getElementById('profile-edl-allhistory');
+  const showAllHistory = allHistoryEl ? allHistoryEl.checked : true;
+
   if (!decks.length) {
     el.innerHTML = '<div style="font-size:12px;color:var(--muted)">No event decklists added yet.</div>';
     return;
@@ -23140,10 +23311,12 @@ function renderEventDecks(player, batches, records) {
     return keys[0]===(a.code||'') ? -1 : 1;
   });
 
-  const visible = searchQ ? sorted.filter(d =>
+  const recencyBase = filterEventDecksByRecency(sorted, showAllHistory);
+
+  const visible = searchQ ? recencyBase.filter(d =>
     (d.code||'').toLowerCase().includes(searchQ) ||
     (d.deckTypeOverride||'').toLowerCase().includes(searchQ)
-  ) : sorted;
+  ) : recencyBase;
 
   el.innerHTML = '';
   visible.forEach(deck => {
