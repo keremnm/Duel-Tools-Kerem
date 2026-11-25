@@ -14194,6 +14194,56 @@ function buildCardTimingForMatch(plays, player, aliases, player1, player2, parse
   return { version: 1, games };
 }
 
+// Earliest event date the Parsed Replay Data work (Card Timing now, Known
+// Decklist Data later) considers in scope — set by the user. An event
+// whose date is still unknown is NOT auto-eligible (it has to be learned
+// first — see learnUnknownEventDates / the Unknown Event Dates review list
+// in the Admin Tools tab); once learned, it becomes eligible the moment
+// it resolves to this cutoff or later.
+const PARSED_REPLAY_DATA_CUTOFF = '2025-01-01';
+// Resolves an event label down to its known calendar date ('YYYY-MM-DD'),
+// or null if genuinely unresolved. Single source of truth shared by
+// isEventEligibleForParsedReplayData / isEventConfirmedPre2025 /
+// isEventDateUnknown below, so those three can never disagree with each
+// other about what "known" means for one event. GFWL seasons have no
+// FL-resolvable date of their own (see gfwlSeasonToYear's own comment) so
+// they're resolved to Jan 1 of their mapped year — coarse, but every
+// season's year falls entirely on one side of the Jan-1-2025 cutoff (the
+// mapping never straddles it mid-season: S5 is all 2024, S6 is all 2025),
+// so the coarseness never actually changes which side of the cutoff a
+// season lands on.
+function _parsedReplayDataEventDate(eventLabel) {
+  const code = eventGroupKey(eventLabel || '');
+  if (!code) return null;
+  if (isGFWLSeason(code)) {
+    const y = gfwlSeasonToYear(code);
+    return y ? y + '-01-01' : null;
+  }
+  return getEventDate(code);
+}
+function isEventEligibleForParsedReplayData(eventLabel) {
+  const d = _parsedReplayDataEventDate(eventLabel);
+  return !!d && d >= PARSED_REPLAY_DATA_CUTOFF;
+}
+// True only once this event's date is actually known AND resolves to
+// before the cutoff. An event whose date is still unknown is deliberately
+// NOT "confirmed pre-2025" — it might turn out to be 2025+ once dated — so
+// it's never purge-eligible until it's been dated one way or the other.
+// This is what the "Purge Pre-2025 Replay Cache" tool uses to decide what's
+// safe to delete.
+function isEventConfirmedPre2025(eventLabel) {
+  const d = _parsedReplayDataEventDate(eventLabel);
+  return !!d && d < PARSED_REPLAY_DATA_CUTOFF;
+}
+// True when this event's date hasn't been resolved at all yet (neither the
+// live _eventDates catalog nor the static fallback table has it) — distinct
+// from "resolved but before the cutoff". Feeds the Unknown Event Dates
+// review list so an admin/miner can supply a date manually once the
+// automatic learnUnknownEventDates lookup hasn't resolved it either.
+function isEventDateUnknown(eventLabel) {
+  return _parsedReplayDataEventDate(eventLabel) == null;
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // MERGE REPLAY — stitches a continuation replay (DuelingBook gives a
 // disconnect-forced reconnect its own replay ID) into an EXISTING match's
@@ -27427,14 +27477,68 @@ function loadAdminToolsSection(el) {
         'fetched stays cached there, even after a batch\'s own copy is cleared once parsed) — ' +
         '<b>never re-fetches from DuelingBook, so this never costs a CapSolver charge.</b> A replay ' +
         'whose raw plays genuinely aren\'t in that cache (never fetched through this app, or fetched ' +
-        'before caching existed) is skipped and reported, not re-fetched live. Safe to re-run any ' +
-        'time — a replay that already has this data is skipped instantly, so running it again after ' +
-        'new replays come in only computes the new ones.' +
+        'before caching existed) is skipped and reported, not re-fetched live. Only replays from ' +
+        'events dated 2025 or later are in scope — see "Unknown Event Dates" below for events this ' +
+        'can\'t yet decide on. Safe to re-run any time — a replay that already has this data is ' +
+        'skipped instantly, so running it again after new replays come in only computes the new ones.' +
       '</div>' +
     '</div>' +
     '<button id="admin-backfill-cardtiming-btn" class="btn-go" onclick="adminBackfillCardTiming()" style="font-size:14px;padding:10px 18px">▶ Run Backfill</button>' +
     '<div id="admin-backfill-cardtiming-status" style="font-size:13px;color:var(--muted);min-height:20px;margin-top:10px"></div>' +
-    '<div id="admin-backfill-cardtiming-log" style="display:none;flex-direction:column;gap:4px;font-size:12px;font-family:monospace;max-height:360px;overflow-y:auto;background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:10px;margin-top:8px"></div>';
+    '<div id="admin-backfill-cardtiming-log" style="display:none;flex-direction:column;gap:4px;font-size:12px;font-family:monospace;max-height:360px;overflow-y:auto;background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:10px;margin-top:8px"></div>' +
+
+    '<hr style="border:none;border-top:1px solid var(--border);margin:22px 0"/>' +
+
+    '<div style="font-size:15px;color:var(--text);margin-bottom:14px">' +
+      '<b>Cache Non-Cached Replays</b>' +
+      '<div style="font-size:13px;color:var(--muted);margin-top:8px;line-height:1.6">' +
+        'Live-fetches replays that are eligible for Card Timing (2025+ event, already imported) but ' +
+        'aren\'t in the server\'s replay cache yet — the ones the backfill above reports as "not in ' +
+        'cache". <b>Each fetch solves a Cloudflare Turnstile via CapSolver and costs money</b> ' +
+        '(~$1.20 per 1,000 solves), and runs one at a time since DuelingBook/Cloudflare flags rapid ' +
+        'parallel requests as a bot — a single replay can take 5-90 seconds. Processes a bounded ' +
+        'batch per click so it never runs away unsupervised; click again to continue with the next batch.' +
+      '</div>' +
+    '</div>' +
+    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">' +
+      '<label class="lbl" style="margin:0">Batch size</label>' +
+      '<input id="admin-cache-noncached-batchsize" type="number" value="25" min="1" max="200" style="width:70px;text-align:center;font-size:14px"/>' +
+      '<button id="admin-cache-noncached-btn" class="btn-go" onclick="adminCacheNonCachedReplays()" style="font-size:14px;padding:10px 18px">▶ Cache Non-Cached Replays</button>' +
+    '</div>' +
+    '<div id="admin-cache-noncached-status" style="font-size:13px;color:var(--muted);min-height:20px"></div>' +
+    '<div id="admin-cache-noncached-log" style="display:none;flex-direction:column;gap:4px;font-size:12px;font-family:monospace;max-height:360px;overflow-y:auto;background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:10px;margin-top:8px"></div>' +
+
+    '<hr style="border:none;border-top:1px solid var(--border);margin:22px 0"/>' +
+
+    '<div style="font-size:15px;color:var(--text);margin-bottom:14px">' +
+      '<b>Purge Pre-2025 Replay Cache</b>' +
+      '<div style="font-size:13px;color:var(--muted);margin-top:8px;line-height:1.6">' +
+        'Deletes the cached raw play-by-play JSON (the data the two tools above read/write) for every ' +
+        'replay whose event is <b>confirmed</b> to be before 2025 — to reclaim storage, since those ' +
+        'replays are permanently out of scope for Card Timing. An event whose date is still unknown is ' +
+        'left alone (it might turn out to be 2025+ once dated — see "Unknown Event Dates" below). This ' +
+        'only removes the re-fetchable raw cache — match history, decklists, stats, and any Card Timing ' +
+        'already computed are untouched. <b>Permanent — re-caching later means paying for a fresh fetch.</b>' +
+      '</div>' +
+    '</div>' +
+    '<button id="admin-purge-pre2025-btn" class="btn-go" onclick="adminPurgePre2025Cache()" style="font-size:14px;padding:10px 18px;background:var(--red)">🗑 Purge Pre-2025 Replay Cache</button>' +
+    '<div id="admin-purge-pre2025-status" style="font-size:13px;color:var(--muted);min-height:20px;margin-top:10px"></div>' +
+
+    '<hr style="border:none;border-top:1px solid var(--border);margin:22px 0"/>' +
+
+    '<div style="font-size:15px;color:var(--text);margin-bottom:14px">' +
+      '<b>Unknown Event Dates</b>' +
+      '<div style="font-size:13px;color:var(--muted);margin-top:8px;line-height:1.6">' +
+        'Event codes with replays in the database whose calendar date isn\'t known yet — Format ' +
+        'Library\'s automatic lookup (which runs in the background whenever a new event code is ' +
+        'first imported) hasn\'t resolved them, so Card Timing can\'t decide whether they\'re 2025+ or ' +
+        'not and excludes them until they\'re dated. Pick a date and save to resolve one — it\'s stored ' +
+        'the same way a manually-tracked event always has been, and takes effect immediately.' +
+      '</div>' +
+    '</div>' +
+    '<button id="admin-unknown-dates-btn" class="btn-go" onclick="adminScanUnknownEventDates()" style="font-size:14px;padding:10px 18px">🔍 Scan for Unknown Event Dates</button>' +
+    '<div id="admin-unknown-dates-status" style="font-size:13px;color:var(--muted);min-height:20px;margin-top:10px"></div>' +
+    '<div id="admin-unknown-dates-list" style="display:flex;flex-direction:column;margin-top:4px"></div>';
 }
 
 async function adminBackfillCardTiming() {
@@ -27453,6 +27557,13 @@ async function adminBackfillCardTiming() {
   statusEl.style.color = 'var(--muted)';
   statusEl.textContent = 'Loading batches…';
 
+  // Defensive refresh — an admin landing directly on this tab (bookmark,
+  // reload) may not have gone through the normal bootstrap loadEventDates()
+  // calls recently, and the 2025+ filter below needs _eventDates to be
+  // current, especially right after a batch of codes just got resolved
+  // through "Unknown Event Dates" below.
+  await loadEventDates();
+
   let batches = [];
   try {
     batches = await getAllBatchesFull(true);
@@ -27463,17 +27574,27 @@ async function adminBackfillCardTiming() {
     return;
   }
 
-  let totalReplays = 0, computed = 0, alreadyDone = 0, noCache = 0, noUsableData = 0, errors = 0;
+  let totalReplays = 0, computed = 0, alreadyDone = 0, noCache = 0, noUsableData = 0, errors = 0,
+      beforeCutoff = 0, unknownDate = 0;
 
   for (const batch of batches) {
     const replays = batch.replays || [];
     if (!replays.length) continue;
-    let batchComputed = 0, batchNoCache = 0, batchNoUsable = 0, batchErrors = 0;
+    let batchComputed = 0, batchNoCache = 0, batchNoUsable = 0, batchErrors = 0,
+        batchBeforeCutoff = 0, batchUnknown = 0;
 
     for (const r of replays) {
       totalReplays++;
-      if (r.cardTiming) { alreadyDone++; continue; } // idempotent re-run
+      if (r.cardTiming) { alreadyDone++; continue; } // idempotent re-run — leaves anything computed
+      // by an earlier, unscoped run of this backfill alone; the 2025+ cutoff
+      // below only ever prevents *new* computation, it doesn't retroactively
+      // strip existing data (see "Purge Pre-2025 Replay Cache" for reclaiming
+      // the raw cache specifically, which is the thing with real storage cost).
       if (r.isManual || !r.parsed || !r.parsed.games || !r.parsed.games.length) continue; // nothing to correlate raw plays against
+      // 2025+ scoping — checked before ever touching the cache, so an
+      // out-of-scope replay never shows up as "not in cache" either.
+      if (isEventConfirmedPre2025(r.eventLabel)) { batchBeforeCutoff++; beforeCutoff++; continue; }
+      if (isEventDateUnknown(r.eventLabel)) { batchUnknown++; unknownDate++; continue; }
 
       try {
         const res = await fetch(API+'/admin/replay-cache/'+encodeURIComponent(r.replayId), { headers: authHeaders() });
@@ -27495,8 +27616,10 @@ async function adminBackfillCardTiming() {
       }
     }
 
-    if (batchComputed || batchNoCache || batchNoUsable || batchErrors) {
+    if (batchComputed || batchNoCache || batchNoUsable || batchErrors || batchBeforeCutoff || batchUnknown) {
       log(`${_escapeHtml(batch.player||'(unknown)')} — ✓ ${batchComputed} computed`
+        + (batchBeforeCutoff ? `, <span style="color:var(--dim)">${batchBeforeCutoff} skipped (event before 2025)</span>` : '')
+        + (batchUnknown ? `, <span style="color:var(--amber)">${batchUnknown} skipped (event date unknown)</span>` : '')
         + (batchNoCache ? `, <span style="color:var(--amber)">${batchNoCache} skipped (not in cache)</span>` : '')
         + (batchNoUsable ? `, ${batchNoUsable} skipped (no usable data)` : '')
         + (batchErrors ? `, <span style="color:var(--red)">${batchErrors} errored</span>` : ''));
@@ -27506,9 +27629,286 @@ async function adminBackfillCardTiming() {
 
   statusEl.style.color = 'var(--green)';
   statusEl.textContent = `✓ Done — ${computed} replay(s) computed, ${alreadyDone} already had it, `
+    + `${beforeCutoff} skipped (event before 2025 — out of scope), `
+    + `${unknownDate} skipped (event date not yet known — see "Unknown Event Dates" below), `
     + `${noCache} skipped (not in the replay cache — would need a live re-fetch), `
     + `${noUsableData} skipped (no usable parsed/raw data), ${errors} errored. ${totalReplays} replays scanned in total.`;
   if (btn) { btn.disabled = false; btn.textContent = '▶ Run Backfill'; }
+}
+
+async function adminCacheNonCachedReplays() {
+  const btn = document.getElementById('admin-cache-noncached-btn');
+  const statusEl = document.getElementById('admin-cache-noncached-status');
+  const logEl = document.getElementById('admin-cache-noncached-log');
+  const sizeInput = document.getElementById('admin-cache-noncached-batchsize');
+  const batchSize = Math.max(1, Math.min(200, parseInt(sizeInput && sizeInput.value, 10) || 25));
+  const estCost = (batchSize * 0.0012).toFixed(2); // CapSolver: $1.20 per 1,000 Turnstile solves
+
+  const confirmed = confirm(
+    `This will live-fetch up to ${batchSize} replay(s) from DuelingBook — solving a Cloudflare ` +
+    `Turnstile via CapSolver for each one — and compute Card Timing for them. Each fetch takes ` +
+    `5-90 seconds and runs one at a time, so this could take a while.\n\n` +
+    `Estimated CapSolver cost: ~$${estCost} (at $1.20 per 1,000 solves).\n\n` +
+    `Only replays from events dated 2025 or later are eligible. Continue?`
+  );
+  if (!confirmed) return;
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Running…'; }
+  logEl.style.display = 'flex'; logEl.innerHTML = '';
+  const log = (html, color) => {
+    const d = document.createElement('div');
+    if (color) d.style.color = color;
+    d.innerHTML = html;
+    logEl.appendChild(d);
+    logEl.scrollTop = logEl.scrollHeight;
+  };
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = 'Scanning for eligible, not-yet-cached replays…';
+  await loadEventDates();
+
+  let batches = [];
+  try {
+    batches = await getAllBatchesFull(true);
+  } catch(e) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = 'Failed to load batches: ' + e.message;
+    if (btn) { btn.disabled = false; btn.textContent = '▶ Cache Non-Cached Replays'; }
+    return;
+  }
+
+  // Phase 1 — find candidates (eligible 2025+ event, usable parsed data, not
+  // already computed). Capped well above batchSize so the cache-status check
+  // below (cheap, local — no CapSolver cost) has a healthy pool to pick the
+  // actual batch from without having to scan every batch in the database.
+  const candidates = [];
+  outer:
+  for (const batch of batches) {
+    for (const r of (batch.replays||[])) {
+      if (r.cardTiming) continue;
+      if (r.isManual || !r.parsed || !r.parsed.games || !r.parsed.games.length) continue;
+      if (!isEventEligibleForParsedReplayData(r.eventLabel)) continue;
+      candidates.push({ batch, r });
+      if (candidates.length >= batchSize * 8) break outer;
+    }
+  }
+
+  const toFetch = [];
+  for (const c of candidates) {
+    if (toFetch.length >= batchSize) break;
+    try {
+      const res = await fetch(API+'/admin/replay-cache/'+encodeURIComponent(c.r.replayId), { headers: authHeaders() });
+      const body = await res.json();
+      if (res.ok && body.ok && !body.cached) toFetch.push(c);
+    } catch(e) {}
+  }
+
+  if (!toFetch.length) {
+    statusEl.style.color = 'var(--green)';
+    statusEl.textContent = '✓ Nothing to do — no eligible (2025+), not-yet-cached replays found among the replays scanned.';
+    if (btn) { btn.disabled = false; btn.textContent = '▶ Cache Non-Cached Replays'; }
+    return;
+  }
+
+  let attempted = 0, computed = 0, noUsable = 0, saveErrors = 0, fetchErrors = 0;
+  for (const { batch, r } of toFetch) {
+    attempted++;
+    statusEl.textContent = `Fetching ${attempted}/${toFetch.length} — ${r.replayId}…`;
+    try {
+      const res = await fetch(API+'/proxy/replay?id='+encodeURIComponent(r.replayId), { headers: authHeaders() });
+      const body = await res.json();
+      if (!res.ok || !body.ok) {
+        fetchErrors++;
+        log(`✗ ${_escapeHtml(r.replayId)} — fetch failed: ${_escapeHtml(body.error||('HTTP '+res.status))}`, 'var(--red)');
+        continue;
+      }
+      const timing = buildCardTimingForMatch(body.replay.plays, batch.player, batch.aliases||[], r.player1, r.player2, r.parsed);
+      if (!timing) {
+        noUsable++;
+        log(`⚠ ${_escapeHtml(r.replayId)} — cached, but no usable Card Timing data`, 'var(--amber)');
+        continue;
+      }
+      const saveRes = await fetch(API+'/batches/'+batch.id+'/replay/'+encodeURIComponent(r.replayId), {
+        method: 'PATCH', headers: { 'Content-Type':'application/json', ...authHeaders() },
+        body: JSON.stringify({ cardTiming: timing }),
+      });
+      if (!saveRes.ok) { saveErrors++; log(`✗ ${_escapeHtml(r.replayId)} — fetched but failed to save`, 'var(--red)'); continue; }
+      computed++;
+      log(`✓ ${_escapeHtml(r.replayId)} — cached and computed`, 'var(--green)');
+    } catch(e) {
+      fetchErrors++;
+      log(`✗ ${_escapeHtml(r.replayId)} — ${_escapeHtml(e.message)}`, 'var(--red)');
+    }
+    await new Promise(res2 => setTimeout(res2, 1000)); // polite pacing between live fetches
+  }
+
+  statusEl.style.color = 'var(--green)';
+  statusEl.textContent = `✓ Done — ${computed} cached & computed, ${noUsable} cached but no usable data, `
+    + `${saveErrors} cached but failed to save, ${fetchErrors} fetch error(s). ${attempted} of ${toFetch.length} attempted this run. `
+    + `Click again to continue with the next batch.`;
+  if (btn) { btn.disabled = false; btn.textContent = '▶ Cache Non-Cached Replays'; }
+}
+
+async function adminPurgePre2025Cache() {
+  const btn = document.getElementById('admin-purge-pre2025-btn');
+  const statusEl = document.getElementById('admin-purge-pre2025-status');
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = 'Scanning for pre-2025 cached replays…';
+  await loadEventDates();
+
+  let batches = [];
+  try {
+    batches = await getAllBatchesFull(true);
+  } catch(e) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = 'Failed to load batches: ' + e.message;
+    return;
+  }
+
+  const ids = new Set();
+  for (const batch of batches) {
+    for (const r of (batch.replays||[])) {
+      if (r.replayId && isEventConfirmedPre2025(r.eventLabel)) ids.add(r.replayId);
+    }
+  }
+
+  if (!ids.size) {
+    statusEl.style.color = 'var(--green)';
+    statusEl.textContent = '✓ Nothing to purge — no replays found whose event is confirmed to be before 2025.';
+    return;
+  }
+
+  const confirmed = confirm(
+    `Permanently delete the cached raw play-by-play data for ${ids.size} replay(s) from events ` +
+    `confirmed to be before 2025?\n\n` +
+    `This only removes the re-fetchable raw cache (frees storage) — it does NOT touch match history, ` +
+    `decklists, stats, or any Card Timing already computed for them. This cannot be undone; re-caching ` +
+    `any of them later means paying for a fresh CapSolver fetch.`
+  );
+  if (!confirmed) return;
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Purging…'; }
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = `Purging ${ids.size} replay(s)…`;
+  try {
+    const res = await fetch(API+'/admin/replay-cache/purge', {
+      method: 'POST', headers: { 'Content-Type':'application/json', ...authHeaders() },
+      body: JSON.stringify({ replayIds: [...ids] }),
+    });
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok || !data.ok) {
+      statusEl.style.color = 'var(--red)';
+      statusEl.textContent = '✗ Purge failed: ' + (data.error||'HTTP '+res.status);
+      if (btn) { btn.disabled = false; btn.textContent = '🗑 Purge Pre-2025 Replay Cache'; }
+      return;
+    }
+    statusEl.style.color = 'var(--green)';
+    statusEl.textContent = `✓ Purged ${data.deleted} of ${data.requested} requested (the rest were already not cached).`;
+  } catch(e) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = 'Error: ' + e.message;
+  }
+  if (btn) { btn.disabled = false; btn.textContent = '🗑 Purge Pre-2025 Replay Cache'; }
+}
+
+let _adminUnknownEventDatesState = { codes: [] };
+
+async function adminScanUnknownEventDates() {
+  const btn = document.getElementById('admin-unknown-dates-btn');
+  const statusEl = document.getElementById('admin-unknown-dates-status');
+  const listEl = document.getElementById('admin-unknown-dates-list');
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning…'; }
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = 'Scanning…';
+  listEl.innerHTML = '';
+  await loadEventDates();
+
+  let batches = [];
+  try {
+    batches = await getAllBatchesFull(true);
+  } catch(e) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = 'Failed to load batches: ' + e.message;
+    if (btn) { btn.disabled = false; btn.textContent = '🔍 Scan for Unknown Event Dates'; }
+    return;
+  }
+
+  // Same exclusions learnUnknownEventDates already uses: GFWL seasons
+  // always resolve via gfwlSeasonToYear, and LADDER/ACAD have no calendar
+  // date concept at all, so neither belongs in a "needs a date" review list.
+  const byCode = {};
+  for (const batch of batches) {
+    for (const r of (batch.replays||[])) {
+      const code = eventGroupKey(r.eventLabel||'');
+      if (!code || isGFWLSeason(code) || code==='LADDER' || code==='ACAD') continue;
+      if (!isEventDateUnknown(code)) continue;
+      if (!byCode[code]) byCode[code] = { code, count: 0, example: r.eventLabel };
+      byCode[code].count++;
+    }
+  }
+
+  const codes = Object.values(byCode).sort((a,b) => b.count - a.count);
+  _adminUnknownEventDatesState.codes = codes;
+  if (btn) { btn.disabled = false; btn.textContent = '🔍 Scan for Unknown Event Dates'; }
+
+  if (!codes.length) {
+    statusEl.style.color = 'var(--green)';
+    statusEl.textContent = '✓ No unknown event dates found — every event code in the database already resolves to a date.';
+    return;
+  }
+
+  statusEl.style.color = 'var(--amber)';
+  statusEl.textContent = `${codes.length} event code(s) with no known date — affecting ${codes.reduce((s,c)=>s+c.count,0)} replay(s) total. Excluded from Card Timing until dated.`;
+  listEl.innerHTML = codes.map(c => (
+    '<div id="admin-unknown-date-row-' + _escapeHtml(c.code) + '" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border2)">' +
+      '<div style="flex:1;min-width:0">' +
+        '<div style="font-weight:bold">' + _escapeHtml(c.code) + '</div>' +
+        '<div style="font-size:11px;color:var(--muted)">' + c.count + ' replay(s) — e.g. "' + _escapeHtml(c.example) + '"</div>' +
+      '</div>' +
+      '<input type="date" id="admin-unknown-date-input-' + _escapeHtml(c.code) + '" style="font-size:13px;padding:5px 8px"/>' +
+      '<button class="btn-go" style="font-size:12px;padding:6px 12px" onclick="adminResolveUnknownEventDate(this)" data-code="' + _escapeHtml(c.code) + '">Save</button>' +
+    '</div>'
+  )).join('');
+}
+
+async function adminResolveUnknownEventDate(saveBtn) {
+  const code = saveBtn.getAttribute('data-code');
+  const input = document.getElementById('admin-unknown-date-input-' + code);
+  const date = input && input.value;
+  if (!date) { alert('Pick a date first.'); return; }
+  const statusEl = document.getElementById('admin-unknown-dates-status');
+  saveBtn.disabled = true;
+  try {
+    const res = await fetch(API+'/events/'+encodeURIComponent(code)+'/ensure', {
+      method: 'POST', headers: { 'Content-Type':'application/json', ...authHeaders() },
+      body: JSON.stringify({ date }),
+    });
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok) {
+      alert('Failed to save date for ' + code + ': ' + (data.error||'HTTP '+res.status));
+      saveBtn.disabled = false;
+      return;
+    }
+    // Refresh _eventDates so isEventEligibleForParsedReplayData /
+    // isEventConfirmedPre2025 / isEventDateUnknown all see this immediately
+    // — no page reload needed for the other tools above to pick it up.
+    await loadEventDates();
+    const row = document.getElementById('admin-unknown-date-row-' + code);
+    if (row && row.parentElement) row.parentElement.removeChild(row);
+    _adminUnknownEventDatesState.codes = _adminUnknownEventDatesState.codes.filter(c => c.code !== code);
+    const remaining = _adminUnknownEventDatesState.codes;
+    if (statusEl) {
+      if (!remaining.length) {
+        statusEl.style.color = 'var(--green)';
+        statusEl.textContent = '✓ All unknown event dates resolved.';
+      } else {
+        statusEl.style.color = 'var(--amber)';
+        statusEl.textContent = `${remaining.length} event code(s) with no known date — affecting ${remaining.reduce((s,c)=>s+c.count,0)} replay(s) total. Excluded from Card Timing until dated.`;
+      }
+    }
+  } catch(e) {
+    alert('Error saving date for ' + code + ': ' + e.message);
+    saveBtn.disabled = false;
+  }
 }
 
 // ── Registry Check — read-only scan for likely player-registry mess:

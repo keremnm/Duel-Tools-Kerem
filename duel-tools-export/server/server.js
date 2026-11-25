@@ -5814,6 +5814,43 @@ ${value}
     return json(res, 200, { ok:true, cached:true, plays: cached.plays });
   }
 
+  // ── POST /api/admin/replay-cache/purge — bulk-delete specific replays'
+  // raw cached JSON from duel_tools_replay_cache. Backs the "Purge Pre-2025
+  // Replay Cache" admin tool (see adminPurgePre2025Cache client-side),
+  // which reclaims storage for events confirmed to resolve to before
+  // PARSED_REPLAY_DATA_CUTOFF. Which replay ids qualify is decided entirely
+  // client-side (via isEventConfirmedPre2025 — one place that logic lives,
+  // same reasoning as isEventEligibleForParsedReplayData); this route just
+  // deletes whatever ids it's handed. Body: { replayIds: [...] }. An id
+  // that was never cached (or already purged) is simply not counted in
+  // `deleted` — never an error, since "not cached" is the end state the
+  // caller wanted either way.
+  if (parts[0]==='admin' && parts[1]==='replay-cache' && parts[2]==='purge' && !parts[3] && method==='POST') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    return readBody(req, async data => {
+      const ids = Array.isArray(data.replayIds) ? [...new Set(data.replayIds.map(String).filter(Boolean))] : [];
+      if (!ids.length) return json(res, 400, { error: 'replayIds required' });
+      let deleted = 0;
+      if (pgClient) {
+        try {
+          const r = await pgClient.query('DELETE FROM duel_tools_replay_cache WHERE id = ANY($1) RETURNING id', [ids]);
+          deleted = r.rows.length;
+        } catch(e) {
+          return json(res, 500, { error: 'Purge failed: ' + e.message });
+        }
+        // Strip the in-memory mirror too — getCachedReplay() populates
+        // db.replayCache[id] as a read-through cache even in Postgres mode
+        // (see its own comment), so a stale in-memory copy would otherwise
+        // keep answering "cached:true" until this process restarts.
+        ids.forEach(id => { delete db.replayCache[id]; });
+      } else {
+        // File-DB mode (local dev only) — db.replayCache IS the store.
+        ids.forEach(id => { if (db.replayCache[id]) { delete db.replayCache[id]; deleted++; } });
+      }
+      return json(res, 200, { ok:true, requested: ids.length, deleted });
+    });
+  }
+
   return json(res, 404, { error:'Not found' });
 });
 
