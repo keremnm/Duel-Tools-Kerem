@@ -938,8 +938,30 @@ select{cursor:pointer}
             <button id="tc-phase-postside-btn" onclick="setTopCardsMatchPhase('postside')" title="Games 2+3 combined, after siding"
               style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Post-Side</button>
           </div>
+          <div class="slbl" style="margin:0 0 0 14px">DATA SOURCE</div>
+          <div style="display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px">
+            <button id="tc-mode-observed-btn" onclick="setTopCardsDataMode('observed')" title="Cards OBSERVED during a match — infers a deck ran a card from seeing it in the log. Works for every replay, no saved decklist needed."
+              style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Observed</button>
+            <button id="tc-mode-decklist-btn" onclick="setTopCardsDataMode('decklist')" title="Cards CONFIRMED via a saved event decklist (YDK) — real copy counts (0/1/2/3), Included-vs-Omitted comparison. Only covers matches with a saved decklist."
+              style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Decklist</button>
+          </div>
+          <div id="tc-decklist-filters" style="display:none;align-items:center;gap:10px;flex-wrap:wrap">
+            <div class="slbl" style="margin:0">PLAYER</div>
+            <select id="tc-player-select" onchange="renderTopCardsTable()"
+              style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:140px">
+              <option value="">All Players</option>
+            </select>
+            <div class="slbl" style="margin:0">EVENT</div>
+            <select id="tc-event-select" onchange="renderTopCardsTable()"
+              style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:140px">
+              <option value="">All Events</option>
+            </select>
+            <input id="tc-card-search" type="text" placeholder="Search card…" oninput="debouncedRenderTopCardsTable()"
+              style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;min-width:160px"/>
+          </div>
         </div>
         <div id="tc-output"><div class="dd-empty">Loading replay data…</div></div>
+        <div id="tc-decklist-output" style="display:none"><div class="dd-empty">Loading replay data…</div></div>
       </div>
     </div>
 
@@ -14726,6 +14748,14 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
       omittedNote: replayResult.omittedNote || (p && p.omittedNote) || '',
       games: [], allMine: [], allOpp: [], allMyCards: [],
       mergedReplays: [],
+      // Card Timing data (see extractCardTimingData/buildCardTimingForMatch
+      // above), when the Admin Tools backfill has computed it for this
+      // replay — null for a manual entry (no real play-by-play log exists
+      // to extract it from) or anything not yet backfilled/out of scope.
+      // Carried straight through onto every record so Top Cards' Card
+      // Timing drill-down (see computeCardTimingDrillDown) can read it
+      // without a second, parallel raw-replay lookup.
+      cardTiming: replayResult.cardTiming || null,
     };
   }
 
@@ -14852,6 +14882,8 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
       // adjusting for a merge; this is purely so the UI can list every
       // replay ID that makes up this match.
       mergedReplays: replayResult.mergedReplays || [],
+      // See the matching comment on the manual-entry branch above.
+      cardTiming: replayResult.cardTiming || null,
     };
   }
 
@@ -15029,6 +15061,8 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
     allMyCards: parsed.allMine.map(c => c.name.toLowerCase()),
     allUsageMine: parsed.allUsageMine || [],
     allMyUsageCards: (parsed.allUsageMine||[]).map(c => c.name.toLowerCase()),
+    // See the matching comment on the manual-entry branch above.
+    cardTiming: replayResult.cardTiming || null,
   };
 }
 
@@ -16552,6 +16586,55 @@ function populateTopCardsOpponentDropdown() {
   sel.value = validValues.includes(cur) ? cur : '';
 }
 
+// Player/Event filters — Decklist Mode only (see the DECKLIST MODE +
+// CARD TIMING DRILL-DOWN section below). Observed Mode has always been a
+// cross-player, cross-event view by design, but a decklist is tied to one
+// specific player's one specific event, so narrowing to a single player or
+// event is a natural (and cheap — same records array, no extra fetch) way
+// to sanity-check a surprising Decklist Mode number against one concrete
+// decklist before trusting the aggregate.
+function populateTopCardsPlayerDropdown(records) {
+  const sel = document.getElementById('tc-player-select');
+  if (!sel) return;
+  const counts = {};
+  records.forEach(r => { if (r.player) counts[r.player] = (counts[r.player]||0) + 1; });
+  const players = Object.keys(counts).sort((a,b) => counts[b]-counts[a]);
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">All Players (${records.length})</option>` +
+    players.map(p => `<option value="${_escapeHtml(p.toLowerCase())}">${_escapeHtml(p)} (${counts[p]})</option>`).join('');
+  sel.value = players.map(p=>p.toLowerCase()).includes(cur) ? cur : '';
+}
+function populateTopCardsEventDropdown(records) {
+  const sel = document.getElementById('tc-event-select');
+  if (!sel) return;
+  const counts = {};
+  records.forEach(r => { const code = eventCodeFromLabel(r.eventLabel); if (code) counts[code] = (counts[code]||0) + 1; });
+  const codes = Object.keys(counts).sort((a,b) => counts[b]-counts[a]);
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">All Events (${records.length})</option>` +
+    codes.map(c => `<option value="${_escapeHtml(c)}">${_escapeHtml(c)} (${counts[c]})</option>`).join('');
+  sel.value = codes.includes(cur) ? cur : '';
+}
+
+// Observed Mode / Decklist Mode toggle — see the big comment block above
+// computeDecklistModeStats for what each one means. Re-renders the table
+// immediately; renderTopCardsTable itself branches on _tcDataMode to decide
+// which output container and which stats pipeline to use.
+function setTopCardsDataMode(mode) {
+  _tcDataMode = mode;
+  _syncModeButtons([
+    ['tc-mode-observed-btn', 'observed'],
+    ['tc-mode-decklist-btn', 'decklist'],
+  ], mode);
+  const decklistFilters = document.getElementById('tc-decklist-filters');
+  if (decklistFilters) decklistFilters.style.display = mode === 'decklist' ? 'flex' : 'none';
+  const obsOut = document.getElementById('tc-output');
+  const dkOut = document.getElementById('tc-decklist-output');
+  if (obsOut) obsOut.style.display = mode === 'decklist' ? 'none' : '';
+  if (dkOut) dkOut.style.display = mode === 'decklist' ? '' : 'none';
+  renderTopCardsTable();
+}
+
 // List vs Images view — purely a this-session display preference (not
 // persisted to the server), same data either way. Defaults to Images.
 let _tcViewMode = 'images';
@@ -16727,10 +16810,240 @@ function _cardObservationsByQtyForPhase(r, phase) {
   return obs;
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// TOP CARDS — DECKLIST MODE + CARD TIMING DRILL-DOWN
+//
+// Everything above this point ("Observed Mode") infers "this deck runs
+// card X" from cards that happened to be SEEN during a match — which can't
+// tell "never ran it" apart from "ran it but never drew it", and can't see
+// a card that sat in the deck all game untouched. Decklist Mode instead
+// reads a player's actual SAVED decklist for the event (getEventDecks —
+// the same event-decklist records Event Decklists/Deck Viewer already use),
+// so it knows the true, confirmed copy count (0/1/2/3) for every card —
+// real ground truth, not an inference — for every match that has one
+// attached. Matches with no saved decklist for their event simply don't
+// contribute here (same "partial data is fine" tolerance as everywhere
+// else in this app), which is also exactly what makes a trustworthy
+// "confirmed to run this card" population possible for the Card Timing
+// drill-down below.
+// ══════════════════════════════════════════════════════════════════════
+
+let _tcDataMode = 'observed'; // 'observed' | 'decklist'
+
+function eventCodeFromLabel(eventLabel) {
+  return (eventLabel||'').split(':')[0].trim().toUpperCase();
+}
+// Finds this player's saved decklist entry for a match's event, same code
+// resolution buildMatchRecord's own getEventDeckType closure already uses.
+function getEventDecklistEntry(player, eventLabel) {
+  const code = eventCodeFromLabel(eventLabel);
+  if (!code || !player) return null;
+  const decks = getEventDecks(player);
+  return (decks||[]).find(d => d.code === code || d.code === (eventLabel||'').trim().toUpperCase()) || null;
+}
+function _decodeYdkText(ydkData) {
+  try { return decodeURIComponent(escape(atob(ydkData))); } catch(e) {}
+  try { return atob(ydkData); } catch(e2) { return ''; }
+}
+// entry -> { cardName: copyCount } for its MAIN DECK, resolving passcodes to
+// names via the same ygoprodeck lookup/cache the decklist image exporter
+// uses. Cached per entry OBJECT (not per code/player string) — a decklist
+// entry is replaced wholesale on save (saveEventDecks), never mutated in
+// place, so caching on object identity can't ever serve a stale decklist's
+// counts under a since-updated entry.
+const _decklistCountsCache = new WeakMap();
+async function getDecklistCardCounts(entry) {
+  if (!entry || !entry.ydkData) return null;
+  if (_decklistCountsCache.has(entry)) return _decklistCountsCache.get(entry);
+  const passcodes = parseYDK(_decodeYdkText(entry.ydkData));
+  if (!passcodes.length) { _decklistCountsCache.set(entry, null); return null; }
+  await lookupPasscodeNames([...new Set(passcodes)]);
+  const counts = {};
+  passcodes.forEach(p => {
+    const card = window._cardDataCache[p];
+    if (!card || !card.name) return; // unresolved passcode — skip rather than pollute the card universe with a bare id
+    counts[card.name] = (counts[card.name]||0) + 1;
+  });
+  _decklistCountsCache.set(entry, counts);
+  return counts;
+}
+
+// Groups a filtered record list into one entry per ACTUAL decklist
+// deployment (one player's saved list for one event) — the unit "distinct
+// decklists" below counts, and the unit every per-card copy-count lookup is
+// resolved against exactly once instead of once per match. Records with no
+// resolvable player/event code, or no saved decklist for that event, are
+// reported back separately (skipped) rather than silently dropped, so the
+// UI can say how much of the filtered data this view actually covers.
+async function _resolveDecklistGroups(records) {
+  const groups = new Map();
+  let noCodeOrPlayer = 0;
+  records.forEach(r => {
+    const code = eventCodeFromLabel(r.eventLabel);
+    if (!code || !r.player) { noCodeOrPlayer++; return; }
+    const key = r.player.toLowerCase() + '|' + code;
+    if (!groups.has(key)) groups.set(key, { player: r.player, code, decklistKey: key, matches: [] });
+    groups.get(key).matches.push(r);
+  });
+  const groupList = [...groups.values()];
+  const resolved = [];
+  let noDecklist = 0;
+  for (const g of groupList) {
+    const entry = getEventDecklistEntry(g.player, g.code);
+    const counts = entry ? await getDecklistCardCounts(entry) : null;
+    if (!counts) { noDecklist += g.matches.length; continue; }
+    resolved.push({ ...g, counts });
+  }
+  return { resolved, groupsTotal: groupList.length, matchesSkipped: noCodeOrPlayer + noDecklist };
+}
+
+// Which observation UNITS one match record contributes under the current
+// Match Phase — mirrors _cardObservationsForPhase's own phase semantics
+// exactly (one unit = the match's own result in 'full'; one unit per game
+// in that phase for 'preside'/'postside') so Decklist Mode and Observed
+// Mode can never disagree about what "Pre-Side"/"Post-Side" means. Unlike
+// Observed Mode, every unit returned here applies to EVERY card in the
+// governing decklist alike (a decklist's contents don't change game to game
+// within one match), so this only needs to know win/loss, not which cards.
+function _matchPhaseWinUnits(r, phase) {
+  if (phase === 'full') {
+    if (!r.matchWon && !r.matchLost) return [];
+    return [{ win: r.matchWon }];
+  }
+  const gameNums = phase === 'preside' ? [1] : [2, 3];
+  return (r.games||[]).filter(g => gameNums.includes(g.gameNum) && g.winner).map(g => ({ win: !!g.myWon }));
+}
+
+const DECKLIST_COPY_BUCKETS = ['0','1','2','3+'];
+function _copyBucket(qty) { return qty >= 3 ? '3+' : String(qty||0); }
+// Below this many decided units (matches, or games under Pre/Post-Side), a
+// bucket's win% is noisy enough to be misleading on its own — flagged in
+// the UI rather than hidden, same "show it, but say so" spirit as Top
+// Cards' own Min Matches floor (which filters whole ROWS; this flags
+// individual buckets within a row that otherwise clears that floor).
+const CARD_TIMING_SMALL_SAMPLE = 8;
+
+// Core Decklist Mode aggregation. `records` is already filtered by
+// deck/opponent-deck/year-season/player/event exactly like Observed Mode's
+// table; this only adds the decklist-copy-count dimension on top. Returns
+// one row per distinct card name seen in ANY decklist among the resolved
+// groups (i.e. "cards relevant to compare," not every card in the game).
+async function computeDecklistModeStats(records, { cardQuery, phase } = {}) {
+  const q = (cardQuery||'').trim().toLowerCase();
+  const { resolved, groupsTotal, matchesSkipped } = await _resolveDecklistGroups(records);
+
+  const cardUniverse = new Set();
+  resolved.forEach(g => Object.keys(g.counts).forEach(n => cardUniverse.add(n)));
+
+  const stats = {};
+  cardUniverse.forEach(name => {
+    if (q && !name.toLowerCase().includes(q)) return;
+    stats[name] = { name, allDecklists: new Set(), allPlayers: new Set(), buckets: Object.fromEntries(DECKLIST_COPY_BUCKETS.map(b => [b, { w:0, l:0, decklists:new Set(), players:new Set() }])) };
+  });
+
+  let matchesConsidered = 0;
+  for (const g of resolved) {
+    for (const r of g.matches) {
+      const units = _matchPhaseWinUnits(r, phase || 'full');
+      if (!units.length) continue;
+      matchesConsidered += units.length;
+      units.forEach(({ win }) => {
+        Object.keys(stats).forEach(name => {
+          const qty = g.counts[name] || 0;
+          const b = stats[name].buckets[_copyBucket(qty)];
+          if (win) b.w++; else b.l++;
+          b.decklists.add(g.decklistKey);
+          b.players.add(g.player.toLowerCase());
+          stats[name].allDecklists.add(g.decklistKey);
+          stats[name].allPlayers.add(g.player.toLowerCase());
+        });
+      });
+    }
+  }
+
+  const rows = Object.values(stats).map(s => {
+    const bucketRows = DECKLIST_COPY_BUCKETS.map(key => {
+      const b = s.buckets[key];
+      const n = b.w + b.l;
+      return { key, w: b.w, l: b.l, n, pct: pct(b.w, n), decklists: b.decklists.size, players: b.players.size, ci: wilsonCI(b.w, n), lowSample: n > 0 && n < CARD_TIMING_SMALL_SAMPLE };
+    });
+    const omitted = bucketRows[0];
+    const includedBuckets = bucketRows.slice(1);
+    const includedW = includedBuckets.reduce((s2,b)=>s2+b.w, 0);
+    const includedL = includedBuckets.reduce((s2,b)=>s2+b.l, 0);
+    const includedN = includedW + includedL;
+    const includedDecklists = new Set(includedBuckets.flatMap(b => [...s.buckets[b.key].decklists])).size;
+    const includedPlayers   = new Set(includedBuckets.flatMap(b => [...s.buckets[b.key].players])).size;
+    const included = { w: includedW, l: includedL, n: includedN, pct: pct(includedW, includedN), decklists: includedDecklists, players: includedPlayers, ci: wilsonCI(includedW, includedN), lowSample: includedN > 0 && includedN < CARD_TIMING_SMALL_SAMPLE };
+    const impact = (omitted.n >= CARD_TIMING_SMALL_SAMPLE && included.n >= CARD_TIMING_SMALL_SAMPLE) ? (included.pct - omitted.pct) : null;
+    return { name: s.name, buckets: bucketRows, omitted, included, impact, totalN: omitted.n + included.n, totalDecklists: s.allDecklists.size, totalPlayers: s.allPlayers.size };
+  }).filter(r => r.totalN > 0);
+
+  return { rows, matchesConsidered, matchesSkipped, decklistGroupsUsed: resolved.length, decklistGroupsTotal: groupsTotal };
+}
+
+// ── Card Timing drill-down (per card, Game-level data) ──────────────────────
+// Scoped to matches whose GOVERNING DECKLIST is confirmed to run this exact
+// card — resolved the identical way computeDecklistModeStats' Included
+// bucket is — which is what makes "Never Drawn" a trustworthy bucket here
+// instead of silently mixing in matches where the deck never ran the card
+// at all. Reads buildCardTimingForMatch's per-game data (see its header
+// comment for exactly what counts as a card's first appearance) attached to
+// each record as r.cardTiming by buildMatchRecord above; a confirmed match
+// with no cardTiming yet (not backfilled, or event not yet 2025+-eligible)
+// simply contributes nothing here, same partial-data tolerance as the rest
+// of this feature — it keeps filling in as the Admin Tools backfill and
+// ongoing imports add more.
+async function computeCardTimingDrillDown(cardName, records) {
+  const { resolved } = await _resolveDecklistGroups(records);
+  const confirmedGroups = resolved.filter(g => (g.counts[cardName]||0) > 0);
+  const confirmedMatches = confirmedGroups.flatMap(g => g.matches);
+
+  const mk = () => ({ w: 0, l: 0 });
+  const buckets = { opening: mk(), early: mk(), mid: mk(), late: mk(), never: mk() };
+  const firstSecond = { first: mk(), second: mk() };
+  const gamePhase = { g1: mk(), post: mk() };
+  let gamesWithTimingData = 0;
+
+  confirmedMatches.forEach(r => {
+    if (!r.cardTiming || !r.cardTiming.games || !r.cardTiming.games.length) return;
+    r.cardTiming.games.forEach(game => {
+      gamesWithTimingData++;
+      const outcome = game.myWon ? 'w' : 'l';
+      const openHandHit = (game.myOpeningHand||[]).some(c => c.cardName === cardName);
+      const ev = !openHandHit ? (game.myEvents||[]).find(e => e.cardName === cardName) : null;
+      let bucket;
+      if (openHandHit) bucket = buckets.opening;
+      else if (ev) bucket = (ev.turn||0) <= 3 ? buckets.early : ((ev.turn||0) <= 6 ? buckets.mid : buckets.late);
+      else bucket = buckets.never;
+      bucket[outcome]++;
+      (game.myFirst ? firstSecond.first : firstSecond.second)[outcome]++;
+      (game.gameNum === 1 ? gamePhase.g1 : gamePhase.post)[outcome]++;
+    });
+  });
+
+  function row(label, b) { const n = b.w + b.l; return { label, w: b.w, l: b.l, n, pct: pct(b.w, n), ci: wilsonCI(b.w, n), lowSample: n > 0 && n < CARD_TIMING_SMALL_SAMPLE }; }
+  return {
+    cardName,
+    confirmedDecklists: confirmedGroups.length,
+    confirmedMatches: confirmedMatches.length,
+    gamesWithTimingData,
+    timing: [row('Opening Hand', buckets.opening), row('Drawn/Added Turn 1–3', buckets.early), row('Drawn/Added Turn 4–6', buckets.mid), row('Drawn/Added Turn 7+', buckets.late), row('Never Drawn', buckets.never)],
+    firstSecond: [row('Going First', firstSecond.first), row('Going Second', firstSecond.second)],
+    gamePhase: [row('Game 1', gamePhase.g1), row('Post-Side (G2/G3)', gamePhase.post)],
+  };
+}
+
 // The currently-rendered rows, kept around so the drill-down modal
 // (showTopCardsCardModal) can look one up by index from an onclick handler
 // without re-deriving it from _globalRecords.
 let _tcLastRows = [];
+// Same idea as _tcLastRows, but the full filtered record set behind
+// whichever table is currently showing (Observed or Decklist Mode) — the
+// Card Timing drill-down needs the FULL set, not just one card's own
+// matches, since "Never Drawn" requires seeing matches that never show up
+// in a per-card "where this card appeared" list at all.
+let _tcLastFilteredRecords = [];
 
 // Bumped on every renderTopCardsTable call, so a slow (or failed/retried)
 // image lookup from an OLDER render can tell it's stale and bail instead of
@@ -16778,9 +17091,17 @@ function renderTopCardsTable(deckType) {
   else if (oppFilter) records = records.filter(r => (r.oppDeck||'Unknown') === oppFilter);
   if (!records.length) {
     const oppLbl = oppFilter === '__MIRROR__' ? ' in Mirror matches' : (oppFilter ? ' vs '+_escapeHtml(oppFilter) : '');
-    out.innerHTML = `<div class="dd-empty">No replays found for ${_escapeHtml(deck||'this deck')}${oppLbl}${_tcListsMode==='tops'?' in Tops Only lists':''}.</div>`;
+    const emptyMsg = `<div class="dd-empty">No replays found for ${_escapeHtml(deck||'this deck')}${oppLbl}${_tcListsMode==='tops'?' in Tops Only lists':''}.</div>`;
+    if (_tcDataMode === 'decklist') { const dkOut = document.getElementById('tc-decklist-output'); if (dkOut) dkOut.innerHTML = emptyMsg; }
+    out.innerHTML = emptyMsg;
     return;
   }
+
+  if (_tcDataMode === 'decklist') {
+    renderDecklistModeTable(records, deck, oppFilter, myGen);
+    return;
+  }
+  _tcLastFilteredRecords = records;
 
   const minInput = document.getElementById('tc-minmatches-input');
   const rawMin = minInput ? parseFloat(minInput.value) : 20;
@@ -16851,6 +17172,176 @@ function buildTopCardsListHtml(rows) {
   return html;
 }
 
+// ── Decklist Mode rendering ──────────────────────────────────────────────
+// Called from renderTopCardsTable once it's branched on _tcDataMode —
+// `records` is already deck/opponent/year-season-filtered exactly like
+// Observed Mode gets; this layers the Player/Event filters and the
+// decklist-copy-count aggregation on top. Async (resolving decklists can
+// mean an awaited ygoprodeck passcode lookup the first time), so it shows a
+// brief "Resolving…" placeholder — subsequent renders with the same
+// decklists are instant since getDecklistCardCounts caches per entry.
+async function renderDecklistModeTable(records, deck, oppFilter, myGen) {
+  const out = document.getElementById('tc-decklist-output');
+  if (!out) return;
+  populateTopCardsPlayerDropdown(records);
+  populateTopCardsEventDropdown(records);
+  const playerSel = document.getElementById('tc-player-select');
+  const playerFilter = playerSel ? playerSel.value : '';
+  const eventSel = document.getElementById('tc-event-select');
+  const eventFilter = eventSel ? eventSel.value : '';
+  if (playerFilter) records = records.filter(r => (r.player||'').toLowerCase() === playerFilter);
+  if (eventFilter) records = records.filter(r => eventCodeFromLabel(r.eventLabel) === eventFilter);
+  const cardSearchEl = document.getElementById('tc-card-search');
+  const cardQuery = cardSearchEl ? cardSearchEl.value : '';
+
+  out.innerHTML = '<div class="dd-empty">Resolving saved decklists…</div>';
+  const result = await computeDecklistModeStats(records, { cardQuery, phase: _tcMatchPhase });
+  if (myGen !== _tcRenderGen) return; // a newer render superseded this one while this one awaited
+
+  _tcLastFilteredRecords = records;
+
+  const minInput = document.getElementById('tc-minmatches-input');
+  const rawMin = minInput ? parseFloat(minInput.value) : 8;
+  const minVal = (isNaN(rawMin) || rawMin < 0) ? 0 : rawMin;
+  const minSample = _tcMinMatchesUnit === 'pct' ? Math.round(records.length * (minVal/100)) : Math.round(minVal);
+
+  const rows = result.rows
+    .filter(r => r.totalN >= minSample)
+    .sort((a,b) => {
+      if (a.impact === null && b.impact === null) return b.totalN - a.totalN;
+      if (a.impact === null) return 1;
+      if (b.impact === null) return -1;
+      return b.impact - a.impact;
+    });
+  _tcLastRows = rows;
+
+  if (!rows.length) {
+    out.innerHTML = result.decklistGroupsUsed
+      ? `<div class="dd-empty">No cards with ${minVal}+ decided ${_tcMatchPhase==='full'?'matches':'games'} to compare for ${_escapeHtml(deck)}. Try lowering Min Matches.</div>`
+      : `<div class="dd-empty">No saved decklists (with a YDK) found for ${_escapeHtml(deck)}'s events yet — Decklist Mode needs at least one. Save an event decklist in Event Decklists, or switch back to Observed Mode.</div>`;
+    return;
+  }
+
+  const oppNote = oppFilter === '__MIRROR__' ? ' · vs Mirror' : (oppFilter ? ' · vs '+_escapeHtml(oppFilter) : '');
+  const phaseNote = _tcMatchPhase === 'full' ? '' : (_tcMatchPhase === 'preside' ? ' · Pre-Side (G1)' : ' · Post-Side (G2+G3)');
+  const covNote = result.matchesSkipped
+    ? ` — ${result.decklistGroupsUsed} saved decklist(s), ${result.matchesConsidered} decided ${_tcMatchPhase==='full'?'match(es)':'game(s)'} covered (${result.matchesSkipped} more ${_tcMatchPhase==='full'?'match(es)':'unit(s)'} have no saved decklist for their event and aren't counted)`
+    : ` — ${result.decklistGroupsUsed} saved decklist(s), ${result.matchesConsidered} decided ${_tcMatchPhase==='full'?'match(es)':'game(s)'} covered`;
+  const summary = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${_escapeHtml(deck)}${oppNote}${phaseNote}${covNote}, ${rows.length} card(s) compared. <span style="color:var(--dim)">Click a card for its Card Timing breakdown (Opening Hand/turn drawn/first-second/Game 1 vs post-side).</span></div>`;
+
+  out.innerHTML = summary + buildDecklistModeTableHtml(rows);
+}
+
+function _fmtBucketCell(b) {
+  if (!b.n) return '<span style="color:var(--dim)">—</span>';
+  const warn = b.lowSample ? ' ⚠' : '';
+  return `<span style="font-weight:bold;color:${b.pct>=50?'var(--green)':'var(--red)'}">${b.pct}%</span>` +
+    `<span style="color:var(--muted)"> (${b.w}-${b.l}${warn})</span>`;
+}
+function buildDecklistModeTableHtml(rows) {
+  let html = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-family:monospace;font-size:12px;white-space:nowrap">';
+  html += '<thead><tr style="border-bottom:1px solid var(--border);color:var(--muted);text-align:right">' +
+    '<th style="padding:6px 8px;text-align:left">Card</th>' +
+    '<th style="padding:6px 8px" title="Matches/games where the governing decklist ran 0 copies of this card">Omitted (0x)</th>' +
+    '<th style="padding:6px 8px">1 Copy</th>' +
+    '<th style="padding:6px 8px">2 Copies</th>' +
+    '<th style="padding:6px 8px">3 Copies</th>' +
+    '<th style="padding:6px 8px" title="1, 2, or 3 copies combined">Included (Any)</th>' +
+    '<th style="padding:6px 8px" title="Included win% minus Omitted win%, when both sides have at least 8 decided units">Impact</th>' +
+    '<th style="padding:6px 8px" title="Distinct (player, event) decklists behind this row">Decklists</th>' +
+    '<th style="padding:6px 8px" title="Distinct players behind this row">Players</th>' +
+    '</tr></thead><tbody>';
+  rows.forEach((r, idx) => {
+    const b0 = r.buckets.find(b=>b.key==='0'), b1 = r.buckets.find(b=>b.key==='1'), b2 = r.buckets.find(b=>b.key==='2'), b3 = r.buckets.find(b=>b.key==='3+');
+    const impactHtml = r.impact === null ? '<span style="color:var(--dim)">—</span>' : `<span style="font-weight:bold;color:${r.impact>=0?'var(--green)':'var(--red)'}">${r.impact>=0?'+':''}${r.impact}%</span>`;
+    html += `<tr onclick="showCardTimingModal(_tcLastRows[${idx}].name)" title="Click for this card's Card Timing breakdown" style="border-bottom:1px solid var(--border);cursor:pointer;text-align:right">` +
+      `<td style="padding:6px 8px;text-align:left;color:var(--text)">${_escapeHtml(r.name)}</td>` +
+      `<td style="padding:6px 8px">${_fmtBucketCell(b0)}</td>` +
+      `<td style="padding:6px 8px">${_fmtBucketCell(b1)}</td>` +
+      `<td style="padding:6px 8px">${_fmtBucketCell(b2)}</td>` +
+      `<td style="padding:6px 8px">${_fmtBucketCell(b3)}</td>` +
+      `<td style="padding:6px 8px">${_fmtBucketCell(r.included)}</td>` +
+      `<td style="padding:6px 8px">${impactHtml}</td>` +
+      `<td style="padding:6px 8px;color:var(--muted)">${r.totalDecklists}</td>` +
+      `<td style="padding:6px 8px;color:var(--muted)">${r.totalPlayers}</td>` +
+      `</tr>`;
+  });
+  html += '</tbody></table></div>';
+  return html;
+}
+
+// ── Card Timing drill-down modal ─────────────────────────────────────────
+// Reachable from a card row in EITHER mode — Observed Mode's existing
+// per-card modal gained a "⏱ Card Timing" button (see showTopCardsCardModal
+// above), Decklist Mode's rows open it directly. Always computed against
+// _tcLastFilteredRecords (the full filtered set behind whichever table is
+// currently showing), never a per-card subset, since "Never Drawn" needs to
+// see matches the card never appeared in at all.
+async function showCardTimingModal(cardName) {
+  const existing = document.getElementById('ctd-modal-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'ctd-modal-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:100000;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:620px;width:100%;max-height:85vh;overflow-y:auto;display:flex;flex-direction:column;gap:14px';
+  overlay.appendChild(box);
+
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;gap:10px';
+  hdr.innerHTML = `<span style="font-family:monospace;font-weight:bold;font-size:14px;color:var(--text)">⏱ ${_escapeHtml(cardName)} — Card Timing</span>`;
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = 'margin-left:auto;background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer';
+  closeBtn.onclick = () => overlay.remove();
+  hdr.appendChild(closeBtn);
+  box.appendChild(hdr);
+
+  const loading = document.createElement('div');
+  loading.className = 'dd-empty';
+  loading.textContent = 'Resolving confirmed decklists + parsed replay data…';
+  box.appendChild(loading);
+  document.body.appendChild(overlay);
+
+  const dd = await computeCardTimingDrillDown(cardName, _tcLastFilteredRecords);
+  if (!document.getElementById('ctd-modal-overlay')) return; // closed while awaiting
+  loading.remove();
+
+  if (!dd.confirmedDecklists) {
+    const empty = document.createElement('div');
+    empty.className = 'dd-empty';
+    empty.textContent = 'No saved decklist in this filtered view is confirmed to run this card yet — Card Timing needs a decklist (for "Never Drawn" to mean anything) and backfilled parsed-replay data.';
+    box.appendChild(empty);
+    return;
+  }
+  const note = document.createElement('div');
+  note.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace';
+  note.textContent = `${dd.confirmedDecklists} decklist(s) confirmed to run this card · ${dd.confirmedMatches} match(es) · ${dd.gamesWithTimingData} game(s) with parsed Card Timing data. More fills in as the Admin Tools backfill (or new replays) add Card Timing to more matches.`;
+  box.appendChild(note);
+
+  function section(title, rows) {
+    const wrap = document.createElement('div');
+    const h = document.createElement('div');
+    h.style.cssText = 'font-size:11px;color:var(--muted);letter-spacing:.08em;font-family:monospace;margin-bottom:6px';
+    h.textContent = title.toUpperCase();
+    wrap.appendChild(h);
+    const tbl = document.createElement('table');
+    tbl.style.cssText = 'width:100%;border-collapse:collapse;font-family:monospace;font-size:12px';
+    tbl.innerHTML = rows.map(r => {
+      const cell = r.n ? `<span style="font-weight:bold;color:${r.pct>=50?'var(--green)':'var(--red)'}">${r.pct}%</span><span style="color:var(--muted)"> (${r.w}-${r.l}${r.lowSample?' ⚠':''})</span>` : '<span style="color:var(--dim)">—</span>';
+      return `<tr style="border-bottom:1px solid var(--border)"><td style="padding:4px 6px;color:var(--text)">${_escapeHtml(r.label)}</td><td style="padding:4px 6px;text-align:right">${cell}</td><td style="padding:4px 6px;text-align:right;color:var(--muted)">${r.n ? r.ci.low+'–'+r.ci.high+'%' : ''}</td></tr>`;
+    }).join('');
+    wrap.appendChild(tbl);
+    return wrap;
+  }
+  box.appendChild(section('Opening Hand / Turn Drawn / Never Drawn', dd.timing));
+  box.appendChild(section('Going First vs Second', dd.firstSecond));
+  box.appendChild(section('Game 1 vs Post-Side', dd.gamePhase));
+}
+
 // Image-grid view — same rows as the list, rendered as card art tiles with
 // a win%/N badge, closer to how masterduelmeta.com's Top Cards page reads.
 // Images resolve via the same passcode → ygoprodeck imageId lookup already
@@ -16913,9 +17404,21 @@ function showTopCardsCardModal(idx) {
   hdr.style.cssText = 'display:flex;align-items:center;gap:10px';
   hdr.innerHTML = `<span style="font-family:monospace;font-weight:bold;font-size:14px;color:var(--text)">${_escapeHtml(r.name)}</span>` +
     `<span style="font-family:monospace;font-size:12px;color:var(--muted)">${r.w}-${r.l} (${wp}%)</span>`;
+  // Card Timing drill-down — opening hand/turn-drawn/first-second/G1-vs-
+  // post-side breakdown, scoped to decks CONFIRMED (via a saved decklist)
+  // to run this card. Uses _tcLastFilteredRecords (the FULL filtered set
+  // behind this table, set in renderTopCardsTable), not just r.matches —
+  // "Never Drawn" needs to see matches this card never showed up in at all,
+  // which r.matches (Observed Mode's own "where it was seen" list) can't.
+  const timingBtn = document.createElement('button');
+  timingBtn.textContent = '⏱ Card Timing';
+  timingBtn.title = 'Opening hand / turn-drawn / going first-second / Game 1 vs post-side breakdown, for decks confirmed via a saved decklist to run this card';
+  timingBtn.style.cssText = 'margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:4px 10px;border-radius:5px;cursor:pointer';
+  timingBtn.onclick = () => showCardTimingModal(r.name);
+  hdr.appendChild(timingBtn);
   const closeBtn = document.createElement('button');
   closeBtn.textContent = '✕';
-  closeBtn.style.cssText = 'margin-left:auto;background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer';
+  closeBtn.style.cssText = 'background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer';
   closeBtn.onclick = () => overlay.remove();
   hdr.appendChild(closeBtn);
   box.appendChild(hdr);
