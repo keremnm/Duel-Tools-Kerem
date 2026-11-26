@@ -74,7 +74,20 @@ let _pgEverLoaded = false;
 // case. See POST /api/fl-import/pending (creates/updates the hidden batch),
 // autoMergeHiddenBatches (auto-promotion), and POST /api/batches/merge
 // (admin-triggered merge) further down.
-let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {}, replayCache: {}, overrides: {}, _changeLog: [], events: {} };
+// emptyReplayIds: replay ids that GET /api/proxy/replay confirmed have 0
+// plays on DuelingBook even after the master=true retry (see that route) —
+// genuinely nothing there, not just "never fetched yet". Deliberately
+// separate from replayCache (which that route still does NOT cache a
+// 0-plays result into, in case it's a transient DuelingBook issue rather
+// than a permanently-empty replay) — this list exists so the "Cache
+// Non-Cached Replays" admin tool can tell "already confirmed empty, don't
+// pay CapSolver to ask again" apart from "never attempted", without
+// changing that route's existing retry/caching behavior for anything else
+// that calls it. A plain array of short id strings stays tiny (even
+// 50,000 ids is well under 1MB serialized), so — unlike replayCache, whose
+// 2026-11 incident is the cautionary tale (see "NOT bulk-loaded anymore"
+// below) — this is safe to load/save as an ordinary whole-array key.
+let db = { batches: {}, players: {}, users: {}, gfwl: {}, eventDates: {}, replayCache: {}, overrides: {}, _changeLog: [], events: {}, emptyReplayIds: [] };
 
 // ── KNOWN_EVENT_DATES — authoritative Month/Year (+ expected replay count)
 // for a fixed roster of German Goat events, handed over directly by the
@@ -234,8 +247,9 @@ async function connectPostgres() {
   // reconnect-triggered stall with no loss of correctness.
   if (!_pgEverLoaded) {
     try {
-      const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('players','users','gfwl','eventDates','overrides','_changeLog','events')");
+      const res = await client.query("SELECT key, value FROM duel_tools_data WHERE key IN ('players','users','gfwl','eventDates','overrides','_changeLog','events','emptyReplayIds')");
       for (const row of res.rows) { db[row.key] = row.value; }
+      if (!db.emptyReplayIds) db.emptyReplayIds = [];
     } catch(e) { console.error('[PG] Failed to load players/users/gfwl/etc — starting with whatever was already in memory:', e.message); }
 
     try {
@@ -450,6 +464,7 @@ function loadFileDB() {
       if (!db.overrides) db.overrides = {};
       if (!db._changeLog) db._changeLog = [];
       if (!db.events) db.events = {};
+      if (!db.emptyReplayIds) db.emptyReplayIds = [];
     }
   } catch(e) { console.error('File DB load error:', e.message); }
 }
@@ -5806,12 +5821,43 @@ ${value}
   // for) a live refetch. A miss just means this replay was never run
   // through the cache; the backfill reports it to the admin as skipped
   // rather than silently paying to refetch it.
-  if (parts[0]==='admin' && parts[1]==='replay-cache' && parts[2] && method==='GET') {
+  if (parts[0]==='admin' && parts[1]==='replay-cache' && parts[2] && parts[2]!=='purge' && parts[2]!=='mark-empty' && method==='GET') {
     if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
     const replayId = decodeURIComponent(parts[2]);
     const cached = await getCachedReplay(replayId);
-    if (!cached || !(cached.plays||[]).length) return json(res, 200, { ok:true, cached:false });
-    return json(res, 200, { ok:true, cached:true, plays: cached.plays });
+    // emptyConfirmed: GET /api/proxy/replay already tried this exact replay
+    // and DuelingBook genuinely returned 0 plays even after its master=true
+    // retry (see that route) — it deliberately does NOT write that outcome
+    // into replayCache itself (in case it's transient), so emptyReplayIds is
+    // the separate signal the "Cache Non-Cached Replays" tool needs to avoid
+    // re-paying CapSolver forever for a replay that will never have data.
+    const emptyConfirmed = (db.emptyReplayIds||[]).includes(replayId);
+    if (!cached || !(cached.plays||[]).length) return json(res, 200, { ok:true, cached:false, emptyConfirmed });
+    return json(res, 200, { ok:true, cached:true, plays: cached.plays, emptyConfirmed });
+  }
+
+  // ── POST /api/admin/replay-cache/mark-empty — records that a replay was
+  // live-fetched and DuelingBook genuinely has no play data for it (0 plays
+  // even after the master=true retry in GET /api/proxy/replay), so the
+  // "Cache Non-Cached Replays" admin tool never pays CapSolver to ask again.
+  // Intentionally NOT done by GET /api/proxy/replay itself, which already
+  // deliberately leaves this case out of replayCache in case it's a
+  // transient DuelingBook hiccup rather than a permanently-empty replay —
+  // this is purely an admin-tool-side "stop retrying this one" marker, kept
+  // in its own small list rather than changing that route's behavior for
+  // every other caller. Body: { replayId }. Idempotent.
+  if (parts[0]==='admin' && parts[1]==='replay-cache' && parts[2]==='mark-empty' && !parts[3] && method==='POST') {
+    if (!isAdmin(req)) return json(res, 403, { error:'Admin only' });
+    return readBody(req, async data => {
+      const replayId = String(data.replayId||'').trim();
+      if (!replayId) return json(res, 400, { error: 'replayId required' });
+      if (!db.emptyReplayIds) db.emptyReplayIds = [];
+      if (!db.emptyReplayIds.includes(replayId)) {
+        db.emptyReplayIds.push(replayId);
+        await saveDB(['emptyReplayIds']);
+      }
+      return json(res, 200, { ok:true });
+    });
   }
 
   // ── POST /api/admin/replay-cache/purge — bulk-delete specific replays'

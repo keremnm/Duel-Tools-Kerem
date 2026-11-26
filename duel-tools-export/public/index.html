@@ -1230,10 +1230,6 @@ select{cursor:pointer}
               </div>
               <input id="profile-edl-search" class="edl-search" type="text" placeholder="Search event code..." oninput="(()=>{const p=_activeProfile&&_activeProfile.player;if(p)renderEventDecks(p,_activeProfile.batches||[],_activeProfile.records||[]);})()"
                 style="width:100%;font-size:12px;margin-bottom:6px;padding:5px 8px"/>
-              <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);margin-bottom:8px;cursor:pointer;font-family:monospace">
-                <input type="checkbox" id="profile-edl-allhistory" onchange="(()=>{const p=_activeProfile&&_activeProfile.player;if(p)renderEventDecks(p,_activeProfile.batches||[],_activeProfile.records||[]);})()" style="cursor:pointer;accent-color:var(--green)"/>
-                Include All Historical Data
-              </label>
               <div id="profile-event-decklists" style="display:flex;flex-direction:column;gap:6px">
                 <div style="font-size:12px;color:var(--muted)">No event decklists added yet.</div>
               </div>
@@ -9383,15 +9379,12 @@ function renderRPS() {
     }
     return r;
   });
-  // Default a NEW batch to recent data (current year + next year, and any
-  // matching GFWL season) rather than its whole history — only the first
-  // render of a given batch gets this applied; re-renders of the same batch
-  // (toggling another checkbox) leave the user's own choice alone. See
-  // isRecentYearSeasonKey/_recencyDefaultedFor.
+  // No default filter — a NEW batch opens to its whole history, same as
+  // every other filter in this app after the "Recent" default was reverted.
   const _rpsBatchKey = _batchIdentityKey(_activeBatch);
   if (_recencyDefaultedFor.rps !== _rpsBatchKey) {
     _recencyDefaultedFor.rps = _rpsBatchKey;
-    _rpsFilterSelected = computeRecentFilterDefault(_allReplays);
+    _rpsFilterSelected = null;
   }
 
   // Apply multi-select filter (null = all)
@@ -10080,15 +10073,12 @@ function applyDeckYearFilter(matches, yearSel, batchKey) {
   const seasonsPresentForRecent = [...new Set(matches.map(m => eventGroupKey(m.eventLabel||'')).filter(c => c && isGFWLSeason(c)))];
   const recentAvailable = [...years, ...seasonsPresentForRecent].some(isRecentYearSeasonKey);
 
-  // Default a NEW batch to "Recent" rather than "All" — only the first
-  // render of a given batch; re-renders of the same batch (switching
-  // matches, re-searching) leave the user's own dropdown choice alone. The
-  // owner-guard alone decides this (not whatever curYear happens to read —
-  // see the equivalent, more defensive note in populateGfwlSeasonFilter,
-  // whose virgin option value is NOT empty the way this select's is).
+  // No default filter — a NEW batch opens to "All", same as every other
+  // filter in this app after the "Recent" default was reverted. "Recent" is
+  // still offered as a manual option below, just never pre-selected.
   if (_recencyDefaultedFor.deck !== batchKey) {
     _recencyDefaultedFor.deck = batchKey;
-    curYear = recentAvailable ? 'recent' : '';
+    curYear = '';
   }
 
   const recentLabel = 'Recent (' + _recentFilterYears().join('-') + ')';
@@ -14194,6 +14184,38 @@ function buildCardTimingForMatch(plays, player, aliases, player1, player2, parse
   return { version: 1, games };
 }
 
+// Diagnostic-only mirror of buildCardTimingForMatch's own checks, used
+// purely to tell the Admin Tools logs WHICH condition caused a null —
+// different game count vs. no matching player identity vs. no raw data at
+// all look identical from the outside ("no usable data") but point at very
+// different root causes. Deliberately kept separate from the real function
+// so improving these messages can never risk changing what
+// buildCardTimingForMatch itself returns.
+function diagnoseCardTimingSkip(plays, player, aliases, player1, player2, parsed) {
+  if (!plays || !plays.length) return 'the raw replay has 0 plays';
+  if (!parsed || !parsed.games || !parsed.games.length) return 'the saved parse has no games to correlate against';
+  const rawGames = extractCardTimingData(plays, player1, player2);
+  if (!rawGames.length) return 'no opening-hand ("Pick first") event found in the raw log — may not be a normal match replay';
+  const isMine = u => matchesPlayerName(u, player, aliases);
+  let gameNumMismatches = 0, identityMismatches = 0;
+  parsed.games.forEach(pg => {
+    const rg = rawGames.find(g => g.gameNum === pg.gameNum);
+    if (!rg) { gameNumMismatches++; return; }
+    const myName = isMine(rg.firstPlayer) ? rg.firstPlayer : (isMine(rg.secondPlayer) ? rg.secondPlayer : null);
+    if (!myName) identityMismatches++;
+  });
+  if (gameNumMismatches === parsed.games.length) {
+    return `the raw log's game numbers (${rawGames.map(g=>g.gameNum).join(',')}) don't match the saved parse's (${parsed.games.map(g=>g.gameNum).join(',')}) at all`;
+  }
+  if (identityMismatches === parsed.games.length) {
+    return `neither player name in the raw log ("${player1}" / "${player2}") matches this batch's player ("${player}") or its aliases`;
+  }
+  if (gameNumMismatches || identityMismatches) {
+    return `${gameNumMismatches} game(s) had no matching game number in the raw log, ${identityMismatches} game(s) couldn't identify which side is "me" — partial mismatch`;
+  }
+  return 'unknown — matched games and identities but still produced no usable data (unexpected, worth reporting)';
+}
+
 // Earliest event date the Parsed Replay Data work (Card Timing now, Known
 // Decklist Data later) considers in scope — set by the user. An event
 // whose date is still unknown is NOT auto-eligible (it has to be learned
@@ -17422,7 +17444,7 @@ function populateGfwlSeasonFilter(sel, seasons, allGFWL, ownerKey) {
   // virgin "all", or state left over from a previously-viewed profile).
   if (_recencyDefaultedFor.gfwl !== ownerKey) {
     _recencyDefaultedFor.gfwl = ownerKey;
-    curVal = recentSeasonsAvailable ? 'recent' : 'all';
+    curVal = 'all'; // no default filter — opens to All Seasons
   }
 
   sel.innerHTML = '<option value="all">All Seasons</option>' +
@@ -22557,16 +22579,13 @@ async function openProfile(player, batches, records) {
       }
     }
   }
-  // Default to this player's recent data (current year + next year, and any
-  // GFWL season that maps to one of those years) rather than dumping their
-  // entire history — "Include All Historical Data" in the filter dropdown
-  // always restores everything. Falls back to showing everything if this
-  // player has no recent-window data at all (an all-time-only player).
-  _profileFilterSelected = computeRecentFilterDefault(records);
+  // No filter active by default on a newly opened profile — show this
+  // player's entire history until they deliberately narrow it. (A previous
+  // version of this defaulted to "current year + next year"; that default
+  // was reverted — every filter below now opens to "All"/unchecked.)
+  _profileFilterSelected = null;
   const _mdSel = document.getElementById('profile-mydeck-filter');
   if (_mdSel) _mdSel.value = '';
-  const _edlAllHist = document.getElementById('profile-edl-allhistory');
-  if (_edlAllHist) _edlAllHist.checked = false; // reset to recent-only for the newly opened profile
   _activeProfile = { player, batches, records };
   document.getElementById('profile-browser').style.display = 'none';
   document.getElementById('profile-view').style.display = 'flex';
@@ -22667,24 +22686,11 @@ async function openProfile(player, batches, records) {
     window._playerRegistry[player.toLowerCase()].eventDecklists = _profileEntry.eventDecklists;
   }
 
-  // Stat chips
-  const chips = document.getElementById('profile-stat-chips');
-  chips.innerHTML = '';
-  const W = records.filter(r=>r.matchWon).length;
-  const L = records.filter(r=>r.matchLost).length;
-  const WR = pct(W, records.length);
-  [
-    [records.length, 'Matches', 'var(--blue)'],
-    [W+'-'+L, 'W — L Record', WR>=50?'var(--green)':'var(--red)'],
-    [WR+'%', 'Win Rate', WR>=50?'var(--green)':'var(--red)'],
-    [batches.length, 'Batches', 'var(--muted)'],
-    [totalReplays, 'Replays', 'var(--muted)'],
-  ].forEach(([v,l,col]) => {
-    const ch = document.createElement('div');
-    ch.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:9px;padding:10px 16px;min-width:90px';
-    ch.innerHTML = `<span style="font-size:20px;font-weight:bold;color:${col};display:block;line-height:1.2;margin-bottom:2px">${v}</span><span style="font-size:11px;color:var(--muted)">${l}</span>`;
-    chips.appendChild(ch);
-  });
+  // Stat chips — _profileFilterSelected is null and the My Deck select was
+  // just reset to '' above, so on this first render refreshProfileStatChips
+  // naturally shows the full, unfiltered totals; it re-renders itself (with
+  // the filtered subset) whenever a filter changes afterward.
+  refreshProfileStatChips();
 
   // Deck usage donut — will be updated by renderGFWLHistory with correct season filter
   // For now build it from all records; renderGFWLHistory will rebuild it immediately after
@@ -23079,8 +23085,15 @@ function getProfileFilterPredicate() {
   };
 }
 
-// Re-compute stat chips (Matches, W-L, Win Rate) based on the unified filter selection.
-// Batches and Replays counts stay fixed — they represent the full dataset.
+// Re-compute stat chips (Matches, W-L, Win Rate, Batches, Replays) based on
+// the unified filter selection (year/season multi-select + My Deck). With
+// no filter active this is identical to the old always-full-dataset
+// numbers; with a filter active, Batches/Replays now follow it too instead
+// of always showing the full dataset — a replay is matched back to its
+// record by replayId (the same identifier every other replay<->record
+// correlation in this app already keys on), so a replay that never became
+// a usable record (omitted, unparsed) is correctly excluded from the
+// filtered counts, same as it already is from Matches.
 function refreshProfileStatChips() {
   if (!_activeProfile) return;
   const chips = document.getElementById('profile-stat-chips');
@@ -23091,12 +23104,28 @@ function refreshProfileStatChips() {
   let recs = (_activeProfile.records || []).filter(_cpred);
   const _chipsDkSel = document.getElementById('profile-mydeck-filter');
   const _chipsDk = _chipsDkSel ? _chipsDkSel.value : '';
+  const _deckActive = !!_chipsDk;
   if (_chipsDk) recs = recs.filter(r => r.myDeck === _chipsDk);
   const W = recs.filter(r=>r.matchWon).length;
   const L = recs.filter(r=>r.matchLost).length;
   const WR = pct(W, recs.length);
   const batches = _activeProfile.batches || [];
-  const totalReplays = batches.reduce((s,b)=>(s+(b.replays||[]).length),0);
+
+  let totalReplays, batchCount;
+  if (_cActive || _deckActive) {
+    const filteredReplayIds = new Set(recs.map(r => r.replayId).filter(Boolean));
+    totalReplays = 0;
+    const batchesWithMatch = new Set();
+    batches.forEach(b => {
+      (b.replays||[]).forEach(rep => {
+        if (filteredReplayIds.has(rep.replayId)) { totalReplays++; batchesWithMatch.add(b); }
+      });
+    });
+    batchCount = batchesWithMatch.size;
+  } else {
+    totalReplays = batches.reduce((s,b)=>(s+(b.replays||[]).length),0);
+    batchCount = batches.length;
+  }
   const label = _cActive ? ' (' + [..._profileFilterSelected].join(', ') + ')' : '';
 
   chips.innerHTML = '';
@@ -23104,7 +23133,7 @@ function refreshProfileStatChips() {
     [recs.length, 'Matches'+label, 'var(--blue)'],
     [W+'-'+L, 'W — L Record', WR>=50?'var(--green)':'var(--red)'],
     [WR+'%', 'Win Rate', WR>=50?'var(--green)':'var(--red)'],
-    [batches.length, 'Batches', 'var(--muted)'],
+    [batchCount, 'Batches', 'var(--muted)'],
     [totalReplays, 'Replays', 'var(--muted)'],
   ].forEach(([v,l,col]) => {
     const ch = document.createElement('div');
@@ -23600,25 +23629,6 @@ function saveEventDecks(player, list) {
   }
 }
 
-// A deck entry's own event code is "recent" if it falls in the current
-// year + next year window (or maps to a GFWL season that does) — see
-// isRecentYearSeasonKey. When showAllHistory is true, or when this player
-// has no recent-window decklists at all (don't show an empty panel with no
-// obvious reason why — same fallback pattern as every other recency
-// default in this app), returns the full list unfiltered.
-function filterEventDecksByRecency(sortedDecks, showAllHistory) {
-  if (showAllHistory) return sortedDecks;
-  const isRecentDeckCode = code => {
-    const grp = eventGroupKey(code||'');
-    if (!grp) return false;
-    if (isGFWLSeason(grp)) return isRecentYearSeasonKey(grp);
-    const d = getEventDate(grp);
-    return d ? isRecentYearSeasonKey(d.slice(0,4)) : false;
-  };
-  const recencyFiltered = sortedDecks.filter(d => isRecentDeckCode(d.code));
-  return recencyFiltered.length ? recencyFiltered : sortedDecks;
-}
-
 function renderEventDecks(player, batches, records) {
   const el = document.getElementById('profile-event-decklists') || document.getElementById('profile-event-decks');
   if (!el) return;
@@ -23641,13 +23651,6 @@ function renderEventDecks(player, batches, records) {
   const searchEl = el.parentElement.querySelector('.edl-search');
   const searchQ = searchEl ? searchEl.value.toLowerCase().trim() : '';
 
-  // Recency filter — defaults to current year + next year (and any matching
-  // GFWL season — see isRecentYearSeasonKey) unless "Include All Historical
-  // Data" is checked. Checkbox defaults unchecked per newly-opened profile
-  // (reset in loadProfileBatch).
-  const allHistoryEl = document.getElementById('profile-edl-allhistory');
-  const showAllHistory = allHistoryEl ? allHistoryEl.checked : true;
-
   if (!decks.length) {
     el.innerHTML = '<div style="font-size:12px;color:var(--muted)">No event decklists added yet.</div>';
     return;
@@ -23661,12 +23664,10 @@ function renderEventDecks(player, batches, records) {
     return keys[0]===(a.code||'') ? -1 : 1;
   });
 
-  const recencyBase = filterEventDecksByRecency(sorted, showAllHistory);
-
-  const visible = searchQ ? recencyBase.filter(d =>
+  const visible = searchQ ? sorted.filter(d =>
     (d.code||'').toLowerCase().includes(searchQ) ||
     (d.deckTypeOverride||'').toLowerCase().includes(searchQ)
-  ) : recencyBase;
+  ) : sorted;
 
   el.innerHTML = '';
   visible.forEach(deck => {
@@ -27692,24 +27693,30 @@ async function adminCacheNonCachedReplays() {
     }
   }
 
+  // A replay counts as "already handled, don't fetch again" if it's either
+  // actually cached OR already confirmed to have 0 plays on DuelingBook
+  // (see emptyConfirmed below) — the latter is what keeps this tool from
+  // re-paying CapSolver, run after run, for a replay that will never
+  // succeed. Without this, every click would re-attempt (and re-charge for)
+  // the exact same permanently-empty replays forever.
   const toFetch = [];
   for (const c of candidates) {
     if (toFetch.length >= batchSize) break;
     try {
       const res = await fetch(API+'/admin/replay-cache/'+encodeURIComponent(c.r.replayId), { headers: authHeaders() });
       const body = await res.json();
-      if (res.ok && body.ok && !body.cached) toFetch.push(c);
+      if (res.ok && body.ok && !body.cached && !body.emptyConfirmed) toFetch.push(c);
     } catch(e) {}
   }
 
   if (!toFetch.length) {
     statusEl.style.color = 'var(--green)';
-    statusEl.textContent = '✓ Nothing to do — no eligible (2025+), not-yet-cached replays found among the replays scanned.';
+    statusEl.textContent = '✓ Nothing to do — no eligible (2025+), not-yet-cached, not-already-confirmed-empty replays found among the replays scanned.';
     if (btn) { btn.disabled = false; btn.textContent = '▶ Cache Non-Cached Replays'; }
     return;
   }
 
-  let attempted = 0, computed = 0, noUsable = 0, saveErrors = 0, fetchErrors = 0;
+  let attempted = 0, computed = 0, noUsable = 0, confirmedEmpty = 0, saveErrors = 0, fetchErrors = 0;
   for (const { batch, r } of toFetch) {
     attempted++;
     statusEl.textContent = `Fetching ${attempted}/${toFetch.length} — ${r.replayId}…`;
@@ -27721,10 +27728,35 @@ async function adminCacheNonCachedReplays() {
         log(`✗ ${_escapeHtml(r.replayId)} — fetch failed: ${_escapeHtml(body.error||('HTTP '+res.status))}`, 'var(--red)');
         continue;
       }
+      // GET /api/proxy/replay can come back ok:true with 0 plays even after
+      // its own master=true retry — DuelingBook genuinely has nothing for
+      // this replay. That route deliberately doesn't cache that outcome (in
+      // case it's transient), so mark it here instead, specifically so this
+      // tool never re-pays CapSolver to ask the exact same question again.
+      if (!(body.replay.plays||[]).length) {
+        confirmedEmpty++;
+        try {
+          await fetch(API+'/admin/replay-cache/mark-empty', {
+            method: 'POST', headers: { 'Content-Type':'application/json', ...authHeaders() },
+            body: JSON.stringify({ replayId: r.replayId }),
+          });
+        } catch(e) {}
+        log(`⚠ ${_escapeHtml(r.replayId)} — DuelingBook has no play data for this replay (0 plays even after retry) — marked so it's never re-fetched`, 'var(--amber)');
+        continue;
+      }
       const timing = buildCardTimingForMatch(body.replay.plays, batch.player, batch.aliases||[], r.player1, r.player2, r.parsed);
       if (!timing) {
         noUsable++;
-        log(`⚠ ${_escapeHtml(r.replayId)} — cached, but no usable Card Timing data`, 'var(--amber)');
+        // buildCardTimingForMatch returns null when it can't line up the
+        // freshly-fetched raw log with this replay's already-saved parsed
+        // result closely enough to trust. diagnoseCardTimingSkip re-checks
+        // the same conditions purely to report WHICH one failed — it never
+        // changes what gets computed, only what gets logged. This replay IS
+        // correctly cached now (GET /api/proxy/replay already did that),
+        // so a re-run won't re-fetch or re-charge for it — only the Card
+        // Timing computation is skipped.
+        const reason = diagnoseCardTimingSkip(body.replay.plays, batch.player, batch.aliases||[], r.player1, r.player2, r.parsed);
+        log(`⚠ ${_escapeHtml(r.replayId)} — fetched &amp; cached fine, but Card Timing couldn't be computed: ${_escapeHtml(reason)}`, 'var(--amber)');
         continue;
       }
       const saveRes = await fetch(API+'/batches/'+batch.id+'/replay/'+encodeURIComponent(r.replayId), {
@@ -27742,9 +27774,11 @@ async function adminCacheNonCachedReplays() {
   }
 
   statusEl.style.color = 'var(--green)';
-  statusEl.textContent = `✓ Done — ${computed} cached & computed, ${noUsable} cached but no usable data, `
+  statusEl.textContent = `✓ Done — ${computed} cached & computed, `
+    + `${confirmedEmpty} confirmed empty on DuelingBook (won't be retried), `
+    + `${noUsable} cached fine but Card Timing couldn't be computed (see log for why), `
     + `${saveErrors} cached but failed to save, ${fetchErrors} fetch error(s). ${attempted} of ${toFetch.length} attempted this run. `
-    + `Click again to continue with the next batch.`;
+    + `Click again to continue with the next batch — anything from this run is skipped automatically next time, nothing gets re-fetched or re-charged.`;
   if (btn) { btn.disabled = false; btn.textContent = '▶ Cache Non-Cached Replays'; }
 }
 
@@ -27835,18 +27869,22 @@ async function adminScanUnknownEventDates() {
   // Same exclusions learnUnknownEventDates already uses: GFWL seasons
   // always resolve via gfwlSeasonToYear, and LADDER/ACAD have no calendar
   // date concept at all, so neither belongs in a "needs a date" review list.
+  // Each matching replay is kept (not just counted) so the row can be
+  // expanded to show exactly which replay(s)/player(s) this code affects —
+  // an admin deciding a date needs to be able to go look at the actual
+  // replay, not just take the code's word for it.
   const byCode = {};
   for (const batch of batches) {
     for (const r of (batch.replays||[])) {
       const code = eventGroupKey(r.eventLabel||'');
       if (!code || isGFWLSeason(code) || code==='LADDER' || code==='ACAD') continue;
       if (!isEventDateUnknown(code)) continue;
-      if (!byCode[code]) byCode[code] = { code, count: 0, example: r.eventLabel };
-      byCode[code].count++;
+      if (!byCode[code]) byCode[code] = { code, replays: [] };
+      byCode[code].replays.push({ replayId: r.replayId, eventLabel: r.eventLabel, player: batch.player || '(unknown)' });
     }
   }
 
-  const codes = Object.values(byCode).sort((a,b) => b.count - a.count);
+  const codes = Object.values(byCode).sort((a,b) => b.replays.length - a.replays.length);
   _adminUnknownEventDatesState.codes = codes;
   if (btn) { btn.disabled = false; btn.textContent = '🔍 Scan for Unknown Event Dates'; }
 
@@ -27857,17 +27895,66 @@ async function adminScanUnknownEventDates() {
   }
 
   statusEl.style.color = 'var(--amber)';
-  statusEl.textContent = `${codes.length} event code(s) with no known date — affecting ${codes.reduce((s,c)=>s+c.count,0)} replay(s) total. Excluded from Card Timing until dated.`;
+  statusEl.textContent = `${codes.length} event code(s) with no known date — affecting ${codes.reduce((s,c)=>s+c.replays.length,0)} replay(s) total. Excluded from Card Timing until dated.`;
   listEl.innerHTML = codes.map(c => (
-    '<div id="admin-unknown-date-row-' + _escapeHtml(c.code) + '" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border2)">' +
-      '<div style="flex:1;min-width:0">' +
-        '<div style="font-weight:bold">' + _escapeHtml(c.code) + '</div>' +
-        '<div style="font-size:11px;color:var(--muted)">' + c.count + ' replay(s) — e.g. "' + _escapeHtml(c.example) + '"</div>' +
+    '<div id="admin-unknown-date-row-' + _escapeHtml(c.code) + '" style="padding:8px 10px;border-bottom:1px solid var(--border2)">' +
+      '<div style="display:flex;align-items:center;gap:8px">' +
+        '<div style="flex:1;min-width:0">' +
+          '<div style="font-weight:bold">' + _escapeHtml(c.code) + '</div>' +
+          '<button data-code="' + _escapeHtml(c.code) + '" onclick="adminToggleUnknownDateDetail(this.getAttribute(\'data-code\'))" ' +
+            'style="background:none;border:none;color:var(--blue);font-size:11px;font-family:monospace;cursor:pointer;padding:0;text-decoration:underline">' +
+            c.replays.length + ' replay(s) — view replay(s) / player(s)' +
+          '</button>' +
+        '</div>' +
+        '<input type="date" id="admin-unknown-date-input-' + _escapeHtml(c.code) + '" style="width:160px;flex:none;font-size:13px;padding:5px 8px"/>' +
+        '<button class="btn-go" style="flex:none;font-size:12px;padding:6px 16px" onclick="adminResolveUnknownEventDate(this)" data-code="' + _escapeHtml(c.code) + '">Save</button>' +
       '</div>' +
-      '<input type="date" id="admin-unknown-date-input-' + _escapeHtml(c.code) + '" style="width:160px;flex:none;font-size:13px;padding:5px 8px"/>' +
-      '<button class="btn-go" style="flex:none;font-size:12px;padding:6px 16px" onclick="adminResolveUnknownEventDate(this)" data-code="' + _escapeHtml(c.code) + '">Save</button>' +
+      '<div id="admin-unknown-date-detail-' + _escapeHtml(c.code) + '" style="display:none;flex-direction:column;margin-top:8px"></div>' +
     '</div>'
   )).join('');
+}
+
+// Lazily builds and toggles the per-replay detail list under an Unknown
+// Event Dates row — which exact replay(s) this code covers, whose
+// profile(s) they're on, and a link to watch the real replay, so an admin
+// can go verify the event's real-world date instead of guessing from the
+// code alone.
+function adminToggleUnknownDateDetail(code) {
+  const el = document.getElementById('admin-unknown-date-detail-' + code);
+  if (!el) return;
+  if (el.style.display === 'flex') { el.style.display = 'none'; return; }
+  if (!el.dataset.built) {
+    const entry = _adminUnknownEventDatesState.codes.find(c => c.code === code);
+    const replays = entry ? entry.replays : [];
+    el.innerHTML = replays.map(r => (
+      '<div style="display:flex;align-items:center;gap:8px;font-size:11px;padding:5px 0;border-top:1px solid var(--border2)">' +
+        '<span style="color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + _escapeHtml(r.eventLabel) + '">' +
+          _escapeHtml(r.replayId) + ' — "' + _escapeHtml(r.eventLabel) + '" — <b style="color:var(--text)">' + _escapeHtml(r.player) + '</b>' +
+        '</span>' +
+        '<a href="' + replayUrl(r.replayId) + '" target="_blank" style="color:var(--blue);flex:none">▶ Watch</a>' +
+        '<button class="dd-btn-sec" style="flex:none;font-size:10px;padding:4px 8px" data-player="' + _escapeHtml(r.player) + '" ' +
+          'onclick="adminGotoPlayerProfile(this.getAttribute(\'data-player\'))">View Profile</button>' +
+      '</div>'
+    )).join('');
+    el.dataset.built = '1';
+  }
+  el.style.display = 'flex';
+}
+
+// Same proven "jump to this player's Profile" sequence an existing GFWL
+// view already uses (its own gotoPlayerProfile, scoped to that closure) —
+// switch to the Profiles tab, load the profile batch list, filter to this
+// player, then open their profile. Duplicated here (rather than hoisting
+// the GFWL one) to avoid touching already-working code for an unrelated
+// feature.
+function adminGotoPlayerProfile(playerName) {
+  const profilesTab = document.querySelector('.ntab[onclick*="profiles"]');
+  switchTab('profiles', profilesTab);
+  setTimeout(async () => {
+    await loadProfiles();
+    const playerBatches = (_allProfileBatches||[]).filter(b => (b.player||'').toLowerCase() === playerName.toLowerCase());
+    if (playerBatches.length) openProfile(playerName, playerBatches, []);
+  }, 300);
 }
 
 async function adminResolveUnknownEventDate(saveBtn) {
@@ -27902,7 +27989,7 @@ async function adminResolveUnknownEventDate(saveBtn) {
         statusEl.textContent = '✓ All unknown event dates resolved.';
       } else {
         statusEl.style.color = 'var(--amber)';
-        statusEl.textContent = `${remaining.length} event code(s) with no known date — affecting ${remaining.reduce((s,c)=>s+c.count,0)} replay(s) total. Excluded from Card Timing until dated.`;
+        statusEl.textContent = `${remaining.length} event code(s) with no known date — affecting ${remaining.reduce((s,c)=>s+c.replays.length,0)} replay(s) total. Excluded from Card Timing until dated.`;
       }
     }
   } catch(e) {
