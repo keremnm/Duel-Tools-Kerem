@@ -932,31 +932,22 @@ select{cursor:pointer}
           </button>
         </div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-          <div class="slbl" style="margin:0">MATCH PHASE</div>
+          <div class="slbl" style="margin:0">DATA SOURCE</div>
           <div style="display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px">
-            <button id="tc-phase-full-btn" onclick="setTopCardsMatchPhase('full')" title="Every decided game across the whole match, scored by the match's overall result (how this has always worked)"
-              style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Entire Match</button>
-            <button id="tc-phase-preside-btn" onclick="setTopCardsMatchPhase('preside')" title="Game 1 only, before either side sides their deck"
-              style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Pre-Side</button>
-            <button id="tc-phase-postside-btn" onclick="setTopCardsMatchPhase('postside')" title="Games 2+3 combined, after siding"
-              style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Post-Side</button>
+            <button id="tc-mode-observed-btn" onclick="setTopCardsDataMode('observed')" title="Cards OBSERVED during a match — infers a deck ran a card from seeing it in the log. Works for every replay, no saved decklist needed. Shows Overall/Pre-Side/Post-Side Win% together."
+              style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Parsed</button>
+            <button id="tc-mode-decklist-btn" onclick="setTopCardsDataMode('decklist')" title="Cards CONFIRMED via a saved event decklist (YDK) — real copy counts (0/1/2/3), Included-vs-Omitted comparison, plus Pre-Side/Post-Side Win% from parsed replay data. Only covers matches with a saved decklist."
+              style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Decklist+Parsed</button>
           </div>
-          <div class="slbl" style="margin:0 0 0 14px">DATA SOURCE</div>
-          <div style="display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px">
-            <button id="tc-mode-observed-btn" onclick="setTopCardsDataMode('observed')" title="Cards OBSERVED during a match — infers a deck ran a card from seeing it in the log. Works for every replay, no saved decklist needed."
-              style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Observed</button>
-            <button id="tc-mode-decklist-btn" onclick="setTopCardsDataMode('decklist')" title="Cards CONFIRMED via a saved event decklist (YDK) — real copy counts (0/1/2/3), Included-vs-Omitted comparison. Only covers matches with a saved decklist."
-              style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">Decklist</button>
+          <div class="slbl" style="margin:0 0 0 14px">PLAYER</div>
+          <div style="position:relative">
+            <input id="tc-player-search" type="text" placeholder="🔍 All Players…" autocomplete="off"
+              oninput="onTopCardsPlayerSearch(this.value)" onfocus="showTopCardsPlayerDropdown()"
+              title="Search and pick a player to narrow this page down to just their matches — works in both Parsed and Decklist+Parsed. Leave blank for All Players."
+              style="width:150px;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none"/>
+            <div id="tc-player-search-dropdown" style="display:none;position:absolute;left:0;top:100%;margin-top:3px;background:var(--card);border:1px solid var(--border2);border-radius:6px;z-index:100;max-height:220px;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,.5);min-width:210px"></div>
           </div>
           <div id="tc-decklist-filters" style="display:none;align-items:center;gap:10px;flex-wrap:wrap">
-            <div class="slbl" style="margin:0">PLAYER</div>
-            <input id="tc-player-search" type="text" placeholder="🔍 Filter…" oninput="_renderTopCardsPlayerOptions()"
-              title="Narrow the Player list below — the dropdown itself is sorted A-Z"
-              style="width:84px;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:6px 8px;border-radius:6px 0 0 6px;border-right:none;outline:none"/>
-            <select id="tc-player-select" onchange="renderTopCardsTable()"
-              style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:0 6px 6px 0;outline:none;cursor:pointer;min-width:140px;margin-left:-10px">
-              <option value="">All Players</option>
-            </select>
             <div class="slbl" style="margin:0">EVENT</div>
             <input id="tc-event-search" type="text" placeholder="🔍 Filter…" oninput="_renderTopCardsEventOptions()"
               title="Narrow the Event list below — the dropdown itself is sorted A-Z"
@@ -967,6 +958,7 @@ select{cursor:pointer}
             </select>
           </div>
         </div>
+        <div id="tc-rps-wrap"></div>
         <div id="tc-output"><div class="dd-empty">Loading replay data…</div></div>
         <div id="tc-decklist-output" style="display:none"><div class="dd-empty">Loading replay data…</div></div>
       </div>
@@ -14738,6 +14730,46 @@ function displayOpponentName(rawName) {
   return (entry && entry.name) ? entry.name : rawName;
 }
 
+// Resolves Game 1's RPS sequence outcome for one raw replay — reuses the
+// EXACT sequence-resolution algorithm the RPS Analysis page's renderRPS()
+// already uses and has used in production (same beats-map, same "ties keep
+// going until a decisive pick" logic, same player1/player2-side
+// disambiguation), rather than inventing a second, parallel RPS
+// methodology. Returns 'win'/'loss'/'tie' for this match's Game 1 RPS, or
+// null when there's no RPS play data to resolve at all (manual entries have
+// no `.plays` log; some very old replays may lack it too).
+//
+// Deliberately reads `replayResult.oppName` (the raw replay's own top-level
+// field, always present — see server.js's `oppName:data.oppName||''`)
+// rather than requiring `replayResult.parsed.oppName` the way renderRPS
+// does — this needs to work from all of buildMatchRecord's branches
+// (manual/fast-path/legacy-parsed/RPS-only), not just the ones that have a
+// `.parsed` object, and the two fields describe the same opponent either
+// way. `.plays` itself survives on every stored replay even after the
+// heavier `.allPlays` log gets stripped post-parse (see server.js), so this
+// works regardless of which buildMatchRecord branch a given replay takes.
+function _rpsG1Result(replayResult, player) {
+  const plys = replayResult.plays || [];
+  if (!plys.length) return null;
+  const g1plays = plys.filter(p => (p.game||1) === 1);
+  const beats = { Rock: 'Scissors', Paper: 'Rock', Scissors: 'Paper' };
+  const oppName = (replayResult.parsed && replayResult.parsed.oppName) || replayResult.oppName || '';
+  let seqResult = null;
+  for (const p of g1plays) {
+    const isP1 = player ? (
+      (p.player1||'').toLowerCase() === (player||'').toLowerCase() ||
+      (oppName && oppName.toLowerCase() !== (p.player1||'').toLowerCase())
+    ) : true;
+    const myPick  = isP1 ? p.player1_choice : p.player2_choice;
+    const oppPick = isP1 ? p.player2_choice : p.player1_choice;
+    if (!myPick || !oppPick) continue;
+    if (myPick === oppPick) { seqResult = 'tie'; continue; } // tied so far, keep going
+    seqResult = beats[myPick] === oppPick ? 'win' : 'loss'; // decisive pick
+    break;
+  }
+  return seqResult; // 'win' | 'loss' | 'tie' | null
+}
+
 function buildMatchRecord(replayResult, player, aliases, batch) {
   const replayId = replayResult.replayId || '';
 
@@ -14811,6 +14843,9 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
       // Timing drill-down (see computeCardTimingDrillDown) can read it
       // without a second, parallel raw-replay lookup.
       cardTiming: replayResult.cardTiming || null,
+      // See _rpsG1Result's own comment — always null here since a manual
+      // entry has no real RPS play log to resolve.
+      rpsResult: _rpsG1Result(replayResult, player),
     };
   }
 
@@ -14939,6 +14974,7 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
       mergedReplays: replayResult.mergedReplays || [],
       // See the matching comment on the manual-entry branch above.
       cardTiming: replayResult.cardTiming || null,
+      rpsResult: _rpsG1Result(replayResult, player),
     };
   }
 
@@ -14976,6 +15012,7 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
       games:[], allMine:[], allOpp:[],
       allMyCards:[],
       allUsageMine:[], allMyUsageCards:[],
+      rpsResult: _rpsG1Result(replayResult, player),
     };
   }
 
@@ -15118,6 +15155,7 @@ function buildMatchRecord(replayResult, player, aliases, batch) {
     allMyUsageCards: (parsed.allUsageMine||[]).map(c => c.name.toLowerCase()),
     // See the matching comment on the manual-entry branch above.
     cardTiming: replayResult.cardTiming || null,
+    rpsResult: _rpsG1Result(replayResult, player),
   };
 }
 
@@ -16121,7 +16159,7 @@ function populateFormatDataDropdown() {
 const FD_MATCHUP_FIXED_NAMES = [
   'Chaos Turbo', 'Warrior', 'Chaos Control', 'Chaos Return', 'Chaos Warrior',
   'Goat Control', 'Chaos Relinquished', 'Stein OTK', 'Earth Aggro',
-  'Aggro Lockdown', 'Rescue Cat OTK', 'Zombie', 'Monarch',
+  'Aggro Lockdown', 'Gumo Sumo', 'Rescue Cat OTK', 'Zombie', 'Monarch',
 ];
 // Derived from the real classifier's own ALL_DECK_CLASSES rather than
 // hardcoded, per the actual request ("any of the deck types with 'Burn' in
@@ -16166,7 +16204,17 @@ function fdMatchupRowDefs(myDeck) {
       rows.push({ key: 'gate', label: 'Reasoning Gate', variantKey: 'gate', variantValue: _fdMatchupGateMode, variantOptions: FD_MATCHUP_GATE_OPTIONS,
         matchOpp: _fdMatchupGateMode === 'combined' ? (o => FD_MATCHUP_GATE_VARIANTS.includes(o)) : (o => o === _fdMatchupGateMode) });
     }
-    rows.push({ key: 'named:'+name, label: name, matchOpp: o => o === name });
+    // A fixed-name row whose name equals the "my deck" being viewed is the
+    // mirror matchup (e.g. Chaos Turbo's own page listing a "Chaos Turbo"
+    // row) — flagged here so the renderer sources its numbers from the
+    // mirror tally instead of `byOpp`, which deliberately never contains a
+    // `deck` key (see nonMirrorsKnown above byOpp's construction): mirrors
+    // are excluded from the cross-linked opponent breakdown by design, since
+    // a mirror match has no "other side" to reconcile against. Without this
+    // flag the row's matchOpp (o => o === name) looks up a byOpp key that
+    // can never exist, so it always rendered "No data" even when real mirror
+    // matches existed — the bug this flag fixes.
+    rows.push({ key: 'named:'+name, label: name, matchOpp: o => o === name, isMirrorRow: name === myDeck });
   });
   rows.push({ key: 'restoffield', label: 'Rest of Field', isRestOfField: true,
     matchOpp: o => o !== 'Unknown' && !pinnedExcl.has(o) });
@@ -16274,6 +16322,15 @@ function renderFormatDataTable(deckType) {
   });
   const mirrorW = mirrors.filter(r=>r.matchWon).length;
   const mirrorL = mirrors.filter(r=>r.matchLost).length;
+  // Pre-/Post-Side tallies for the mirror row itself (see isMirrorRow above)
+  // — same per-record gameOutcomeTally used for every other opponent.
+  let mirrorG1W=0, mirrorG1L=0, mirrorPSW=0, mirrorPSL=0;
+  mirrors.forEach(r => {
+    const g1 = gameOutcomeTally(r.games, [1]);
+    mirrorG1W += g1.w; mirrorG1L += g1.l;
+    const ps = gameOutcomeTally(r.games, [2,3]);
+    mirrorPSW += ps.w; mirrorPSL += ps.l;
+  });
   const fieldW = nonMirrors.filter(r=>r.matchWon).length;
   const fieldL = nonMirrors.filter(r=>r.matchLost).length;
   const fieldTot = fieldW + fieldL;
@@ -16342,7 +16399,9 @@ function renderFormatDataTable(deckType) {
 
   const matchupDefs = fdMatchupRowDefs(deck);
   matchupDefs.forEach(def => {
-    const rec = fdAggregateMatchupRow(byOpp, def.matchOpp);
+    const rec = def.isMirrorRow
+      ? { w: mirrorW, l: mirrorL, g1w: mirrorG1W, g1l: mirrorG1L, psw: mirrorPSW, psl: mirrorPSL, oppCount: mirrors.length ? 1 : 0 }
+      : fdAggregateMatchupRow(byOpp, def.matchOpp);
     const tot = rec.w + rec.l;
     const wp = pct(rec.w, tot);
     const ci = wilsonCI(rec.w, tot);
@@ -16372,9 +16431,11 @@ function renderFormatDataTable(deckType) {
     if (tot) {
       // A row can span several real opponent deck types (Burn/Reasoning
       // Gate combined, Rest of Field) — the drill-down gets every matching
-      // opponent's records unioned together, not just one.
-      const matchingOpps = Object.keys(byOpp).filter(def.matchOpp);
-      const unionRecords = matchingOpps.flatMap(o => byOppRecords[o] || []);
+      // opponent's records unioned together, not just one. The mirror row is
+      // sourced straight from `mirrors` instead, since byOppRecords never
+      // has a `deck` key either (same reason as the tally above).
+      const unionRecords = def.isMirrorRow ? mirrors
+        : Object.keys(byOpp).filter(def.matchOpp).flatMap(o => byOppRecords[o] || []);
       tr.onclick = e => {
         if (e.target.closest('select') || e.target.closest('button')) return;
         toggleFormatDataMatchLog(tr, def.label, unionRecords);
@@ -16420,7 +16481,7 @@ function renderFormatDataTable(deckType) {
 
   const note = document.createElement('div');
   note.style.cssText = 'font-size:10px;color:var(--dim);margin-top:4px';
-  note.textContent = 'Deck types auto-classified by TF-IDF model. Burn and Reasoning Gate are pooled by default (pick a specific variant from that row\'s own dropdown); every other deck not named above is folded into Rest of Field — use "+ Add a matchup" to pin one out as its own row for this session. The Opponent Deck breakdown below only includes matches cross-linked to the opponent\'s own archive — guaranteeing it\'s built from the exact same matches, with the exact same two deck labels, as that opponent deck\'s own page, so e.g. Warrior\'s win % vs Chaos Turbo and Chaos Turbo\'s win % vs Warrior always sum to 100%. 95% CI via Wilson score interval. Mirror matches (self-deck) excluded from the opponent breakdown above. Pre-Side Win % = Game 1 only; Post-Side Win % = Games 2+3 combined — shown as N/A where there\'s no per-game data (manual/forfeit entries, or replays whose game winner was never parsed). Click a row to see every individual match\'s Game 1/2/3 results.'
+  note.textContent = 'Deck types auto-classified by TF-IDF model. Burn and Reasoning Gate are pooled by default (pick a specific variant from that row\'s own dropdown); every other deck not named above is folded into Rest of Field — use "+ Add a matchup" to pin one out as its own row for this session. The Opponent Deck breakdown below only includes matches cross-linked to the opponent\'s own archive — guaranteeing it\'s built from the exact same matches, with the exact same two deck labels, as that opponent deck\'s own page, so e.g. Warrior\'s win % vs Chaos Turbo and Chaos Turbo\'s win % vs Warrior always sum to 100%. 95% CI via Wilson score interval. Mirror matches (self-deck) are shown as their own row (sourced from the Mirror Matches chip above, not the cross-linked breakdown) and excluded from every other opponent-deck row and from Rest of Field. Pre-Side Win % = Game 1 only; Post-Side Win % = Games 2+3 combined — shown as N/A where there\'s no per-game data (manual/forfeit entries, or replays whose game winner was never parsed). Click a row to see every individual match\'s Game 1/2/3 results.'
     + (unknownOppExcluded ? ` ${unknownOppExcluded} match${unknownOppExcluded!==1?'es':''} vs an opponent who isn\'t archived/cross-linked excluded from the breakdown (still counted in Total Matches and Win Rate vs Field above, which don\'t depend on knowing the opponent\'s deck).` : '')
     + (incompleteExcluded ? ` ${incompleteExcluded} match${incompleteExcluded!==1?'es':''} excluded from every number above as not a valid best-of-3 score — a real (non-manual, non-overridden) replay whose recorded wins are either short of the 2 needed to decide it (e.g. 1-0, 0-1, 1-1) or impossible to reach in a real match (e.g. 3-0, 0-3, 2-2). See Admin → Cross-Links → Check & Fix Data to review these.` : '')
     + (omittedExcluded ? ` ${omittedExcluded} match${omittedExcluded!==1?'es':''} manually omitted from every number above — see Admin → Cross-Links → Check & Fix Data → Omitted Data to review or un-omit.` : '');
@@ -16648,17 +16709,20 @@ function populateTopCardsOpponentDropdown() {
 // event is a natural (and cheap — same records array, no extra fetch) way
 // to sanity-check a surprising Decklist Mode number against one concrete
 // decklist before trusting the aggregate.
-// Full (unfiltered, A-Z) option list for each dropdown, cached so the
-// "🔍 Filter…" box beside it (see _renderTopCardsPlayerOptions/
-// _renderTopCardsEventOptions) can narrow what's shown WITHOUT re-deriving
-// counts from records every keystroke, and without touching the actually-
-// applied Player/Event filter (sel.value) — typing in the filter box only
-// narrows the option list offered, it never silently resets an
-// already-selected Player/Event back to "All" just because the search text
-// no longer matches it (the currently-selected option is always kept
-// available, even while filtered out of view, for exactly that reason).
+// Full (unfiltered, A-Z) player option list, cached so the live-autocomplete
+// dropdown (see onTopCardsPlayerSearch et al below) doesn't have to re-derive
+// counts from records on every keystroke. Shared across BOTH Parsed and
+// Decklist+Parsed modes — unlike Event (Decklist+Parsed-only, still a plain
+// filtered <select>), Player narrows either data source down to one player's
+// matches, per explicit request to bring this to Parsed too.
 let _tcPlayerOptionsCache = []; let _tcPlayerTotalCount = 0;
 let _tcEventOptionsCache = [];  let _tcEventTotalCount = 0;
+// The committed Player filter — '' means All Players. Lowercased, same key
+// shape _tcPlayerOptionsCache uses, so lookups never depend on display-name
+// casing. Deliberately page-level (not per-mode): switching Parsed <->
+// Decklist+Parsed keeps whichever player was selected, same as every other
+// Top Cards filter (Deck Type, Year, etc).
+let _tcSelectedPlayer = '';
 
 function populateTopCardsPlayerDropdown(records) {
   const counts = {};
@@ -16666,23 +16730,69 @@ function populateTopCardsPlayerDropdown(records) {
   const players = Object.keys(counts).sort((a,b) => a.localeCompare(b, undefined, {sensitivity:'base'}));
   _tcPlayerOptionsCache = players.map(p => ({ key: p.toLowerCase(), label: p, count: counts[p] }));
   _tcPlayerTotalCount = records.length;
-  _renderTopCardsPlayerOptions();
-}
-function _renderTopCardsPlayerOptions() {
-  const sel = document.getElementById('tc-player-select');
-  if (!sel) return;
   const searchEl = document.getElementById('tc-player-search');
-  const q = (searchEl ? searchEl.value : '').trim().toLowerCase();
-  const cur = sel.value;
-  let filtered = q ? _tcPlayerOptionsCache.filter(p => p.label.toLowerCase().includes(q)) : _tcPlayerOptionsCache;
-  if (cur && !filtered.some(p => p.key === cur)) {
-    const curOpt = _tcPlayerOptionsCache.find(p => p.key === cur);
-    if (curOpt) filtered = [curOpt, ...filtered];
-  }
-  sel.innerHTML = `<option value="">All Players (${_tcPlayerTotalCount})</option>` +
-    filtered.map(p => `<option value="${_escapeHtml(p.key)}">${_escapeHtml(p.label)} (${p.count})</option>`).join('');
-  sel.value = cur;
+  if (searchEl) searchEl.placeholder = `🔍 All Players (${_tcPlayerTotalCount})…`;
 }
+
+// Live-autocomplete Player search — same UX pattern as the sidebar's own
+// player-search/player-search-dropdown (onPlayerSearch et al, near the top
+// of this file): typing narrows a dropdown of matches as you go, clicking
+// one commits the filter and re-renders. Typing alone never silently
+// changes what's already applied — only clicking a result (or fully
+// clearing the box, treated as explicitly picking "All Players") does.
+function _tcRenderPlayerDropdown(query) {
+  const dropdown = document.getElementById('tc-player-search-dropdown');
+  if (!dropdown) return;
+  const q = (query||'').trim().toLowerCase();
+  const matches = (q ? _tcPlayerOptionsCache.filter(p => p.label.toLowerCase().includes(q)) : _tcPlayerOptionsCache).slice(0, 12);
+  dropdown.innerHTML = '';
+  function item(label, onclick, muted) {
+    const el = document.createElement('div');
+    el.style.cssText = 'padding:8px 12px;cursor:pointer;font-size:12px;border-bottom:1px solid var(--border)' + (muted ? ';color:var(--muted)' : '');
+    el.onmouseover = () => el.style.background = 'var(--card2)';
+    el.onmouseout = () => el.style.background = '';
+    el.innerHTML = label;
+    el.onclick = onclick;
+    dropdown.appendChild(el);
+  }
+  item(`All Players (${_tcPlayerTotalCount})`, () => selectTopCardsPlayer('', ''), true);
+  matches.forEach(p => {
+    item(`<span style="color:var(--text)">${_escapeHtml(p.label)}</span> <span style="color:var(--muted);font-size:10px">(${p.count})</span>`,
+      () => selectTopCardsPlayer(p.key, p.label));
+  });
+  dropdown.style.display = 'block';
+}
+function onTopCardsPlayerSearch(val) {
+  _tcRenderPlayerDropdown(val);
+  // Fully clearing the box (not just narrowing the search) is the explicit
+  // "back to All Players" gesture — anything short of that leaves the
+  // already-applied filter alone until a dropdown item is actually clicked.
+  if (!val.trim() && _tcSelectedPlayer) {
+    _tcSelectedPlayer = '';
+    renderTopCardsTable();
+  }
+}
+function showTopCardsPlayerDropdown() {
+  const el = document.getElementById('tc-player-search');
+  _tcRenderPlayerDropdown(el ? el.value : '');
+}
+function selectTopCardsPlayer(key, label) {
+  _tcSelectedPlayer = key;
+  const el = document.getElementById('tc-player-search');
+  if (el) el.value = label;
+  const dropdown = document.getElementById('tc-player-search-dropdown');
+  if (dropdown) dropdown.style.display = 'none';
+  renderTopCardsTable();
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('#tc-player-search') && !e.target.closest('#tc-player-search-dropdown')) {
+    const dd = document.getElementById('tc-player-search-dropdown');
+    if (dd) dd.style.display = 'none';
+    const el = document.getElementById('tc-player-search');
+    if (el && !_tcSelectedPlayer) el.value = '';
+  }
+});
+
 function populateTopCardsEventDropdown(records) {
   const counts = {};
   records.forEach(r => { const code = eventCodeFromLabel(r.eventLabel); if (code) counts[code] = (counts[code]||0) + 1; });
@@ -16766,16 +16876,26 @@ function toggleTopCardsMinMatchesUnit() {
 }
 
 // Match Phase — which decided game(s) of a match count toward a card's
-// W/L. 'full' (default) is the original behavior: a card counts once per
-// match it was seen in, scored by that match's overall result. 'preside'
-// and 'postside' switch to per-GAME scoring (reusing the same gameNum/
-// myWon fields buildFormatDataMatchLog's Pre-Side/Post-Side columns
-// already read) — 'preside' only counts Game 1, 'postside' counts Games 2
-// and 3 individually, so a single match can contribute up to 2 Post-Side
+// W/L. 'full' is the original behavior: a card counts once per match it was
+// seen in, scored by that match's overall result. 'preside' and 'postside'
+// switch to per-GAME scoring (reusing the same gameNum/myWon fields
+// buildFormatDataMatchLog's Pre-Side/Post-Side columns already read) —
+// 'preside' only counts Game 1, 'postside' counts Games 2 and 3
+// individually, so a single match can contribute up to 2 Post-Side
 // observations for the same card (same semantics as Matchups' own
 // Pre-Side/Post-Side columns, which this mirrors on purpose so the two
 // pages never disagree about what those terms mean).
-let _tcMatchPhase = 'full'; // 'full' | 'preside' | 'postside'
+//
+// There used to be a Match Phase toggle button row driving this; it's gone
+// now — both Parsed and Decklist+Parsed show Overall/Pre-Side/Post-Side
+// Win% together, always, instead of needing a toggle to see each one (see
+// renderTopCardsTable's `stats`/presideTally/postsideTally and
+// computeDecklistModeStats' preside/postside additions below). _tcMatchPhase
+// stays pinned to 'full' — nothing sets it to anything else any more — and
+// is kept only because _tcCardObservations (an otherwise-unused one-line
+// wrapper a couple of lines down) still reads it; 'full' is also exactly the
+// phase every "Overall"/"Included"/"Match Win Rate" number has always meant.
+const _tcMatchPhase = 'full'; // always 'full' — no UI sets this any more
 // Metric — which per-card presence signal counts as "this card was in
 // play" for a given game/match. 'winrate' (default, unchanged) credits a
 // card for merely being seen (drawn, revealed, searched — anywhere in
@@ -16798,16 +16918,6 @@ function _syncModeButtons(pairs, mode) {
     if (m === mode) { btn.style.background = 'var(--card)'; btn.style.color = 'var(--text)'; }
     else { btn.style.background = 'none'; btn.style.color = 'var(--muted)'; }
   });
-}
-
-function setTopCardsMatchPhase(phase) {
-  _tcMatchPhase = phase;
-  _syncModeButtons([
-    ['tc-phase-full-btn', 'full'],
-    ['tc-phase-preside-btn', 'preside'],
-    ['tc-phase-postside-btn', 'postside'],
-  ], phase);
-  renderTopCardsTable();
 }
 
 function setTopCardsMetric(metric) {
@@ -16863,6 +16973,31 @@ function _cardObservationsForPhase(r, phase, metric) {
 }
 function _tcCardObservations(r) {
   return _cardObservationsForPhase(r, _tcMatchPhase, _tcMetric);
+}
+
+// Per-card phase tally over a given record set — { lowercased card name ->
+// {w,l} }. Pulled out to top-level (used to be nested inside
+// renderTopCardsTable) so Decklist+Parsed's Post-Side column can build the
+// exact same kind of tally over ITS OWN (player/event-filtered) records
+// without duplicating this loop — see the explicit correction that
+// Post-Side win% must come from parsed/observed per-card data, never from
+// decklist copy-count bucketing, since a submitted maindeck list can't tell
+// us what got sided in for Games 2/3.
+function _tcBuildPhaseTally(records, phase, metric) {
+  const t = {};
+  records.forEach(r => {
+    _cardObservationsForPhase(r, phase, metric).forEach(({ key, win }) => {
+      if (!key || TOP_CARDS_IGNORED_CARDS.has(key)) return;
+      if (!t[key]) t[key] = { w: 0, l: 0 };
+      if (win) t[key].w++; else t[key].l++;
+    });
+  });
+  return t;
+}
+function _tcPhaseCell(tally, key) {
+  const b = tally[key] || { w: 0, l: 0 };
+  const n = b.w + b.l;
+  return { n, w: b.w, l: b.l, pct: pct(b.w, n), lowSample: n > 0 && n < CARD_TIMING_SMALL_SAMPLE };
 }
 
 // Quantity-aware counterpart of _cardObservationsForPhase, used only by the
@@ -17127,6 +17262,95 @@ async function computeCardTimingDrillDown(cardName, records) {
   };
 }
 
+// ── RPS Win% table ───────────────────────────────────────────────────────
+// New feature: for the current Deck Type + VS matchup, how often did a
+// player win the Game 1 RPS sequence (via each record's rpsResult — see
+// _rpsG1Result/buildMatchRecord above), and when they did, how often did
+// that turn into a Game 1 win and/or an overall match win. Deliberately
+// scoped like every other Top Cards number (deck/opponent/year/season/
+// lists-filtered) but NOT by the Player single-select filter — the whole
+// point is an All Players aggregate alongside a per-player breakdown in the
+// same table, so narrowing to one player first would defeat it.
+//
+// G1 win, when a record's own per-game data doesn't have it (the "parse
+// failed, RPS-only" buildMatchRecord branch has games:[] even though it may
+// still have a usable rpsResult) falls back to the same 2-0-score heuristic
+// the original RPS Analysis page's renderRPS() uses for the same gap,
+// adapted to read buildMatchRecord's OUTPUT fields (score/matchWon) instead
+// of a raw replay's r.parsed, since that's the only shape available here.
+function _tcRpsG1Win(r) {
+  const g1 = (r.games||[]).find(g => g.gameNum === 1);
+  if (g1 && typeof g1.myWon === 'boolean') return g1.myWon;
+  return r.score === '2-0' && r.matchWon;
+}
+function _tcComputeRpsStats(records) {
+  const byPlayer = {};
+  function bucket(key, label) {
+    if (!byPlayer[key]) byPlayer[key] = { label, rpsTotal: 0, rpsWon: 0, rpsWonThenG1Win: 0, rpsWonThenMatchWin: 0 };
+    return byPlayer[key];
+  }
+  const all = bucket('__all__', 'All Players');
+  records.forEach(r => {
+    if (!r.rpsResult || !r.player) return; // null = no RPS play data (manual entries, pre-RPS-tracking replays, etc.)
+    const b = bucket(r.player.toLowerCase(), r.player);
+    [b, all].forEach(target => {
+      target.rpsTotal++; // wins + losses + ties, same denominator renderRPS's own RPS W% uses
+      if (r.rpsResult === 'win') {
+        target.rpsWon++;
+        if (_tcRpsG1Win(r)) target.rpsWonThenG1Win++;
+        if (r.matchWon) target.rpsWonThenMatchWin++;
+      }
+    });
+  });
+  return byPlayer;
+}
+function renderTopCardsRpsTable(records, deck, oppFilter) {
+  const wrap = document.getElementById('tc-rps-wrap');
+  if (!wrap) return;
+  if (!oppFilter) {
+    wrap.innerHTML = '<div class="dd-empty" style="font-size:11px;padding:8px 2px">🎲 Pick a specific VS matchup above to see the RPS Win% breakdown for that matchup.</div>';
+    return;
+  }
+  const byPlayer = _tcComputeRpsStats(records);
+  const all = byPlayer['__all__'];
+  if (!all || !all.rpsTotal) {
+    wrap.innerHTML = '<div class="dd-empty" style="font-size:11px;padding:8px 2px">No RPS play data recorded for these matches yet.</div>';
+    return;
+  }
+  const rows = Object.entries(byPlayer)
+    .filter(([k]) => k !== '__all__')
+    .map(([,b]) => b)
+    .sort((a,b) => b.rpsTotal - a.rpsTotal || a.label.localeCompare(b.label, undefined, {sensitivity:'base'}));
+  function pctCell(w, n) {
+    if (!n) return '<span style="color:var(--dim)">—</span>';
+    const p = pct(w, n);
+    return `<span style="font-weight:bold;color:${p>=50?'var(--green)':'var(--red)'}">${p}%</span><span style="color:var(--muted)"> (${w}/${n})</span>`;
+  }
+  const oppLbl = oppFilter === '__MIRROR__' ? 'Mirror' : oppFilter;
+  function row(label, b, bold) {
+    return `<tr style="border-bottom:1px solid var(--border);text-align:right${bold?';font-weight:bold;background:var(--card)':''}">` +
+      `<td style="padding:5px 8px;text-align:left;color:var(--text)">${_escapeHtml(label)}</td>` +
+      `<td style="padding:5px 8px">${pctCell(b.rpsWon, b.rpsTotal)}</td>` +
+      `<td style="padding:5px 8px">${pctCell(b.rpsWonThenG1Win, b.rpsWon)}</td>` +
+      `<td style="padding:5px 8px">${pctCell(b.rpsWonThenMatchWin, b.rpsWon)}</td>` +
+      `</tr>`;
+  }
+  let html = '<div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:4px">';
+  html += `<div style="font-size:12px;font-weight:bold;color:var(--text);margin-bottom:2px">🎲 RPS Win% — ${_escapeHtml(deck||'')} vs ${_escapeHtml(oppLbl||'')}</div>`;
+  html += '<div style="font-size:10px;color:var(--muted);margin-bottom:8px">RPS W% = won the Game 1 RPS sequence (ties count toward N, not toward wins). RPS+G1 W% / RPS+Match W% = of those RPS wins, also won Game 1 / the overall match. Shows every player regardless of the Player filter above.</div>';
+  html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-family:monospace;font-size:12px;white-space:nowrap">';
+  html += '<thead><tr style="border-bottom:1px solid var(--border);color:var(--muted);text-align:right">' +
+    '<th style="padding:5px 8px;text-align:left">Player</th>' +
+    '<th style="padding:5px 8px" title="Won the Game 1 RPS sequence">RPS W%</th>' +
+    '<th style="padding:5px 8px" title="Of RPS wins, also won Game 1">RPS+G1 W%</th>' +
+    '<th style="padding:5px 8px" title="Of RPS wins, also won the overall match (2-1 or 2-0)">RPS+Match W%</th>' +
+    '</tr></thead><tbody>';
+  html += row('All Players', all, true);
+  rows.forEach(b => { html += row(b.label, b); });
+  html += '</tbody></table></div></div>';
+  wrap.innerHTML = html;
+}
+
 // The currently-rendered rows, kept around so the drill-down modal
 // (showTopCardsCardModal) can look one up by index from an onclick handler
 // without re-deriving it from _globalRecords.
@@ -17187,11 +17411,29 @@ function renderTopCardsTable(deckType) {
     const emptyMsg = `<div class="dd-empty">No replays found for ${_escapeHtml(deck||'this deck')}${oppLbl}${_tcListsMode==='tops'?' in Tops Only lists':''}.</div>`;
     if (_tcDataMode === 'decklist') { const dkOut = document.getElementById('tc-decklist-output'); if (dkOut) dkOut.innerHTML = emptyMsg; }
     out.innerHTML = emptyMsg;
+    renderTopCardsRpsTable([], deck, oppFilter);
     return;
   }
 
+  // Player dropdown/autocomplete is rebuilt from the deck/opponent/year-
+  // filtered set BEFORE the Player filter itself is applied — same
+  // principle as the old select-based version: narrowing by player must
+  // never narrow the list of players ON OFFER. Shared across both Parsed
+  // and Decklist+Parsed (see onTopCardsPlayerSearch et al above) — per
+  // explicit request to bring the Player filter to Parsed too, not just
+  // Decklist+Parsed, which is why this now lives here rather than inside
+  // renderDecklistModeTable alone.
+  populateTopCardsPlayerDropdown(records);
+  const recordsForFilters = records; // pre-Player-filter — Decklist+Parsed's Event dropdown needs this same "don't shrink the options" treatment
+  // The RPS Win% table is scoped to Deck Type + VS matchup like every other
+  // Top Cards number, but deliberately ignores the Player single-select
+  // filter — it shows an All Players aggregate AND a per-player breakdown
+  // together, so narrowing to one player first would defeat the point.
+  renderTopCardsRpsTable(records, deck, oppFilter);
+  if (_tcSelectedPlayer) records = records.filter(r => (r.player||'').toLowerCase() === _tcSelectedPlayer);
+
   if (_tcDataMode === 'decklist') {
-    renderDecklistModeTable(records, deck, oppFilter, myGen);
+    renderDecklistModeTable(records, deck, oppFilter, myGen, recordsForFilters);
     return;
   }
   _tcLastFilteredRecords = records;
@@ -17224,24 +17466,8 @@ function renderTopCardsTable(deckType) {
     });
   });
 
-  function _tcPhaseTally(phase) {
-    const t = {};
-    records.forEach(r => {
-      _cardObservationsForPhase(r, phase, _tcMetric).forEach(({ key, win }) => {
-        if (!key || TOP_CARDS_IGNORED_CARDS.has(key)) return;
-        if (!t[key]) t[key] = { w: 0, l: 0 };
-        if (win) t[key].w++; else t[key].l++;
-      });
-    });
-    return t;
-  }
-  function _tcPhaseCell(tally, key) {
-    const b = tally[key] || { w: 0, l: 0 };
-    const n = b.w + b.l;
-    return { n, w: b.w, l: b.l, pct: pct(b.w, n), lowSample: n > 0 && n < CARD_TIMING_SMALL_SAMPLE };
-  }
-  const presideTally = _tcPhaseTally('preside');
-  const postsideTally = _tcPhaseTally('postside');
+  const presideTally = _tcBuildPhaseTally(records, 'preside', _tcMetric);
+  const postsideTally = _tcBuildPhaseTally(records, 'postside', _tcMetric);
 
   const cardSearchEl = document.getElementById('tc-card-search');
   const cardQuery = (cardSearchEl ? cardSearchEl.value : '').trim().toLowerCase();
@@ -17302,29 +17528,54 @@ function buildTopCardsListHtml(rows) {
 
 // ── Decklist Mode rendering ──────────────────────────────────────────────
 // Called from renderTopCardsTable once it's branched on _tcDataMode —
-// `records` is already deck/opponent/year-season-filtered exactly like
-// Observed Mode gets; this layers the Player/Event filters and the
-// decklist-copy-count aggregation on top. Async (resolving decklists can
-// mean an awaited ygoprodeck passcode lookup the first time), so it shows a
-// brief "Resolving…" placeholder — subsequent renders with the same
-// decklists are instant since getDecklistCardCounts caches per entry.
-async function renderDecklistModeTable(records, deck, oppFilter, myGen) {
+// `records` is already deck/opponent/year-season/player-filtered exactly
+// like Parsed Mode gets (the Player filter is now shared — see
+// renderTopCardsTable); this layers the Event filter and the decklist-
+// copy-count aggregation on top. `recordsForFilters` is the SAME set before
+// the Player filter was applied, purely so the Event dropdown's own option
+// list doesn't shrink just because a player got selected (same "don't
+// silently narrow what's on offer" rule the old cached A-Z lists followed).
+// Async (resolving decklists can mean an awaited ygoprodeck passcode lookup
+// the first time), so it shows a brief "Resolving…" placeholder —
+// subsequent renders with the same decklists are instant since
+// getDecklistCardCounts caches per entry.
+async function renderDecklistModeTable(records, deck, oppFilter, myGen, recordsForFilters) {
   const out = document.getElementById('tc-decklist-output');
   if (!out) return;
-  populateTopCardsPlayerDropdown(records);
-  populateTopCardsEventDropdown(records);
-  const playerSel = document.getElementById('tc-player-select');
-  const playerFilter = playerSel ? playerSel.value : '';
+  populateTopCardsEventDropdown(recordsForFilters || records);
   const eventSel = document.getElementById('tc-event-select');
   const eventFilter = eventSel ? eventSel.value : '';
-  if (playerFilter) records = records.filter(r => (r.player||'').toLowerCase() === playerFilter);
   if (eventFilter) records = records.filter(r => eventCodeFromLabel(r.eventLabel) === eventFilter);
   const cardSearchEl = document.getElementById('tc-card-search');
   const cardQuery = cardSearchEl ? cardSearchEl.value : '';
 
   out.innerHTML = '<div class="dd-empty">Resolving saved decklists…</div>';
-  const result = await computeDecklistModeStats(records, { cardQuery, phase: _tcMatchPhase });
+  // Primary stats (Omitted/Included/Impact, i.e. the Match Win Rate columns)
+  // are always phase:'full' now — see _tcMatchPhase's comment above, the
+  // Match Phase toggle this used to follow is gone, every mode shows every
+  // phase together instead. Pre-Side is a SECOND decklist-bucketed pass —
+  // still legitimate to compute from the submitted maindeck, since Game 1
+  // is played before anyone sides — read back in below purely for its
+  // Included bucket (that card's G1 win% when it was actually in the list).
+  const [result, presideResult] = await Promise.all([
+    computeDecklistModeStats(records, { cardQuery, phase: 'full' }),
+    computeDecklistModeStats(records, { cardQuery, phase: 'preside' }),
+  ]);
   if (myGen !== _tcRenderGen) return; // a newer render superseded this one while this one awaited
+  const presideByName = {};
+  presideResult.rows.forEach(r => { presideByName[r.name.toLowerCase()] = r.included; });
+  // Post-Side is explicitly NOT decklist-bucketed — per correction, there's
+  // no way to know what a player actually sided in/out for Games 2/3 from
+  // their submitted maindeck list alone (the side deck isn't a siding
+  // plan). So this reuses the exact same per-card OBSERVED/parsed-replay
+  // tally Parsed Mode's own Post-Side column uses (_tcBuildPhaseTally),
+  // over this same filtered record set, keyed by lowercased card name.
+  const postsideTally = _tcBuildPhaseTally(records, 'postside', 'winrate');
+  result.rows.forEach(r => {
+    const key = r.name.toLowerCase();
+    r.preside = presideByName[key] || { w:0, l:0, n:0, pct:0, lowSample:false };
+    r.postside = _tcPhaseCell(postsideTally, key);
+  });
 
   _tcLastFilteredRecords = records;
 
@@ -17345,17 +17596,16 @@ async function renderDecklistModeTable(records, deck, oppFilter, myGen) {
 
   if (!rows.length) {
     out.innerHTML = result.decklistGroupsUsed
-      ? `<div class="dd-empty">No cards with ${minVal}+ decided ${_tcMatchPhase==='full'?'matches':'games'} to compare for ${_escapeHtml(deck)}. Try lowering Min Matches.</div>`
-      : `<div class="dd-empty">No saved decklists (with a YDK) found for ${_escapeHtml(deck)}'s events yet — Decklist Mode needs at least one. Save an event decklist in Event Decklists, or switch back to Observed Mode.</div>`;
+      ? `<div class="dd-empty">No cards with ${minVal}+ decided matches to compare for ${_escapeHtml(deck)}. Try lowering Min Matches.</div>`
+      : `<div class="dd-empty">No saved decklists (with a YDK) found for ${_escapeHtml(deck)}'s events yet — Decklist+Parsed needs at least one. Save an event decklist in Event Decklists, or switch back to Parsed.</div>`;
     return;
   }
 
   const oppNote = oppFilter === '__MIRROR__' ? ' · vs Mirror' : (oppFilter ? ' · vs '+_escapeHtml(oppFilter) : '');
-  const phaseNote = _tcMatchPhase === 'full' ? '' : (_tcMatchPhase === 'preside' ? ' · Pre-Side (G1)' : ' · Post-Side (G2+G3)');
   const covNote = result.matchesSkipped
-    ? ` — ${result.decklistGroupsUsed} saved decklist(s), ${result.matchesConsidered} decided ${_tcMatchPhase==='full'?'match(es)':'game(s)'} covered (${result.matchesSkipped} more ${_tcMatchPhase==='full'?'match(es)':'unit(s)'} have no saved decklist for their event and aren't counted)`
-    : ` — ${result.decklistGroupsUsed} saved decklist(s), ${result.matchesConsidered} decided ${_tcMatchPhase==='full'?'match(es)':'game(s)'} covered`;
-  const summary = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${_escapeHtml(deck)}${oppNote}${phaseNote}${covNote}, ${rows.length} card(s) compared. <span style="color:var(--dim)">Click a card for its Card Timing breakdown (Opening Hand/turn drawn/first-second/Game 1 vs post-side).</span></div>`;
+    ? ` — ${result.decklistGroupsUsed} saved decklist(s), ${result.matchesConsidered} decided match(es) covered (${result.matchesSkipped} more match(es) have no saved decklist for their event and aren't counted)`
+    : ` — ${result.decklistGroupsUsed} saved decklist(s), ${result.matchesConsidered} decided match(es) covered`;
+  const summary = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${_escapeHtml(deck)}${oppNote}${covNote}, ${rows.length} card(s) compared. <span style="color:var(--dim)">Match Win Rate (Included/Omitted/Impact), Pre-Side W% (decklist-bucketed G1), and Post-Side W% (parsed-replay data — not decklist-bucketed, since a submitted maindeck can't show what got sided in) all shown together. Click a card for its Card Timing breakdown.</span></div>`;
 
   // List vs Images — same shared _tcViewMode toggle Observed Mode uses, per
   // explicit request that Images work in both modes. The badge shows each
@@ -17420,7 +17670,9 @@ function buildDecklistModeTableHtml(rows) {
     '<th style="padding:6px 8px">1 Copy</th>' +
     '<th style="padding:6px 8px">2 Copies</th>' +
     '<th style="padding:6px 8px">3 Copies</th>' +
-    '<th style="padding:6px 8px" title="1, 2, or 3 copies combined">Included (Any)</th>' +
+    '<th style="padding:6px 8px" title="1, 2, or 3 copies combined — this is each card\'s Match Win Rate">Included (Any) / Match Win %</th>' +
+    '<th style="padding:6px 8px" title="Game 1 only, before either side sides — still decklist-bucketed (the submitted maindeck IS what\'s in play for G1)">Pre-Side W% (G1)</th>' +
+    '<th style="padding:6px 8px" title="Games 2+3, after siding — sourced from PARSED REPLAY data, not decklist copy counts, since a submitted maindeck can\'t show what got sided in/out">Post-Side W%</th>' +
     '<th style="padding:6px 8px" title="Included win% minus Omitted win%, when both sides have at least 8 decided units">Impact</th>' +
     '<th style="padding:6px 8px" title="Distinct (player, event) decklists behind this row">Decklists</th>' +
     '<th style="padding:6px 8px" title="Distinct players behind this row">Players</th>' +
@@ -17435,6 +17687,8 @@ function buildDecklistModeTableHtml(rows) {
       `<td style="padding:6px 8px">${_fmtBucketCell(b2)}</td>` +
       `<td style="padding:6px 8px">${_fmtBucketCell(b3)}</td>` +
       `<td style="padding:6px 8px">${_fmtBucketCell(r.included)}</td>` +
+      `<td style="padding:6px 8px">${_fmtBucketCell(r.preside)}</td>` +
+      `<td style="padding:6px 8px">${_fmtBucketCell(r.postside)}</td>` +
       `<td style="padding:6px 8px">${impactHtml}</td>` +
       `<td style="padding:6px 8px;color:var(--muted)">${r.totalDecklists}</td>` +
       `<td style="padding:6px 8px;color:var(--muted)">${r.totalPlayers}</td>` +
@@ -17599,8 +17853,7 @@ function showTopCardsCardModal(idx) {
 
   const note = document.createElement('div');
   note.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace';
-  note.textContent = `${r.matches.length} match(es) this card showed up in while piloting this deck. If one of these doesn't belong, it usually means that match got auto-classified into the wrong deck — open it in Deck Viewer and set the deck type there (✎ next to the event code).` +
-    (_tcMatchPhase !== 'full' ? ` Note: this is ${_tcMatchPhase==='preside'?'Pre-Side (Game 1)':'Post-Side (Games 2+3)'} mode, so the W/L shown below is each match's OVERALL result — this card's own ${_tcMatchPhase==='preside'?'Game 1':'Game 2/3'} result may differ from it.` : '');
+  note.textContent = `${r.matches.length} match(es) this card showed up in while piloting this deck. If one of these doesn't belong, it usually means that match got auto-classified into the wrong deck — open it in Deck Viewer and set the deck type there (✎ next to the event code).`;
   box.appendChild(note);
 
   const list = document.createElement('div');
