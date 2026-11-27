@@ -912,11 +912,14 @@ select{cursor:pointer}
               style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-weight:bold;font-size:12px;padding:6px 9px;border-radius:0 6px 6px 0;cursor:pointer;min-width:30px">%</button>
           </div>
           <div style="display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px">
-            <button id="tc-view-list-btn" onclick="setTopCardsViewMode('list')" title="Text table"
-              style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">☰ List</button>
-            <button id="tc-view-images-btn" onclick="setTopCardsViewMode('images')" title="Card image grid"
-              style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">🖼 Images</button>
+            <button id="tc-view-list-btn" onclick="setTopCardsViewMode('list')" title="Text table (default) — works in both Observed and Decklist Mode"
+              style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">☰ List</button>
+            <button id="tc-view-images-btn" onclick="setTopCardsViewMode('images')" title="Card image grid — works in both Observed and Decklist Mode"
+              style="background:none;color:var(--muted);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">🖼 Images</button>
           </div>
+          <input id="tc-card-search" type="text" placeholder="🔍 Search card…" oninput="debouncedRenderTopCardsTable()"
+            title="Filter the card list by name — works in both Observed and Decklist Mode"
+            style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;min-width:160px"/>
           <div style="margin-left:auto;display:flex;gap:4px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:2px">
             <button id="tc-lists-all-btn" onclick="setTopCardsListsMode('all')" title="Every recorded match for this deck"
               style="background:var(--card);color:var(--text);border:none;font-family:monospace;font-size:11px;padding:5px 10px;border-radius:4px;cursor:pointer">All Lists</button>
@@ -947,17 +950,21 @@ select{cursor:pointer}
           </div>
           <div id="tc-decklist-filters" style="display:none;align-items:center;gap:10px;flex-wrap:wrap">
             <div class="slbl" style="margin:0">PLAYER</div>
+            <input id="tc-player-search" type="text" placeholder="🔍 Filter…" oninput="_renderTopCardsPlayerOptions()"
+              title="Narrow the Player list below — the dropdown itself is sorted A-Z"
+              style="width:84px;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:6px 8px;border-radius:6px 0 0 6px;border-right:none;outline:none"/>
             <select id="tc-player-select" onchange="renderTopCardsTable()"
-              style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:140px">
+              style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:0 6px 6px 0;outline:none;cursor:pointer;min-width:140px;margin-left:-10px">
               <option value="">All Players</option>
             </select>
             <div class="slbl" style="margin:0">EVENT</div>
+            <input id="tc-event-search" type="text" placeholder="🔍 Filter…" oninput="_renderTopCardsEventOptions()"
+              title="Narrow the Event list below — the dropdown itself is sorted A-Z"
+              style="width:84px;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:11px;padding:6px 8px;border-radius:6px 0 0 6px;border-right:none;outline:none"/>
             <select id="tc-event-select" onchange="renderTopCardsTable()"
-              style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;cursor:pointer;min-width:140px">
+              style="width:auto;background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:0 6px 6px 0;outline:none;cursor:pointer;min-width:140px;margin-left:-10px">
               <option value="">All Events</option>
             </select>
-            <input id="tc-card-search" type="text" placeholder="Search card…" oninput="debouncedRenderTopCardsTable()"
-              style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:12px;padding:6px 10px;border-radius:6px;outline:none;min-width:160px"/>
           </div>
         </div>
         <div id="tc-output"><div class="dd-empty">Loading replay data…</div></div>
@@ -2073,6 +2080,7 @@ const DECK_CATEGORY = {
   'Thunder Clap':           'Aggro',
   'Earth Aggro':            'Aggro',
   'Aggro Lockdown':         'Aggro',
+  'Gumo Sumo':              'Aggro',
   'Gumo':                   'Aggro',
   'Ben Kai OTK':            'Aggro',
   'Chaos Recruiter':        'Aggro',
@@ -12097,6 +12105,53 @@ function classifyFromCards(cards) {
       scores['Gearfried Warriors'] += 0.40;
     }
   }
+
+  // Gumo Sumo — split off from Aggro Lockdown, per explicit instruction.
+  // NOT a strict all-4-required check (an earlier version of this was) —
+  // per explicit correction, missing one of the four shouldn't force the
+  // deck back to plain Aggro Lockdown. Instead this scales with how many of
+  // a WIDER 6-card core pool are present (the original 4, plus Compulsory
+  // Evacuation Device and D.D. Assailant, both explicitly named), with an
+  // extra nudge per supporting Warrior staple alongside them ("other
+  // warrior cards" — reusing the same warrior-identifying card list already
+  // used elsewhere in this function, e.g. the Night Assailant check above).
+  // 1 core card alone is a weak, non-decisive signal (small score bump,
+  // nothing suppressed — let the rest of the deck's cards settle it, same
+  // as any other single ambiguous card here); 2 is a real signal that
+  // partially suppresses the main competing decks; 3+ is decisive and wins
+  // outright. Deliberately placed LAST, after every other scoring rule in
+  // this function (several of which add their own Aggro Lockdown/Warrior
+  // points further down from the plain has('jurai gumo')/has('time seal')
+  // bumps above), so the suppression/floor below reliably wins regardless
+  // of what else bumped those decks earlier, instead of being clobbered by
+  // a later rule the way an earlier attempt at this check (placed up near
+  // those two bumps) was. Checked here, not cached anywhere, so it applies
+  // automatically to every future classification AND retroactively to
+  // every existing PARSED (non-manual) replay the next time it's rendered,
+  // since classifyFromCards is never cached for those. A manual entry's
+  // myDeck is a direct user assertion rather than something classifyFromCards
+  // computes, so it's unaffected here — re-tag any such match by hand via
+  // the deck type override (✎) if it should become Gumo Sumo too.
+  const GUMO_SUMO_CORE_CARDS = ['jurai gumo', 'swift gaia the fierce knight', 'drop off', 'time seal', 'compulsory evacuation device', 'd.d. assailant'];
+  const GUMO_SUMO_WARRIOR_SUPPORT_CARDS = ['blade knight','don zaloog','mystic swordsman lv2','kycoo the ghost destroyer','sasuke samurai','exiled force'];
+  const gumoCoreCount = GUMO_SUMO_CORE_CARDS.filter(has).length;
+  if (gumoCoreCount >= 1) {
+    const gumoWarriorSupportCount = GUMO_SUMO_WARRIOR_SUPPORT_CARDS.filter(has).length;
+    if (gumoCoreCount >= 3) {
+      ['Aggro Lockdown','Warrior','Chaos Warrior','Earth Aggro'].forEach(k => scores[k] = Math.max(0, scores[k] * 0.15));
+    } else if (gumoCoreCount === 2) {
+      ['Aggro Lockdown','Warrior','Chaos Warrior'].forEach(k => scores[k] = Math.max(0, scores[k] * 0.50));
+    }
+    scores['Gumo Sumo'] += gumoCoreCount * 0.55 + Math.min(gumoWarriorSupportCount, 3) * 0.20;
+    if (gumoCoreCount >= 3) {
+      // Guarantee Gumo Sumo actually wins the final argmax once it's this
+      // decisive, regardless of how much Aggro Lockdown/Warrior had already
+      // accumulated before this point ran — same reasoning as the floor
+      // comment above.
+      scores['Gumo Sumo'] = Math.max(scores['Gumo Sumo'], scores['Aggro Lockdown'] + scores['Warrior'] + 0.30);
+    }
+  }
+
   Object.keys(scores).forEach(k=>{if(scores[k]<0)scores[k]=0;});
 
   const sorted = Object.entries(scores).sort((a,b)=>b[1]-a[1]);
@@ -12540,7 +12595,7 @@ function selectMatch(idx) {
 // ── Deck type override ────────────────────────────────────────────────────────
 const DECK_TYPE_LIST = [
   'Goat Control','Chaos Control','Chaos Warrior','Warrior','Monarch','Earth Aggro',
-  'Aggro Lockdown','Chaos Turbo','Reasoning Gate Turbo','Reasoning Gate Machine',
+  'Aggro Lockdown','Gumo Sumo','Chaos Turbo','Reasoning Gate Turbo','Reasoning Gate Machine',
   'Chaos Return','Chaos Recruiter','Gravekeeper','Burn','Panda Burn','Drain Burn',
   'Last Turn','Final Countdown','Pacman','Ben Kai OTK','Relinquished','Chaos Relinquished',
   'Library FTK','Gumo','Rescue Cat Earth Aggro','Rescue Cat OTK','Rescue Cat OTK',
@@ -16593,27 +16648,63 @@ function populateTopCardsOpponentDropdown() {
 // event is a natural (and cheap — same records array, no extra fetch) way
 // to sanity-check a surprising Decklist Mode number against one concrete
 // decklist before trusting the aggregate.
+// Full (unfiltered, A-Z) option list for each dropdown, cached so the
+// "🔍 Filter…" box beside it (see _renderTopCardsPlayerOptions/
+// _renderTopCardsEventOptions) can narrow what's shown WITHOUT re-deriving
+// counts from records every keystroke, and without touching the actually-
+// applied Player/Event filter (sel.value) — typing in the filter box only
+// narrows the option list offered, it never silently resets an
+// already-selected Player/Event back to "All" just because the search text
+// no longer matches it (the currently-selected option is always kept
+// available, even while filtered out of view, for exactly that reason).
+let _tcPlayerOptionsCache = []; let _tcPlayerTotalCount = 0;
+let _tcEventOptionsCache = [];  let _tcEventTotalCount = 0;
+
 function populateTopCardsPlayerDropdown(records) {
-  const sel = document.getElementById('tc-player-select');
-  if (!sel) return;
   const counts = {};
   records.forEach(r => { if (r.player) counts[r.player] = (counts[r.player]||0) + 1; });
-  const players = Object.keys(counts).sort((a,b) => counts[b]-counts[a]);
+  const players = Object.keys(counts).sort((a,b) => a.localeCompare(b, undefined, {sensitivity:'base'}));
+  _tcPlayerOptionsCache = players.map(p => ({ key: p.toLowerCase(), label: p, count: counts[p] }));
+  _tcPlayerTotalCount = records.length;
+  _renderTopCardsPlayerOptions();
+}
+function _renderTopCardsPlayerOptions() {
+  const sel = document.getElementById('tc-player-select');
+  if (!sel) return;
+  const searchEl = document.getElementById('tc-player-search');
+  const q = (searchEl ? searchEl.value : '').trim().toLowerCase();
   const cur = sel.value;
-  sel.innerHTML = `<option value="">All Players (${records.length})</option>` +
-    players.map(p => `<option value="${_escapeHtml(p.toLowerCase())}">${_escapeHtml(p)} (${counts[p]})</option>`).join('');
-  sel.value = players.map(p=>p.toLowerCase()).includes(cur) ? cur : '';
+  let filtered = q ? _tcPlayerOptionsCache.filter(p => p.label.toLowerCase().includes(q)) : _tcPlayerOptionsCache;
+  if (cur && !filtered.some(p => p.key === cur)) {
+    const curOpt = _tcPlayerOptionsCache.find(p => p.key === cur);
+    if (curOpt) filtered = [curOpt, ...filtered];
+  }
+  sel.innerHTML = `<option value="">All Players (${_tcPlayerTotalCount})</option>` +
+    filtered.map(p => `<option value="${_escapeHtml(p.key)}">${_escapeHtml(p.label)} (${p.count})</option>`).join('');
+  sel.value = cur;
 }
 function populateTopCardsEventDropdown(records) {
-  const sel = document.getElementById('tc-event-select');
-  if (!sel) return;
   const counts = {};
   records.forEach(r => { const code = eventCodeFromLabel(r.eventLabel); if (code) counts[code] = (counts[code]||0) + 1; });
-  const codes = Object.keys(counts).sort((a,b) => counts[b]-counts[a]);
+  const codes = Object.keys(counts).sort((a,b) => a.localeCompare(b, undefined, {sensitivity:'base'}));
+  _tcEventOptionsCache = codes.map(c => ({ key: c, label: c, count: counts[c] }));
+  _tcEventTotalCount = records.length;
+  _renderTopCardsEventOptions();
+}
+function _renderTopCardsEventOptions() {
+  const sel = document.getElementById('tc-event-select');
+  if (!sel) return;
+  const searchEl = document.getElementById('tc-event-search');
+  const q = (searchEl ? searchEl.value : '').trim().toLowerCase();
   const cur = sel.value;
-  sel.innerHTML = `<option value="">All Events (${records.length})</option>` +
-    codes.map(c => `<option value="${_escapeHtml(c)}">${_escapeHtml(c)} (${counts[c]})</option>`).join('');
-  sel.value = codes.includes(cur) ? cur : '';
+  let filtered = q ? _tcEventOptionsCache.filter(c => c.label.toLowerCase().includes(q)) : _tcEventOptionsCache;
+  if (cur && !filtered.some(c => c.key === cur)) {
+    const curOpt = _tcEventOptionsCache.find(c => c.key === cur);
+    if (curOpt) filtered = [curOpt, ...filtered];
+  }
+  sel.innerHTML = `<option value="">All Events (${_tcEventTotalCount})</option>` +
+    filtered.map(c => `<option value="${_escapeHtml(c.key)}">${_escapeHtml(c.label)} (${c.count})</option>`).join('');
+  sel.value = cur;
 }
 
 // Observed Mode / Decklist Mode toggle — see the big comment block above
@@ -16636,8 +16727,10 @@ function setTopCardsDataMode(mode) {
 }
 
 // List vs Images view — purely a this-session display preference (not
-// persisted to the server), same data either way. Defaults to Images.
-let _tcViewMode = 'images';
+// persisted to the server), same data either way. Defaults to List per
+// explicit request ("default the list as the default way to look") —
+// Images still works in both Observed and Decklist Mode when toggled to.
+let _tcViewMode = 'list';
 function setTopCardsViewMode(mode) {
   _tcViewMode = mode;
   const listBtn = document.getElementById('tc-view-list-btn');
@@ -17109,39 +17202,67 @@ function renderTopCardsTable(deckType) {
   const minSample = _tcMinMatchesUnit === 'pct' ? Math.round(records.length * (minVal/100)) : Math.round(minVal);
   const minLabel = _tcMinMatchesUnit === 'pct' ? `${minVal}% (${minSample})` : `${minSample}`;
 
-  const stats = {}; // lowercased card name -> { name, id, w, l, matches }
+  // Overall (full-match) tally — still the row set that drives sort order,
+  // the Min Matches floor, and the click-to-see-matches modal, exactly as
+  // before. Pre-Side/Post-Side are additional, ALWAYS-ON columns computed
+  // in parallel below rather than behind the Match Phase toggle, per
+  // explicit request to show Overall/Pre-Side/Post-Side win% together
+  // instead of needing to flip that toggle to see each one — so for
+  // Observed Mode the Match Phase toggle no longer changes this table (it
+  // still drives Decklist Mode's Omitted/Included bucketing, unchanged).
+  const stats = {}; // lowercased card name -> { key, name, id, w, l, matches }
   records.forEach(r => {
-    _tcCardObservations(r).forEach(({ key, win }) => {
+    _cardObservationsForPhase(r, 'full', _tcMetric).forEach(({ key, win }) => {
       if (!key || TOP_CARDS_IGNORED_CARDS.has(key)) return;
       if (!stats[key]) {
         const card = (r.allMine||[]).find(c => (c.name||'').toLowerCase() === key)
                   || (r.allUsageMine||[]).find(c => (c.name||'').toLowerCase() === key);
-        stats[key] = { name: card ? card.name : key, id: card ? (card.id||null) : null, w: 0, l: 0, matches: [] };
+        stats[key] = { key, name: card ? card.name : key, id: card ? (card.id||null) : null, w: 0, l: 0, matches: [] };
       }
       if (!stats[key].matches.includes(r)) stats[key].matches.push(r);
       if (win) stats[key].w++; else stats[key].l++;
     });
   });
 
+  function _tcPhaseTally(phase) {
+    const t = {};
+    records.forEach(r => {
+      _cardObservationsForPhase(r, phase, _tcMetric).forEach(({ key, win }) => {
+        if (!key || TOP_CARDS_IGNORED_CARDS.has(key)) return;
+        if (!t[key]) t[key] = { w: 0, l: 0 };
+        if (win) t[key].w++; else t[key].l++;
+      });
+    });
+    return t;
+  }
+  function _tcPhaseCell(tally, key) {
+    const b = tally[key] || { w: 0, l: 0 };
+    const n = b.w + b.l;
+    return { n, w: b.w, l: b.l, pct: pct(b.w, n), lowSample: n > 0 && n < CARD_TIMING_SMALL_SAMPLE };
+  }
+  const presideTally = _tcPhaseTally('preside');
+  const postsideTally = _tcPhaseTally('postside');
+
+  const cardSearchEl = document.getElementById('tc-card-search');
+  const cardQuery = (cardSearchEl ? cardSearchEl.value : '').trim().toLowerCase();
+
   const rows = Object.values(stats)
-    .map(s => ({ ...s, n: s.w + s.l }))
+    .map(s => ({ ...s, n: s.w + s.l, preside: _tcPhaseCell(presideTally, s.key), postside: _tcPhaseCell(postsideTally, s.key) }))
     .filter(s => s.n >= minSample)
+    .filter(s => !cardQuery || s.name.toLowerCase().includes(cardQuery))
     .sort((a,b) => (pct(b.w,b.n) - pct(a.w,a.n)) || (b.n - a.n));
   _tcLastRows = rows;
 
-  const unitWord = _tcMatchPhase === 'full' ? 'match' : 'game';
-  const unitWordPlural = unitWord + 'es';
-
   if (!rows.length) {
-    out.innerHTML = `<div class="dd-empty">No cards with ${minLabel}+ decided ${unitWordPlural} for ${_escapeHtml(deck)}. Try lowering Min Matches.</div>`;
+    const searchNote = cardQuery ? ` matching "${_escapeHtml(cardQuery)}"` : '';
+    out.innerHTML = `<div class="dd-empty">No cards${searchNote} with ${minLabel}+ decided matches for ${_escapeHtml(deck)}. Try lowering Min Matches${cardQuery?' or clearing the search':''}.</div>`;
     return;
   }
 
   const totalMatches = records.length;
-  const phaseNote = _tcMatchPhase === 'full' ? '' : (_tcMatchPhase === 'preside' ? ' · Pre-Side (G1)' : ' · Post-Side (G2+G3)');
   const metricNote = _tcMetric === 'usage' ? ' · Usage Rate' : '';
   const oppNote = oppFilter === '__MIRROR__' ? ' · vs Mirror' : (oppFilter ? ' · vs '+_escapeHtml(oppFilter) : '');
-  const summary = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${_escapeHtml(deck)}${oppNote}${_tcListsMode==='tops'?' · Tops Only':''}${phaseNote}${metricNote} — ${totalMatches} match(es), ${rows.length} card(s) with ${minLabel}+ decided ${unitWordPlural}. <span style="color:var(--dim)">Click a card to see which matches it came from.</span></div>`;
+  const summary = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${_escapeHtml(deck)}${oppNote}${_tcListsMode==='tops'?' · Tops Only':''}${metricNote} — ${totalMatches} match(es), ${rows.length} card(s) with ${minLabel}+ decided matches (Overall). <span style="color:var(--dim)">Click a card to see which matches it came from. Pre-Side/Post-Side shown alongside Overall.</span></div>`;
 
   if (_tcViewMode === 'images') {
     out.innerHTML = summary + '<div id="tc-grid" class="dd-empty">Loading card images…</div>';
@@ -17152,23 +17273,30 @@ function renderTopCardsTable(deckType) {
 }
 
 function buildTopCardsListHtml(rows) {
-  let html = '<table style="width:100%;border-collapse:collapse;font-family:monospace;font-size:12.5px">';
-  html += '<thead><tr style="border-bottom:1px solid var(--border);color:var(--muted);text-align:left">' +
-    '<th style="padding:6px 8px">Card</th><th style="padding:6px 8px;text-align:right">W-L</th>' +
-    '<th style="padding:6px 8px;text-align:right">N</th><th style="padding:6px 8px;text-align:right">Win %</th>' +
-    '<th style="padding:6px 8px;text-align:right">95% CI</th></tr></thead><tbody>';
+  let html = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-family:monospace;font-size:12.5px;white-space:nowrap">';
+  html += '<thead><tr style="border-bottom:1px solid var(--border);color:var(--muted);text-align:right">' +
+    '<th style="padding:6px 8px;text-align:left">Card</th>' +
+    '<th style="padding:6px 8px">W-L</th>' +
+    '<th style="padding:6px 8px">N</th>' +
+    '<th style="padding:6px 8px" title="Overall win% — every decided match, scored by the match\'s overall result">Overall Win %</th>' +
+    '<th style="padding:6px 8px">95% CI</th>' +
+    '<th style="padding:6px 8px" title="Game 1 only, before either side sides their deck">Pre-Side Win %</th>' +
+    '<th style="padding:6px 8px" title="Games 2+3, after siding">Post-Side Win %</th>' +
+    '</tr></thead><tbody>';
   rows.forEach((r, idx) => {
     const wp = pct(r.w, r.n);
     const ci = wilsonCI(r.w, r.n);
-    html += `<tr onclick="showTopCardsCardModal(${idx})" title="Click to see which matches this card came from" style="border-bottom:1px solid var(--border);cursor:pointer">` +
-      `<td style="padding:6px 8px;color:var(--text)">${_escapeHtml(r.name)}</td>` +
-      `<td style="padding:6px 8px;text-align:right;color:var(--muted)">${r.w}-${r.l}</td>` +
-      `<td style="padding:6px 8px;text-align:right;color:var(--muted)">${r.n}</td>` +
-      `<td style="padding:6px 8px;text-align:right;font-weight:bold;color:${wp>=50?'var(--green)':'var(--red)'}">${wp}%</td>` +
-      `<td style="padding:6px 8px;text-align:right;color:var(--muted)">${ci.low}–${ci.high}%</td>` +
+    html += `<tr onclick="showTopCardsCardModal(${idx})" title="Click to see which matches this card came from" style="border-bottom:1px solid var(--border);cursor:pointer;text-align:right">` +
+      `<td style="padding:6px 8px;text-align:left;color:var(--text)">${_escapeHtml(r.name)}</td>` +
+      `<td style="padding:6px 8px;color:var(--muted)">${r.w}-${r.l}</td>` +
+      `<td style="padding:6px 8px;color:var(--muted)">${r.n}</td>` +
+      `<td style="padding:6px 8px;font-weight:bold;color:${wp>=50?'var(--green)':'var(--red)'}">${wp}%</td>` +
+      `<td style="padding:6px 8px;color:var(--muted)">${ci.low}–${ci.high}%</td>` +
+      `<td style="padding:6px 8px">${_fmtBucketCell(r.preside)}</td>` +
+      `<td style="padding:6px 8px">${_fmtBucketCell(r.postside)}</td>` +
       `</tr>`;
   });
-  html += '</tbody></table>';
+  html += '</tbody></table></div>';
   return html;
 }
 
@@ -17229,7 +17357,53 @@ async function renderDecklistModeTable(records, deck, oppFilter, myGen) {
     : ` — ${result.decklistGroupsUsed} saved decklist(s), ${result.matchesConsidered} decided ${_tcMatchPhase==='full'?'match(es)':'game(s)'} covered`;
   const summary = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">${_escapeHtml(deck)}${oppNote}${phaseNote}${covNote}, ${rows.length} card(s) compared. <span style="color:var(--dim)">Click a card for its Card Timing breakdown (Opening Hand/turn drawn/first-second/Game 1 vs post-side).</span></div>`;
 
-  out.innerHTML = summary + buildDecklistModeTableHtml(rows);
+  // List vs Images — same shared _tcViewMode toggle Observed Mode uses, per
+  // explicit request that Images work in both modes. The badge shows each
+  // card's Included (Any) win% here, since Decklist Mode has no single
+  // "the" win% the way Observed Mode does.
+  if (_tcViewMode === 'images') {
+    out.innerHTML = summary + '<div id="tc-decklist-grid" class="dd-empty">Loading card images…</div>';
+    renderDecklistModeGrid(rows, myGen);
+  } else {
+    out.innerHTML = summary + buildDecklistModeTableHtml(rows);
+  }
+}
+
+// Decklist Mode's own card image grid — mirrors renderTopCardsGrid's tile
+// layout exactly (so the two modes look like the same feature), but the
+// badge shows Included (Any) win%/N rather than Observed Mode's single w/n,
+// since that's the closest Decklist Mode equivalent of "this card's overall
+// win rate." Decklist Mode rows never carry a passcode the way Observed
+// Mode's do (computeDecklistModeStats/getDecklistCardCounts only ever
+// needed the resolved NAME), so passcodes/image ids are resolved here by
+// name against window._cardDataCache — already populated for every card in
+// `rows` by the awaited getDecklistCardCounts calls inside
+// computeDecklistModeStats, so no extra network lookup is needed.
+function renderDecklistModeGrid(rows, gen) {
+  if (gen !== _tcRenderGen) return;
+  const gridEl = document.getElementById('tc-decklist-grid');
+  if (!gridEl) return;
+  const byName = {};
+  Object.values(window._cardDataCache||{}).forEach(card => {
+    if (card && card.name && !byName[card.name.toLowerCase()]) byName[card.name.toLowerCase()] = card.imageId || null;
+  });
+  const tiles = rows.map((r, idx) => {
+    const imgId = byName[r.name.toLowerCase()] || null;
+    const n = r.included.n;
+    const wp = r.included.pct;
+    const badgeColor = wp>=50 ? 'var(--green)' : 'var(--red)';
+    const img = imgId
+      ? `<img src="https://images.ygoprodeck.com/images/cards/${imgId}.jpg" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"/>`
+      : '';
+    const fallback = `<div style="display:${imgId?'none':'flex'};position:absolute;inset:0;align-items:center;justify-content:center;text-align:center;font-size:9px;line-height:1.3;color:#777;padding:4px;box-sizing:border-box;background:#1a1a1a">${_escapeHtml(r.name)}</div>`;
+    const badge = n
+      ? `<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.78);color:${badgeColor};font-size:11px;font-weight:700;text-align:center;padding:3px 2px;line-height:1.3">${wp}% <span style="color:#9a9aa8;font-weight:400">(${n})</span></div>`
+      : `<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.78);color:var(--dim);font-size:9px;text-align:center;padding:3px 2px">No Included data</div>`;
+    return `<div onclick="showCardTimingModal(_tcLastRows[${idx}].name)" title="${_escapeHtml(r.name)} — Included (Any) win rate, click for Card Timing" style="position:relative;width:100px;height:146px;border-radius:6px;overflow:hidden;background:#1a1a1a;border:1px solid var(--border);cursor:pointer">${img}${fallback}${badge}</div>`;
+  }).join('');
+  gridEl.removeAttribute('class');
+  gridEl.setAttribute('style', 'display:flex;flex-wrap:wrap;gap:8px');
+  gridEl.innerHTML = tiles;
 }
 
 function _fmtBucketCell(b) {
@@ -18751,6 +18925,7 @@ const DECK_COLORS = {
   'Zombie':               '#66ff66',
   'Earth Aggro':          '#cc8844',
   'Aggro Lockdown':       '#ff5533',
+  'Gumo Sumo':            '#ff884d',
   'Ben Kai OTK':          '#ffdd00',
   'Pacman':               '#ffee44',
   'Monarch':              '#88aacc',
