@@ -17391,17 +17391,21 @@ async function computeDecklistModeStats(records, { cardQuery, phase } = {}) {
 // simply contributes nothing here, same partial-data tolerance as the rest
 // of this feature — it keeps filling in as the Admin Tools backfill and
 // ongoing imports add more.
-async function computeCardTimingDrillDown(cardName, records) {
-  const { resolved } = await _resolveDecklistGroups(records);
-  const confirmedGroups = resolved.filter(g => (g.counts[cardName]||0) > 0);
-  const confirmedMatches = confirmedGroups.flatMap(g => g.matches);
-
+// Tallies ONE card's Opening Hand / Early / Mid / Late / Never-Drawn buckets
+// from a set of CONFIRMED matches (matches whose governing decklist is known
+// to run this exact card — see _resolveDecklistGroups), split three ways:
+// combined across every game ('all'), Game 1 only ('g1'), and Post-Side
+// G2/G3 only ('post'). Extracted as its own pure function (no behavior
+// change from the single inline loop this replaced) specifically so
+// _computeCardTimingPool below can reuse the EXACT same tallying logic for
+// every other card in the deck, not just the one a user opened the modal
+// for — the cross-card Par/Expectation reference numbers only mean anything
+// if they're built from identical bucket semantics.
+function _tallyCardTimingBuckets(confirmedMatches, cardName) {
   const mk = () => ({ w: 0, l: 0 });
-  const buckets = { opening: mk(), early: mk(), mid: mk(), late: mk(), never: mk() };
-  const firstSecond = { first: mk(), second: mk() };
-  const gamePhase = { g1: mk(), post: mk() };
+  const mkScope = () => ({ opening: mk(), early: mk(), mid: mk(), late: mk(), never: mk() });
+  const scopes = { all: mkScope(), g1: mkScope(), post: mkScope() };
   let gamesWithTimingData = 0;
-
   confirmedMatches.forEach(r => {
     if (!r.cardTiming || !r.cardTiming.games || !r.cardTiming.games.length) return;
     r.cardTiming.games.forEach(game => {
@@ -17409,26 +17413,165 @@ async function computeCardTimingDrillDown(cardName, records) {
       const outcome = game.myWon ? 'w' : 'l';
       const openHandHit = (game.myOpeningHand||[]).some(c => c.cardName === cardName);
       const ev = !openHandHit ? (game.myEvents||[]).find(e => e.cardName === cardName) : null;
-      let bucket;
-      if (openHandHit) bucket = buckets.opening;
-      else if (ev) bucket = (ev.turn||0) <= 3 ? buckets.early : ((ev.turn||0) <= 6 ? buckets.mid : buckets.late);
-      else bucket = buckets.never;
-      bucket[outcome]++;
+      let key;
+      if (openHandHit) key = 'opening';
+      else if (ev) key = (ev.turn||0) <= 3 ? 'early' : ((ev.turn||0) <= 6 ? 'mid' : 'late');
+      else key = 'never';
+      scopes.all[key][outcome]++;
+      (game.gameNum === 1 ? scopes.g1 : scopes.post)[key][outcome]++;
+    });
+  });
+  return { scopes, gamesWithTimingData };
+}
+
+async function computeCardTimingDrillDown(cardName, records) {
+  const { resolved } = await _resolveDecklistGroups(records);
+  const confirmedGroups = resolved.filter(g => (g.counts[cardName]||0) > 0);
+  const confirmedMatches = confirmedGroups.flatMap(g => g.matches);
+
+  const { scopes, gamesWithTimingData } = _tallyCardTimingBuckets(confirmedMatches, cardName);
+
+  // Going First/Second is tracked once, combined across every game — it's
+  // orthogonal to the opening/early/mid/late split above, not a 4th scope.
+  const firstSecond = { first: { w: 0, l: 0 }, second: { w: 0, l: 0 } };
+  confirmedMatches.forEach(r => {
+    if (!r.cardTiming || !r.cardTiming.games || !r.cardTiming.games.length) return;
+    r.cardTiming.games.forEach(game => {
+      const outcome = game.myWon ? 'w' : 'l';
       (game.myFirst ? firstSecond.first : firstSecond.second)[outcome]++;
-      (game.gameNum === 1 ? gamePhase.g1 : gamePhase.post)[outcome]++;
     });
   });
 
   function row(label, b) { const n = b.w + b.l; return { label, w: b.w, l: b.l, n, pct: pct(b.w, n), ci: wilsonCI(b.w, n), lowSample: n > 0 && n < CARD_TIMING_SMALL_SAMPLE }; }
+  function sumBuckets(scope) { return { w: scope.opening.w+scope.early.w+scope.mid.w+scope.late.w+scope.never.w, l: scope.opening.l+scope.early.l+scope.mid.l+scope.late.l+scope.never.l }; }
+  const all = scopes.all;
   return {
     cardName,
     confirmedDecklists: confirmedGroups.length,
     confirmedMatches: confirmedMatches.length,
     gamesWithTimingData,
-    timing: [row('Opening Hand', buckets.opening), row('Drawn/Added Turn 1–3', buckets.early), row('Drawn/Added Turn 4–6', buckets.mid), row('Drawn/Added Turn 7+', buckets.late), row('Never Drawn', buckets.never)],
+    timing: [row('Opening Hand', all.opening), row('Drawn/Added Turn 1–3', all.early), row('Drawn/Added Turn 4–6', all.mid), row('Drawn/Added Turn 7+', all.late), row('Never Drawn', all.never)],
     firstSecond: [row('Going First', firstSecond.first), row('Going Second', firstSecond.second)],
-    gamePhase: [row('Game 1', gamePhase.g1), row('Post-Side (G2/G3)', gamePhase.post)],
+    gamePhase: [row('Game 1', sumBuckets(scopes.g1)), row('Post-Side (G2/G3)', sumBuckets(scopes.post))],
+    // Raw w/l buckets per scope, kept around for _buildCardTimingBaselineSummary
+    // (the Baselines & Expectation section) rather than re-tallying.
+    scopes,
   };
+}
+
+// ── Card Timing BASELINES & EXPECTATION (deck-wide reference numbers) ───────
+// A single card's own Drawn Win% means little in isolation — some of that
+// number is just "this deck wins X% of the time when the game goes long
+// enough to draw a card at all," which has nothing to do with the specific
+// card. These two functions build the deck-wide (card-agnostic) reference
+// points a card's own numbers get compared against, and the final per-scope
+// summary row shown in the Card Timing modal:
+//   - baseline(scope): flat win rate over EVERY game in `records` with Card
+//     Timing data, regardless of decklist/card — same population Top Cards
+//     is already showing (deck + whatever VS/year/player filters are
+//     active), not narrowed to any one card's confirmed decklists.
+//   - par(scope): the pooled Early+Mid+Late ("Drawn", excluding Opening
+//     Hand) win rate, summed across every OTHER card in the deck with
+//     enough of its OWN sample (>= CARD_TIMING_SMALL_SAMPLE) to not be pure
+//     noise — "is this card's Drawn performance better or worse than a
+//     typical card in this deck," which baseline() alone can't answer
+//     since baseline includes every Never-Drawn/Opening-Hand game too.
+//   - expectation(scope, card): same pooled bucket data as par(), but
+//     turn-mix-weighted by THIS card's own early/mid/late split — a card
+//     drawn mostly late is judged against what a typical LATE draw looks
+//     like (which can differ from an early one), not the flat pooled
+//     average. This is what makes it distinct from the simpler Gap vs Par.
+async function _computeCardTimingPool(records) {
+  const mk = () => ({ w: 0, l: 0 });
+  const baseline = { all: mk(), g1: mk(), post: mk() };
+  records.forEach(r => {
+    if (!r.cardTiming || !r.cardTiming.games || !r.cardTiming.games.length) return;
+    r.cardTiming.games.forEach(game => {
+      const outcome = game.myWon ? 'w' : 'l';
+      baseline.all[outcome]++;
+      (game.gameNum === 1 ? baseline.g1 : baseline.post)[outcome]++;
+    });
+  });
+
+  const { resolved } = await _resolveDecklistGroups(records);
+  const cardUniverse = new Set();
+  resolved.forEach(g => Object.keys(g.counts).forEach(n => cardUniverse.add(n)));
+
+  const mkPoolScope = () => ({ early: mk(), mid: mk(), late: mk() });
+  const pool = { all: mkPoolScope(), g1: mkPoolScope(), post: mkPoolScope() };
+  cardUniverse.forEach(name => {
+    const confirmedMatches = resolved.filter(g => (g.counts[name]||0) > 0).flatMap(g => g.matches);
+    const { scopes } = _tallyCardTimingBuckets(confirmedMatches, name);
+    ['all','g1','post'].forEach(s => {
+      const sc = scopes[s];
+      const drawnN = sc.early.w+sc.early.l+sc.mid.w+sc.mid.l+sc.late.w+sc.late.l;
+      if (drawnN < CARD_TIMING_SMALL_SAMPLE) return; // too little of THIS card's own sample to trust in the pool
+      ['early','mid','late'].forEach(k => { pool[s][k].w += sc[k].w; pool[s][k].l += sc[k].l; });
+    });
+  });
+
+  return { baseline, pool };
+}
+
+// Combines one card's own computeCardTimingDrillDown output with the
+// deck-wide _computeCardTimingPool data into the final Baseline / Gap vs Not
+// OH / Gap vs Par / Winrate over Expectation numbers for each of the three
+// scopes (All Games / Game 1 Only / Postboard Only), rendered by
+// showCardTimingModal's "Baselines & Expectation" section.
+function _buildCardTimingBaselineSummary(dd, poolData) {
+  function sumWL(...bs) { return bs.reduce((a,b)=>({w:a.w+b.w,l:a.l+b.l}), {w:0,l:0}); }
+  // One decimal place throughout this section, not the whole-percent
+  // rounding used elsewhere in the app — these Gap/Par/Expectation numbers
+  // are themselves small (often under 5%), so integer rounding on either
+  // side of a subtraction can distort or even flip the sign of the result.
+  // Matches the precision of the user's own worked example figures
+  // (e.g. "+0.9%", "-0.5%"), which don't fall out of integer-rounded inputs.
+  function pct1(b) { const n = b.w+b.l; return n ? Math.round(b.w/n*1000)/10 : null; }
+  function round1(x) { return Math.round(x*10)/10; }
+  const SCOPE_LABELS = { all: 'All Games', g1: 'Game 1 Only', post: 'Postboard Only (G2/G3)' };
+
+  return ['all','g1','post'].map(s => {
+    const sc = dd.scopes[s];
+    const oh = sc.opening;
+    const notOH = sumWL(sc.early, sc.mid, sc.late, sc.never);
+    const drawn = sumWL(sc.early, sc.mid, sc.late);
+    const baseline = poolData.baseline[s];
+    const pool = poolData.pool[s];
+
+    const ohPct = pct1(oh);
+    const notOHPct = pct1(notOH);
+    const gapVsNotOH = (ohPct !== null && notOHPct !== null) ? round1(ohPct - notOHPct) : null;
+
+    const drawnPct = pct1(drawn);
+    const parBucket = sumWL(pool.early, pool.mid, pool.late);
+    const parPct = pct1(parBucket);
+    const gapVsPar = (drawnPct !== null && parPct !== null) ? round1(drawnPct - parPct) : null;
+
+    // Turn-mix-weighted expectation: weight each turn bucket's POOL win rate
+    // (full precision, not pre-rounded, so the weighted sum doesn't compound
+    // rounding error across buckets) by how many of THIS card's own
+    // observations fall in that bucket, then round only the final result.
+    let expW = 0, expN = 0;
+    ['early','mid','late'].forEach(k => {
+      const n = sc[k].w + sc[k].l;
+      const poolN = pool[k].w + pool[k].l;
+      if (n > 0 && poolN > 0) { expW += n * (pool[k].w/poolN*100); expN += n; }
+    });
+    const expectationPct = expN > 0 ? round1(expW / expN) : null;
+    const winrateOverExpectation = (drawnPct !== null && expectationPct !== null) ? round1(drawnPct - expectationPct) : null;
+
+    return {
+      scope: s, label: SCOPE_LABELS[s],
+      baseline: { w: baseline.w, l: baseline.l, n: baseline.w+baseline.l, pct: pct1(baseline) },
+      oh: { w: oh.w, l: oh.l, n: oh.w+oh.l, pct: ohPct },
+      gapVsNotOH,
+      drawn: { w: drawn.w, l: drawn.l, n: drawn.w+drawn.l, pct: drawnPct },
+      par: { w: parBucket.w, l: parBucket.l, n: parBucket.w+parBucket.l, pct: parPct },
+      gapVsPar,
+      expectationPct,
+      winrateOverExpectation,
+    };
+  });
 }
 
 // ── RPS Win% (shared by the Matchups drill-down and RPS Analysis) ───────
@@ -17972,19 +18115,62 @@ async function showCardTimingModal(cardName) {
 
   const dd = await computeCardTimingDrillDown(cardName, _tcLastFilteredRecords);
   if (!document.getElementById('ctd-modal-overlay')) return; // closed while awaiting
-  loading.remove();
 
   if (!dd.confirmedDecklists) {
+    loading.remove();
     const empty = document.createElement('div');
     empty.className = 'dd-empty';
     empty.textContent = 'No saved decklist in this filtered view is confirmed to run this card yet — Card Timing needs a decklist (for "Never Drawn" to mean anything) and backfilled parsed-replay data.';
     box.appendChild(empty);
     return;
   }
+
+  const poolData = await _computeCardTimingPool(_tcLastFilteredRecords);
+  if (!document.getElementById('ctd-modal-overlay')) return; // closed while awaiting
+  loading.remove();
+  const baselineSummary = _buildCardTimingBaselineSummary(dd, poolData);
+
   const note = document.createElement('div');
   note.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace';
   note.textContent = `${dd.confirmedDecklists} decklist(s) confirmed to run this card · ${dd.confirmedMatches} match(es) · ${dd.gamesWithTimingData} game(s) with parsed Card Timing data. More fills in as the Admin Tools backfill (or new replays) add Card Timing to more matches.`;
   box.appendChild(note);
+
+  function fmtPct1(v) { return v === null ? '—' : v + '%'; }
+  function fmtGap1(v) {
+    if (v === null) return '<span style="color:var(--dim)">—</span>';
+    const sign = v > 0 ? '+' : '';
+    const color = v > 0 ? 'var(--green)' : (v < 0 ? 'var(--red)' : 'var(--muted)');
+    return `<span style="color:${color}">${sign}${v}%</span>`;
+  }
+  function baselinesSection(rows) {
+    const wrap = document.createElement('div');
+    const h = document.createElement('div');
+    h.style.cssText = 'font-size:11px;color:var(--muted);letter-spacing:.08em;font-family:monospace;margin-bottom:6px';
+    h.textContent = 'BASELINES & EXPECTATION';
+    wrap.appendChild(h);
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font-size:10px;color:var(--dim);font-family:monospace;margin:-2px 0 6px;line-height:1.4';
+    hint.textContent = 'Baseline = deck-wide win rate for every game in this view, any card. Par = pooled Drawn win rate across every eligible card in the deck. Expectation = Par adjusted for the turns this card is actually drawn in.';
+    wrap.appendChild(hint);
+    const tbl = document.createElement('table');
+    tbl.style.cssText = 'width:100%;border-collapse:collapse;font-family:monospace;font-size:11px';
+    tbl.innerHTML = '<thead><tr style="color:var(--muted)">' +
+      '<th style="text-align:left;padding:4px 6px;font-weight:normal">Scope</th>' +
+      '<th style="text-align:right;padding:4px 6px;font-weight:normal">Baseline</th>' +
+      '<th style="text-align:right;padding:4px 6px;font-weight:normal">Opening Hand (Δ)</th>' +
+      '<th style="text-align:right;padding:4px 6px;font-weight:normal">Drawn (Δ Par / Δ Exp)</th>' +
+      '</tr></thead><tbody>' +
+      rows.map(r => `<tr style="border-top:1px solid var(--border)">` +
+        `<td style="text-align:left;padding:4px 6px;color:var(--text)">${_escapeHtml(r.label)}</td>` +
+        `<td style="text-align:right;padding:4px 6px;color:var(--muted)">${fmtPct1(r.baseline.pct)} <span style="color:var(--dim)">(${r.baseline.n})</span></td>` +
+        `<td style="text-align:right;padding:4px 6px">${fmtPct1(r.oh.pct)} <span style="color:var(--dim)">(${r.oh.n})</span> ${fmtGap1(r.gapVsNotOH)}</td>` +
+        `<td style="text-align:right;padding:4px 6px">${fmtPct1(r.drawn.pct)} <span style="color:var(--dim)">(${r.drawn.n})</span> ${fmtGap1(r.gapVsPar)} par / ${fmtGap1(r.winrateOverExpectation)} exp</td>` +
+        `</tr>`).join('') +
+      '</tbody></table>';
+    wrap.appendChild(tbl);
+    return wrap;
+  }
+  box.appendChild(baselinesSection(baselineSummary));
 
   function section(title, rows) {
     const wrap = document.createElement('div');
@@ -18003,7 +18189,6 @@ async function showCardTimingModal(cardName) {
   }
   box.appendChild(section('Opening Hand / Turn Drawn / Never Drawn', dd.timing));
   box.appendChild(section('Going First vs Second', dd.firstSecond));
-  box.appendChild(section('Game 1 vs Post-Side', dd.gamePhase));
 }
 
 // Image-grid view — same rows as the list, rendered as card art tiles with
