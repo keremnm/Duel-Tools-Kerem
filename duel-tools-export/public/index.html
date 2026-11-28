@@ -16560,10 +16560,30 @@ function renderFormatDataTable(deckType) {
   // (see fdMatchupRowDefs) instead of every opponent that happens to have
   // data, so every deck's page is laid out the same way and easy to
   // compare at a glance.
+  // RPS+G1 W% / RPS+Match W% cells for one matchup row's own record set —
+  // reuses the exact same tally (_tcComputeRpsStats) and cell formatter
+  // (_rpsPctCell) already shared by Top Cards' RPS Win% and the single-
+  // matchup drill-down's "🎲 RPS Win%" box (_fdRpsSummaryHtml), just scoped
+  // to ONE opponent-deck row's records instead of one player's or one
+  // drilled-into matchup's. Both functions are declared further down this
+  // same script (function declarations are hoisted), so calling them here
+  // is safe despite the definition order.
+  function _fdRpsMatchupCells(recs) {
+    const all = _tcComputeRpsStats(recs)['__all__'];
+    if (!all || !all.rpsWon) {
+      return '<td style="color:var(--dim);font-size:11px">N/A</td><td style="color:var(--dim);font-size:11px">N/A</td>';
+    }
+    return `<td>${_rpsPctCell(all.rpsWonThenG1Win, all.rpsWon)}</td>` +
+      `<td>${all.rpsWonThenG1Win ? _rpsPctCell(all.rpsWonG1ThenMatchWin, all.rpsWonThenG1Win) : '<span style="color:var(--dim)">—</span>'}</td>`;
+  }
+
   const table = document.createElement('table');
   table.className = 'dd-table';
   table.style.marginTop = '4px';
-  table.innerHTML = '<thead><tr><th>Opponent Deck</th><th>N</th><th>W-L</th><th>Win %</th><th title="Win rate of Game 1 only, before either side adjusts their deck">Pre-Side Win %</th><th title="Combined win rate of Games 2+3, after siding">Post-Side Win %</th><th title="Click a row to see every individual match\'s Game 1/2/3 results">Games</th><th>95% CI</th><th style="min-width:90px"></th></tr></thead>';
+  table.innerHTML = '<thead><tr><th>Opponent Deck</th><th>N</th><th>W-L</th><th>Win %</th><th title="Win rate of Game 1 only, before either side adjusts their deck">Pre-Side Win %</th><th title="Combined win rate of Games 2+3, after siding">Post-Side Win %</th>'
+    + '<th title="Of the games you won the Game 1 RPS for, what % you also won Game 1">RPS+G1 W%</th>'
+    + '<th title="Of the games you won BOTH the Game 1 RPS and Game 1 itself, what % you went on to win the whole match">RPS+Match W%</th>'
+    + '<th title="Click a row to see every individual match\'s Game 1/2/3 results">Games</th><th>95% CI</th><th style="min-width:90px"></th></tr></thead>';
   const tbody = document.createElement('tbody');
 
   const matchupDefs = fdMatchupRowDefs(deck);
@@ -16587,6 +16607,15 @@ function renderFormatDataTable(deckType) {
     } else {
       labelHtml = `<span style="font-weight:bold;color:${def.isRestOfField?'var(--muted)':'var(--text)'}">${_escapeHtml(def.label)}</span>`;
     }
+    // A row can span several real opponent deck types (Burn/Reasoning Gate
+    // combined, Rest of Field) — the drill-down (and the RPS columns below)
+    // get every matching opponent's records unioned together, not just one.
+    // The mirror row is sourced straight from `mirrors` instead, since
+    // byOppRecords never has a `deck` key either (same reason as the tally
+    // above). Computed unconditionally (not just when tot) since the RPS
+    // cells need it too, and _fdRpsMatchupCells handles an empty array fine.
+    const unionRecords = def.isMirrorRow ? mirrors
+      : Object.keys(byOpp).filter(def.matchOpp).flatMap(o => byOppRecords[o] || []);
     tr.innerHTML = `
       <td>${labelHtml}</td>
       <td class="dd-record">${tot}</td>
@@ -16594,17 +16623,11 @@ function renderFormatDataTable(deckType) {
       ${tot ? `<td style="font-weight:bold;color:${wp>=50?'var(--green)':'var(--red)'}">${wp}%</td>` : '<td style="color:var(--dim);font-size:11px">No data</td>'}
       ${sideWinCell(rec.g1w, rec.g1l)}
       ${sideWinCell(rec.psw, rec.psl)}
+      ${_fdRpsMatchupCells(unionRecords)}
       <td style="text-align:center;color:var(--muted)">${tot ? '<span class="fd-games-caret">▸</span>' : ''}</td>
       <td style="color:var(--muted);font-size:11px">${tot ? ci.low+'–'+ci.high+'%' : ''}</td>
       <td><div class="dd-winbar"><div class="dd-winbar-w" style="width:${tot?rec.w/tot*100:0}%"></div><div class="dd-winbar-l" style="width:${tot?rec.l/tot*100:0}%"></div></div></td>`;
     if (tot) {
-      // A row can span several real opponent deck types (Burn/Reasoning
-      // Gate combined, Rest of Field) — the drill-down gets every matching
-      // opponent's records unioned together, not just one. The mirror row is
-      // sourced straight from `mirrors` instead, since byOppRecords never
-      // has a `deck` key either (same reason as the tally above).
-      const unionRecords = def.isMirrorRow ? mirrors
-        : Object.keys(byOpp).filter(def.matchOpp).flatMap(o => byOppRecords[o] || []);
       tr.onclick = e => {
         if (e.target.closest('select') || e.target.closest('button')) return;
         toggleFormatDataMatchLog(tr, def.label, unionRecords);
@@ -16613,7 +16636,11 @@ function renderFormatDataTable(deckType) {
     tbody.appendChild(tr);
   });
 
-  // Summary row — all non-mirror opponents combined
+  // Summary row — all non-mirror opponents combined. Sourced from
+  // byOppRecords (the known-opponent subset), same as fieldG1W/fieldPSW
+  // above, for consistency with those columns rather than the plainer
+  // fieldW/fieldL (which include unknown-opponent matches too).
+  const fieldRpsRecs = Object.values(byOppRecords).flat();
   const sumTr = document.createElement('tr');
   sumTr.style.cssText = 'background:var(--card2);font-weight:bold';
   sumTr.innerHTML = `
@@ -16623,6 +16650,7 @@ function renderFormatDataTable(deckType) {
     <td style="color:${fieldWP>=50?'var(--green)':'var(--red)'}">${fieldWP}%</td>
     ${sideWinCell(fieldG1W, fieldG1L)}
     ${sideWinCell(fieldPSW, fieldPSL)}
+    ${_fdRpsMatchupCells(fieldRpsRecs)}
     <td></td>
     <td style="color:var(--muted);font-size:11px;font-weight:normal">${fieldCI.low}–${fieldCI.high}%</td>
     <td><div class="dd-winbar"><div class="dd-winbar-w" style="width:${fieldTot?fieldW/fieldTot*100:0}%"></div><div class="dd-winbar-l" style="width:${fieldTot?fieldL/fieldTot*100:0}%"></div></div></td>`;
@@ -16650,7 +16678,7 @@ function renderFormatDataTable(deckType) {
 
   const note = document.createElement('div');
   note.style.cssText = 'font-size:10px;color:var(--dim);margin-top:4px';
-  note.textContent = 'Deck types auto-classified by TF-IDF model. Burn and Reasoning Gate are pooled by default (pick a specific variant from that row\'s own dropdown); every other deck not named above is folded into Rest of Field — use "+ Add a matchup" to pin one out as its own row for this session. The Opponent Deck breakdown below only includes matches cross-linked to the opponent\'s own archive — guaranteeing it\'s built from the exact same matches, with the exact same two deck labels, as that opponent deck\'s own page, so e.g. Warrior\'s win % vs Chaos Turbo and Chaos Turbo\'s win % vs Warrior always sum to 100%. 95% CI via Wilson score interval. Mirror matches (self-deck) are shown as their own row (sourced from the Mirror Matches chip above, not the cross-linked breakdown) and excluded from every other opponent-deck row and from Rest of Field. Pre-Side Win % = Game 1 only; Post-Side Win % = Games 2+3 combined — shown as N/A where there\'s no per-game data (manual/forfeit entries, or replays whose game winner was never parsed). Click a row to see every individual match\'s Game 1/2/3 results.'
+  note.textContent = 'Deck types auto-classified by TF-IDF model. Burn and Reasoning Gate are pooled by default (pick a specific variant from that row\'s own dropdown); every other deck not named above is folded into Rest of Field — use "+ Add a matchup" to pin one out as its own row for this session. The Opponent Deck breakdown below only includes matches cross-linked to the opponent\'s own archive — guaranteeing it\'s built from the exact same matches, with the exact same two deck labels, as that opponent deck\'s own page, so e.g. Warrior\'s win % vs Chaos Turbo and Chaos Turbo\'s win % vs Warrior always sum to 100%. 95% CI via Wilson score interval. Mirror matches (self-deck) are shown as their own row (sourced from the Mirror Matches chip above, not the cross-linked breakdown) and excluded from every other opponent-deck row and from Rest of Field. Pre-Side Win % = Game 1 only; Post-Side Win % = Games 2+3 combined — shown as N/A where there\'s no per-game data (manual/forfeit entries, or replays whose game winner was never parsed). RPS+G1 W% = of the games this row won the Game 1 RPS for, what % also won Game 1; RPS+Match W% = of the games that won BOTH the RPS and Game 1, what % went on to win the whole match — both N/A where there\'s no RPS play data. Click a row to see every individual match\'s Game 1/2/3 results.'
     + (unknownOppExcluded ? ` ${unknownOppExcluded} match${unknownOppExcluded!==1?'es':''} vs an opponent who isn\'t archived/cross-linked excluded from the breakdown (still counted in Total Matches and Win Rate vs Field above, which don\'t depend on knowing the opponent\'s deck).` : '')
     + (incompleteExcluded ? ` ${incompleteExcluded} match${incompleteExcluded!==1?'es':''} excluded from every number above as not a valid best-of-3 score — a real (non-manual, non-overridden) replay whose recorded wins are either short of the 2 needed to decide it (e.g. 1-0, 0-1, 1-1) or impossible to reach in a real match (e.g. 3-0, 0-3, 2-2). See Admin → Cross-Links → Check & Fix Data to review these.` : '')
     + (omittedExcluded ? ` ${omittedExcluded} match${omittedExcluded!==1?'es':''} manually omitted from every number above — see Admin → Cross-Links → Check & Fix Data → Omitted Data to review or un-omit.` : '');
@@ -17653,9 +17681,9 @@ function _fdRpsSummaryHtml(recs) {
     '</div>';
 }
 
-// The currently-rendered rows, kept around so the drill-down modal
-// (showTopCardsCardModal) can look one up by index from an onclick handler
-// without re-deriving it from _globalRecords.
+// The currently-rendered rows, kept around so the Card Timing drill-down
+// modal (showCardTimingModal) can look one up by index from an onclick
+// handler without re-deriving it from _globalRecords.
 let _tcLastRows = [];
 // Same idea as _tcLastRows, but the full filtered record set behind
 // whichever table is currently showing (Observed or Decklist Mode) — the
@@ -17717,8 +17745,8 @@ function _computeObservedCardStats(records, minSample, cardQuery) {
 // everything with a real sample — and, just as importantly, keeps a
 // misclassified stray match's cards off the list entirely rather than
 // showing up as a deceptive 100% "top" card. Each row is clickable (see
-// showTopCardsCardModal) to see exactly which matches it came from, for
-// exactly that reason.
+// showCardTimingModal) to open its Card Timing breakdown, with a button
+// there to see exactly which matches it came from, for exactly that reason.
 function renderTopCardsTable(deckType) {
   const myGen = ++_tcRenderGen;
   const out = document.getElementById('tc-output');
@@ -17817,7 +17845,7 @@ function buildTopCardsListHtml(rows) {
   rows.forEach((r, idx) => {
     const wp = pct(r.w, r.n);
     const ci = wilsonCI(r.w, r.n);
-    html += `<tr onclick="showTopCardsCardModal(${idx})" title="Click to see which matches this card came from" style="border-bottom:1px solid var(--border);cursor:pointer;text-align:right">` +
+    html += `<tr onclick="showCardTimingModal(_tcLastRows[${idx}].name, _tcLastRows[${idx}].matches)" title="Click for this card's Card Timing breakdown" style="border-bottom:1px solid var(--border);cursor:pointer;text-align:right">` +
       `<td style="padding:6px 8px;text-align:left;color:var(--text)">${_escapeHtml(r.name)}</td>` +
       `<td style="padding:6px 8px;color:var(--muted)">${r.w}-${r.l}</td>` +
       `<td style="padding:6px 8px;color:var(--muted)">${r.n}</td>` +
@@ -18078,13 +18106,20 @@ function buildDecklistModeTableHtml(rows) {
 }
 
 // ── Card Timing drill-down modal ─────────────────────────────────────────
-// Reachable from a card row in EITHER mode — Observed Mode's existing
-// per-card modal gained a "⏱ Card Timing" button (see showTopCardsCardModal
-// above), Decklist Mode's rows open it directly. Always computed against
+// Reachable from a card row in EITHER mode — Observed Mode's rows now open
+// this directly too (Card Timing is the default view, not a secondary
+// button away), Decklist Mode's rows always did. Always computed against
 // _tcLastFilteredRecords (the full filtered set behind whichever table is
 // currently showing), never a per-card subset, since "Never Drawn" needs to
 // see matches the card never appeared in at all.
-async function showCardTimingModal(cardName) {
+// `rawMatches`, when passed (Observed Mode's own "where this card appeared"
+// list, from _tcLastRows[idx].matches), is rendered as a collapsed-by-
+// default section toggled by a header button instead of being the modal's
+// main content — this used to be its own separate modal (showTopCardsCardModal)
+// that Card Timing was one click further behind; folded in here so Card
+// Timing is what you see first. Card Timing's own entry points
+// (Decklist+Parsed mode) don't have this list handy and simply omit it.
+async function showCardTimingModal(cardName, rawMatches) {
   const existing = document.getElementById('ctd-modal-overlay');
   if (existing) existing.remove();
 
@@ -18100,9 +18135,46 @@ async function showCardTimingModal(cardName) {
   const hdr = document.createElement('div');
   hdr.style.cssText = 'display:flex;align-items:center;gap:10px';
   hdr.innerHTML = `<span style="font-family:monospace;font-weight:bold;font-size:14px;color:var(--text)">⏱ ${_escapeHtml(cardName)} — Card Timing</span>`;
+  // Built once up front so it's available (and appended last) on EVERY exit
+  // path below, including the "no confirmed decklist" empty state — a card
+  // with no decklist to run Card Timing on is exactly when falling back to
+  // "which matches is this even coming from" is most useful.
+  let matchesSection = null;
+  if (rawMatches && rawMatches.length) {
+    const viewBtn = document.createElement('button');
+    viewBtn.textContent = `🔍 View Matches (${rawMatches.length})`;
+    viewBtn.title = 'Which matches this card came from — if one looks wrong, it usually means that match got auto-classified into the wrong deck';
+    viewBtn.style.cssText = 'margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:4px 10px;border-radius:5px;cursor:pointer';
+    viewBtn.onclick = () => {
+      const open = matchesSection.style.display !== 'none';
+      matchesSection.style.display = open ? 'none' : 'flex';
+      viewBtn.textContent = open ? `🔍 View Matches (${rawMatches.length})` : '🔼 Hide Matches';
+    };
+    hdr.appendChild(viewBtn);
+
+    matchesSection = document.createElement('div');
+    matchesSection.id = 'ctd-raw-matches';
+    matchesSection.style.cssText = 'display:none;flex-direction:column;gap:6px;border-top:1px solid var(--border);padding-top:12px';
+    rawMatches.forEach(m => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-family:monospace;font-size:11px;flex-wrap:wrap';
+      const resultColor = m.matchWon ? 'var(--green)' : (m.matchLost ? 'var(--red)' : 'var(--muted)');
+      const resultText = m.matchWon ? 'W' : (m.matchLost ? 'L' : '?');
+      row.innerHTML = `<span style="color:${resultColor};font-weight:bold">${resultText}</span>` +
+        `<span style="color:var(--text)">vs ${_escapeHtml(m.oppName||'Unknown')}</span>` +
+        `<span style="color:var(--muted)">${_escapeHtml(m.oppDeck||'Unknown')}</span>` +
+        `<span style="color:var(--dim)">${_escapeHtml(m.eventLabel||'—')}</span>`;
+      const viewMatchBtn = document.createElement('button');
+      viewMatchBtn.textContent = '🔍 View';
+      viewMatchBtn.style.cssText = 'margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer';
+      viewMatchBtn.onclick = () => { overlay.remove(); gotoDeckViewerForReplay(m.player, m.replayId, viewMatchBtn); };
+      row.appendChild(viewMatchBtn);
+      matchesSection.appendChild(row);
+    });
+  }
   const closeBtn = document.createElement('button');
   closeBtn.textContent = '✕';
-  closeBtn.style.cssText = 'margin-left:auto;background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer';
+  closeBtn.style.cssText = `background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer${rawMatches && rawMatches.length ? '' : ';margin-left:auto'}`;
   closeBtn.onclick = () => overlay.remove();
   hdr.appendChild(closeBtn);
   box.appendChild(hdr);
@@ -18122,6 +18194,7 @@ async function showCardTimingModal(cardName) {
     empty.className = 'dd-empty';
     empty.textContent = 'No saved decklist in this filtered view is confirmed to run this card yet — Card Timing needs a decklist (for "Never Drawn" to mean anything) and backfilled parsed-replay data.';
     box.appendChild(empty);
+    if (matchesSection) box.appendChild(matchesSection);
     return;
   }
 
@@ -18189,6 +18262,7 @@ async function showCardTimingModal(cardName) {
   }
   box.appendChild(section('Opening Hand / Turn Drawn / Never Drawn', dd.timing));
   box.appendChild(section('Going First vs Second', dd.firstSecond));
+  if (matchesSection) box.appendChild(matchesSection);
 }
 
 // Image-grid view — same rows as the list, rendered as card art tiles with
@@ -18219,85 +18293,11 @@ async function renderTopCardsGrid(rows, gen) {
       : '';
     const fallback = `<div style="display:${imgId?'none':'flex'};position:absolute;inset:0;align-items:center;justify-content:center;text-align:center;font-size:9px;line-height:1.3;color:#777;padding:4px;box-sizing:border-box;background:#1a1a1a">${_escapeHtml(r.name)}</div>`;
     const badge = `<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.78);color:${badgeColor};font-size:11px;font-weight:700;text-align:center;padding:3px 2px;line-height:1.3">${wp}% <span style="color:#9a9aa8;font-weight:400">(${r.n})</span></div>`;
-    return `<div onclick="showTopCardsCardModal(${idx})" title="${_escapeHtml(r.name)} — click to see matches" style="position:relative;width:100px;height:146px;border-radius:6px;overflow:hidden;background:#1a1a1a;border:1px solid var(--border);cursor:pointer">${img}${fallback}${badge}</div>`;
+    return `<div onclick="showCardTimingModal(_tcLastRows[${idx}].name, _tcLastRows[${idx}].matches)" title="${_escapeHtml(r.name)} — Card Timing" style="position:relative;width:100px;height:146px;border-radius:6px;overflow:hidden;background:#1a1a1a;border:1px solid var(--border);cursor:pointer">${img}${fallback}${badge}</div>`;
   }).join('');
   gridEl.removeAttribute('class');
   gridEl.setAttribute('style', 'display:flex;flex-wrap:wrap;gap:8px');
   gridEl.innerHTML = tiles;
-}
-
-// Drill-down modal — exactly which matches contributed a given card to the
-// current deck's Top Cards list, each with a one-click way to open it in
-// Deck Viewer. The main reason this exists: if a card looks wrong for the
-// deck selected, it's almost always because the match itself got auto-
-// classified into the wrong deck bucket (see the TF-IDF note on Format
-// Data), and this is the fastest way to find and fix that specific match
-// rather than doubting the whole feature.
-function showTopCardsCardModal(idx) {
-  const r = _tcLastRows[idx];
-  if (!r) return;
-  const existing = document.getElementById('tc-card-modal-overlay');
-  if (existing) existing.remove();
-
-  const overlay = document.createElement('div');
-  overlay.id = 'tc-card-modal-overlay';
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
-  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
-
-  const box = document.createElement('div');
-  box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:560px;width:100%;max-height:80vh;overflow-y:auto;display:flex;flex-direction:column;gap:12px';
-  overlay.appendChild(box);
-
-  const wp = pct(r.w, r.n);
-  const hdr = document.createElement('div');
-  hdr.style.cssText = 'display:flex;align-items:center;gap:10px';
-  hdr.innerHTML = `<span style="font-family:monospace;font-weight:bold;font-size:14px;color:var(--text)">${_escapeHtml(r.name)}</span>` +
-    `<span style="font-family:monospace;font-size:12px;color:var(--muted)">${r.w}-${r.l} (${wp}%)</span>`;
-  // Card Timing drill-down — opening hand/turn-drawn/first-second/G1-vs-
-  // post-side breakdown, scoped to decks CONFIRMED (via a saved decklist)
-  // to run this card. Uses _tcLastFilteredRecords (the FULL filtered set
-  // behind this table, set in renderTopCardsTable), not just r.matches —
-  // "Never Drawn" needs to see matches this card never showed up in at all,
-  // which r.matches (Observed Mode's own "where it was seen" list) can't.
-  const timingBtn = document.createElement('button');
-  timingBtn.textContent = '⏱ Card Timing';
-  timingBtn.title = 'Opening hand / turn-drawn / going first-second / Game 1 vs post-side breakdown, for decks confirmed via a saved decklist to run this card';
-  timingBtn.style.cssText = 'margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:11px;padding:4px 10px;border-radius:5px;cursor:pointer';
-  timingBtn.onclick = () => showCardTimingModal(r.name);
-  hdr.appendChild(timingBtn);
-  const closeBtn = document.createElement('button');
-  closeBtn.textContent = '✕';
-  closeBtn.style.cssText = 'background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer';
-  closeBtn.onclick = () => overlay.remove();
-  hdr.appendChild(closeBtn);
-  box.appendChild(hdr);
-
-  const note = document.createElement('div');
-  note.style.cssText = 'font-size:11px;color:var(--muted);font-family:monospace';
-  note.textContent = `${r.matches.length} match(es) this card showed up in while piloting this deck. If one of these doesn't belong, it usually means that match got auto-classified into the wrong deck — open it in Deck Viewer and set the deck type there (✎ next to the event code).`;
-  box.appendChild(note);
-
-  const list = document.createElement('div');
-  list.style.cssText = 'display:flex;flex-direction:column;gap:6px';
-  (r.matches||[]).forEach(m => {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:8px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-family:monospace;font-size:11px;flex-wrap:wrap';
-    const resultColor = m.matchWon ? 'var(--green)' : (m.matchLost ? 'var(--red)' : 'var(--muted)');
-    const resultText = m.matchWon ? 'W' : (m.matchLost ? 'L' : '?');
-    row.innerHTML = `<span style="color:${resultColor};font-weight:bold">${resultText}</span>` +
-      `<span style="color:var(--text)">vs ${_escapeHtml(m.oppName||'Unknown')}</span>` +
-      `<span style="color:var(--muted)">${_escapeHtml(m.oppDeck||'Unknown')}</span>` +
-      `<span style="color:var(--dim)">${_escapeHtml(m.eventLabel||'—')}</span>`;
-    const viewBtn = document.createElement('button');
-    viewBtn.textContent = '🔍 View';
-    viewBtn.style.cssText = 'margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);font-family:monospace;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer';
-    viewBtn.onclick = () => { overlay.remove(); gotoDeckViewerForReplay(m.player, m.replayId, viewBtn); };
-    row.appendChild(viewBtn);
-    list.appendChild(row);
-  });
-  box.appendChild(list);
-
-  document.body.appendChild(overlay);
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -21430,8 +21430,9 @@ async function eventsRenderCardImageGrid(container, rows, section, gen) {
 }
 
 // Drill-down modal — exactly which of this event's matches contributed a
-// given card's win-rate numbers, mirroring Format Data's
-// showTopCardsCardModal (same layout, same "open in Deck Viewer" button),
+// given card's win-rate numbers. Same raw-match-list layout (and "open in
+// Deck Viewer" button) Format Data's Top Cards used to show by default
+// before Card Timing became its default view (see showCardTimingModal),
 // just reading from this tab's own _evTcLastRows[section] instead.
 function showEventsTopCardsCardModal(section, idx) {
   const r = (_evTcLastRows[section]||[])[idx];
